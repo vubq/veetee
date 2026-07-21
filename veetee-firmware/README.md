@@ -43,3 +43,26 @@ tests/
 - `../docs/09-testing-security-operations.md`
 
 Không copy cả `references/xiaozhi-esp32/main`. Chỉ mang code hoặc pattern sau khi xác định owner module, license notice và test tương ứng.
+
+## Build và hardware bring-up
+
+```bash
+source /home/vubq/.espressif/v6.0.2/esp-idf/export.sh
+cd veetee-firmware
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+Host test cho state machine không phụ thuộc ESP-IDF:
+
+```bash
+cmake -S tests -B build/host-tests
+cmake --build build/host-tests
+ctest --test-dir build/host-tests --output-on-failure
+```
+
+Firmware bring-up hiện hiển thị color bars, phát tone ngắn, log thống kê PCM16
+của mic và đưa button event qua application queue. Kích thước/offset/mirror màn
+hình và INMP441 slot được đổi bằng `idf.py menuconfig`; giá trị mặc định vẫn là
+baseline provisional cho tới khi kiểm tra trực tiếp trên phần cứng.

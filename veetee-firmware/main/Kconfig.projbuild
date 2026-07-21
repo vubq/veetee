@@ -1,0 +1,86 @@
+menu "Veetee hardware bring-up"
+
+    config VEETEE_LCD_WIDTH
+        int "ST7789 visible width"
+        range 80 320
+        default 240
+
+    config VEETEE_LCD_HEIGHT
+        int "ST7789 visible height"
+        range 80 320
+        default 320
+
+    config VEETEE_LCD_OFFSET_X
+        int "ST7789 X offset"
+        range 0 100
+        default 0
+
+    config VEETEE_LCD_OFFSET_Y
+        int "ST7789 Y offset"
+        range 0 100
+        default 0
+
+    config VEETEE_LCD_MIRROR_X
+        bool "Mirror LCD on X axis"
+        default n
+
+    config VEETEE_LCD_MIRROR_Y
+        bool "Mirror LCD on Y axis"
+        default n
+
+    config VEETEE_LCD_SWAP_XY
+        bool "Swap LCD X/Y axes"
+        default n
+
+    config VEETEE_LCD_INVERT_COLOR
+        bool "Invert ST7789 colors"
+        default y
+
+    config VEETEE_LCD_BGR_ORDER
+        bool "Use BGR instead of RGB element order"
+        default n
+
+    config VEETEE_LCD_BACKLIGHT_INVERT
+        bool "Invert LCD backlight output"
+        default n
+
+    config VEETEE_LCD_SPI_CLOCK_HZ
+        int "LCD SPI clock (Hz)"
+        range 1000000 80000000
+        default 40000000
+
+    choice VEETEE_MIC_SLOT
+        prompt "INMP441 slot selected by its L/R pin"
+        default VEETEE_MIC_SLOT_LEFT
+
+        config VEETEE_MIC_SLOT_LEFT
+            bool "Left slot"
+
+        config VEETEE_MIC_SLOT_RIGHT
+            bool "Right slot"
+    endchoice
+
+    config VEETEE_MIC_SAMPLE_SHIFT
+        int "Right shift from INMP441 32-bit slot to PCM16"
+        range 8 16
+        default 12
+
+    config VEETEE_MIC_DIAGNOSTICS
+        bool "Log bounded microphone statistics"
+        default y
+
+    config VEETEE_BOOT_TONE
+        bool "Play a short low-volume speaker tone on boot"
+        default y
+
+    config VEETEE_BUTTON_LONG_PRESS_MS
+        int "Assistant gate long-press threshold (ms)"
+        range 500 4000
+        default 1500
+
+    config VEETEE_BUTTON_WIFI_RESET_MS
+        int "Wi-Fi configuration hold threshold (ms)"
+        range 4000 10000
+        default 5000
+
+endmenu

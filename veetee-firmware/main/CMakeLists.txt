@@ -1,0 +1,27 @@
+set(VEETEE_SRCS
+    "app_main.cpp"
+    "app/state_machine.cpp"
+    "audio/i2s_audio.cpp"
+    "board/veetee_board.cpp"
+    "display/st7789_display.cpp"
+    "input/button.cpp"
+)
+
+idf_component_register(
+    SRCS ${VEETEE_SRCS}
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_driver_gpio
+        esp_driver_i2s
+        esp_driver_spi
+        esp_app_format
+        esp_lcd
+        esp_psram
+        esp_timer
+)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
+
+# ESP-IDF 6 defaults to the newest language mode. Veetee keeps its own source
+# surface C++17-compatible so firmware behavior does not depend on newer syntax.
+set_source_files_properties(${VEETEE_SRCS} PROPERTIES COMPILE_OPTIONS "-std=gnu++17")
