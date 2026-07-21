@@ -66,3 +66,9 @@ Firmware bring-up hiện hiển thị color bars, phát tone ngắn, log thống
 của mic và đưa button event qua application queue. Kích thước/offset/mirror màn
 hình và INMP441 slot được đổi bằng `idf.py menuconfig`; giá trị mặc định vẫn là
 baseline provisional cho tới khi kiểm tra trực tiếp trên phần cứng.
+
+Khi chưa có cấu hình, firmware phát AP `Veetee-XXXX` và captive portal tại
+`http://192.168.4.1`. Portal scan SSID, nhận Wi-Fi, bootstrap URL LAN, locale và
+wake profile ID; password không được ghi log. Nếu station không lấy được IP trong
+60 giây, firmware tự quay lại portal. Settings có schema version trong NVS và
+`client_id` UUID bền vững.

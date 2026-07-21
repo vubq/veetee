@@ -7,24 +7,66 @@ TransitionResult StateMachine::Handle(Event event) {
     bool accepted = false;
 
     switch (event) {
-        case Event::kBootCompleted:
+        case Event::kBootNeedsProvisioning:
             if (state_ == State::kStarting) {
-                state_ = State::kIdle;
+                state_ = State::kWifiConfiguring;
+                accepted = true;
+            }
+            break;
+
+        case Event::kBootWithCredentials:
+            if (state_ == State::kStarting) {
+                state_ = State::kNetworkConnecting;
                 accepted = true;
             }
             break;
 
         case Event::kEnterWifiConfig:
-            if (state_ == State::kStarting || state_ == State::kIdle) {
+            if (state_ == State::kStarting || state_ == State::kNetworkConnecting ||
+                state_ == State::kActivating || state_ == State::kIdle) {
                 assistant_gate_open_ = false;
                 state_ = State::kWifiConfiguring;
                 accepted = true;
             }
             break;
 
-        case Event::kWifiConfigured:
+        case Event::kRetryWifiProvisioning:
             if (state_ == State::kWifiConfiguring) {
+                accepted = true;
+            }
+            break;
+
+        case Event::kProvisioningSaved:
+            if (state_ == State::kWifiConfiguring) {
+                state_ = State::kNetworkConnecting;
+                accepted = true;
+            }
+            break;
+
+        case Event::kWifiConnected:
+            if (state_ == State::kNetworkConnecting) {
                 state_ = State::kActivating;
+                accepted = true;
+            }
+            break;
+
+        case Event::kWifiConnectionTimeout:
+            if (state_ == State::kNetworkConnecting) {
+                state_ = State::kWifiConfiguring;
+                accepted = true;
+            }
+            break;
+
+        case Event::kWifiDisconnected:
+            if (state_ != State::kStarting && state_ != State::kWifiConfiguring &&
+                state_ != State::kNetworkConnecting) {
+                if (state_ == State::kEvaluating || state_ == State::kThinking ||
+                    state_ == State::kSpeaking || state_ == State::kClosing ||
+                    state_ == State::kAborting) {
+                    ++cancellation_generation_;
+                }
+                assistant_gate_open_ = false;
+                state_ = State::kNetworkConnecting;
                 accepted = true;
             }
             break;
@@ -183,6 +225,7 @@ const char* ToString(State state) {
     switch (state) {
         case State::kStarting: return "starting";
         case State::kWifiConfiguring: return "wifi_configuring";
+        case State::kNetworkConnecting: return "network_connecting";
         case State::kActivating: return "activating";
         case State::kIdle: return "idle";
         case State::kConnecting: return "connecting";
@@ -198,9 +241,14 @@ const char* ToString(State state) {
 
 const char* ToString(Event event) {
     switch (event) {
-        case Event::kBootCompleted: return "boot_completed";
+        case Event::kBootNeedsProvisioning: return "boot_needs_provisioning";
+        case Event::kBootWithCredentials: return "boot_with_credentials";
         case Event::kEnterWifiConfig: return "enter_wifi_config";
-        case Event::kWifiConfigured: return "wifi_configured";
+        case Event::kRetryWifiProvisioning: return "retry_wifi_provisioning";
+        case Event::kProvisioningSaved: return "provisioning_saved";
+        case Event::kWifiConnected: return "wifi_connected";
+        case Event::kWifiConnectionTimeout: return "wifi_connection_timeout";
+        case Event::kWifiDisconnected: return "wifi_disconnected";
         case Event::kActivationComplete: return "activation_complete";
         case Event::kButtonShortPress: return "button_short_press";
         case Event::kButtonLongPress: return "button_long_press";

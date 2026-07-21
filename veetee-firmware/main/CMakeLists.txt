@@ -5,6 +5,9 @@ set(VEETEE_SRCS
     "board/veetee_board.cpp"
     "display/st7789_display.cpp"
     "input/button.cpp"
+    "network/provisioning_portal.cpp"
+    "network/wifi_manager.cpp"
+    "settings/settings_store.cpp"
 )
 
 idf_component_register(
@@ -15,9 +18,14 @@ idf_component_register(
         esp_driver_i2s
         esp_driver_spi
         esp_app_format
+        esp_event
+        esp_http_server
         esp_lcd
+        esp_netif
         esp_psram
         esp_timer
+        esp_wifi
+        nvs_flash
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)

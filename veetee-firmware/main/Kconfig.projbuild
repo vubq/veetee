@@ -83,4 +83,17 @@ menu "Veetee hardware bring-up"
         range 4000 10000
         default 5000
 
+    config VEETEE_WIFI_CONNECT_TIMEOUT_SECONDS
+        int "Wi-Fi station timeout before AP fallback (seconds)"
+        range 10 180
+        default 60
+
+    config VEETEE_DEFAULT_BOOTSTRAP_URL
+        string "Optional development bootstrap URL"
+        default ""
+        help
+            Leave empty for first-boot provisioning. A LAN URL entered in the
+            portal is persisted in NVS so changing host/domain does not require
+            rebuilding firmware.
+
 endmenu

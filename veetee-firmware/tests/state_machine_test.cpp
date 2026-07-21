@@ -16,9 +16,28 @@ void Expect(StateMachine& machine, Event event, State expected) {
     assert(result.to == expected);
 }
 
+void ReachIdle(StateMachine& machine) {
+    Expect(machine, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(machine, Event::kWifiConnected, State::kActivating);
+    Expect(machine, Event::kActivationComplete, State::kIdle);
+}
+
+void TestBootAndProvisioningFlow() {
+    StateMachine first_boot;
+    Expect(first_boot, Event::kBootNeedsProvisioning, State::kWifiConfiguring);
+    Expect(first_boot, Event::kRetryWifiProvisioning, State::kWifiConfiguring);
+    Expect(first_boot, Event::kProvisioningSaved, State::kNetworkConnecting);
+    Expect(first_boot, Event::kWifiConnected, State::kActivating);
+    Expect(first_boot, Event::kActivationComplete, State::kIdle);
+
+    StateMachine timeout;
+    Expect(timeout, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(timeout, Event::kWifiConnectionTimeout, State::kWifiConfiguring);
+}
+
 void TestAutoConversationDoesNotNeedSecondButtonPress() {
     StateMachine machine;
-    Expect(machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(machine);
     Expect(machine, Event::kButtonShortPress, State::kConnecting);
     Expect(machine, Event::kTransportConnected, State::kListening);
     Expect(machine, Event::kVadFinal, State::kEvaluating);
@@ -31,8 +50,8 @@ void TestAutoConversationDoesNotNeedSecondButtonPress() {
 void TestWakeAndButtonShareTheSamePath() {
     StateMachine button_machine;
     StateMachine wake_machine;
-    Expect(button_machine, Event::kBootCompleted, State::kIdle);
-    Expect(wake_machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(button_machine);
+    ReachIdle(wake_machine);
     Expect(button_machine, Event::kButtonShortPress, State::kConnecting);
     Expect(wake_machine, Event::kActivationWakeDetected, State::kConnecting);
     Expect(button_machine, Event::kTransportConnected, State::kListening);
@@ -41,7 +60,7 @@ void TestWakeAndButtonShareTheSamePath() {
 
 void TestAbortInvalidatesTheCurrentGeneration() {
     StateMachine machine;
-    Expect(machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(machine);
     Expect(machine, Event::kButtonShortPress, State::kConnecting);
     Expect(machine, Event::kTransportConnected, State::kListening);
     Expect(machine, Event::kVadFinal, State::kEvaluating);
@@ -54,7 +73,7 @@ void TestAbortInvalidatesTheCurrentGeneration() {
 
 void TestAdmissionRejectReturnsToListening() {
     StateMachine machine;
-    Expect(machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(machine);
     Expect(machine, Event::kButtonShortPress, State::kConnecting);
     Expect(machine, Event::kTransportConnected, State::kListening);
     Expect(machine, Event::kVadFinal, State::kEvaluating);
@@ -63,7 +82,7 @@ void TestAdmissionRejectReturnsToListening() {
 
 void TestLongPressClosesTheAssistantGate() {
     StateMachine machine;
-    Expect(machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(machine);
     Expect(machine, Event::kButtonShortPress, State::kConnecting);
     Expect(machine, Event::kTransportConnected, State::kListening);
     Expect(machine, Event::kButtonLongPress, State::kIdle);
@@ -72,7 +91,7 @@ void TestLongPressClosesTheAssistantGate() {
 
 void TestWakeCancelsClosingGrace() {
     StateMachine machine;
-    Expect(machine, Event::kBootCompleted, State::kIdle);
+    ReachIdle(machine);
     Expect(machine, Event::kButtonShortPress, State::kConnecting);
     Expect(machine, Event::kTransportConnected, State::kListening);
     Expect(machine, Event::kInactivityTimeout, State::kClosing);
@@ -83,6 +102,7 @@ void TestWakeCancelsClosingGrace() {
 }  // namespace
 
 int main() {
+    TestBootAndProvisioningFlow();
     TestAutoConversationDoesNotNeedSecondButtonPress();
     TestWakeAndButtonShareTheSamePath();
     TestAbortInvalidatesTheCurrentGeneration();

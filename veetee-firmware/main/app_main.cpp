@@ -13,6 +13,8 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "input/button.h"
+#include "network/wifi_manager.h"
+#include "settings/settings_store.h"
 
 namespace {
 
@@ -22,6 +24,9 @@ constexpr UBaseType_t kEventQueueDepth = 16;
 QueueHandle_t g_event_queue = nullptr;
 veetee::app::StateMachine g_state_machine;
 veetee::board::VeeteeBoard g_board;
+veetee::settings::SettingsStore g_settings_store;
+veetee::settings::DeviceSettings g_settings;
+veetee::network::WifiManager g_wifi;
 
 bool PostEvent(veetee::app::Event event) {
     if (g_event_queue == nullptr || xQueueSend(g_event_queue, &event, 0) != pdTRUE) {
@@ -46,6 +51,23 @@ void OnButtonEvent(veetee::input::ButtonEvent event, void*) {
     }
 }
 
+void OnWifiEvent(veetee::network::WifiManagerEvent event, void*) {
+    switch (event) {
+        case veetee::network::WifiManagerEvent::kConnected:
+            PostEvent(veetee::app::Event::kWifiConnected);
+            break;
+        case veetee::network::WifiManagerEvent::kConnectionTimeout:
+            PostEvent(veetee::app::Event::kWifiConnectionTimeout);
+            break;
+        case veetee::network::WifiManagerEvent::kDisconnected:
+            PostEvent(veetee::app::Event::kWifiDisconnected);
+            break;
+        case veetee::network::WifiManagerEvent::kProvisioningSaved:
+            PostEvent(veetee::app::Event::kProvisioningSaved);
+            break;
+    }
+}
+
 void RunApplication(void*) {
     veetee::app::Event event;
     while (xQueueReceive(g_event_queue, &event, portMAX_DELAY) == pdTRUE) {
@@ -63,7 +85,31 @@ void RunApplication(void*) {
                  result.cancellation_generation);
         g_board.ApplyState(result.to);
 
-        if (result.to == veetee::app::State::kConnecting) {
+        if (result.to == veetee::app::State::kWifiConfiguring) {
+            if (event == veetee::app::Event::kEnterWifiConfig) {
+                const esp_err_t reset_error = g_wifi.ResetProvisioning();
+                if (reset_error != ESP_OK) {
+                    ESP_LOGE(kTag, "Unable to clear stored provisioning: %s",
+                             esp_err_to_name(reset_error));
+                }
+            }
+            const esp_err_t error = g_wifi.StartProvisioning();
+            if (error != ESP_OK) {
+                ESP_LOGE(kTag, "Unable to start provisioning: %s; retrying",
+                         esp_err_to_name(error));
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                PostEvent(veetee::app::Event::kRetryWifiProvisioning);
+            }
+        } else if (result.to == veetee::app::State::kNetworkConnecting) {
+            const esp_err_t error = g_wifi.StartStation();
+            if (error != ESP_OK) {
+                ESP_LOGE(kTag, "Unable to start station: %s; opening setup portal",
+                         esp_err_to_name(error));
+                PostEvent(veetee::app::Event::kWifiConnectionTimeout);
+            }
+        } else if (result.to == veetee::app::State::kActivating) {
+            ESP_LOGI(kTag, "Network ready; OTA/bootstrap starts in the next firmware slice");
+        } else if (result.to == veetee::app::State::kConnecting) {
             // The transport phase will replace this local bring-up completion event.
             PostEvent(veetee::app::Event::kTransportConnected);
         } else if (result.to == veetee::app::State::kAborting) {
@@ -97,6 +143,8 @@ extern "C" void app_main() {
         abort();
     }
 
+    ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
+    ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, nullptr));
     ESP_ERROR_CHECK(g_board.StartDiagnostics());
 
@@ -104,5 +152,7 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "Unable to create application task");
         abort();
     }
-    PostEvent(veetee::app::Event::kBootCompleted);
+    PostEvent(g_settings.HasProvisioning()
+                  ? veetee::app::Event::kBootWithCredentials
+                  : veetee::app::Event::kBootNeedsProvisioning);
 }

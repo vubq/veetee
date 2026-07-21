@@ -7,6 +7,7 @@ namespace veetee::app {
 enum class State : std::uint8_t {
     kStarting,
     kWifiConfiguring,
+    kNetworkConnecting,
     kActivating,
     kIdle,
     kConnecting,
@@ -19,9 +20,14 @@ enum class State : std::uint8_t {
 };
 
 enum class Event : std::uint8_t {
-    kBootCompleted,
+    kBootNeedsProvisioning,
+    kBootWithCredentials,
     kEnterWifiConfig,
-    kWifiConfigured,
+    kRetryWifiProvisioning,
+    kProvisioningSaved,
+    kWifiConnected,
+    kWifiConnectionTimeout,
+    kWifiDisconnected,
     kActivationComplete,
     kButtonShortPress,
     kButtonLongPress,
