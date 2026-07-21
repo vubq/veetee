@@ -9,6 +9,9 @@
         {
           "name": "self.get_device_status",
           "description": "Read the current device state, assistant gate, firmware version and speaker volume.",
+          "audience": "regular",
+          "safetyClass": "read_only",
+          "requiresConfirmation": false,
           "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -18,6 +21,9 @@
         {
           "name": "self.audio_speaker.get_volume",
           "description": "Read the current speaker output volume as a percentage from 0 to 100.",
+          "audience": "regular",
+          "safetyClass": "read_only",
+          "requiresConfirmation": false,
           "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -27,6 +33,9 @@
         {
           "name": "self.audio_speaker.set_volume",
           "description": "Set speaker output volume from 0 to 100 percent.",
+          "audience": "regular",
+          "safetyClass": "reversible",
+          "requiresConfirmation": false,
           "inputSchema": {
             "type": "object",
             "additionalProperties": false,

@@ -108,6 +108,7 @@ export function defaultAgentConfig(): Record<string, unknown> {
       firstInputSeconds: 15,
       betweenTurnsSeconds: 30,
       closingGraceSeconds: 5,
+      maxSessionSeconds: 600,
       totalTurnSeconds: 30,
       admissionSeconds: 1,
       plannerSeconds: 8,

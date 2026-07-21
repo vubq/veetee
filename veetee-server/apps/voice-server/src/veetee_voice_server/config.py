@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     first_input_seconds: float = Field(default=15.0, gt=0.1, le=300.0)
     between_turns_seconds: float = Field(default=30.0, gt=0.1, le=600.0)
     closing_grace_seconds: float = Field(default=5.0, gt=0.1, le=60.0)
+    max_session_seconds: float = Field(default=600.0, gt=1.0, le=3_600.0)
     asr_seconds: float = Field(default=8.0, gt=0.1, le=60.0)
     goodbye_text: str = "Tạm biệt, hẹn gặp lại."
 

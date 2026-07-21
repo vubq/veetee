@@ -59,6 +59,7 @@ class ConversationEngine:
         self._arbiter = arbiter
         self._admission = admission
         self._planner = planner
+        self._fused_semantic_gate = id(admission) == id(planner)
         self._llm = llm
         self._tts = tts
         self._tools = tools
@@ -66,14 +67,18 @@ class ConversationEngine:
         self._policy = policy or ConversationPolicy()
         self._system_prompt = system_prompt
 
-    async def handle_transcript(
-        self, transcript: Transcript
-    ) -> AdmissionDisposition | None:
+    async def handle_transcript(self, transcript: Transcript) -> AdmissionDisposition | None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
         try:
+            admission_seconds = (
+                self._policy.planner_seconds
+                if self._fused_semantic_gate
+                else self._policy.admission_seconds
+            )
+            admission_context = context.child(admission_seconds)
             decision = await await_operation(
-                self._admission.evaluate(transcript, context.child(self._policy.admission_seconds)),
-                context.child(self._policy.admission_seconds),
+                self._admission.evaluate(transcript, admission_context),
+                admission_context,
             )
             await self._emit(
                 context,
@@ -85,6 +90,7 @@ class ConversationEngine:
                         "disposition": decision.disposition.value,
                         "confidence": decision.confidence,
                         "reason_code": decision.reason_code,
+                        "addressed_to_robot": decision.addressed_to_robot,
                     },
                 ),
             )
@@ -161,16 +167,12 @@ class ConversationEngine:
             return
         if plan.action is PlanAction.END_SESSION:
             if plan.response_text:
-                await self._speak_planned_text(
-                    plan.response_text, plan.locale, context
-                )
+                await self._speak_planned_text(plan.response_text, plan.locale, context)
             await self._arbiter.close_assistant("semantic_end")
             return
         if plan.action is PlanAction.ASK_CLARIFICATION:
             if plan.response_text:
-                await self._speak_planned_text(
-                    plan.response_text, plan.locale, context
-                )
+                await self._speak_planned_text(plan.response_text, plan.locale, context)
             return
         if plan.action is PlanAction.RESPOND and plan.response_text:
             await self._speak_planned_text(plan.response_text, plan.locale, context)
@@ -228,21 +230,15 @@ class ConversationEngine:
                     ),
                 )
                 for sentence in chunker.push(event.text):
-                    await self._speak_text(
-                        sentence, request.plan.locale, context, speech
-                    )
+                    await self._speak_text(sentence, request.plan.locale, context, speech)
 
             remainder = chunker.flush()
             if remainder:
-                await self._speak_text(
-                    remainder, request.plan.locale, context, speech
-                )
+                await self._speak_text(remainder, request.plan.locale, context, speech)
         finally:
             await self._finish_speech(context, speech)
 
-    async def _speak_once(
-        self, text: str, locale: str, context: OperationContext
-    ) -> None:
+    async def _speak_once(self, text: str, locale: str, context: OperationContext) -> None:
         speech = _SpeechLifecycle()
         chunker = SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
@@ -257,9 +253,7 @@ class ConversationEngine:
         finally:
             await self._finish_speech(context, speech)
 
-    async def _speak_planned_text(
-        self, text: str, locale: str, context: OperationContext
-    ) -> None:
+    async def _speak_planned_text(self, text: str, locale: str, context: OperationContext) -> None:
         await self._emit(
             context,
             ConversationOutput(
@@ -304,9 +298,7 @@ class ConversationEngine:
                 ),
             )
 
-    async def _finish_speech(
-        self, context: OperationContext, speech: _SpeechLifecycle
-    ) -> None:
+    async def _finish_speech(self, context: OperationContext, speech: _SpeechLifecycle) -> None:
         if not speech.started or not self._arbiter.is_current(context):
             return
         await self._emit(

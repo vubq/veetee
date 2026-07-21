@@ -27,6 +27,19 @@ class DeviceTool:
     name: str
     description: str
     input_schema: dict[str, Any]
+    audience: str
+    safety_class: str
+    requires_confirmation: bool
+
+    def as_catalog_item(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": self.input_schema,
+            "audience": self.audience,
+            "safetyClass": self.safety_class,
+            "requiresConfirmation": self.requires_confirmation,
+        }
 
 
 class DeviceMcpClient:
@@ -36,45 +49,91 @@ class DeviceMcpClient:
         self._next_id = 1
         self._pending: dict[int | str, asyncio.Future[dict[str, Any]]] = {}
         self._tools: dict[str, DeviceTool] = {}
+        self._all_tools: dict[str, DeviceTool] | None = None
+        self._initialize_lock = asyncio.Lock()
+        self._discovery_lock = asyncio.Lock()
+        self._initialized = False
         self._closed = False
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "inputSchema": tool.input_schema,
-                "requiresConfirmation": False,
-            }
-            for tool in self._tools.values()
-        ]
+        return [tool.as_catalog_item() for tool in self._tools.values()]
 
     async def initialize(self, timeout_seconds: float = 8.0) -> None:
-        context = OperationContext(
-            self._session_id,
-            f"{self._session_id}:mcp-bootstrap",
-            0,
-            CancellationToken(),
-            monotonic() + timeout_seconds,
-        )
-        initialized = await self._request(
-            "initialize", {"capabilities": {}}, context.child(timeout_seconds)
-        )
-        self._validate_initialize_result(initialized)
+        async with self._initialize_lock:
+            if self._initialized:
+                return
+            context = OperationContext(
+                self._session_id,
+                f"{self._session_id}:mcp-bootstrap",
+                0,
+                CancellationToken(),
+                monotonic() + timeout_seconds,
+            )
+            initialized = await self._request(
+                "initialize", {"capabilities": {}}, context.child(timeout_seconds)
+            )
+            self._validate_initialize_result(initialized)
+            self._tools = await self._discover_tools(False, context)
+            self._initialized = True
+
+    async def manager_tools(self, timeout_seconds: float = 8.0) -> list[dict[str, Any]]:
+        await self.initialize(timeout_seconds)
+        if self._all_tools is None:
+            context = OperationContext(
+                self._session_id,
+                f"{self._session_id}:mcp-manager-catalog",
+                0,
+                CancellationToken(),
+                monotonic() + timeout_seconds,
+            )
+            async with self._discovery_lock:
+                if self._all_tools is None:
+                    self._all_tools = await self._discover_tools(True, context)
+        return [tool.as_catalog_item() for tool in self._all_tools.values()]
+
+    async def manager_call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        confirmed: bool,
+        context: OperationContext,
+    ) -> Any:
+        context.checkpoint()
+        await self.manager_tools(context.remaining_seconds)
+        assert self._all_tools is not None
+        tool = self._all_tools.get(name)
+        if tool is None:
+            raise KeyError(f"Unknown device MCP tool: {name}")
+        if tool.requires_confirmation and not confirmed:
+            raise PermissionError(f"Device MCP tool requires confirmation: {name}")
+        return await self._call_tool(tool, arguments, context)
+
+    async def _discover_tools(
+        self, with_user_tools: bool, context: OperationContext
+    ) -> dict[str, DeviceTool]:
         cursor = ""
         seen_cursors: set[str] = set()
         discovered: dict[str, DeviceTool] = {}
         for _ in range(32):
             result = await self._request(
                 "tools/list",
-                {"cursor": cursor, "withUserTools": False},
+                {"cursor": cursor, "withUserTools": with_user_tools},
                 context,
             )
             tools = result.get("tools")
             if not isinstance(tools, list):
                 raise DeviceMcpError("Device tools/list result is missing tools")
             for item in tools:
-                tool = self._parse_tool(item)
+                tool = self._parse_tool(
+                    item,
+                    default_audience=(
+                        "regular"
+                        if not with_user_tools
+                        or (isinstance(item, dict) and item.get("name") in self._tools)
+                        else "user"
+                    ),
+                )
                 if tool.name in discovered:
                     raise DeviceMcpError(f"Duplicate device MCP tool: {tool.name}")
                 discovered[tool.name] = tool
@@ -82,31 +141,30 @@ class DeviceMcpClient:
                     raise DeviceMcpError("Device MCP catalog exceeds 128 tools")
             next_cursor = result.get("nextCursor")
             if next_cursor in {None, ""}:
-                self._tools = discovered
-                return
+                return discovered
             if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
                 raise DeviceMcpError("Device MCP pagination cursor is invalid")
             seen_cursors.add(next_cursor)
             cursor = next_cursor
         raise DeviceMcpError("Device MCP catalog exceeds pagination limit")
 
-    async def call(
-        self, name: str, arguments: dict[str, Any], context: OperationContext
-    ) -> Any:
+    async def call(self, name: str, arguments: dict[str, Any], context: OperationContext) -> Any:
         context.checkpoint()
         tool = self._tools.get(name)
         if tool is None:
             raise KeyError(f"Unknown device MCP tool: {name}")
+        return await self._call_tool(tool, arguments, context)
+
+    async def _call_tool(
+        self, tool: DeviceTool, arguments: dict[str, Any], context: OperationContext
+    ) -> Any:
+        name = tool.name
         validation_error = next(
             Draft202012Validator(tool.input_schema).iter_errors(arguments), None
         )
         if validation_error is not None:
-            raise DeviceMcpError(
-                f"Invalid arguments for {name}: {validation_error.message[:256]}"
-            )
-        result = await self._request(
-            "tools/call", {"name": name, "arguments": arguments}, context
-        )
+            raise DeviceMcpError(f"Invalid arguments for {name}: {validation_error.message[:256]}")
+        result = await self._request("tools/call", {"name": name, "arguments": arguments}, context)
         self._validate_call_result(name, result)
         if result.get("isError") is True:
             raise DeviceMcpError(f"Device MCP tool failed: {name}")
@@ -152,9 +210,7 @@ class DeviceMcpClient:
             raise DeviceMcpError("Device MCP client is closed")
         request_id = self._next_id
         self._next_id += 1
-        future: asyncio.Future[dict[str, Any]] = (
-            asyncio.get_running_loop().create_future()
-        )
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
         try:
             await self._sender(
@@ -182,12 +238,17 @@ class DeviceMcpClient:
             raise DeviceMcpError("Device MCP initialize result is invalid")
 
     @staticmethod
-    def _parse_tool(value: Any) -> DeviceTool:
+    def _parse_tool(value: Any, *, default_audience: str) -> DeviceTool:
         if not isinstance(value, dict):
             raise DeviceMcpError("Device MCP tool entry must be an object")
         name = value.get("name")
         description = value.get("description")
         input_schema = value.get("inputSchema")
+        audience = value.get("audience", default_audience)
+        safety_class = value.get(
+            "safetyClass", "disruptive" if audience == "user" else "reversible"
+        )
+        requires_confirmation = value.get("requiresConfirmation", audience == "user")
         if (
             not isinstance(name, str)
             or not name.startswith("self.")
@@ -195,23 +256,30 @@ class DeviceMcpClient:
             or not isinstance(description, str)
             or len(description) > 512
             or not isinstance(input_schema, dict)
+            or audience not in {"regular", "user"}
+            or safety_class not in {"read_only", "reversible", "disruptive", "destructive"}
+            or not isinstance(requires_confirmation, bool)
+            or (audience == "user" and not requires_confirmation)
         ):
             raise DeviceMcpError("Device MCP tool entry is invalid")
         try:
             Draft202012Validator.check_schema(input_schema)
         except SchemaError as error:
             raise DeviceMcpError("Device MCP tool input schema is invalid") from error
-        return DeviceTool(name, description, input_schema)
+        return DeviceTool(
+            name,
+            description,
+            input_schema,
+            audience,
+            safety_class,
+            requires_confirmation,
+        )
 
     @staticmethod
     def _validate_call_result(name: str, result: dict[str, Any]) -> None:
         content = result.get("content")
         is_error = result.get("isError")
-        if (
-            not isinstance(content, list)
-            or len(content) > 32
-            or not isinstance(is_error, bool)
-        ):
+        if not isinstance(content, list) or len(content) > 32 or not isinstance(is_error, bool):
             raise DeviceMcpError(f"Device MCP tool result is invalid: {name}")
         total_text_bytes = 0
         for item in content:

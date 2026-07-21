@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, ClassVar
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.types import (
@@ -112,4 +112,162 @@ class JsonPlannerProvider:
             if isinstance(value.get("response_text"), str)
             else None,
             tool_call=tool_call,
+        )
+
+
+class StructuredConversationGate:
+    """Run signal admission and semantic planning in one structured model call."""
+
+    _reason_codes: ClassVar[frozenset[str]] = frozenset(
+        {
+            "speech_relevant",
+            "non_speech",
+            "low_quality",
+            "not_addressed",
+            "self_echo",
+            "duplicate",
+            "low_confidence",
+            "semantic_interrupt",
+            "conversation_end",
+            "unclear",
+            "invalid_model_output",
+        }
+    )
+
+    def __init__(
+        self,
+        complete_json: Any,
+        *,
+        locale: str = "vi-VN",
+        signal_gate: LocalAdmissionProvider | None = None,
+    ) -> None:
+        self._complete_json = complete_json
+        self._locale = locale
+        self._signal_gate = signal_gate or LocalAdmissionProvider()
+        self._cached: tuple[str, int, str, AdmissionDecision, ConversationPlan] | None = None
+
+    async def evaluate(
+        self, transcript: Transcript, context: OperationContext
+    ) -> AdmissionDecision:
+        # Never allow a cancelled or malformed turn to inherit an older plan.
+        self._cached = None
+        signal_decision = await self._signal_gate.evaluate(transcript, context)
+        if signal_decision.disposition is not AdmissionDisposition.ACCEPTED:
+            return signal_decision
+
+        value = await self._complete_json(
+            {
+                "role": "conversation_gate",
+                "locale": transcript.locale or self._locale,
+                "transcript": transcript.text,
+                "asr_confidence": transcript.confidence,
+                "asr_stability": transcript.stability,
+            },
+            context,
+        )
+        context.checkpoint()
+        decision, plan = self._parse_gate(value, transcript.locale or self._locale)
+        if decision.disposition in {AdmissionDisposition.ACCEPTED, AdmissionDisposition.END}:
+            self._cached = (
+                context.turn_id,
+                context.generation,
+                transcript.text,
+                decision,
+                plan,
+            )
+        return decision
+
+    async def plan(
+        self,
+        transcript: Transcript,
+        admission: AdmissionDecision,
+        context: OperationContext,
+    ) -> ConversationPlan:
+        context.checkpoint()
+        cached = self._cached
+        self._cached = None
+        if (
+            cached is None
+            or cached[0] != context.turn_id
+            or cached[1] != context.generation
+            or cached[2] != transcript.text
+            or cached[3].disposition is not admission.disposition
+        ):
+            raise ValueError("Semantic gate plan is unavailable for this turn")
+        return cached[4]
+
+    @classmethod
+    def _parse_gate(
+        cls, value: dict[str, Any], locale: str
+    ) -> tuple[AdmissionDecision, ConversationPlan]:
+        admission_value = value.get("admission")
+        if not isinstance(admission_value, dict):
+            admission_value = {}
+        try:
+            disposition = AdmissionDisposition(
+                str(admission_value.get("decision", AdmissionDisposition.UNCLEAR.value))
+            )
+        except ValueError:
+            disposition = AdmissionDisposition.UNCLEAR
+        confidence_value = admission_value.get("confidence", 0.0)
+        confidence = (
+            min(max(float(confidence_value), 0.0), 1.0)
+            if isinstance(confidence_value, int | float) and not isinstance(confidence_value, bool)
+            else 0.0
+        )
+        addressed_value = admission_value.get("addressed_to_robot")
+        addressed_to_robot = (
+            min(max(float(addressed_value), 0.0), 1.0)
+            if isinstance(addressed_value, int | float) and not isinstance(addressed_value, bool)
+            else None
+        )
+        reason_code = str(admission_value.get("reason_code", "invalid_model_output"))
+        if reason_code not in cls._reason_codes:
+            reason_code = "invalid_model_output"
+
+        plan_value = value.get("plan")
+        if not isinstance(plan_value, dict):
+            plan_value = {}
+        flattened_plan = {**plan_value, "dialogue_act": value.get("dialogue_act")}
+        plan = JsonPlannerProvider._parse(flattened_plan, locale)
+
+        if (
+            disposition is AdmissionDisposition.INTERRUPT
+            or plan.dialogue_act is DialogueAct.INTERRUPT
+        ):
+            disposition = AdmissionDisposition.INTERRUPT
+            reason_code = "semantic_interrupt"
+        elif (
+            disposition is AdmissionDisposition.END
+            or plan.dialogue_act is DialogueAct.END
+            or plan.action is PlanAction.END_SESSION
+        ):
+            disposition = AdmissionDisposition.END
+            reason_code = "conversation_end"
+            plan = replace(
+                plan,
+                action=PlanAction.END_SESSION,
+                dialogue_act=DialogueAct.END,
+                tool_call=None,
+            )
+        elif disposition is AdmissionDisposition.ACCEPTED and plan.action is PlanAction.NOOP:
+            disposition = AdmissionDisposition.NON_ACTIONABLE
+            reason_code = "unclear"
+
+        if disposition not in {AdmissionDisposition.ACCEPTED, AdmissionDisposition.END}:
+            plan = replace(
+                plan,
+                action=PlanAction.NOOP,
+                response_required=False,
+                response_text=None,
+                tool_call=None,
+            )
+        return (
+            AdmissionDecision(
+                disposition,
+                confidence,
+                reason_code,
+                addressed_to_robot,
+            ),
+            plan,
         )

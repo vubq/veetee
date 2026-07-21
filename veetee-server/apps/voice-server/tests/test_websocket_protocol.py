@@ -90,9 +90,7 @@ class FakeAsr:
 
 
 class FakeTts:
-    async def synthesize(
-        self, *_: object, **__: object
-    ) -> AsyncIterator[AudioChunk]:
+    async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
         if False:
             yield AudioChunk(0, 24_000, "pcm_s16le", b"", final=True)
 
@@ -115,9 +113,7 @@ def session(websocket: FakeWebSocket, settings: Settings) -> VoiceSession:
 
 
 async def test_server_waits_for_valid_device_hello_before_replying() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     websocket = FakeWebSocket()
     voice_session = session(websocket, settings)
     task = asyncio.create_task(voice_session.run())
@@ -139,9 +135,7 @@ async def test_server_waits_for_valid_device_hello_before_replying() -> None:
 
 
 async def test_missing_device_hello_closes_with_protocol_error() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.11
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.11)
     websocket = FakeWebSocket()
     await session(websocket, settings).run()
     assert websocket.sent_text == []
@@ -149,13 +143,9 @@ async def test_missing_device_hello_closes_with_protocol_error() -> None:
 
 
 async def test_binary_or_invalid_hello_is_rejected_before_server_hello() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     binary_socket = FakeWebSocket()
-    await binary_socket.incoming.put(
-        {"type": "websocket.receive", "bytes": b"not-a-device-hello"}
-    )
+    await binary_socket.incoming.put({"type": "websocket.receive", "bytes": b"not-a-device-hello"})
     await session(binary_socket, settings).run()
     assert binary_socket.sent_text == []
     assert binary_socket.closed == [(1002, "device hello must be a text frame")]
@@ -163,18 +153,14 @@ async def test_binary_or_invalid_hello_is_rejected_before_server_hello() -> None
     invalid_socket = FakeWebSocket()
     invalid = json.loads(fixture("device-hello-v1.json"))
     invalid["unexpected"] = True
-    await invalid_socket.incoming.put(
-        {"type": "websocket.receive", "text": json.dumps(invalid)}
-    )
+    await invalid_socket.incoming.put({"type": "websocket.receive", "text": json.dumps(invalid)})
     await session(invalid_socket, settings).run()
     assert invalid_socket.sent_text == []
     assert invalid_socket.closed == [(1002, "invalid device hello")]
 
 
 async def test_session_mismatch_closes_after_successful_handshake() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     websocket = FakeWebSocket()
     await websocket.incoming.put(
         {"type": "websocket.receive", "text": fixture("device-hello-v1.json")}
@@ -201,25 +187,19 @@ async def test_session_mismatch_closes_after_successful_handshake() -> None:
 
 
 async def test_oversized_opus_packet_closes_with_message_too_big() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     websocket = FakeWebSocket()
     await websocket.incoming.put(
         {"type": "websocket.receive", "text": fixture("device-hello-v1.json")}
     )
-    await websocket.incoming.put(
-        {"type": "websocket.receive", "bytes": b"x" * 1501}
-    )
+    await websocket.incoming.put({"type": "websocket.receive", "bytes": b"x" * 1501})
     await session(websocket, settings).run()
     assert websocket.closed == [(1009, "Opus packet too large")]
 
 
 async def test_protocol_parser_enforces_size_audio_and_session_contract() -> None:
     hello = fixture("device-hello-v1.json")
-    parsed = parse_device_hello(
-        hello, expected_sample_rate=16_000, expected_frame_duration=60
-    )
+    parsed = parse_device_hello(hello, expected_sample_rate=16_000, expected_frame_duration=60)
     assert parsed.features.mcp is True
 
     wrong_audio = json.loads(hello)
@@ -233,16 +213,12 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
 
     oversized = json.dumps({"type": "hello", "padding": "x" * 8192})
     with pytest.raises(ProtocolViolationError) as oversized_error:
-        parse_device_hello(
-            oversized, expected_sample_rate=16_000, expected_frame_duration=60
-        )
+        parse_device_hello(oversized, expected_sample_rate=16_000, expected_frame_duration=60)
     assert oversized_error.value.close_code == 1009
 
     with pytest.raises(ProtocolViolationError) as mismatch:
         parse_client_event(
-            json.dumps(
-                {"session_id": "other", "type": "abort", "reason": "new_turn"}
-            ),
+            json.dumps({"session_id": "other", "type": "abort", "reason": "new_turn"}),
             session_id="expected",
         )
     assert mismatch.value.close_code == 1008
@@ -259,9 +235,7 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
     assert stt_payload(fixture_session, "Xin chào Veetee") == json.loads(
         fixture("stt-final-vietnamese.json")
     )
-    assert llm_payload(fixture_session, "thinking") == json.loads(
-        fixture("llm-thinking.json")
-    )
+    assert llm_payload(fixture_session, "thinking") == json.loads(fixture("llm-thinking.json"))
     assert tts_payload(fixture_session, "start") == json.loads(fixture("tts-start.json"))
     assert tts_payload(fixture_session, "stop") == json.loads(fixture("tts-stop.json"))
     assert assistant_sleep_payload(fixture_session, "inactivity_timeout") == json.loads(
@@ -279,9 +253,7 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
 
 
 async def test_session_bootstraps_device_mcp_catalog_after_hello() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     websocket = FakeWebSocket()
     captured: dict[str, Any] = {}
 
@@ -359,6 +331,7 @@ async def test_session_bootstraps_device_mcp_catalog_after_hello() -> None:
     )
     assert voice_session._mcp_bootstrap_task is not None
     await voice_session._mcp_bootstrap_task
+    assert voice_session.mcp_ready.is_set()
     assert captured["tools"].list_tools()[0]["name"] == "self.get_device_status"
 
     await websocket.incoming.put({"type": "websocket.disconnect", "code": 1000})
@@ -438,9 +411,7 @@ async def test_cancelled_generation_stops_paced_audio_before_late_frames() -> No
 
 
 async def test_abort_while_asr_is_pending_keeps_assistant_listening() -> None:
-    settings = Settings(
-        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
-    )
+    settings = Settings(environment="test", require_device_auth=False, hello_timeout_seconds=0.2)
     websocket = FakeWebSocket()
     voice_session = session(websocket, settings)
     await voice_session.inactivity.assistant_opened(WakeSource.BUTTON)

@@ -19,6 +19,7 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
                 "firstInputSeconds": 0,
                 "betweenTurnsSeconds": 45,
                 "closingGraceSeconds": 999,
+                "maxSessionSeconds": 99_999,
                 "llmSeconds": 12,
             },
             "providers": [
@@ -37,6 +38,7 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
     assert profile.policy.first_input_seconds == 3.0
     assert profile.policy.between_turns_seconds == 45.0
     assert profile.policy.closing_grace_seconds == 60.0
+    assert profile.policy.max_session_seconds == 3_600.0
     assert profile.llm_model == "cx/configured-model"
     assert profile.llm_reasoning_effort == "low"
 
@@ -46,9 +48,11 @@ def test_session_profile_uses_configurable_local_persona_fallback() -> None:
         environment="test",
         require_device_auth=False,
         default_persona="Configured local persona",
+        max_session_seconds=720,
     )
     profile = SessionProfile.defaults(settings)
     assert profile.persona == "Configured local persona"
+    assert profile.policy.max_session_seconds == 720
 
 
 @pytest.mark.asyncio

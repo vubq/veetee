@@ -56,6 +56,27 @@ class FakePlanner:
         return self.plan_value
 
 
+class SlowFusedGate:
+    def __init__(self, plan: ConversationPlan) -> None:
+        self.plan_value = plan
+
+    async def evaluate(
+        self, transcript: Transcript, context: OperationContext
+    ) -> AdmissionDecision:
+        await asyncio.sleep(0.02)
+        context.checkpoint()
+        return AdmissionDecision(AdmissionDisposition.ACCEPTED, 0.95, "fixture")
+
+    async def plan(
+        self,
+        transcript: Transcript,
+        admission: AdmissionDecision,
+        context: OperationContext,
+    ) -> ConversationPlan:
+        context.checkpoint()
+        return self.plan_value
+
+
 class FakeLlm:
     def __init__(self, deltas: tuple[str, ...] = ("Xin chao. ", "Toi co the giup ban.")) -> None:
         self.deltas = deltas
@@ -149,12 +170,8 @@ async def test_auto_conversation_replies_without_a_second_button_press() -> None
     assert [output.kind for output in sink.outputs].count(OutputKind.TTS_START) == 1
     assert [output.kind for output in sink.outputs].count(OutputKind.TTS_STOP) == 1
     assert next(
-        index for index, output in enumerate(sink.outputs)
-        if output.kind is OutputKind.TTS_START
-    ) < next(
-        index for index, output in enumerate(sink.outputs)
-        if output.kind is OutputKind.AUDIO
-    )
+        index for index, output in enumerate(sink.outputs) if output.kind is OutputKind.TTS_START
+    ) < next(index for index, output in enumerate(sink.outputs) if output.kind is OutputKind.AUDIO)
     assert arbiter.snapshot.state is ConversationState.LISTENING
 
 
@@ -171,8 +188,7 @@ async def test_planner_response_text_skips_the_second_llm_call() -> None:
     assert tts.calls == ["Tôi là Veetee."]
     assert any(output.kind is OutputKind.AUDIO for output in sink.outputs)
     assert any(
-        output.kind is OutputKind.TEXT_DELTA
-        and output.payload.get("text") == "Tôi là Veetee."
+        output.kind is OutputKind.TEXT_DELTA and output.payload.get("text") == "Tôi là Veetee."
         for output in sink.outputs
     )
 
@@ -215,6 +231,35 @@ async def test_rejected_input_never_calls_planner_llm_or_tts(
     assert arbiter.snapshot.state is ConversationState.LISTENING
 
 
+async def test_fused_semantic_gate_uses_planner_deadline() -> None:
+    arbiter = TurnArbiter("session-fused")
+    gate = SlowFusedGate(response_plan("Đã xử lý."))
+    llm = FakeLlm()
+    tts = FakeTts()
+    sink = MemoryConversationSink()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=gate,
+        planner=gate,
+        llm=llm,
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            admission_seconds=0.001,
+            planner_seconds=0.2,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    result = await engine.handle_transcript(Transcript("fixture", "vi-VN"))
+
+    assert result is AdmissionDisposition.ACCEPTED
+    assert tts.calls == ["Đã xử lý."]
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
 async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     engine, arbiter, _, _, llm, tts, sink = create_engine()
     llm.release = asyncio.Event()
@@ -232,7 +277,6 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     assert tts.calls == []
     assert not any(output.kind is OutputKind.AUDIO for output in sink.outputs)
     assert not any(
-        output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP}
-        for output in sink.outputs
+        output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP} for output in sink.outputs
     )
     assert arbiter.snapshot.state is ConversationState.LISTENING

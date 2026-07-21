@@ -59,10 +59,27 @@ async def test_default_websocket_route_uses_only_the_veetee_namespace() -> None:
     assert "/xiaozhi/v1/" not in paths
 
 
-async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
-    profile = SessionProfile.defaults(
-        Settings(environment="test", require_device_auth=False)
+async def test_manager_mcp_internal_routes_require_service_token() -> None:
+    settings = Settings(
+        environment="test",
+        manager_internal_token="test-service-token",
+        _env_file=None,  # type: ignore[call-arg]
     )
+    app = create_app(settings)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        unauthorized = await client.get("/internal/v1/devices/device-1/mcp/tools")
+        offline = await client.get(
+            "/internal/v1/devices/device-1/mcp/tools",
+            headers={"authorization": "Bearer test-service-token"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert offline.status_code == 409
+    assert offline.json()["detail"] == "Device has no active voice session"
+
+
+async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
+    profile = SessionProfile.defaults(Settings(environment="test", require_device_auth=False))
     prompt = _planner_system_prompt(profile, RegistryToolBroker())
     assert "available tool catalog: []" in prompt
     assert "never invent a tool name" in prompt
@@ -87,8 +104,6 @@ async def test_llm_readiness_retries_a_failed_startup_prewarm() -> None:
     first = await probe()
     second = await probe()
 
-    assert first == ComponentHealth(
-        "llm", healthy=False, required=True, detail="prewarm_failed"
-    )
+    assert first == ComponentHealth("llm", healthy=False, required=True, detail="prewarm_failed")
     assert second == ComponentHealth("llm", healthy=True, required=True)
     assert provider.prewarm_calls == 2

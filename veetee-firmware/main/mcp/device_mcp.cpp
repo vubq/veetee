@@ -26,6 +26,7 @@ struct ToolDefinition {
     const char* name;
     const char* description;
     const char* input_schema;
+    const char* safety_class;
     bool user_only;
     ToolHandler handler;
 };
@@ -40,6 +41,7 @@ constexpr std::array<ToolDefinition, 4> kTools = {{
         "self.get_device_status",
         "Read the current device state, assistant gate, firmware version and speaker volume.",
         kEmptyInputSchema,
+        "read_only",
         false,
         ToolHandler::kDeviceStatus,
     },
@@ -47,6 +49,7 @@ constexpr std::array<ToolDefinition, 4> kTools = {{
         "self.audio_speaker.get_volume",
         "Read the current speaker output volume as a percentage from 0 to 100.",
         kEmptyInputSchema,
+        "read_only",
         false,
         ToolHandler::kGetVolume,
     },
@@ -54,6 +57,7 @@ constexpr std::array<ToolDefinition, 4> kTools = {{
         "self.audio_speaker.set_volume",
         "Set speaker output volume from 0 to 100 percent.",
         kVolumeInputSchema,
+        "reversible",
         false,
         ToolHandler::kSetVolume,
     },
@@ -61,6 +65,7 @@ constexpr std::array<ToolDefinition, 4> kTools = {{
         "self.get_system_info",
         "Read board and firmware identity for an explicit user diagnostic action.",
         kEmptyInputSchema,
+        "read_only",
         true,
         ToolHandler::kSystemInfo,
     },
@@ -101,6 +106,10 @@ cJSON* CreateToolJson(const ToolDefinition& tool) {
     }
     if (!cJSON_AddStringToObject(value, "name", tool.name) ||
         !cJSON_AddStringToObject(value, "description", tool.description) ||
+        !cJSON_AddStringToObject(value, "audience",
+                                tool.user_only ? "user" : "regular") ||
+        !cJSON_AddStringToObject(value, "safetyClass", tool.safety_class) ||
+        !cJSON_AddBoolToObject(value, "requiresConfirmation", tool.user_only) ||
         !cJSON_AddItemToObject(value, "inputSchema", schema)) {
         // schema remains caller-owned when cJSON_AddItemToObject fails.
         cJSON_Delete(schema);

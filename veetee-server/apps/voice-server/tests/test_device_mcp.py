@@ -37,9 +37,7 @@ def tool(name: str, *, maximum: int = 100) -> dict[str, Any]:
             "type": "object",
             "additionalProperties": False,
             "required": ["volume"],
-            "properties": {
-                "volume": {"type": "integer", "minimum": 0, "maximum": maximum}
-            },
+            "properties": {"volume": {"type": "integer", "minimum": 0, "maximum": maximum}},
         },
     }
 
@@ -129,10 +127,72 @@ async def test_schema_rejection_happens_before_device_dispatch() -> None:
     await client.initialize()
 
     with pytest.raises(DeviceMcpError, match="Invalid arguments"):
-        await client.call(
-            "self.audio_speaker.set_volume", {"volume": 101}, operation_context()
+        await client.call("self.audio_speaker.set_volume", {"volume": 101}, operation_context())
+    assert [request["method"] for request in sent].count("tools/call") == 0
+
+
+async def test_manager_catalog_requires_confirmation_for_user_only_tool() -> None:
+    async def responder(request: dict[str, Any]) -> dict[str, Any]:
+        if request["method"] == "initialize":
+            return initialize_result(request["id"])
+        if request["method"] == "tools/list":
+            regular = tool("self.audio_speaker.set_volume")
+            regular.update(
+                audience="regular",
+                safetyClass="reversible",
+                requiresConfirmation=False,
+            )
+            tools = [regular]
+            if request["params"]["withUserTools"]:
+                tools.append(
+                    {
+                        "name": "self.get_system_info",
+                        "description": "Read diagnostic system information.",
+                        "inputSchema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {},
+                        },
+                        "audience": "user",
+                        "safetyClass": "read_only",
+                        "requiresConfirmation": True,
+                    }
+                )
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {"tools": tools, "nextCursor": ""},
+            }
+        return {
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {
+                "content": [{"type": "text", "text": "diagnostic"}],
+                "isError": False,
+            },
+        }
+
+    client, sent = client_with_responder(responder)
+    catalog = await client.manager_tools()
+
+    assert [item["name"] for item in catalog] == [
+        "self.audio_speaker.set_volume",
+        "self.get_system_info",
+    ]
+    assert catalog[1]["audience"] == "user"
+    assert catalog[1]["requiresConfirmation"] is True
+
+    with pytest.raises(PermissionError, match="requires confirmation"):
+        await client.manager_call(
+            "self.get_system_info", {}, confirmed=False, context=operation_context()
         )
     assert [request["method"] for request in sent].count("tools/call") == 0
+
+    result = await client.manager_call(
+        "self.get_system_info", {}, confirmed=True, context=operation_context()
+    )
+    assert result["result"]["content"][0]["text"] == "diagnostic"
+    assert [request["method"] for request in sent].count("tools/call") == 1
 
 
 async def test_successful_call_and_json_rpc_error() -> None:
@@ -167,9 +227,7 @@ async def test_successful_call_and_json_rpc_error() -> None:
 
     client, _ = client_with_responder(responder)
     await client.initialize()
-    result = await client.call(
-        "self.audio_speaker.set_volume", {"volume": 55}, operation_context()
-    )
+    result = await client.call("self.audio_speaker.set_volume", {"volume": 55}, operation_context())
     assert result == {
         "tool": "self.audio_speaker.set_volume",
         "arguments": {"volume": 55},
@@ -181,9 +239,7 @@ async def test_successful_call_and_json_rpc_error() -> None:
 
     fail_call = True
     with pytest.raises(DeviceMcpError, match="Device MCP error -32602"):
-        await client.call(
-            "self.audio_speaker.set_volume", {"volume": 55}, operation_context()
-        )
+        await client.call("self.audio_speaker.set_volume", {"volume": 55}, operation_context())
 
 
 async def test_malformed_tool_result_is_rejected() -> None:
@@ -208,9 +264,7 @@ async def test_malformed_tool_result_is_rejected() -> None:
     client, _ = client_with_responder(responder)
     await client.initialize()
     with pytest.raises(DeviceMcpError, match="tool result is invalid"):
-        await client.call(
-            "self.audio_speaker.set_volume", {"volume": 55}, operation_context()
-        )
+        await client.call("self.audio_speaker.set_volume", {"volume": 55}, operation_context())
 
 
 async def test_turn_cancellation_drops_late_device_result() -> None:
@@ -238,9 +292,7 @@ async def test_turn_cancellation_drops_late_device_result() -> None:
     await client.initialize()
     token = CancellationToken()
     call = asyncio.create_task(
-        client.call(
-            "self.audio_speaker.set_volume", {"volume": 55}, operation_context(token)
-        )
+        client.call("self.audio_speaker.set_volume", {"volume": 55}, operation_context(token))
     )
     await call_sent.wait()
     assert pending_call is not None
@@ -260,9 +312,7 @@ async def test_turn_cancellation_drops_late_device_result() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "case", ["duplicate", "cursor_cycle", "catalog_limit", "page_limit"]
-)
+@pytest.mark.parametrize("case", ["duplicate", "cursor_cycle", "catalog_limit", "page_limit"])
 async def test_invalid_tool_catalog_is_rejected(case: str) -> None:
     page = 0
 

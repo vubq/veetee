@@ -22,6 +22,7 @@ import { OtaController } from "./modules/ota.controller.js";
 import { PairingController } from "./modules/pairing.controller.js";
 import { ProvidersController } from "./modules/providers.controller.js";
 import { PairingService } from "./pairing/pairing.service.js";
+import { VoiceMcpService } from "./mcp/voice-mcp.service.js";
 import { SecretCryptoService } from "./security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./store/control-plane.store.js";
 
@@ -46,6 +47,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     ArtifactFilesService,
     AuthService,
     PairingService,
+    VoiceMcpService,
     SecretCryptoService,
     ControlPlaneStore,
     DeviceAuthGuard,

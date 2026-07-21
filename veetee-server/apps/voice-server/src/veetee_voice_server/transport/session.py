@@ -237,16 +237,12 @@ class WebSocketConversationSink:
         frame += b"\0" * (frame_bytes - len(frame))
         return self._encoder.encode(frame, frame_samples=frame_samples)
 
-    async def _enqueue_audio(
-        self, stream: _PacedAudioStream, packet: bytes | None
-    ) -> bool:
+    async def _enqueue_audio(self, stream: _PacedAudioStream, packet: bytes | None) -> bool:
         if stream.cancelled.is_set():
             return False
         put_task = asyncio.create_task(stream.queue.put(packet))
         cancelled = asyncio.create_task(stream.cancelled.wait())
-        done, _ = await asyncio.wait(
-            {put_task, cancelled}, return_when=asyncio.FIRST_COMPLETED
-        )
+        done, _ = await asyncio.wait({put_task, cancelled}, return_when=asyncio.FIRST_COMPLETED)
         if cancelled in done:
             put_task.cancel()
             await asyncio.gather(put_task, return_exceptions=True)
@@ -267,9 +263,7 @@ class WebSocketConversationSink:
                 delay = next_packet_at - loop.time()
                 if delay > 0:
                     await asyncio.sleep(delay)
-                next_packet_at = max(next_packet_at, loop.time()) + (
-                    self._frame_duration_ms / 1000
-                )
+                next_packet_at = max(next_packet_at, loop.time()) + (self._frame_duration_ms / 1000)
             elif sequence == self._prebuffer_frames - 1:
                 next_packet_at = loop.time() + self._frame_duration_ms / 1000
             if (
@@ -391,18 +385,18 @@ class VoiceSession:
             first_input_seconds=profile.policy.first_input_seconds,
             between_turns_seconds=profile.policy.between_turns_seconds,
             closing_grace_seconds=profile.policy.closing_grace_seconds,
+            max_session_seconds=profile.policy.max_session_seconds,
             goodbye=self._goodbye,
         )
         self._decoder = OpusDecoder(settings.input_sample_rate)
         self._speech = bytearray()
         self._pre_roll = bytearray()
-        self._pre_roll_bytes = (
-            settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
-        )
+        self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
         self._speech_active = False
         self._asr_task: asyncio.Task[None] | None = None
         self._asr_context: OperationContext | None = None
         self._mcp_bootstrap_task: asyncio.Task[None] | None = None
+        self.mcp_ready = asyncio.Event()
         self._closed = False
 
     async def run(self) -> None:
@@ -432,9 +426,7 @@ class VoiceSession:
                 if message.get("bytes") is not None:
                     await self._handle_audio(message["bytes"])
                 elif message.get("text") is not None:
-                    event = parse_client_event(
-                        message["text"], session_id=self.session_id
-                    )
+                    event = parse_client_event(message["text"], session_id=self.session_id)
                     await self._handle_control(event)
         except TimeoutError:
             await self.websocket.close(code=1002, reason="device hello timeout")
@@ -491,6 +483,7 @@ class VoiceSession:
     async def _initialize_mcp(self) -> None:
         try:
             await self.mcp.initialize()
+            self.mcp_ready.set()
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -501,11 +494,14 @@ class VoiceSession:
             )
 
     async def _abort_current(self, reason: str) -> None:
+        was_closing = self.arbiter.snapshot.state is ConversationState.CLOSING
         receipt = await self.arbiter.abort(reason)
         self.sink.mark_cancelled(receipt.generation)
         await self._cancel_asr()
         self._reset_input()
         await self.sink.cancel_tts(receipt.generation)
+        if was_closing:
+            await self.inactivity.interrupt_closing()
         await self.arbiter.finish_cancellation(receipt)
         if self.arbiter.snapshot.state is ConversationState.LISTENING:
             await self.sink.send_listening()
@@ -639,9 +635,7 @@ class VoiceSession:
         started = False
         try:
             async for audio in iterate_operation(
-                self.tts.synthesize(
-                    self.profile.goodbye_text, self.profile.locale, context
-                ),
+                self.tts.synthesize(self.profile.goodbye_text, self.profile.locale, context),
                 context,
             ):
                 if not started:

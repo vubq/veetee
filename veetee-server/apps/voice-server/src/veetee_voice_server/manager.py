@@ -46,6 +46,7 @@ class SessionProfile:
                 first_input_seconds=settings.first_input_seconds,
                 between_turns_seconds=settings.between_turns_seconds,
                 closing_grace_seconds=settings.closing_grace_seconds,
+                max_session_seconds=settings.max_session_seconds,
                 total_turn_seconds=30.0,
                 admission_seconds=1.0,
                 planner_seconds=settings.planner_seconds,
@@ -98,6 +99,12 @@ class SessionProfile:
                     0.5,
                     60.0,
                 ),
+                max_session_seconds=_bounded_float(
+                    conversation.get("maxSessionSeconds"),
+                    defaults.policy.max_session_seconds,
+                    10.0,
+                    3_600.0,
+                ),
                 total_turn_seconds=_bounded_float(
                     conversation.get("totalTurnSeconds"), 30.0, 5.0, 60.0
                 ),
@@ -110,21 +117,14 @@ class SessionProfile:
                     0.5,
                     15.0,
                 ),
-                llm_seconds=_bounded_float(
-                    conversation.get("llmSeconds"), 20.0, 1.0, 45.0
-                ),
-                tts_seconds=_bounded_float(
-                    conversation.get("ttsSeconds"), 10.0, 1.0, 30.0
-                ),
-                mcp_seconds=_bounded_float(
-                    conversation.get("mcpSeconds"), 10.0, 0.5, 30.0
-                ),
+                llm_seconds=_bounded_float(conversation.get("llmSeconds"), 20.0, 1.0, 45.0),
+                tts_seconds=_bounded_float(conversation.get("ttsSeconds"), 10.0, 1.0, 30.0),
+                mcp_seconds=_bounded_float(conversation.get("mcpSeconds"), 10.0, 0.5, 30.0),
             ),
             llm_base_url=_optional_string(llm.get("baseUrl")) or defaults.llm_base_url,
             llm_model=_optional_string(llm.get("model")) or defaults.llm_model,
             llm_reasoning_effort=(
-                _reasoning_effort(llm.get("reasoningEffort"))
-                or defaults.llm_reasoning_effort
+                _reasoning_effort(llm.get("reasoningEffort")) or defaults.llm_reasoning_effort
             ),
         )
 

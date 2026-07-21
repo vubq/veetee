@@ -19,8 +19,7 @@ DEVICE_TOOLS = [
     {
         "name": "self.get_device_status",
         "description": (
-            "Read the current device state, assistant gate, firmware version and "
-            "speaker volume."
+            "Read the current device state, assistant gate, firmware version and speaker volume."
         ),
         "inputSchema": {
             "type": "object",
@@ -30,9 +29,7 @@ DEVICE_TOOLS = [
     },
     {
         "name": "self.audio_speaker.get_volume",
-        "description": (
-            "Read the current speaker output volume as a percentage from 0 to 100."
-        ),
+        "description": ("Read the current speaker output volume as a percentage from 0 to 100."),
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -46,9 +43,7 @@ DEVICE_TOOLS = [
             "type": "object",
             "additionalProperties": False,
             "required": ["volume"],
-            "properties": {
-                "volume": {"type": "integer", "minimum": 0, "maximum": 100}
-            },
+            "properties": {"volume": {"type": "integer", "minimum": 0, "maximum": 100}},
         },
     },
 ]
@@ -67,10 +62,12 @@ def load_pcm(path: Path, sample_rate: int) -> bytes:
 async def run(
     url: str,
     wav_path: Path,
-    timeout: float,
+    timeout_seconds: float,
     *,
     abort_on_first_audio: bool,
     abort_on_tool_call: bool,
+    expect_no_response: bool,
+    idle_after_wake: bool,
     late_tool_result_delay: float,
     expected_tool: str | None,
     expected_volume: int | None,
@@ -107,9 +104,9 @@ async def run(
                 separators=(",", ":"),
             )
         )
-        hello = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout))
+        hello = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds))
         session_id = hello["session_id"]
-        await bootstrap_device_mcp(websocket, session_id, timeout)
+        await bootstrap_device_mcp(websocket, session_id, timeout_seconds)
         await websocket.send(
             json.dumps(
                 {
@@ -123,16 +120,17 @@ async def run(
             )
         )
 
-        encoder = OpusEncoder(16_000)
-        try:
-            for offset in range(0, len(pcm), frame_bytes):
-                packet = encoder.encode(
-                    pcm[offset : offset + frame_bytes], frame_samples=frame_samples
-                )
-                await websocket.send(packet)
-                await asyncio.sleep(0.06)
-        finally:
-            encoder.close()
+        if not idle_after_wake:
+            encoder = OpusEncoder(16_000)
+            try:
+                for offset in range(0, len(pcm), frame_bytes):
+                    packet = encoder.encode(
+                        pcm[offset : offset + frame_bytes], frame_samples=frame_samples
+                    )
+                    await websocket.send(packet)
+                    await asyncio.sleep(0.06)
+            finally:
+                encoder.close()
 
         started = perf_counter()
         saw_stt = False
@@ -146,31 +144,35 @@ async def run(
         late_tool_result_sent = False
         observe_after_late_until: float | None = None
         stale_output_after_abort: list[str] = []
+        saw_assistant_sleep = False
         while True:
-            if saw_tts_stop and not abort_on_first_audio and not abort_on_tool_call:
-                break
-            if saw_tts_stop and listening_after_abort and abort_on_first_audio:
-                break
             if (
-                abort_on_tool_call
-                and observe_after_late_until is not None
-                and perf_counter() >= observe_after_late_until
+                saw_tts_stop
+                and not idle_after_wake
+                and not abort_on_first_audio
+                and not abort_on_tool_call
             ):
                 break
-            receive_timeout = timeout
+            if (
+                saw_tts_stop
+                and listening_after_abort
+                and abort_on_first_audio
+                and not idle_after_wake
+            ):
+                break
+            if observe_after_late_until is not None and perf_counter() >= observe_after_late_until:
+                break
+            receive_timeout = timeout_seconds
             if observe_after_late_until is not None:
                 receive_timeout = max(
                     0.01,
-                    min(timeout, observe_after_late_until - perf_counter()),
+                    min(timeout_seconds, observe_after_late_until - perf_counter()),
                 )
             try:
-                message = await asyncio.wait_for(
-                    websocket.recv(), timeout=receive_timeout
-                )
+                message = await asyncio.wait_for(websocket.recv(), timeout=receive_timeout)
             except TimeoutError:
                 if (
-                    abort_on_tool_call
-                    and observe_after_late_until is not None
+                    observe_after_late_until is not None
                     and perf_counter() >= observe_after_late_until
                 ):
                     break
@@ -247,9 +249,7 @@ async def run(
             elif event_type == "llm" and isinstance(event.get("text"), str):
                 if abort_sent and abort_on_tool_call:
                     stale_output_after_abort.append("llm:text")
-                result["llm_characters"] = result.get("llm_characters", 0) + len(
-                    event["text"]
-                )
+                result["llm_characters"] = result.get("llm_characters", 0) + len(event["text"])
                 result.setdefault("llm_text", []).append(event["text"])
             elif event_type == "tts" and state == "start":
                 if abort_sent and abort_on_tool_call:
@@ -282,19 +282,68 @@ async def run(
                             },
                         )
                         late_tool_result_sent = True
-                        timings["late_tool_result_ms"] = (
-                            perf_counter() - started
-                        ) * 1000
+                        timings["late_tool_result_ms"] = (perf_counter() - started) * 1000
                         observe_after_late_until = perf_counter() + 1.0
                 elif not saw_tts_start:
                     result["ended_without_tts"] = True
                     break
+            elif event_type == "listen" and state == "start" and abort_sent:
+                listening_after_abort = True
+                timings["listening_after_abort_ms"] = elapsed_ms
+                result["lifecycle"].append("listen:start")
+                if idle_after_wake:
+                    observe_after_late_until = perf_counter() + 1.0
+            elif event_type == "system" and event.get("command") == "assistant_sleep":
+                saw_assistant_sleep = True
+                result["assistant_sleep_reason"] = event.get("reason")
+                result["lifecycle"].append("system:assistant_sleep")
+                if idle_after_wake and not abort_sent:
+                    break
 
     result["timings"] = {key: round(value, 2) for key, value in timings.items()}
-    if abort_on_tool_call:
-        abort_to_listening_ms = (
-            timings.get("listening_after_abort_ms", float("inf"))
-            - timings.get("abort_sent_ms", 0.0)
+    if idle_after_wake and abort_on_first_audio:
+        abort_to_listening_ms = timings.get("listening_after_abort_ms", float("inf")) - timings.get(
+            "abort_sent_ms", 0.0
+        )
+        result["frames_after_abort"] = frames_after_abort
+        result["abort_to_listening_ms"] = round(abort_to_listening_ms, 2)
+        result["ok"] = all(
+            (
+                saw_tts_start,
+                saw_tts_stop,
+                abort_sent,
+                listening_after_abort,
+                abort_to_listening_ms <= 250.0,
+                frames_after_abort <= 2,
+                not saw_assistant_sleep,
+            )
+        )
+    elif idle_after_wake:
+        result["ok"] = all(
+            (
+                saw_tts_start,
+                saw_tts_stop,
+                saw_assistant_sleep,
+                result["downlink_frames"] > 0,
+                not saw_stt,
+                not saw_thinking,
+            )
+        )
+    elif expect_no_response:
+        result["ok"] = all(
+            (
+                saw_stt,
+                bool(result.get("ended_without_tts")),
+                not saw_thinking,
+                not saw_tts_start,
+                not saw_tts_stop,
+                result["downlink_frames"] == 0,
+                not result.get("tool_calls"),
+            )
+        )
+    elif abort_on_tool_call:
+        abort_to_listening_ms = timings.get("listening_after_abort_ms", float("inf")) - timings.get(
+            "abort_sent_ms", 0.0
         )
         result["late_tool_result_sent"] = late_tool_result_sent
         result["stale_output_after_abort"] = stale_output_after_abort
@@ -348,10 +397,8 @@ async def run(
     return result
 
 
-async def bootstrap_device_mcp(
-    websocket: Any, session_id: str, timeout: float
-) -> None:
-    initialize = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout))
+async def bootstrap_device_mcp(websocket: Any, session_id: str, timeout_seconds: float) -> None:
+    initialize = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds))
     payload = initialize.get("payload", {})
     if initialize.get("type") != "mcp" or payload.get("method") != "initialize":
         raise RuntimeError("Expected MCP initialize after server hello")
@@ -366,7 +413,7 @@ async def bootstrap_device_mcp(
         },
     )
 
-    tools_list = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout))
+    tools_list = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds))
     payload = tools_list.get("payload", {})
     if tools_list.get("type") != "mcp" or payload.get("method") != "tools/list":
         raise RuntimeError("Expected MCP tools/list after initialize")
@@ -456,12 +503,18 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--abort-on-first-audio", action="store_true")
     parser.add_argument("--abort-on-tool-call", action="store_true")
+    parser.add_argument("--expect-no-response", action="store_true")
+    parser.add_argument("--idle-after-wake", action="store_true")
     parser.add_argument("--late-tool-result-delay", type=float, default=0.25)
     parser.add_argument("--expect-tool")
     parser.add_argument("--expected-volume", type=int, choices=range(0, 101))
     args = parser.parse_args()
     if args.abort_on_first_audio and args.abort_on_tool_call:
         parser.error("Choose only one abort scenario")
+    if args.expect_no_response and (args.abort_on_first_audio or args.abort_on_tool_call):
+        parser.error("No-response validation cannot be combined with an abort scenario")
+    if args.idle_after_wake and (args.expect_no_response or args.abort_on_tool_call):
+        parser.error("Idle validation only supports an optional first-audio abort")
     if args.late_tool_result_delay < 0:
         parser.error("--late-tool-result-delay must be non-negative")
     result = asyncio.run(
@@ -471,6 +524,8 @@ def main() -> None:
             args.timeout,
             abort_on_first_audio=args.abort_on_first_audio,
             abort_on_tool_call=args.abort_on_tool_call,
+            expect_no_response=args.expect_no_response,
+            idle_after_wake=args.idle_after_wake,
             late_tool_result_delay=args.late_tool_result_delay,
             expected_tool=args.expect_tool,
             expected_volume=args.expected_volume,
