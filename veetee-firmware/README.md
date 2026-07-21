@@ -92,3 +92,19 @@ wake profile ID; password không được ghi log. Nếu station không lấy đ
 
 Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware
 không đọc password Wi-Fi đã lưu trên máy phát triển.
+
+## WebSocket handshake hiện tại
+
+- Transport chạy trên task riêng; callback chỉ assemble frame có bound và post
+  command, không stop/destroy client từ callback.
+- Header dùng Bearer device token, protocol version, hardware MAC `Device-Id` và
+  UUID bền vững `Client-Id`; token/session không được log.
+- Firmware gửi device hello fixture 16 kHz/mono/Opus 60 ms, chờ server hello tối đa
+  10 giây rồi mới gửi `listen:start(mode=auto)` với source `button` hoặc
+  `wake_word` qua cùng một code path.
+- JSON text fragment được assemble với giới hạn 8 KiB. Hello sai transport,
+  session/audio profile hoặc event có `session_id` khác sẽ đóng session.
+- Button/interrupt dùng chung đường `abort`; long press gửi `listen:stop` rồi đóng
+  channel. Generation mới làm event của connection cũ trở thành stale.
+- Binary Opus upload/download và `tts:start/stop` playback gate là lát audio kế
+  tiếp; transport hiện chỉ hoàn tất handshake/control lifecycle.

@@ -160,11 +160,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if resolved_settings.require_device_auth:
             protocol_version = websocket.headers.get("protocol-version")
             hardware_id = websocket.headers.get("device-id")
+            client_id = websocket.headers.get("client-id")
             authorization = websocket.headers.get("authorization", "")
-            has_device_token = authorization.startswith("Bearer ")
-            if protocol_version != "1" or not hardware_id or not has_device_token:
+            has_device_token = (
+                authorization.startswith("Bearer ")
+                and 8 <= len(authorization) <= 264
+                and authorization[7:].isascii()
+            )
+            if (
+                protocol_version != "1"
+                or not _valid_device_header(hardware_id)
+                or not _valid_device_header(client_id)
+                or not has_device_token
+            ):
                 await websocket.close(code=1008, reason="device authentication required")
                 return
+            assert hardware_id is not None
             manager = cast(ManagerClient, runtime["manager"])
             try:
                 device = await manager.authenticate_device(hardware_id, authorization[7:])
@@ -237,6 +248,18 @@ async def _manager_health(manager: ManagerClient) -> ComponentHealth:
         healthy=healthy,
         required=True,
         detail=None if healthy else "unreachable",
+    )
+
+
+def _valid_device_header(value: str | None) -> bool:
+    return (
+        value is not None
+        and 4 <= len(value) <= 128
+        and value == value.strip()
+        and all(
+            character.isascii() and (character.isalnum() or character in "-_.:")
+            for character in value
+        )
     )
 
 

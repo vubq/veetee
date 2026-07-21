@@ -11,6 +11,8 @@ set(VEETEE_SRCS
     "ota/bootstrap_client.cpp"
     "settings/activation_record.cpp"
     "settings/settings_store.cpp"
+    "transport/protocol_v1.cpp"
+    "transport/websocket_transport.cpp"
 )
 
 idf_component_register(
@@ -29,6 +31,7 @@ idf_component_register(
         esp_psram
         esp_timer
         esp_wifi
+        esp_websocket_client
         mbedtls
         nvs_flash
 )

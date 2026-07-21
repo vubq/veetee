@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(veetee_firmware_host_tests LANGUAGES CXX)
+project(veetee_firmware_host_tests LANGUAGES C CXX)
 
 enable_testing()
 
@@ -35,3 +35,33 @@ target_compile_features(activation_record_test PRIVATE cxx_std_17)
 target_compile_options(activation_record_test PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME activation_record_test COMMAND activation_record_test)
+
+add_library(
+    cjson_host STATIC
+    ../managed_components/espressif__cjson/cJSON/cJSON.c
+)
+target_include_directories(
+    cjson_host PUBLIC
+    ../managed_components/espressif__cjson/cJSON
+)
+target_compile_options(cjson_host PRIVATE -w)
+
+add_executable(
+    protocol_v1_test
+    protocol_v1_test.cpp
+    ../main/transport/protocol_v1.cpp
+)
+target_include_directories(
+    protocol_v1_test PRIVATE
+    ../main
+    ../managed_components/espressif__cjson/cJSON
+)
+target_compile_definitions(
+    protocol_v1_test PRIVATE
+    VEETEE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+target_compile_features(protocol_v1_test PRIVATE cxx_std_17)
+target_compile_options(protocol_v1_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(protocol_v1_test PRIVATE cjson_host)
+
+add_test(NAME protocol_v1_test COMMAND protocol_v1_test)

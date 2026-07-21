@@ -17,6 +17,7 @@
 #include "network/wifi_manager.h"
 #include "ota/bootstrap_client.h"
 #include "settings/settings_store.h"
+#include "transport/websocket_transport.h"
 
 namespace {
 
@@ -35,6 +36,7 @@ veetee::settings::SettingsStore g_settings_store;
 veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
+veetee::transport::WebSocketTransport g_transport;
 
 bool PostMessage(const AppMessage& message) {
     if (g_event_queue == nullptr ||
@@ -97,6 +99,25 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
     return PostMessage(message);
 }
 
+bool OnTransportEvent(
+    const veetee::transport::WebSocketTransportNotification& notification,
+    void*) {
+    switch (notification.event) {
+        case veetee::transport::WebSocketTransportEvent::kReady:
+            return PostEvent(veetee::app::Event::kTransportConnected);
+        case veetee::transport::WebSocketTransportEvent::kLost:
+            return PostEvent(veetee::app::Event::kTransportLost);
+    }
+    return false;
+}
+
+void LogTransportError(const char* operation, esp_err_t error) {
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "WebSocket %s failed: %s", operation,
+                 esp_err_to_name(error));
+    }
+}
+
 void RunApplication(void*) {
     AppMessage message{};
     while (xQueueReceive(g_event_queue, &message, portMAX_DELAY) == pdTRUE) {
@@ -116,6 +137,7 @@ void RunApplication(void*) {
         g_board.ApplyState(result.to);
 
         if (result.to == veetee::app::State::kWifiConfiguring) {
+            g_transport.Close();
             g_bootstrap.Cancel();
             if (event == veetee::app::Event::kEnterWifiConfig) {
                 const esp_err_t reset_error = g_wifi.ResetProvisioning();
@@ -132,6 +154,7 @@ void RunApplication(void*) {
                 PostEvent(veetee::app::Event::kRetryWifiProvisioning);
             }
         } else if (result.to == veetee::app::State::kNetworkConnecting) {
+            g_transport.Close();
             g_bootstrap.Cancel();
             const esp_err_t error = g_wifi.StartStation();
             if (error != ESP_OK) {
@@ -140,6 +163,7 @@ void RunApplication(void*) {
                 PostEvent(veetee::app::Event::kWifiConnectionTimeout);
             }
         } else if (result.to == veetee::app::State::kActivating) {
+            g_transport.Close();
             if (event == veetee::app::Event::kActivationCodeAvailable) {
                 const esp_err_t error = g_board.ShowActivationCode(
                     message.activation_code);
@@ -159,11 +183,42 @@ void RunApplication(void*) {
                          esp_err_to_name(error));
             }
         } else if (result.to == veetee::app::State::kConnecting) {
-            // The transport phase will replace this local bring-up completion event.
-            PostEvent(veetee::app::Event::kTransportConnected);
+            const veetee::transport::WakeSource source =
+                event == veetee::app::Event::kActivationWakeDetected
+                    ? veetee::transport::WakeSource::kWakeWord
+                    : veetee::transport::WakeSource::kButton;
+            const esp_err_t error = g_transport.Open(source);
+            if (error != ESP_OK) {
+                LogTransportError("open", error);
+                PostEvent(veetee::app::Event::kTransportLost);
+            }
         } else if (result.to == veetee::app::State::kAborting) {
             g_board.AbortPlayback();
+            if (!result.assistant_gate_open) {
+                LogTransportError("stop listening",
+                                  g_transport.StopListening("user_disable"));
+            } else if (event == veetee::app::Event::kInterruptDetected) {
+                LogTransportError(
+                    "interrupt",
+                    g_transport.Abort("local_interrupt_detected",
+                                      "interrupt_profile"));
+            } else if (event == veetee::app::Event::kActivationWakeDetected) {
+                LogTransportError(
+                    "closing cancellation",
+                    g_transport.Abort("session_closing_cancelled", "wake_word"));
+            } else {
+                LogTransportError(
+                    "button interrupt",
+                    g_transport.Abort("button_interrupt", "button"));
+            }
             PostEvent(veetee::app::Event::kAbortComplete);
+        } else if (result.to == veetee::app::State::kIdle) {
+            if (event == veetee::app::Event::kButtonLongPress) {
+                LogTransportError("stop listening",
+                                  g_transport.StopListening("user_disable"));
+            } else if (!result.assistant_gate_open) {
+                g_transport.Close();
+            }
         }
     }
 }
@@ -196,6 +251,7 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
+    ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent, nullptr));
     ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, nullptr));
     ESP_ERROR_CHECK(g_board.StartDiagnostics());
 

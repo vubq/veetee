@@ -63,6 +63,18 @@ async def test_opus_round_trip_20_ms_mono_frame() -> None:
     assert len(decoded) == 640
 
 
+async def test_opus_round_trip_60_ms_24khz_downlink_frame() -> None:
+    encoder = OpusEncoder(24_000)
+    decoder = OpusDecoder(24_000)
+    try:
+        packet = encoder.encode(b"\0\0" * 1_440, frame_samples=1_440)
+        decoded = decoder.decode(packet)
+    finally:
+        encoder.close()
+        decoder.close()
+    assert len(decoded) == 2_880
+
+
 async def test_9router_environment_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VEETEE_9ROUTER_API_KEY", "sentinel")
     monkeypatch.setenv("VEETEE_9ROUTER_MODEL", "cx/test")

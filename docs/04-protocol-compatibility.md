@@ -50,6 +50,12 @@ Server phải validate device id, token scope, protocol version và max frame tr
 
 Server phải gửi hello trong 10 giây. Nếu client quảng cáo `aec=true`, server có thể bật timestamped binary protocol v2 và AEC policy; không tự bật nếu audio profile chưa test.
 
+Thứ tự handshake V1 là bắt buộc: HTTP upgrade thành công -> device gửi `hello` ->
+server validate -> server gửi `hello`. Server không được chủ động gửi hello trước
+device. JSON hello/control tối đa 8 KiB; binary trước device hello, JSON malformed,
+hello sai audio profile hoặc `session_id` không khớp phải bị đóng bằng WebSocket
+protocol/policy code rõ ràng thay vì tiếp tục session ở trạng thái mơ hồ.
+
 ## 2. JSON event contract
 
 Mọi event trong audio session có `session_id` trừ hello.

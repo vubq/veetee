@@ -59,7 +59,10 @@ class Settings(BaseSettings):
     default_locale: str = "vi-VN"
     websocket_path: str = "/xiaozhi/v1/"
     input_sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
-    wire_sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
+    input_frame_duration_ms: Literal[20, 40, 60] = 60
+    wire_sample_rate: int = Field(default=24_000, ge=8_000, le=48_000)
+    wire_frame_duration_ms: Literal[20, 40, 60] = 60
+    hello_timeout_seconds: float = Field(default=10.0, gt=0.1, le=30.0)
     vad_threads: int = Field(default=1, ge=1, le=4)
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     vad_release_threshold: float = Field(default=0.35, ge=0.0, le=1.0)

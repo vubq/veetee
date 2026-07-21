@@ -1,4 +1,6 @@
 const id = { type: "string", minLength: 1 } as const;
+const sessionId = { type: "string", minLength: 1, maxLength: 64 } as const;
+const reasonCode = { type: "string", minLength: 1, maxLength: 64 } as const;
 const nonNegativeInteger = { type: "integer", minimum: 0 } as const;
 const positiveNumber = { type: "number", exclusiveMinimum: 0 } as const;
 const sha256 = { type: "string", pattern: "^[a-f0-9]{64}$" } as const;
@@ -339,7 +341,7 @@ export const mcpEnvelopeSchema = {
   additionalProperties: false,
   required: ["session_id", "type", "payload"],
   properties: {
-    session_id: id,
+    session_id: sessionId,
     type: { const: "mcp" },
     payload: {
       type: "object",
@@ -409,7 +411,7 @@ export const otaBootstrapSchema = {
 const sessionEvent = {
   type: "object",
   required: ["session_id", "type"],
-  properties: { session_id: id, type: id },
+  properties: { session_id: sessionId, type: id },
 } as const;
 
 export const webSocketEventSchema = {
@@ -439,7 +441,7 @@ export const webSocketEventSchema = {
       properties: {
         type: { const: "hello" },
         transport: { const: "websocket" },
-        session_id: id,
+        session_id: sessionId,
         audio_params: { $ref: "#/$defs/audio_params" },
       },
     },
@@ -448,23 +450,24 @@ export const webSocketEventSchema = {
       additionalProperties: false,
       required: ["session_id", "type", "state"],
       properties: {
-        session_id: id,
+        session_id: sessionId,
         type: { const: "listen" },
         state: { enum: ["start", "stop", "detect"] },
         mode: { enum: ["auto", "manual", "realtime"] },
         source: { enum: ["button", "wake_word"] },
         text: { type: "string" },
+        reason: reasonCode,
       },
     },
     {
       ...sessionEvent,
       additionalProperties: false,
-      required: ["session_id", "type", "reason"],
+      required: ["session_id", "type"],
       properties: {
-        session_id: id,
+        session_id: sessionId,
         type: { const: "abort" },
-        reason: id,
-        source: { enum: ["button", "interrupt_profile", "server"] },
+        reason: reasonCode,
+        source: { enum: ["button", "wake_word", "interrupt_profile", "server"] },
       },
     },
     {
@@ -472,10 +475,10 @@ export const webSocketEventSchema = {
       additionalProperties: false,
       required: ["session_id", "type", "command"],
       properties: {
-        session_id: id,
+        session_id: sessionId,
         type: { const: "system" },
         command: { enum: ["assistant_sleep", "config_changed"] },
-        reason: id,
+        reason: reasonCode,
         config_version: nonNegativeInteger,
         resource_version: id,
       },

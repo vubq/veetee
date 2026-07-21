@@ -9,12 +9,23 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.7.19~2
+  espressif/esp_websocket_client:
+    component_hash: 3fb288702517ef4d75bf933a115f1056ee0c2540d964f9e1d856e0bb67e1dfeb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.0
   idf:
     source:
       type: idf
     version: 6.0.2
 direct_dependencies:
 - espressif/cjson
-manifest_hash: f83beacbfab8dfe279eb84d1f99cb79a89c68c144ca0260e4dc8d8f2d2fb3f03
+- espressif/esp_websocket_client
+manifest_hash: 8183a56ef2735cabac9896df5176b371af67cfc49f41781387ac173c3edab0c5
 target: esp32s3
 version: 3.0.0

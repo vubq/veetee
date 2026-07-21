@@ -60,6 +60,20 @@ V1 là single-node deployment: voice-server, manager, 9Router, VAD/ASR/TTS worke
 chạy trên cùng máy. Port `20128` chỉ dành cho voice-server nội bộ; không cho ESP32
 hoặc LAN gọi trực tiếp.
 
+## Voice WebSocket hiện tại
+
+- Route native `/veetee/v1/` và compatibility `/xiaozhi/v1/` yêu cầu
+  `Protocol-Version`, hardware `Device-Id`, `Client-Id` và Bearer token khi device
+  auth bật.
+- Server chờ và validate exact device hello trước khi trả server hello; timeout mặc
+  định 10 giây, control frame tối đa 8 KiB.
+- Compatibility audio profile hiện là Opus mono: uplink 16 kHz/60 ms, downlink
+  24 kHz/60 ms. Hai hướng có setting riêng để không nhầm sample rate.
+- Malformed JSON/hello đóng code `1002`, frame quá lớn `1009`, sai `session_id`
+  `1008`. Device event sau handshake luôn phải mang đúng session ID.
+- Session vẫn giữ `mode=auto`: `listen:start` mở assistant gate, VAD tự finalize;
+  abort cancellation không gửi wire event custom ngoài contract.
+
 ## Spec bắt buộc
 
 - `../docs/02-system-architecture.md`

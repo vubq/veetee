@@ -48,6 +48,23 @@ describe("contract fixtures", () => {
     expect(result.valid).toBe(false);
   });
 
+  it("accepts bounded stop reasons and forward-compatible abort sources", () => {
+    const listenStop = registry.validate("https://schemas.veetee.local/ws/control-event-v1.json", {
+      session_id: "session-1",
+      type: "listen",
+      state: "stop",
+      reason: "user_disable",
+    });
+    const wakeAbort = registry.validate("https://schemas.veetee.local/ws/control-event-v1.json", {
+      session_id: "session-1",
+      type: "abort",
+      reason: "session_closing_cancelled",
+      source: "wake_word",
+    });
+    expect(listenStop.valid).toBe(true);
+    expect(wakeAbort.valid).toBe(true);
+  });
+
   it("verifies the RFC 8785 JCS and Ed25519 release vector", () => {
     const vector = JSON.parse(
       readFileSync(join(fixtureRoot, "artifacts/signed-resource-manifest-vector-v1.json"), "utf8"),

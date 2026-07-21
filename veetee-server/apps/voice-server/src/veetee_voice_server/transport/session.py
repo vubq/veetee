@@ -29,7 +29,19 @@ from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.contracts import TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
-from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder
+from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder, OpusError
+from veetee_voice_server.transport.protocol import (
+    MAX_OPUS_PACKET_BYTES,
+    AbortEvent,
+    ClientEvent,
+    ListenEvent,
+    McpEvent,
+    ProtocolViolationError,
+    SystemEvent,
+    parse_client_event,
+    parse_device_hello,
+    server_hello_payload,
+)
 
 
 class WebSocketConversationSink:
@@ -38,11 +50,13 @@ class WebSocketConversationSink:
         websocket: WebSocket,
         *,
         session_id: str,
-        output_sample_rate: int = 16_000,
+        output_sample_rate: int = 24_000,
+        frame_duration_ms: int = 60,
     ) -> None:
         self._websocket = websocket
         self._session_id = session_id
         self._output_sample_rate = output_sample_rate
+        self._frame_duration_ms = frame_duration_ms
         self._encoder = OpusEncoder(output_sample_rate)
         self._lock = asyncio.Lock()
         self._cancel_generation = 0
@@ -57,7 +71,7 @@ class WebSocketConversationSink:
                     pcm = await asyncio.to_thread(
                         self._resample_pcm, pcm, output.audio.sample_rate, self._output_sample_rate
                     )
-                frame_samples = self._output_sample_rate // 50
+                frame_samples = self._output_sample_rate * self._frame_duration_ms // 1000
                 for offset in range(0, len(pcm), frame_samples * 2):
                     frame = pcm[offset : offset + frame_samples * 2]
                     if len(frame) < frame_samples * 2:
@@ -73,6 +87,17 @@ class WebSocketConversationSink:
     async def send_control(self, payload: dict[str, Any]) -> None:
         async with self._lock:
             payload = {"session_id": self._session_id, **payload}
+            await self._websocket.send_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            )
+
+    async def send_hello(self) -> None:
+        async with self._lock:
+            payload = server_hello_payload(
+                self._session_id,
+                sample_rate=self._output_sample_rate,
+                frame_duration=self._frame_duration_ms,
+            )
             await self._websocket.send_text(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             )
@@ -126,6 +151,7 @@ class VoiceSession:
             websocket,
             session_id=self.session_id,
             output_sample_rate=settings.wire_sample_rate,
+            frame_duration_ms=settings.wire_frame_duration_ms,
         )
         self.asr = asr
         self.tts = tts
@@ -151,21 +177,22 @@ class VoiceSession:
 
     async def run(self) -> None:
         await self.websocket.accept()
-        await self.sink.send_control(
-            {
-                "type": "hello",
-                "version": 1,
-                "transport": "websocket",
-                "config_version": self.profile.config_version,
-                "audio_params": {
-                    "format": "opus",
-                    "sample_rate": self.settings.wire_sample_rate,
-                    "channels": 1,
-                    "frame_duration": 20,
-                },
-            }
-        )
         try:
+            hello_message = await asyncio.wait_for(
+                self.websocket.receive(), timeout=self.settings.hello_timeout_seconds
+            )
+            if hello_message.get("type") == "websocket.disconnect":
+                return
+            hello_text = hello_message.get("text")
+            if not isinstance(hello_text, str):
+                raise ProtocolViolationError("device hello must be a text frame")
+            parse_device_hello(
+                hello_text,
+                expected_sample_rate=self.settings.input_sample_rate,
+                expected_frame_duration=self.settings.input_frame_duration_ms,
+            )
+            await self.sink.send_hello()
+
             while True:
                 message = await self.websocket.receive()
                 if message.get("type") == "websocket.disconnect":
@@ -173,7 +200,14 @@ class VoiceSession:
                 if message.get("bytes") is not None:
                     await self._handle_audio(message["bytes"])
                 elif message.get("text") is not None:
-                    await self._handle_control(json.loads(message["text"]))
+                    event = parse_client_event(
+                        message["text"], session_id=self.session_id
+                    )
+                    await self._handle_control(event)
+        except TimeoutError:
+            await self.websocket.close(code=1002, reason="device hello timeout")
+        except ProtocolViolationError as error:
+            await self.websocket.close(code=error.close_code, reason=error.reason)
         except WebSocketDisconnect:
             pass
         finally:
@@ -191,12 +225,9 @@ class VoiceSession:
         self._decoder.close()
         self.sink.close()
 
-    async def _handle_control(self, event: dict[str, Any]) -> None:
-        event_type = event.get("type")
-        if event_type == "hello":
-            return
-        if event_type == "listen" and event.get("state") in {"start", "detect"}:
-            source = WakeSource(event.get("source", "button"))
+    async def _handle_control(self, event: ClientEvent) -> None:
+        if isinstance(event, ListenEvent) and event.state in {"start", "detect"}:
+            source = WakeSource(event.source or "button")
             if self.arbiter.snapshot.state is ConversationState.CLOSING:
                 await self.inactivity.wake_during_closing(source)
             else:
@@ -205,14 +236,18 @@ class VoiceSession:
                 {"type": "listen", "state": "start", "source": source.value}
             )
             return
-        if event_type == "listen" and event.get("state") == "stop":
-            await self._abort_or_close("listen_stop")
+        if isinstance(event, ListenEvent) and event.state == "stop":
+            await self._abort_or_close(event.reason or "listen_stop")
             return
-        if event_type == "abort":
-            await self._abort_or_close(str(event.get("reason", "client_abort")))
+        if isinstance(event, AbortEvent):
+            await self._abort_or_close(event.reason)
             return
-        if event_type == "system" and event.get("command") == "assistant_sleep":
-            await self._abort_or_close("system_sleep")
+        if isinstance(event, SystemEvent):
+            await self._abort_or_close(event.reason or "system_sleep")
+            return
+        if isinstance(event, McpEvent):
+            # MCP dispatch is introduced as its own cancellation-scoped vertical slice.
+            return
 
     async def _abort_or_close(self, reason: str) -> None:
         state = self.arbiter.snapshot.state
@@ -226,10 +261,14 @@ class VoiceSession:
             await self.arbiter.finish_cancellation(receipt)
         else:
             await self.arbiter.close_assistant(reason)
-        await self.sink.send_control({"type": "control", "event": "aborted", "reason": reason})
 
     async def _handle_audio(self, packet: bytes) -> None:
-        pcm = self._decoder.decode(packet)
+        if len(packet) > MAX_OPUS_PACKET_BYTES:
+            raise ProtocolViolationError("Opus packet too large", close_code=1009)
+        try:
+            pcm = self._decoder.decode(packet)
+        except (OpusError, ValueError) as error:
+            raise ProtocolViolationError("invalid Opus packet") from error
         if not pcm:
             return
         state = self.arbiter.snapshot.state
