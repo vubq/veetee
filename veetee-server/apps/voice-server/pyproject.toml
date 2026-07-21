@@ -5,13 +5,20 @@ description = "Realtime voice and conversation service for Veetee devices"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.139.2",
+    "huggingface-hub>=0.36.0",
     "httpx>=0.28.1",
+    "numpy>=2.5.1",
+    "onnxruntime>=1.27.0",
     "orjson>=3.11.9",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "redis>=8.0.1",
+    "sherpa-onnx>=1.13.4",
+    "soundfile>=0.14.0",
+    "soxr>=1.1.0",
     "structlog>=26.1.0",
     "uvicorn[standard]>=0.51.0",
+    "vieneu>=3.2.3",
 ]
 
 [project.scripts]

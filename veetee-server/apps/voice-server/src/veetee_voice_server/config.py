@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, HttpUrl
@@ -30,6 +31,13 @@ class Settings(BaseSettings):
     nine_router_api_key: str = Field(default="", repr=False)
     nine_router_model: str = "cx/gpt-5.4-mini"
     nine_router_reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+
+    models_root: Path = Path("models")
+    asr_threads: int = Field(default=4, ge=1, le=8)
+    tts_threads: int = Field(default=4, ge=1, le=8)
+    tts_voice: str = "Ngọc Linh"
+    tts_output_sample_rate: int = Field(default=24_000, ge=16_000, le=48_000)
+    tts_apply_watermark: bool = True
 
 
 @lru_cache

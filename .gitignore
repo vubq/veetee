@@ -5,6 +5,8 @@
 data/
 tmp/
 logs/
+models/
+benchmarks/runs/
 *.log
 *.pem
 *.key

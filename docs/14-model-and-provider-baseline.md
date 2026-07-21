@@ -237,6 +237,14 @@ chỉ hỗ trợ batch, sentence chunking vẫn cho UX incremental nhưng latenc
 không giả định “Turbo” tự động có streaming. Adapter phải có `cancel()` và trả
 sample-rate/format rõ ràng.
 
+Đã benchmark trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB; chưa có
+CUDA toolkit): VieNeu ONNX INT8 có first audio khoảng 430--560 ms và RTF khoảng
+0.99--1.21 khi chạy 4 threads; Zipformer INT8 có RTF khoảng 0.018--0.030. VieNeu
+native C++ CPU đạt RTF khoảng 0.75 cho batch hoàn chỉnh nhưng C ABI hiện chưa có
+stream callback/cancellation. Vì vậy ONNX streaming vẫn là primary V1; native chỉ
+là benchmark/opt-in worker cho tới khi bổ sung API streaming tương đương. Chi tiết
+và lệnh tái lập nằm ở `docs/15-local-ai-runtime.md`.
+
 Model TTS phải được benchmark về first-audio, real-time factor, CPU/RAM/VRAM,
 phát âm tên riêng/số/ngày, chất lượng giọng, output sample rate, license và khả năng
 hủy giữa chừng. Cache các câu hệ thống ngắn (goodbye, activation code, Wi-Fi lỗi)

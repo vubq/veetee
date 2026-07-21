@@ -11,6 +11,9 @@
     "dev:voice": "uv run --project apps/voice-server python apps/voice-server/main.py",
     "test:voice": "uv run --project apps/voice-server pytest",
     "lint:voice": "uv run --project apps/voice-server ruff check apps/voice-server && uv run --project apps/voice-server mypy --config-file apps/voice-server/pyproject.toml -p veetee_voice_server",
+    "models:prepare": "uv run --project apps/voice-server python scripts/prepare_local_ai.py",
+    "models:prepare-native": "uv run --project apps/voice-server python scripts/prepare_native_tts.py",
+    "models:benchmark": "HF_HUB_OFFLINE=1 uv run --project apps/voice-server python scripts/benchmark_local_ai.py",
     "infra:up": "docker compose -f compose.infra.yaml up -d postgres redis",
     "infra:down": "docker compose -f compose.infra.yaml down"
   },

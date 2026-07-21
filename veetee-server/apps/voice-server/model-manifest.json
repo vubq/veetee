@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "models": {
+    "sherpa_zipformer_vi_30m_int8": {
+      "repository": "csukuangfj2/sherpa-onnx-zipformer-vi-30M-int8-2026-02-09",
+      "revision": "83e140db6d23fbb8480fd5fb868f74ab80e7092c",
+      "license": "upstream model card; verify before redistribution",
+      "directory": "sherpa-onnx-zipformer-vi-30m-int8",
+      "files": {
+        "encoder.int8.onnx": "8ef5286dd427eb108055c2ddc1982aa31e544706072d5ea228729292dacade68",
+        "decoder.onnx": "cf2aa385b82c9d5d40cd29c3188af52d0249b3b78f0d4b7eb84ad502d50c7e7f",
+        "joiner.int8.onnx": "7311d2e17b810ecea515d79c71cc4668af8759256a06fa01d27047772320c821",
+        "tokens.txt": "ca8171f8bbd516c050b627582f2125c8f5f1f6ed967ab41b0fa9aae2cf61b492",
+        "bpe.model": "002894e7a82d80ffa5e25008ec8c5496159db804005e2103de96b01b4c13d445"
+      }
+    },
+    "silero_vad": {
+      "repository": "snakers4/silero-vad",
+      "revision": "76e3dc408eb2a5c655c34e230d2d5459b4439daa",
+      "license": "MIT",
+      "directory": "silero-vad",
+      "files": {
+        "silero_vad.onnx": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+      }
+    },
+    "vieneu_v3_turbo_int8": {
+      "repository": "pnnbao-ump/VieNeu-TTS-v3-Turbo",
+      "revision": "75ff82a72f54d55ed389e1eeb12041d3c4bac7d4",
+      "license": "Apache-2.0",
+      "directory": "vieneu-v3-turbo",
+      "files": {
+        "onnx_int8/vieneu_acoustic_cached.onnx": "0be6575ffe1c4c2009edb9c9b218c235f09665f630d1840e63c74bef30d462c1",
+        "onnx_int8/vieneu_backbone_shared.data": "68c0bd5e75f9cf2d557040201f5465dc03a61206813845f2de1ebe6542652b92",
+        "onnx_int8/vieneu_decode_step.onnx": "7907f8e067de22ee88f0912ffc8ccaf7cf90025e1d41351d2a5bb7cec44fc859",
+        "onnx_int8/vieneu_prefill.onnx": "9d04bd8023c5a003dd60939848bba7e85c5d8448480e607a9ae7aa3ecd6d7494",
+        "onnx_int8/vieneu_v3_heads.npz": "c2eadeb5b0b85c3009270352adea8c05a72f31c5a9f189ead9184333fb1becb8",
+        "onnx_int8/config.json": "a9f8d9c4b4736448ab355d1a98cfe48f5e39aecf2916c37b0806c228612e9a2d",
+        "onnx_int8/tokenizer.json": "6cc6bcbe380b8c37bd9f2514e37c5dfa3e00e122c6e3125dae5c4afe48e39158"
+      }
+    },
+    "moss_audio_tokenizer_nano_onnx": {
+      "repository": "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX",
+      "revision": "ceff0d0749bfb3fa2d61149794ec6feef0d1e1ae",
+      "license": "upstream model card; verify before redistribution",
+      "directory": "vieneu-v3-turbo/codec",
+      "files": {
+        "moss_audio_tokenizer_decode_full.onnx": "0fbbafe3fd4afa2a019af5c5ced204af6e2d1db044fa40f021525d2aee95b4ac",
+        "moss_audio_tokenizer_decode_shared.data": "e69d52e0f4e84ca27850557ee54face46632d3a5a16c89bd246c7c408466dcad",
+        "moss_audio_tokenizer_decode_step.onnx": "9527c86a29e1837edec1f74db57d5eeaadb3a715af3382703566460afed25855",
+        "codec_browser_onnx_meta.json": "3e291c883bb7d11ff2fe8e964e3e495519760358859f35c951254c7741592731"
+      }
+    }
+  }
+}
