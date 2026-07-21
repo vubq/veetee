@@ -18,6 +18,7 @@ class VeeteeLogController extends LogController {
 
 async function bootstrap(): Promise<void> {
   const adapter = new FastifyAdapter({
+    routerOptions: { ignoreTrailingSlash: true },
     logger: {
       redact: ["req.headers.authorization", "req.headers.cookie", "res.headers.set-cookie"],
     },

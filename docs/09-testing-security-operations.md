@@ -83,6 +83,8 @@ Admission test corpus phải đa dạng về môi trường, speaker, media play
 ### Server/API
 
 - CSPRNG activation code, TTL 5-10 phút, max attempt, atomic consume.
+- Pairing bootstrap idempotent theo hardware trong TTL; activation retry trả cùng
+  device token dẫn xuất bằng HMAC server-side, database chỉ lưu token hash.
 - JWT scoped theo device/client; rotate server secret không làm outage dài.
 - Argon2id, refresh token rotation, RBAC + tenant guard.
 - Encrypt provider credentials bằng KMS/master key ngoài database.

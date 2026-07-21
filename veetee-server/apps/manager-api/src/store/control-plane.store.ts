@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import {
   BadRequestException,
@@ -54,6 +54,28 @@ export interface ProviderRecord {
   secretConfigured: boolean;
   enabled: boolean;
   health: "unknown" | "healthy" | "degraded";
+}
+
+export type DeviceBootstrapResult =
+  | {
+      state: "unbound";
+      activation: { code: string; challenge: string; expiresAt: string };
+    }
+  | { state: "pending_activation" }
+  | {
+      state: "active";
+      deviceId: string;
+      agentId: string | null;
+      configVersion: number;
+      resourceVersion?: string;
+    };
+
+export interface DeviceActivationResult {
+  deviceId: string;
+  agentId: string | null;
+  token: string;
+  websocketUrl: string;
+  configVersion: number;
 }
 
 interface MutationContext {
@@ -119,6 +141,45 @@ export class ControlPlaneStore {
     return this.pairing.create(hardwareId);
   }
 
+  async bootstrapDevice(
+    hardwareId: string,
+    token?: string,
+    firmwareVersion?: string,
+  ): Promise<DeviceBootstrapResult> {
+    const device = await this.prisma.device.findUnique({
+      where: { hardwareId },
+      include: { agent: true, desiredState: true },
+    });
+    if (!device) {
+      if (token) throw new UnauthorizedException("Device token is invalid");
+      return {
+        state: "unbound",
+        activation: await this.pairing.create(hardwareId),
+      };
+    }
+    if (!device.tokenHash) return { state: "pending_activation" };
+    if (!token || !this.tokenMatches(token, device.tokenHash)) {
+      throw new UnauthorizedException("Device token is invalid");
+    }
+
+    await this.prisma.device.update({
+      where: { id: device.id },
+      data: {
+        lastSeenAt: new Date(),
+        ...(firmwareVersion ? { firmwareVersion } : {}),
+      },
+    });
+    const desired = (device.desiredState?.state ?? {}) as Record<string, unknown>;
+    const resourceVersion = desired.resourceBundleVersion;
+    return {
+      state: "active",
+      deviceId: device.id,
+      agentId: device.agentId,
+      configVersion: device.agent?.publishedVersion ?? 0,
+      ...(typeof resourceVersion === "string" ? { resourceVersion } : {}),
+    };
+  }
+
   async claimPairing(
     code: string,
     name: string,
@@ -178,18 +239,24 @@ export class ControlPlaneStore {
     }
   }
 
-  async activateDevice(hardwareId: string, challenge: string): Promise<Record<string, unknown>> {
+  async activateDevice(
+    hardwareId: string,
+    challenge: string,
+  ): Promise<DeviceActivationResult | null> {
     const device = await this.prisma.device.findUnique({
       where: { hardwareId },
       include: { agent: true },
     });
-    if (
-      !device?.activationChallengeHash ||
-      !this.tokenMatches(challenge, device.activationChallengeHash)
-    ) {
+    if (!device) return null;
+
+    const token = this.deviceToken(hardwareId, challenge);
+    if (device.tokenHash && this.tokenMatches(token, device.tokenHash)) {
+      return this.activationResult(device, token);
+    }
+    if (!device.activationChallengeHash ||
+        !this.tokenMatches(challenge, device.activationChallengeHash)) {
       throw new UnauthorizedException("Activation challenge is invalid");
     }
-    const token = randomBytes(32).toString("base64url");
     const activated = await this.prisma.device.updateMany({
       where: {
         id: device.id,
@@ -198,15 +265,12 @@ export class ControlPlaneStore {
       data: { tokenHash: this.hashToken(token), activationChallengeHash: null },
     });
     if (activated.count !== 1) {
-      throw new UnauthorizedException("Activation challenge is invalid");
+      const winner = await this.prisma.device.findUnique({ where: { id: device.id } });
+      if (!winner?.tokenHash || !this.tokenMatches(token, winner.tokenHash)) {
+        throw new UnauthorizedException("Activation challenge is invalid");
+      }
     }
-    return {
-      deviceId: device.id,
-      agentId: device.agentId,
-      token,
-      websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/xiaozhi/v1/",
-      configVersion: device.agent?.publishedVersion ?? 0,
-    };
+    return this.activationResult(device, token);
   }
 
   async authenticateDevice(deviceId: string, token: string): Promise<{ id: string; tenantId: string }> {
@@ -646,6 +710,32 @@ export class ControlPlaneStore {
 
   private hashToken(token: string): string {
     return createHash("sha256").update(token).digest("hex");
+  }
+
+  private deviceToken(hardwareId: string, challenge: string): string {
+    const secret = process.env.VEETEE_DEVICE_TOKEN_SECRET ?? process.env.VEETEE_AUTH_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error("VEETEE_DEVICE_TOKEN_SECRET or VEETEE_AUTH_SECRET must contain at least 32 characters");
+    }
+    return createHmac("sha256", secret)
+      .update("veetee-device-token-v1\0")
+      .update(hardwareId)
+      .update("\0")
+      .update(challenge)
+      .digest("base64url");
+  }
+
+  private activationResult(
+    device: { id: string; agentId: string | null; agent: { publishedVersion: number } | null },
+    token: string,
+  ): DeviceActivationResult {
+    return {
+      deviceId: device.id,
+      agentId: device.agentId,
+      token,
+      websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/xiaozhi/v1/",
+      configVersion: device.agent?.publishedVersion ?? 0,
+    };
   }
 
   private tokenMatches(token: string, expectedHash: string): boolean {

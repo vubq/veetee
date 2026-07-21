@@ -359,7 +359,7 @@ export const otaBootstrapSchema = {
   $id: "https://schemas.veetee.local/ota/bootstrap-v1.json",
   type: "object",
   additionalProperties: false,
-  required: ["server_time", "activation", "websocket", "firmware", "config", "resources"],
+  required: ["server_time", "websocket", "firmware"],
   properties: {
     server_time: {
       type: "object",
@@ -370,19 +370,20 @@ export const otaBootstrapSchema = {
     activation: {
       type: "object",
       additionalProperties: false,
-      required: ["code", "message", "challenge", "expires_at"],
+      required: ["code", "message", "challenge"],
       properties: {
         code: { type: "string", pattern: "^[0-9]{6}$" },
         message: id,
         challenge: id,
         expires_at: { type: "string", format: "date-time" },
+        timeout_ms: { type: "integer", minimum: 1000, maximum: 3_600_000 },
       },
     },
     websocket: {
       type: "object",
       additionalProperties: false,
       required: ["url", "token"],
-      properties: { url: { type: "string", format: "uri" }, token: id },
+      properties: { url: { type: "string", format: "uri" }, token: { type: "string" } },
     },
     firmware: {
       type: "object",

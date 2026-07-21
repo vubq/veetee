@@ -24,16 +24,6 @@ class ClaimPairingDto {
   agentId?: string;
 }
 
-class ActivateDeviceDto {
-  @IsString()
-  @Length(4, 128)
-  hardwareId!: string;
-
-  @IsString()
-  @Length(16, 128)
-  challenge!: string;
-}
-
 @Controller()
 export class PairingController {
   constructor(private readonly store: ControlPlaneStore) {}
@@ -58,11 +48,5 @@ export class PairingController {
   ): Promise<DeviceRecord> {
     if (!/^\d{6}$/.test(code)) throw new BadRequestException("Pairing code must contain six digits");
     return this.store.claimPairing(code, input.name, { principal, requestId: request.id }, input.agentId);
-  }
-
-  @Public()
-  @Post("veetee/ota/activate")
-  async activate(@Body() input: ActivateDeviceDto): Promise<Record<string, unknown>> {
-    return this.store.activateDevice(input.hardwareId, input.challenge);
   }
 }

@@ -58,6 +58,7 @@ export const fixtureSchemaIds = {
   "config/provider-baseline-v1.json": "https://schemas.veetee.local/config/provider-baseline-v1.json",
   "mcp/initialize.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/tools-call-volume.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
+  "ota/bootstrap-bound.json": "https://schemas.veetee.local/ota/bootstrap-v1.json",
   "ota/bootstrap-unbound.json": "https://schemas.veetee.local/ota/bootstrap-v1.json",
   "ws/abort-interrupt-profile.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/abort-speaking.json": "https://schemas.veetee.local/ws/control-event-v1.json",

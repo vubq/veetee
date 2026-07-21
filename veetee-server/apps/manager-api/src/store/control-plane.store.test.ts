@@ -13,6 +13,14 @@ class FakeRedisClient {
     return "OK";
   }
 
+  async get(key: string): Promise<string | null> {
+    return this.values.get(key) ?? null;
+  }
+
+  async del(key: string): Promise<number> {
+    return this.values.delete(key) ? 1 : 0;
+  }
+
   async eval(
     _: string,
     __: number,
@@ -39,5 +47,13 @@ describe("PairingService", () => {
     expect(ticket.code).toMatch(/^\d{6}$/);
     expect((await pairing.consume(ticket.code, "owner")).hardwareId).toBe("esp32-test");
     await expect(pairing.consume(ticket.code, "owner")).rejects.toThrow();
+  });
+
+  it("reuses the active ticket for bootstrap retries", async () => {
+    const redis = { client: new FakeRedisClient() } as unknown as RedisService;
+    const pairing = new PairingService(redis);
+    const first = await pairing.create("esp32-retry");
+    const retry = await pairing.create("esp32-retry");
+    expect(retry).toEqual(first);
   });
 });

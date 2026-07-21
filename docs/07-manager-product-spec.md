@@ -133,6 +133,10 @@ Internal endpoint dùng service token/mTLS, không expose ra internet.
 6. trả device summary và config version.
 
 Không dùng code 6 số làm password lâu dài. Code chỉ là one-time pairing handle.
+Bootstrap retry theo cùng hardware phải reuse ticket còn TTL. Activation challenge
+là secret possession của device; token kết quả phải retry-idempotent và chỉ lưu hash
+ở database. Device đã active phải xác thực Bearer token trước khi nhận config/WS URL;
+không được cấp pairing code mới chỉ vì request thiếu hoặc sai token.
 
 ## 5. Manager Web information architecture
 

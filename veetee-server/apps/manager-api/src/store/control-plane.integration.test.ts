@@ -103,12 +103,12 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       store.claimPairing(ticket.code, "Duplicate", { principal, requestId: "duplicate" }),
     ).rejects.toThrow();
     const activation = await store.activateDevice("esp32-integration", ticket.challenge);
-    expect(typeof activation.token).toBe("string");
+    expect(typeof activation?.token).toBe("string");
+    await expect(store.activateDevice("esp32-integration", ticket.challenge)).resolves.toEqual(
+      activation,
+    );
     await expect(
-      store.activateDevice("esp32-integration", ticket.challenge),
-    ).rejects.toThrow(/invalid/i);
-    await expect(
-      store.authenticateDevice(device.id, String(activation.token)),
+      store.authenticateDevice(device.id, String(activation?.token)),
     ).resolves.toMatchObject({ id: device.id });
     const desired = await store.setDesiredState(
       device.id,

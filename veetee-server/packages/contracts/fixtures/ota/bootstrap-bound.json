@@ -1,0 +1,23 @@
+{
+  "server_time": {
+    "timestamp": 1784635200000,
+    "timezone_offset": 420
+  },
+  "websocket": {
+    "url": "ws://192.168.1.20:8000/veetee/v1/",
+    "token": "bound-device-token"
+  },
+  "firmware": {
+    "version": "0.1.0",
+    "url": ""
+  },
+  "config": {
+    "version": 3,
+    "etag": "agent-config-3",
+    "url": "http://192.168.1.20:8001/veetee/config/v1/devices/01JDEVICE"
+  },
+  "resources": {
+    "version": "1.0.0",
+    "manifest_url": "http://192.168.1.20:8003/veetee/artifacts/manifests/01JRESOURCE"
+  }
+}

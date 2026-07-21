@@ -181,7 +181,18 @@ MQTT giữ hello/control; UDP giữ audio packet encrypted. Packet wire giữ 16
 Hai endpoint logic:
 
 - `POST /xiaozhi/ota/` (alias `/veetee/ota/`) - report system info, nhận config/activation/firmware.
-- `POST /xiaozhi/ota/activate` - hoàn tất activation.
+- `POST /xiaozhi/ota/activate` (alias `/veetee/ota/activate`) - hoàn tất activation.
+
+Bootstrap nhận `Device-Id`, optional-compatible `Client-Id`, model, firmware và locale.
+Khi chưa bind, `activation` có code 6 số, challenge, TTL; retry cùng hardware trong
+TTL phải trả cùng ticket thay vì sinh vô hạn code. `websocket.token` được phép rỗng
+ở trạng thái này và device chưa được mở voice session. Sau khi Manager atomically
+consume code, firmware poll activate bằng challenge; server trả `202` tới khi bind
+xong và kết quả `200` phải idempotent để retry sau mất response không xoay token.
+
+Sau activation, bootstrap yêu cầu Bearer device token, không còn `activation` và có
+thể trả `config`/`resources` optional. Device-facing JSON dùng `snake_case`; URL lấy
+từ cấu hình LAN/public endpoint, không nhúng domain cố định vào firmware.
 
 Firmware phải parse được cả `websocket` và `mqtt` object để giữ compatibility. Native Veetee V1 chọn WebSocket mặc định và chỉ chọn MQTT+UDP khi signed `preferred_transport=mqtt_udp` được publish rõ cho device/agent. Compatibility profile có thể giữ hành vi ưu tiên MQTT giống source tham chiếu. Server không được vô tình làm native firmware đổi transport chỉ vì response có thêm `mqtt` object.
 
