@@ -1,0 +1,23 @@
+{
+  "algorithm": "ed25519",
+  "canonicalization": "RFC8785-JCS",
+  "public_key_spki_base64": "MCowBQYDK2VwAyEATjmGhKz42+Khs+iORKwulGA+c/zM6SiQpHCNuJF9dUY=",
+  "document": {
+    "manifest_version": 1,
+    "bundle_id": "01JTESTVECTOR00000000000000",
+    "kind": "resource_bundle",
+    "version": "1.0.0-test",
+    "target": {
+      "board": "veetee-s3-n16r8",
+      "chip": "esp32s3",
+      "resource_abi": 1
+    },
+    "payload": {
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "size": 1024
+    },
+    "security_epoch": 1
+  },
+  "canonical_payload": "{\"bundle_id\":\"01JTESTVECTOR00000000000000\",\"kind\":\"resource_bundle\",\"manifest_version\":1,\"payload\":{\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"size\":1024},\"security_epoch\":1,\"target\":{\"board\":\"veetee-s3-n16r8\",\"chip\":\"esp32s3\",\"resource_abi\":1},\"version\":\"1.0.0-test\"}",
+  "signature_base64": "J7hhmGiQZdYwKwlGsXTu1aKAvHfj5+YLKKAXxkwkm+mnpexgL1rg3p5gn3x16wVpZIe7WoCCkKzCS0OlX+uZDg=="
+}

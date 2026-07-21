@@ -1,0 +1,36 @@
+{
+  "name": "@veetee/server-root",
+  "version": "1.0.0",
+  "description": "Backend monorepo của Veetee. Realtime voice path và management control plane được tách riêng nhưng dùng cùng contracts.",
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "docs:validate": "node scripts/validate-docs.mjs",
+    "dev:voice": "uv run --project apps/voice-server python apps/voice-server/main.py",
+    "test:voice": "uv run --project apps/voice-server pytest",
+    "lint:voice": "uv run --project apps/voice-server ruff check apps/voice-server && uv run --project apps/voice-server mypy --config-file apps/voice-server/pyproject.toml -p veetee_voice_server",
+    "infra:up": "docker compose -f compose.infra.yaml up -d postgres redis",
+    "infra:down": "docker compose -f compose.infra.yaml down"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true,
+  "workspaces": [
+    "apps/manager-api",
+    "apps/manager-web",
+    "packages/contracts",
+    "packages/provider-sdk"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

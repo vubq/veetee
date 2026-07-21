@@ -1,0 +1,52 @@
+name: veetee-infra
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${VEETEE_POSTGRES_USER:-veetee}
+      POSTGRES_PASSWORD: ${VEETEE_POSTGRES_PASSWORD:-veetee_dev_only}
+      POSTGRES_DB: ${VEETEE_POSTGRES_DB:-veetee}
+    ports:
+      - "127.0.0.1:${VEETEE_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - veetee-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${VEETEE_REDIS_PORT:-6379}:6379"
+    volumes:
+      - veetee-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    profiles: ["object-storage"]
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${VEETEE_MINIO_ROOT_USER:-veetee}
+      MINIO_ROOT_PASSWORD: ${VEETEE_MINIO_ROOT_PASSWORD:-veetee_minio_dev_only}
+    ports:
+      - "127.0.0.1:${VEETEE_MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${VEETEE_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - veetee-minio:/data
+    restart: unless-stopped
+
+volumes:
+  veetee-postgres:
+  veetee-redis:
+  veetee-minio:

@@ -78,10 +78,12 @@ manager-web ──REST──> manager-api ──Postgres/Redis/MinIO
 
 ### Hạ tầng
 
-- Docker Compose cho dev: Postgres, Redis, MinIO, voice-server, manager-api, manager-web.
+- Development ưu tiên chạy trực tiếp trên host bằng `uv`, Node và ESP-IDF để giảm
+  overhead khi debug model/audio. PostgreSQL và Redis có thể chạy native hoặc bằng
+  `veetee-server/compose.infra.yaml`; MinIO là profile tùy chọn, không tự khởi động.
 - V1 deploy single-node: 9Router, Silero VAD, Zipformer, ChunkFormer và VieNeu-TTS
-  chạy cùng máy với backend dưới process/container riêng. Internal traffic dùng
-  `127.0.0.1` hoặc Docker private network; không publish model worker port ra LAN.
+  chạy cùng máy với backend dưới process/venv riêng. Internal traffic dùng
+  `127.0.0.1`; không publish model worker port ra LAN.
 - Caddy/Nginx terminate TLS; WebSocket timeout và max frame phải cấu hình rõ.
 - Kubernetes chỉ sau khi đã đo connection count, CPU audio và provider quota.
 

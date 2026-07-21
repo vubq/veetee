@@ -24,7 +24,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Dynamic code | Resource bundle chỉ chứa data/model/assets; không chứa native executable/operator tùy ý. |
 | Pairing | Code 6 số là one-time handle, có TTL/attempt limit/CSPRNG/atomic consume; challenge là random nonce, không dùng MAC. |
 | Domain | Không yêu cầu mua domain; dev chạy bằng LAN IP, release có thể dùng local CA/SPKI pinning hoặc tunnel/domain sau. |
-| Deployment V1 | Single-node: voice-server, manager-api/web, PostgreSQL/Redis/MinIO, 9Router, Silero/ASR/TTS workers chạy cùng một máy. Provider/model traffic dùng loopback; chỉ Voice WS, Manager và Device Edge mở ra LAN. |
+| Deployment V1 | Single-node chạy trực tiếp trên host: voice-server, manager-api/web, 9Router và Silero/ASR/TTS workers dùng process/venv riêng. PostgreSQL/Redis có thể cài native hoặc chạy Docker Compose tùy máy; object storage dùng local filesystem trong dev và MinIO chỉ bật khi cần. Provider/model traffic dùng loopback; chỉ Voice WS, Manager và Device Edge mở ra LAN. |
 | Privacy | Raw audio không lưu mặc định; transcript/voiceprint có retention/consent riêng. |
 | Speech AI placement | ASR, Silero VAD và VieNeu-TTS chạy local trên voice-server; ESP32 chỉ capture/playback/Opus/wake/interrupt. |
 | ASR baseline | Sherpa-ONNX Zipformer Vietnamese 30M INT8 là primary; ChunkFormer-CTC-Large-Vie chỉ re-decode khi confidence/ổn định thấp hoặc policy yêu cầu chất lượng cao. Không chạy cả hai trên mọi utterance. |

@@ -1,0 +1,29 @@
+{
+  "name": "@veetee/provider-sdk",
+  "version": "0.1.0",
+  "description": "Port/capability model và conformance suite cho VAD, ASR, LLM, TTS, realtime, memory và tool adapters. Adapter vendor nằm trong voice-server hoặc package riêng nhưng phải pass suite này.",
+  "main": "dist/index.js",
+  "scripts": {
+    "pretest": "npm run build --workspace @veetee/contracts",
+    "test": "vitest run src",
+    "prebuild": "npm run build --workspace @veetee/contracts",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "npm run build --workspace @veetee/contracts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "types": "dist/index.d.ts",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@veetee/contracts": "0.1.0"
+  }
+}

@@ -1,6 +1,31 @@
 # veetee-server
 
-Backend monorepo của Veetee. Realtime voice path và management control plane được tách riêng nhưng dùng cùng contracts.
+Backend monorepo gồm realtime voice hot path, manager control plane, web console và
+các contract dùng chung. Luồng development mặc định chạy trực tiếp trên máy để
+giảm overhead và dễ monitor model/GPU; Docker chỉ là tùy chọn cho hạ tầng stateful.
+
+## Chạy local
+
+```bash
+cp .env.example .env
+npm ci
+uv sync --project apps/voice-server --all-groups
+npm run dev:voice
+```
+
+PostgreSQL/Redis có thể dùng bản cài trên host hoặc khởi động riêng bằng:
+
+```bash
+npm run infra:up
+```
+
+Lệnh này không chạy voice-server, manager, web, ASR, TTS hay 9Router trong
+container. MinIO cũng không chạy trừ khi bật profile `object-storage` rõ ràng.
+
+Backend monorepo của Veetee. Realtime voice path và management control plane được
+tách riêng nhưng dùng cùng contracts. Các app và model worker chạy thủ công trên
+host trong development; `compose.infra.yaml` chỉ cung cấp PostgreSQL/Redis và
+profile MinIO tùy chọn.
 
 ## Apps
 
