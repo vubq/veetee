@@ -110,7 +110,7 @@ describe("contract fixtures", () => {
 
     const publicKey = createPublicKey({
       key: Buffer.from(
-        "MCowBQYDK2VwAyEAUGjfpuNfZXAtWuLuDurXUbIS2qbg6VU1caybY79ckG8=",
+        "MCowBQYDK2VwAyEAI46wrFAWaXIburEHNLzXcKQWWrHWxJz7MNHie5CI17c=",
         "base64",
       ),
       format: "der",

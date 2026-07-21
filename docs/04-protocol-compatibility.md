@@ -268,4 +268,7 @@ Contract changes require a fixture update, changelog entry và compatibility run
 - Canonical native routes: `/veetee/v1/`, `/veetee/ota/`, `/veetee/config/v1/devices/:deviceId`, `/veetee/artifacts/manifests/:manifestId`, `/veetee/artifacts/:artifactId/content`.
 - Compatibility aliases: `/xiaozhi/v1/`, `/xiaozhi/ota/`. Alias chỉ nằm ở gateway/transport layer.
 - Bootstrap resource field canonical là `resources.manifest_url`; WebSocket invalidation dùng `config_version` và `resource_version`.
+- Manifest/content GET gửi `Authorization: Bearer ...` và `Device-Id`; content
+  support một range `bytes=N-`, trả `206`, exact `Content-Length`,
+  `Content-Range` và `Accept-Ranges: bytes`. Redirect và compressed transfer bị từ chối.
 - `audio_params.sample_rate` trong device hello là uplink mic rate; trong server hello là downlink TTS rate. Implementation không được coi hai giá trị này là cùng một hướng audio.

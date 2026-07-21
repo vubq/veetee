@@ -94,7 +94,7 @@ void TestResourceManifest() {
         .key_id = "veetee-dev-release-2026-01",
         .minimum_security_epoch = 1,
         .public_key = HexKey(
-            "5068dfa6e35f65702d5ae2ee0eead751b212daa6e0e9553571ac9b63bf5c906f"),
+            "238eb0ac501669721bbab10734bcd770a4165ab1d6c49cfb30d1e27b9088d7b7"),
     };
     veetee::ota::VerifiedResourceManifest manifest{};
     auto capability = Capability();
@@ -104,7 +104,7 @@ void TestResourceManifest() {
            veetee::ota::ResourceManifestError::kOk);
     assert(std::string(manifest.bundle_id) == "01JRESOURCE0000000000000000");
     assert(std::string(manifest.version) == "1.4.0");
-    assert(manifest.payload_bytes == 1835008);
+    assert(manifest.payload_bytes == 1024);
     assert(manifest.security_epoch == 1);
     assert(!manifest.requires_reboot);
 
@@ -114,7 +114,7 @@ void TestResourceManifest() {
            veetee::ota::ResourceManifestError::kTargetMismatch);
 
     capability = Capability();
-    capability.resource_slot_bytes = 1024;
+    capability.resource_slot_bytes = 512;
     assert(veetee::ota::VerifyResourceManifest(document, capability, &key, 1,
                                                 &manifest) ==
            veetee::ota::ResourceManifestError::kCapacityExceeded);
@@ -133,9 +133,9 @@ void TestResourceManifest() {
            veetee::ota::ResourceManifestError::kSecurityDowngrade);
 
     std::string tampered = document;
-    const std::size_t marker = tampered.find("1835008");
+    const std::size_t marker = tampered.find("1024");
     assert(marker != std::string::npos);
-    tampered.replace(marker, 7, "1835009");
+    tampered.replace(marker, 4, "1025");
     assert(veetee::ota::VerifyResourceManifest(tampered, Capability(), &key, 1,
                                                 &manifest) ==
            veetee::ota::ResourceManifestError::kInvalidSignature);
@@ -167,10 +167,10 @@ void TestResourceManifest() {
 
     std::string unsafe_name = document;
     const std::size_t name =
-        unsafe_name.find(R"("name": "speech/esp-sr-vi-home")");
+        unsafe_name.find(R"("name": "speech/esp-sr-models")");
     assert(name != std::string::npos);
     unsafe_name.replace(name,
-                        std::strlen(R"("name": "speech/esp-sr-vi-home")"),
+                        std::strlen(R"("name": "speech/esp-sr-models")"),
                         R"("name": "speech/../resource.bin")");
     assert(veetee::ota::VerifyResourceManifest(
                unsafe_name, Capability(), &key, 1, &manifest) ==

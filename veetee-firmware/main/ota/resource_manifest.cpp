@@ -292,7 +292,8 @@ ResourceManifestError VerifyResourceManifest(
                    sizeof(candidate.payload_sha256)) &&
         IsSha256(candidate.payload_sha256) &&
         CopyString(payload, "content_type", content_type, sizeof(content_type)) &&
-        std::strcmp(content_type, "application/vnd.veetee.resource-pack") == 0 &&
+        std::strcmp(content_type,
+                    "application/vnd.veetee.esp-sr-model-pack") == 0 &&
         HasOnlyProperties(apply,
                           {"mode", "requires_reboot", "rollback_allowed"}) &&
         CopyString(apply, "mode", apply_mode, sizeof(apply_mode)) &&

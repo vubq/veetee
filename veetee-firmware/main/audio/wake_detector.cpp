@@ -16,6 +16,7 @@ constexpr char kTag[] = "veetee_wake";
 constexpr UBaseType_t kPcmQueueDepth = 8;
 constexpr std::uint32_t kMinimumCooldownMs = 250;
 constexpr std::uint32_t kMaximumCooldownMs = 10000;
+constexpr std::uint32_t kStopTimeoutMs = 1000;
 
 bool CopyId(const char* source, std::array<char, 65>* target) {
     if (source == nullptr || target == nullptr) return false;
@@ -152,16 +153,51 @@ esp_err_t WakeDetector::Initialize(const char* partition_label,
 }
 
 esp_err_t WakeDetector::Start() {
-    if (task_ != nullptr) return ESP_ERR_INVALID_STATE;
+    if (task_running_.load(std::memory_order_acquire)) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (profile_count_ == 0) return ESP_OK;
     if (pcm_queue_ == nullptr || model_chunk_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
+    stop_requested_.store(false, std::memory_order_release);
+    task_running_.store(true, std::memory_order_release);
     if (xTaskCreate(&WakeDetector::TaskEntry, "veetee_wake", 8192, this, 5,
                     &task_) != pdPASS) {
+        task_running_.store(false, std::memory_order_release);
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+esp_err_t WakeDetector::Stop() {
+    SetRole(DetectorRole::kDisabled);
+    stop_requested_.store(true, std::memory_order_release);
+    if (pcm_queue_ != nullptr) {
+        xQueueReset(pcm_queue_);
+        PcmFrame wake{};
+        xQueueSend(pcm_queue_, &wake, 0);
+    }
+    const TickType_t started = xTaskGetTickCount();
+    const TickType_t timeout = pdMS_TO_TICKS(kStopTimeoutMs);
+    while (task_running_.load(std::memory_order_acquire)) {
+        if (xTaskGetTickCount() - started >= timeout) return ESP_ERR_TIMEOUT;
+        vTaskDelay(1);
+    }
+    return ESP_OK;
+}
+
+esp_err_t WakeDetector::Reload(const char* partition_label,
+                               const DetectorProfile* profiles,
+                               std::size_t profile_count) {
+    if (event_sink_ == nullptr) return ESP_ERR_INVALID_STATE;
+    esp_err_t error = Stop();
+    if (error != ESP_OK) return error;
+    ReleaseRuntime();
+    error = Initialize(partition_label, profiles, profile_count, event_sink_,
+                       event_context_);
+    if (error != ESP_OK) return error;
+    return Start();
 }
 
 bool WakeDetector::SubmitPcm(const std::int16_t* samples,
@@ -219,6 +255,7 @@ void WakeDetector::Run() {
     std::size_t buffered_samples = 0;
 
     while (xQueueReceive(pcm_queue_, &frame, portMAX_DELAY) == pdTRUE) {
+        if (stop_requested_.load(std::memory_order_acquire)) break;
         const DetectorRole current_role = role_.load(std::memory_order_acquire);
         const std::uint32_t current_generation =
             generation_.load(std::memory_order_acquire);
@@ -278,6 +315,12 @@ void WakeDetector::Run() {
             active_profile->interface->clean(active_profile->model);
         }
     }
+    if (active_profile != nullptr) {
+        active_profile->interface->clean(active_profile->model);
+    }
+    task_ = nullptr;
+    task_running_.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
 }
 
 WakeDetector::RuntimeProfile* WakeDetector::FindProfile(DetectorRole role) {
@@ -311,6 +354,17 @@ void WakeDetector::ReleaseProfiles() {
         esp_srmodel_deinit(model_list_);
         model_list_ = nullptr;
     }
+}
+
+void WakeDetector::ReleaseRuntime() {
+    ReleaseProfiles();
+    if (pcm_queue_ != nullptr) {
+        vQueueDelete(pcm_queue_);
+        pcm_queue_ = nullptr;
+    }
+    std::free(model_chunk_);
+    model_chunk_ = nullptr;
+    model_chunk_capacity_ = 0;
 }
 
 }  // namespace veetee::audio

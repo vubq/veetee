@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 
 import { AuditService } from "./audit/audit.service.js";
+import { ArtifactFilesService } from "./artifacts/artifact-files.service.js";
+import { ArtifactsController } from "./artifacts/artifacts.controller.js";
 import { AuthController } from "./auth/auth.controller.js";
 import { AuthGuard } from "./auth/auth.guard.js";
 import { AuthService } from "./auth/auth.service.js";
@@ -26,6 +28,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
 @Module({
   controllers: [
     AuthController,
+    ArtifactsController,
     HealthController,
     OtaController,
     PairingController,
@@ -40,6 +43,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     RedisService,
     BootstrapService,
     AuditService,
+    ArtifactFilesService,
     AuthService,
     PairingService,
     SecretCryptoService,

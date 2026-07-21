@@ -34,10 +34,17 @@ public:
                          EventSink event_sink,
                          void* context);
     esp_err_t Start();
+    esp_err_t Stop();
+    esp_err_t Reload(const char* partition_label,
+                     const DetectorProfile* profiles,
+                     std::size_t profile_count);
 
     bool SubmitPcm(const std::int16_t* samples, std::size_t sample_count);
     bool SetRole(DetectorRole role);
     [[nodiscard]] bool HasProfile(DetectorRole role) const;
+    [[nodiscard]] bool healthy() const {
+        return profile_count_ == 0 || task_running_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] DetectorRole role() const {
         return role_.load(std::memory_order_acquire);
     }
@@ -75,6 +82,7 @@ private:
     RuntimeProfile* FindProfile(DetectorRole role);
     const RuntimeProfile* FindProfile(DetectorRole role) const;
     void ReleaseProfiles();
+    void ReleaseRuntime();
 
     std::array<RuntimeProfile, kMaximumProfiles> profiles_{};
     std::size_t profile_count_ = 0;
@@ -88,6 +96,8 @@ private:
     std::atomic<DetectorRole> role_{DetectorRole::kDisabled};
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<std::uint32_t> dropped_frames_{0};
+    std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> task_running_{false};
 };
 
 }  // namespace veetee::audio

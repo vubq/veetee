@@ -110,11 +110,12 @@ wake profile ID; password không được ghi log. Nếu station không lấy đ
 Authenticated bootstrap cũng nhận optional config/resource desired state. Firmware
 đã có task bounded để pull manifest tối đa 32 KiB, từ chối redirect, verify strict
 schema/board/flash/PSRAM/slot/SemVer/resource ABI/runtime, security epoch và
-detached Ed25519 trước khi báo `manifest verified`. Verifier dùng Monocypher 4.0.3
-và restricted JCS integer-only; fixture Node/host dùng chung development public
-key. Đây chưa phải resource updater hoàn chỉnh: payload Range/resume, streaming
-SHA-256, inactive-slot write, journal, atomic activation, health check và rollback
-là milestone kế tiếp.
+detached Ed25519. Sau đó firmware stream raw ESP-SR payload vào inactive resource
+slot với HTTP Range resume, SHA-256, CRC-protected NVS journal, safe-boundary hot
+reload, health window và rollback. Cancellation giữ active slot cùng checkpoint
+256 KiB gần nhất. Verifier dùng Monocypher 4.0.3 và restricted JCS; payload hash
+dùng PSA Crypto. Phần resource còn lại là POST reported/apply state và chạy đủ
+power-loss/corruption matrix trên phần cứng thật.
 
 Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware
 không đọc password Wi-Fi đã lưu trên máy phát triển.

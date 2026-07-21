@@ -16,6 +16,8 @@ set(VEETEE_SRCS
     "ota/resource_reconciler.cpp"
     "security/signed_json.cpp"
     "settings/activation_record.cpp"
+    "settings/resource_record.cpp"
+    "settings/resource_state_store.cpp"
     "settings/settings_store.cpp"
     "transport/protocol_v1.cpp"
     "transport/websocket_transport.cpp"

@@ -16,10 +16,10 @@
     "resource_abi": 1
   },
   "payload": {
-    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCE/resource.bin",
-    "size": 1835008,
-    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "content_type": "application/vnd.veetee.resource-pack"
+    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCE0000000000000000/content",
+    "size": 1024,
+    "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+    "content_type": "application/vnd.veetee.esp-sr-model-pack"
   },
   "apply": {
     "mode": "when_standby",
@@ -28,31 +28,20 @@
   },
   "members": [
     {
-      "name": "speech/esp-sr-vi-home",
+      "name": "speech/esp-sr-models",
       "kind": "model_pack",
       "runtime": "esp-sr",
       "runtime_abi": 1,
       "format_version": 1,
-      "sample_rate": 16000,
-      "detectors": [
-        {
-          "id": "wakenet:veetee_vi",
-          "role": "activation"
-        },
-        {
-          "id": "multinet:interrupt_stop",
-          "role": "interrupt"
-        }
-      ],
-      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "bytes": 482304
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+      "bytes": 1024
     }
   ],
-  "created_at": "2026-07-21T12:00:00Z",
+  "created_at": "2026-07-21T14:45:12.448Z",
   "signature": {
     "algorithm": "ed25519",
     "key_id": "veetee-dev-release-2026-01",
     "security_epoch": 1,
-    "value": "ELseYPRN3GIyl9GFr7ZPwIMDdZY/DUqZ1lj7tWk3XoMMu7qDwtMxMsaexo2sILjNQr3ZXCuOhtBW1zBqQCiiCA=="
+    "value": "6NDi3PMUTs22WDhvp8yE9zdUq9lkClbjYE4F34Pap2KhP7QUjAxQXfL+2aDHwmDwPg1Ntg3EMSLPbp6evGaZDg=="
   }
 }

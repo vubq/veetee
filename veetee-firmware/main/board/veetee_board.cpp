@@ -1,6 +1,10 @@
 #include "board/veetee_board.h"
 
 #include "board/board_config.h"
+
+#include <cstdio>
+#include <cstring>
+
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -28,6 +32,10 @@ bool OnDetectorPcm(const std::int16_t* samples, std::size_t sample_count,
                                                                  sample_count);
 }
 
+bool SamePartition(const char* left, const char* right) {
+    return left != nullptr && right != nullptr && std::strcmp(left, right) == 0;
+}
+
 }  // namespace
 
 VeeteeBoard::VeeteeBoard()
@@ -38,6 +46,8 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
                                   DetectorEventSink detector_event_sink,
                                   EncodedAudioSink encoded_audio_sink,
                                   PlaybackFinishedSink playback_finished_sink,
+                                  const char* active_resource_partition,
+                                  const char* fallback_resource_partition,
                                   void* context) {
     gpio_config_t led = {};
     led.pin_bit_mask = 1ULL << kStatusLed;
@@ -52,15 +62,51 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
     gpio_set_level(kStatusLed, 0);
 
     if ((error = display_.Initialize()) != ESP_OK ||
-        (error = display_.DrawColorBars()) != ESP_OK ||
-        (error = wake_detector_.Initialize(
+        (error = display_.DrawColorBars()) != ESP_OK) {
+        return error;
+    }
+
+    error = wake_detector_.Initialize(
 #if CONFIG_VEETEE_ESP_SR_BRINGUP
-             CONFIG_VEETEE_WAKE_MODEL_PARTITION, kBringupProfiles,
+             active_resource_partition, kBringupProfiles,
              sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0]),
 #else
              nullptr, nullptr, 0,
 #endif
-             detector_event_sink, context)) != ESP_OK ||
+             detector_event_sink, context);
+    if (error == ESP_OK && active_resource_partition != nullptr) {
+        std::snprintf(loaded_wake_partition_.data(), loaded_wake_partition_.size(),
+                      "%s", active_resource_partition);
+    } else if (error != ESP_OK && fallback_resource_partition != nullptr &&
+               !SamePartition(active_resource_partition,
+                              fallback_resource_partition)) {
+        ESP_LOGW(kTag, "Active wake resource %s failed: %s; trying %s",
+                 active_resource_partition == nullptr ? "none"
+                                                      : active_resource_partition,
+                 esp_err_to_name(error), fallback_resource_partition);
+        error = wake_detector_.Initialize(
+#if CONFIG_VEETEE_ESP_SR_BRINGUP
+            fallback_resource_partition, kBringupProfiles,
+            sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0]),
+#else
+            nullptr, nullptr, 0,
+#endif
+            detector_event_sink, context);
+        if (error == ESP_OK) {
+            std::snprintf(loaded_wake_partition_.data(),
+                          loaded_wake_partition_.size(), "%s",
+                          fallback_resource_partition);
+        }
+    }
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag,
+                 "No ESP-SR resource could be loaded: %s; continuing button-only",
+                 esp_err_to_name(error));
+        error = wake_detector_.Initialize(nullptr, nullptr, 0,
+                                          detector_event_sink, context);
+    }
+
+    if (error != ESP_OK ||
         (error = audio_.Initialize(encoded_audio_sink, &OnDetectorPcm,
                                    playback_finished_sink,
                                    context, &wake_detector_)) != ESP_OK ||
@@ -78,6 +124,33 @@ esp_err_t VeeteeBoard::StartAudio() {
     return audio_.Start();
 }
 
+esp_err_t VeeteeBoard::ReloadWakeResource(const char* partition_label) {
+    esp_err_t error = wake_detector_.Reload(
+#if CONFIG_VEETEE_ESP_SR_BRINGUP
+        partition_label, kBringupProfiles,
+        sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0])
+#else
+        nullptr, nullptr, 0
+#endif
+    );
+    if (error != ESP_OK) {
+        loaded_wake_partition_[0] = '\0';
+        return error;
+    }
+    if (partition_label == nullptr) {
+        loaded_wake_partition_[0] = '\0';
+    } else {
+        std::snprintf(loaded_wake_partition_.data(), loaded_wake_partition_.size(),
+                      "%s", partition_label);
+    }
+    ApplyState(state_);
+    return ESP_OK;
+}
+
+bool VeeteeBoard::WakeResourceHealthy() const {
+    return wake_detector_.healthy();
+}
+
 esp_err_t VeeteeBoard::ShowActivationCode(const char* code) {
     return display_.DrawActivationCode(code);
 }
@@ -87,6 +160,7 @@ esp_err_t VeeteeBoard::ShowStandby() {
 }
 
 void VeeteeBoard::ApplyState(app::State state) {
+    state_ = state;
     const bool active = state == app::State::kConnecting ||
                         state == app::State::kListening ||
                         state == app::State::kEvaluating ||

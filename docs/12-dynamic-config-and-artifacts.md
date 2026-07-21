@@ -133,7 +133,7 @@ Không dùng một tên `framework.bin` mơ hồ. Artifact có type rõ:
 | Type | Nội dung |
 |---|---|
 | `firmware` | executable ESP-IDF OTA image |
-| `resource_bundle` | container assets + model data cho một release |
+| `resource_bundle` | release logic được manifest ký; V1 map tới một raw model pack |
 | `model_pack` | ESP-SR model pack (`srmodels.bin`) hoặc runtime pack đã được firmware hỗ trợ |
 | `wake_model` | logical activation detector reference trong model pack |
 | `interrupt_model` | logical interrupt detector reference trong model pack |
@@ -141,13 +141,19 @@ Không dùng một tên `framework.bin` mơ hồ. Artifact có type rõ:
 | `audio_assets` | prompt, chime, offline sound |
 | `admission_model` | optional local signal/input classifier |
 
-`assets.bin` và `model.bin` có thể tồn tại như payload logic, nhưng firmware V1 nên tải một `resource_bundle` đã ký để activate atomically. Với ESP-SR, model pack vật lý là `srmodels.bin` và metadata map detector id; bundle có manifest + blob index + content hashes; MIME gợi ý `application/vnd.veetee.resource-pack`.
+`assets.bin` và `model.bin` có thể tồn tại như payload logic. Với ESP-SR V1, payload
+vật lý là raw `srmodels.bin` bắt đầu tại offset 0; manifest ký bên ngoài chứa toàn bộ
+metadata/hash và dùng MIME `application/vnd.veetee.esp-sr-model-pack`. Cách này cho
+phép `esp_srmodel_init(partition_label)` load trực tiếp mà không cần copy hoặc bỏ qua
+container header.
 
 Native executable code, shared library hoặc arbitrary plugin không được đưa vào resource bundle. Nếu model cần operator/runtime mới, cập nhật `firmware` trước. MCP mở rộng behavior qua server/tool registry; không dùng dynamic native code trên ESP32.
 
-### Resource pack ABI V1
+### Resource payload ABI V1 và hướng V2
 
-Resource pack phải có format version riêng với firmware ABI:
+V1 chỉ có một member `model_pack/esp-sr`, member bytes/hash bằng payload bytes/hash.
+Không đặt header trước `srmodels.bin`. Multi-member container chỉ được thêm ở
+resource ABI V2, khi đó format dự kiến mới gồm:
 
 ```text
 header: magic, pack_version, abi, index_offset, index_bytes, payload_bytes
@@ -156,7 +162,9 @@ payload: immutable binary members (không executable)
 footer: pack_sha256 hoặc CRC phục vụ phát hiện write dang dở
 ```
 
-V1 không nén `srmodels.bin` nếu nén làm mất memory-map hoặc tăng latency; compression chỉ thêm khi có capability flag và benchmark. Path traversal, duplicate name, overflow, alignment sai và member vượt slot đều bị từ chối. Firmware load smoke test model pack trước khi đổi active pointer.
+V1 không nén `srmodels.bin`. Compression/container chỉ thêm khi có capability flag,
+loader và benchmark. Path traversal, duplicate name, overflow và member vượt slot
+đều bị từ chối. Firmware load smoke test model pack trước khi xác nhận active pointer.
 
 ## 6. Artifact manifest
 
@@ -181,10 +189,10 @@ Manifest là nguồn chuẩn cho compatibility và integrity:
     "resource_abi": 1
   },
   "payload": {
-    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCE/resource.bin",
-    "size": 1835008,
+    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCE/content",
+    "size": 125943,
     "sha256": "<64 hex chars>",
-    "content_type": "application/vnd.veetee.resource-pack"
+    "content_type": "application/vnd.veetee.esp-sr-model-pack"
   },
   "apply": {
     "mode": "when_standby",
@@ -193,7 +201,7 @@ Manifest là nguồn chuẩn cho compatibility và integrity:
   },
   "members": [
     {
-      "name": "speech/esp-sr-vi-home",
+      "name": "speech/esp-sr-models",
       "kind": "model_pack",
       "runtime": "esp-sr",
       "runtime_abi": 1,
@@ -204,7 +212,7 @@ Manifest là nguồn chuẩn cho compatibility và integrity:
         {"id": "multinet:interrupt_stop", "role": "interrupt"}
       ],
       "sha256": "<64 hex chars>",
-      "bytes": 482304
+      "bytes": 125943
     }
   ],
   "created_at": "2026-07-21T12:00:00Z",
@@ -300,25 +308,26 @@ N16R8 có 16 MB flash và 8 MB PSRAM. Layout chính xác chỉ freeze sau khi đ
 
 Không lưu model lớn trong NVS. Resource slot inactive được ghi, verify toàn bộ rồi mới atomically đổi active pointer. Nếu boot/apply health check fail, rollback pointer về slot cũ.
 
-Một layout minh họa, chưa phải partition freeze:
+Layout V1 của prototype N16R8:
 
 ```text
 metadata/NVS/otadata/coredump    ~0.5 MB
 ota_0                            ~3.5 MB
 ota_1                            ~3.5 MB
-resource_0                       ~3.75 MB
-resource_1                       ~3.75 MB
+resource_0                        4.0 MB
+resource_1                        4.0 MB
 ```
 
 Nếu app thực tế lớn hơn, ưu tiên giữ executable A/B. Nếu resource bundle vượt slot sau khi đã chốt asset scope, phải mở ADR chuyển sang resource store 8 MB với immutable blobs + dual manifest journal; không tự overwrite active slot. Manager phải từ chối bundle vượt `free_resource_slot_bytes` trong device capability.
 
 ## 10. Apply transaction và rollback
 
-Trạng thái source hiện tại mới hoàn tất bước 1 và phần manifest của bước 2/4:
-bootstrap phát desired target, firmware fetch bounded manifest rồi verify strict
-schema/compatibility/runtime/signature. Payload download, SHA-256 streaming,
-inactive-slot write, journal, activation, health check và rollback chưa được coi là
-đã triển khai cho tới khi lát kế tiếp pass host test và power-loss test trên board.
+Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1: device-authenticated
+manifest/content pull, strict verify, Range/resume, streaming hash/write, CRC journal,
+safe-boundary reload, pending-health và rollback. Manager API stream file immutable
+trực tiếp, trả `206`/`Content-Range`, không buffer artifact trong process. Chưa được
+coi production-ready cho tới khi power-loss/corruption/rollback matrix pass trên board
+và firmware report apply result về Manager.
 
 Device áp dụng config/resource theo transaction:
 
@@ -332,6 +341,11 @@ Device áp dụng config/resource theo transaction:
 8. Atomically activate pointer.
 9. Start health window và report.
 10. Rollback nếu crash, watchdog, load failure hoặc detector health fail.
+
+Release local dùng `npm run resources:release -- ...`; private Ed25519 key nằm trong
+đường dẫn ignored ngoài source. Output immutable mặc định ở `data/artifacts/:id/`
+với `manifest.json`, `content.bin` và marker hoàn tất. Bootstrap có thể dùng LAN IP;
+không cần domain.
 
 Không overwrite active slot trước khi verify xong. Mất điện ở mọi bước phải khởi động lại được từ apply journal.
 

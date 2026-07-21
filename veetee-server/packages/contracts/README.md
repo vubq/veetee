@@ -16,4 +16,5 @@ Artifact fixture dùng một chữ ký development có thể verify để cùng 
 chạy qua Node contract test và firmware host test. Vector riêng tại
 `fixtures/artifacts/signed-resource-manifest-vector-v1.json` khóa RFC 8785 JCS,
 Ed25519 và canonical payload độc lập. Repository chỉ chứa public test key, không
-chứa private key hoặc production key.
+chứa private key hoặc production key. Resource ABI V1 là single-member raw
+`srmodels.bin`; manifest ngoài payload là index ký số.

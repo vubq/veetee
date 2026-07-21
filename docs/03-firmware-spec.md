@@ -257,7 +257,7 @@ Firmware giữ:
 
 ### Trạng thái triển khai resource reconcile
 
-Firmware hiện đã hoàn tất lát đầu của đường reconcile:
+Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implementation:
 
 - authenticated bootstrap parse và validate `config.url`/ETag cùng
   `resources.version`/`manifest_url`;
@@ -267,12 +267,21 @@ Firmware hiện đã hoàn tất lát đầu của đường reconcile:
   resource ABI, runtime member được firmware hỗ trợ, SHA-256 metadata,
   `security_epoch`, trusted `key_id` và detached Ed25519 signature;
 - generation cancellation làm target mới nhất thắng và callback chỉ post kết quả
-  về application queue.
+  về application queue;
+- payload GET gửi Bearer token + `Device-Id`, yêu cầu identity encoding, hỗ trợ
+  `Range: bytes=N-`, kiểm tra `200/206`, `Content-Length` và `Content-Range`;
+- resume re-hash prefix đã ghi, xóa lại tail từ checkpoint 256 KiB rồi stream qua
+  buffer 8 KiB vào inactive slot; active slot không bị ghi;
+- journal NVS versioned + CRC giữ phase/download progress/slot/version/hash và
+  security epoch floor, nên mất điện hoặc target mới không làm mất resource đang chạy;
+- SHA-256 toàn payload phải khớp trước khi stage; ESP-SR reload chỉ chạy sau delay
+  ưu tiên button/wake và khi state machine đang `idle`;
+- activation chuyển qua `pending_health`, health window xác nhận slot mới; load/task
+  health fail hoặc boot active fail sẽ reload previous slot và rollback. Nếu cả hai
+  model lỗi, firmware tiếp tục button-only thay vì bootloop.
 
-Lát này dừng sau `manifest verified`; chưa download payload hoặc đổi active slot.
-Range/resume, streaming SHA-256, inactive partition write, apply journal, atomic
-activation, health window, rollback và desired/reported report thuộc lát kế tiếp.
-Do đó log `download/apply pending` là trạng thái chủ đích, không phải đã apply.
+Phần còn thiếu của lát resource là firmware POST desired/reported/apply result về
+Manager API và power-loss/corrupt-payload matrix đầy đủ trên board thật.
 
 Luồng reconcile:
 
@@ -285,9 +294,16 @@ Luồng reconcile:
 7. Report desired/reported state và health window.
 8. Rollback slot/profile cũ nếu load/crash/watchdog/detector health fail.
 
-Resource bundle chỉ chứa model/assets/data. Code native, model operator hoặc runtime mới phải cập nhật bằng signed firmware OTA. NVS không dùng để chứa binary model lớn.
+Resource V1 hiện là single-member raw `srmodels.bin` ở offset 0 để tương thích trực
+tiếp `esp_srmodel_init(partition_label)`; signed manifest bên ngoài là index/hash.
+Container nhiều member dành cho resource ABI V2. Resource chỉ chứa model/assets/data;
+code native, model operator hoặc runtime mới phải cập nhật bằng signed firmware OTA.
+NVS không dùng để chứa binary model lớn.
 
-Partition strategy ưu tiên của V1 là executable A/B và resource A/B vì đơn giản, dễ recover và dễ kiểm thử mất điện. Size cụ thể chỉ freeze sau khi đo firmware thật có ESP-SR/LVGL/Opus/HTTPS/MCP. Nếu resource slot không đủ cho scope assets đã chốt, phải mở ADR để chọn resource store 8 MB hoặc giảm asset scope; không tự đổi partition sau khi code đã phụ thuộc layout. Manager và firmware đều phải từ chối bundle vượt inactive slot.
+Partition V1 đã freeze cho prototype N16R8 với executable A/B và hai resource slot
+4 MiB. Nếu resource vượt slot sau khi chốt asset scope, phải mở ADR chọn store 8 MiB
+hoặc giảm scope; không tự đổi layout. Manager và firmware đều từ chối payload vượt
+inactive slot.
 
 ## 9. Audio/realtime defaults
 

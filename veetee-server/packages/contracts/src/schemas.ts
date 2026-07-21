@@ -95,7 +95,7 @@ export const resourceManifestSchema = {
         url: { type: "string", format: "uri" },
         size: nonNegativeInteger,
         sha256,
-        content_type: id,
+        content_type: { const: "application/vnd.veetee.esp-sr-model-pack" },
       },
     },
     apply: {

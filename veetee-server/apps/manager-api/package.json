@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "prisma generate",
-    "dev": "tsx watch src/main.ts",
+    "dev": "node scripts/dev.mjs",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run src",
-    "test:integration": "VEETEE_INTEGRATION=1 vitest run src/store/control-plane.integration.test.ts"
+    "test:integration": "VEETEE_INTEGRATION=1 node --env-file=.env ../../node_modules/vitest/vitest.mjs run src/store/control-plane.integration.test.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

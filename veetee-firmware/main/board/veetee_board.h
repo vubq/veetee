@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "app/state_machine.h"
 #include "audio/i2s_audio.h"
 #include "audio/wake_detector.h"
@@ -22,8 +24,17 @@ public:
                          DetectorEventSink detector_event_sink,
                          EncodedAudioSink encoded_audio_sink,
                          PlaybackFinishedSink playback_finished_sink,
+                         const char* active_resource_partition,
+                         const char* fallback_resource_partition,
                          void* context);
     esp_err_t StartAudio();
+    esp_err_t ReloadWakeResource(const char* partition_label);
+    [[nodiscard]] bool WakeResourceHealthy() const;
+    [[nodiscard]] const char* loaded_wake_partition() const {
+        return loaded_wake_partition_[0] == '\0'
+                   ? nullptr
+                   : loaded_wake_partition_.data();
+    }
     esp_err_t ShowActivationCode(const char* code);
     esp_err_t ShowStandby();
     void ApplyState(app::State state);
@@ -39,6 +50,8 @@ private:
     audio::I2sAudio audio_;
     audio::WakeDetector wake_detector_;
     input::Button button_;
+    app::State state_ = app::State::kStarting;
+    std::array<char, 17> loaded_wake_partition_{};
 };
 
 }  // namespace veetee::board

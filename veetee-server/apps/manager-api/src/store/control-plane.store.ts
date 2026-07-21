@@ -284,7 +284,12 @@ export class ControlPlaneStore {
   async authenticateDeviceByHardware(
     hardwareId: string,
     token: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{
+    deviceId: string;
+    tenantId: string;
+    agentId: string | null;
+    configVersion: number;
+  }> {
     const device = await this.prisma.device.findUnique({
       where: { hardwareId },
       include: { agent: true },

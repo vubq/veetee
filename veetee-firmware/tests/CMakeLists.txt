@@ -130,3 +130,14 @@ target_compile_options(resource_manifest_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(resource_manifest_test PRIVATE cjson_host monocypher_host)
 
 add_test(NAME resource_manifest_test COMMAND resource_manifest_test)
+
+add_executable(
+    resource_record_test
+    resource_record_test.cpp
+    ../main/settings/resource_record.cpp
+)
+target_include_directories(resource_record_test PRIVATE ../main)
+target_compile_features(resource_record_test PRIVATE cxx_std_17)
+target_compile_options(resource_record_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME resource_record_test COMMAND resource_record_test)

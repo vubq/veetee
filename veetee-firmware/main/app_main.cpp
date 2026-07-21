@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -26,11 +27,15 @@ namespace {
 
 constexpr char kTag[] = "veetee_app";
 constexpr UBaseType_t kEventQueueDepth = 16;
+constexpr std::uint64_t kResourceApplyDelayUs = 250000;
+constexpr std::uint64_t kResourceHealthWindowUs = 5000000;
 
 enum class AppMessageKind : std::uint8_t {
     kStateEvent,
     kMcpEnvelope,
     kResourceReconcile,
+    kResourceApply,
+    kResourceHealthCheck,
 };
 
 struct AppMessage {
@@ -52,13 +57,18 @@ veetee::ota::BootstrapClient g_bootstrap;
 veetee::ota::ResourceReconciler g_resources;
 veetee::transport::WebSocketTransport g_transport;
 veetee::mcp::DeviceMcp g_mcp;
+esp_timer_handle_t g_resource_apply_timer = nullptr;
+esp_timer_handle_t g_resource_health_timer = nullptr;
+bool g_resource_apply_pending = false;
 
 bool PostMessage(const AppMessage& message) {
     if (g_event_queue == nullptr ||
         xQueueSend(g_event_queue, &message, 0) != pdTRUE) {
         if (message.kind == AppMessageKind::kMcpEnvelope) {
             ESP_LOGW(kTag, "Dropping MCP request: application queue full");
-        } else if (message.kind == AppMessageKind::kResourceReconcile) {
+        } else if (message.kind == AppMessageKind::kResourceReconcile ||
+                   message.kind == AppMessageKind::kResourceApply ||
+                   message.kind == AppMessageKind::kResourceHealthCheck) {
             ESP_LOGW(kTag, "Dropping resource reconcile result: application queue full");
         } else {
             ESP_LOGW(kTag, "Dropping event %s: application queue full",
@@ -67,6 +77,117 @@ bool PostMessage(const AppMessage& message) {
         return false;
     }
     return true;
+}
+
+void OnResourceApplyTimer(void*) {
+    if (!PostMessage(AppMessage{.kind = AppMessageKind::kResourceApply}) &&
+        g_resource_apply_timer != nullptr) {
+        esp_timer_start_once(g_resource_apply_timer, kResourceApplyDelayUs);
+    }
+}
+
+void OnResourceHealthTimer(void*) {
+    if (!PostMessage(AppMessage{.kind = AppMessageKind::kResourceHealthCheck}) &&
+        g_resource_health_timer != nullptr) {
+        esp_timer_start_once(g_resource_health_timer, kResourceApplyDelayUs);
+    }
+}
+
+bool SamePartition(const char* left, const char* right) {
+    return left != nullptr && right != nullptr && std::strcmp(left, right) == 0;
+}
+
+void ScheduleResourceApply() {
+    if (!g_resource_apply_pending || g_resource_apply_timer == nullptr) return;
+    esp_timer_stop(g_resource_apply_timer);
+    const esp_err_t error =
+        esp_timer_start_once(g_resource_apply_timer, kResourceApplyDelayUs);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to schedule resource apply: %s",
+                 esp_err_to_name(error));
+    }
+}
+
+void RollbackWakeResource(const char* fallback_partition,
+                          const char* reason) {
+    if (fallback_partition != nullptr) {
+        const esp_err_t reload_error =
+            g_board.ReloadWakeResource(fallback_partition);
+        if (reload_error != ESP_OK) {
+            ESP_LOGE(kTag,
+                     "Wake resource fallback %s failed: %s; button wake remains available",
+                     fallback_partition, esp_err_to_name(reload_error));
+        }
+    }
+    const esp_err_t rollback_error = g_resources.Rollback();
+    if (rollback_error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to rollback resource state reason=%s: %s",
+                 reason, esp_err_to_name(rollback_error));
+    } else {
+        ESP_LOGW(kTag, "Resource rolled back reason=%s active=%s", reason,
+                 g_resources.ActivePartitionLabel());
+    }
+}
+
+void ApplyStagedWakeResource() {
+    if (!g_resource_apply_pending ||
+        g_state_machine.state() != veetee::app::State::kIdle) {
+        return;
+    }
+    const char* staged_partition = g_resources.StagedPartitionLabel();
+    const char* active_partition = g_resources.ActivePartitionLabel();
+    if (staged_partition == nullptr) {
+        g_resource_apply_pending = false;
+        return;
+    }
+
+    ESP_LOGI(kTag, "Applying staged wake resource partition=%s", staged_partition);
+    esp_err_t error = g_board.ReloadWakeResource(staged_partition);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Staged wake resource load failed: %s",
+                 esp_err_to_name(error));
+        RollbackWakeResource(active_partition, "staged_load_failed");
+        g_resource_apply_pending = false;
+        return;
+    }
+    error = g_resources.ActivateStaged();
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to activate staged resource journal: %s",
+                 esp_err_to_name(error));
+        RollbackWakeResource(active_partition, "activation_journal_failed");
+        g_resource_apply_pending = false;
+        return;
+    }
+    g_resource_apply_pending = false;
+    esp_timer_stop(g_resource_health_timer);
+    error = esp_timer_start_once(g_resource_health_timer,
+                                 kResourceHealthWindowUs);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to schedule resource health check: %s",
+                 esp_err_to_name(error));
+        PostMessage(AppMessage{.kind = AppMessageKind::kResourceHealthCheck});
+    }
+}
+
+void CheckActiveWakeResourceHealth() {
+    if (g_resources.phase() !=
+        veetee::settings::ResourceRecordPhase::kPendingHealth) {
+        return;
+    }
+    const char* active_partition = g_resources.ActivePartitionLabel();
+    if (g_board.WakeResourceHealthy() &&
+        SamePartition(g_board.loaded_wake_partition(), active_partition)) {
+        const esp_err_t error = g_resources.ConfirmActive();
+        if (error == ESP_OK) {
+            ESP_LOGI(kTag, "Resource health confirmed active=%s",
+                     active_partition);
+            return;
+        }
+        ESP_LOGE(kTag, "Unable to confirm resource health: %s",
+                 esp_err_to_name(error));
+    }
+    RollbackWakeResource(g_resources.PreviousPartitionLabel(),
+                         "health_check_failed");
 }
 
 bool PostEvent(veetee::app::Event event) {
@@ -237,21 +358,38 @@ void RunApplication(void*) {
             if (!handled) ESP_LOGW(kTag, "MCP request was rejected");
             continue;
         }
+        if (message.kind == AppMessageKind::kResourceApply) {
+            ApplyStagedWakeResource();
+            continue;
+        }
+        if (message.kind == AppMessageKind::kResourceHealthCheck) {
+            CheckActiveWakeResourceHealth();
+            continue;
+        }
         if (message.kind == AppMessageKind::kResourceReconcile) {
             const auto& notification = message.resource_notification;
             if (notification.event ==
-                veetee::ota::ResourceReconcileEvent::kManifestVerified) {
+                veetee::ota::ResourceReconcileEvent::kPayloadStaged) {
                 ESP_LOGI(kTag,
-                         "Resource manifest verified desired=%s bundle=%s; download/apply pending",
+                         "Resource payload staged desired=%s bundle=%s; apply pending",
                          notification.desired_version,
                          notification.bundle_version);
+                g_resource_apply_pending = true;
+                ScheduleResourceApply();
+            } else if (notification.event ==
+                       veetee::ota::ResourceReconcileEvent::kAlreadyActive) {
+                ESP_LOGI(kTag, "Resource already active desired=%s",
+                         notification.desired_version);
+                g_resource_apply_pending = false;
             } else {
                 ESP_LOGW(kTag,
                          "Resource reconcile failed desired=%s error=%s stage=%s",
                          notification.desired_version, notification.error_code,
                          notification.event == veetee::ota::ResourceReconcileEvent::kManifestRejected
                              ? "verify"
-                             : "transport");
+                             : notification.event == veetee::ota::ResourceReconcileEvent::kPayloadRejected
+                                   ? "payload"
+                                   : "transport");
             }
             continue;
         }
@@ -356,6 +494,10 @@ void RunApplication(void*) {
                 g_transport.Close();
             }
         }
+        if (result.to == veetee::app::State::kIdle &&
+            g_resource_apply_pending) {
+            ScheduleResourceApply();
+        }
     }
 }
 
@@ -383,6 +525,25 @@ extern "C" void app_main() {
         abort();
     }
 
+    const esp_timer_create_args_t apply_timer_args = {
+        .callback = &OnResourceApplyTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "resource_apply",
+        .skip_unhandled_events = false,
+    };
+    const esp_timer_create_args_t health_timer_args = {
+        .callback = &OnResourceHealthTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "resource_health",
+        .skip_unhandled_events = false,
+    };
+    ESP_ERROR_CHECK(
+        esp_timer_create(&apply_timer_args, &g_resource_apply_timer));
+    ESP_ERROR_CHECK(
+        esp_timer_create(&health_timer_args, &g_resource_health_timer));
+
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_resources.Initialize(&g_settings,
@@ -392,10 +553,35 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,
                                            &OnDownlinkAudio, &OnMcpEnvelope,
                                            nullptr));
-    ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, &OnDetectorEvent,
-                                       &OnEncodedAudio,
-                                       &OnPlaybackFinished, nullptr));
+    ESP_ERROR_CHECK(g_board.Initialize(
+        &OnButtonEvent, &OnDetectorEvent, &OnEncodedAudio,
+        &OnPlaybackFinished, g_resources.ActivePartitionLabel(),
+        g_resources.PreviousPartitionLabel(), nullptr));
     ESP_ERROR_CHECK(g_board.StartAudio());
+
+    const auto resource_phase = g_resources.phase();
+    if (resource_phase ==
+        veetee::settings::ResourceRecordPhase::kPendingHealth) {
+        if (SamePartition(g_board.loaded_wake_partition(),
+                          g_resources.ActivePartitionLabel())) {
+            ESP_ERROR_CHECK(esp_timer_start_once(g_resource_health_timer,
+                                                 kResourceHealthWindowUs));
+        } else {
+            RollbackWakeResource(g_resources.PreviousPartitionLabel(),
+                                 "boot_active_load_failed");
+        }
+    } else if (resource_phase ==
+               veetee::settings::ResourceRecordPhase::kStable) {
+        const char* loaded_partition = g_board.loaded_wake_partition();
+        if (loaded_partition != nullptr &&
+            !SamePartition(loaded_partition,
+                           g_resources.ActivePartitionLabel())) {
+            RollbackWakeResource(loaded_partition, "boot_active_load_failed");
+        }
+    } else if (resource_phase ==
+               veetee::settings::ResourceRecordPhase::kStaged) {
+        g_resource_apply_pending = true;
+    }
     if (!g_mcp.Initialize(&ReadDeviceStatus, &SetSpeakerVolume,
                           &SendMcpResponse, nullptr)) {
         ESP_LOGE(kTag, "Unable to initialize device MCP");

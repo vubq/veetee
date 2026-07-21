@@ -146,7 +146,7 @@ menu "Veetee hardware bring-up"
 
     config VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX
         string "Trusted Ed25519 resource public key (32-byte hex)"
-        default "5068dfa6e35f65702d5ae2ee0eead751b212daa6e0e9553571ac9b63bf5c906f"
+        default "238eb0ac501669721bbab10734bcd770a4165ab1d6c49cfb30d1e27b9088d7b7"
         help
             Public verification key only; no private signing key is stored in
             firmware or source. Production builds must use a separate key.
