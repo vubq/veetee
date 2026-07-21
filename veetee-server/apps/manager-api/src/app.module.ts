@@ -4,6 +4,9 @@ import { APP_GUARD } from "@nestjs/core";
 import { AuditService } from "./audit/audit.service.js";
 import { ArtifactFilesService } from "./artifacts/artifact-files.service.js";
 import { ArtifactsController } from "./artifacts/artifacts.controller.js";
+import { ResourceCatalogController } from "./artifacts/resource-catalog.controller.js";
+import { ResourceCatalogService } from "./artifacts/resource-catalog.service.js";
+import { ResourceManifestService } from "./artifacts/resource-manifest.service.js";
 import { AuthController } from "./auth/auth.controller.js";
 import { AuthGuard } from "./auth/auth.guard.js";
 import { AuthService } from "./auth/auth.service.js";
@@ -31,6 +34,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
   controllers: [
     AuthController,
     ArtifactsController,
+    ResourceCatalogController,
     HealthController,
     OtaController,
     PairingController,
@@ -47,6 +51,8 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     BootstrapService,
     AuditService,
     ArtifactFilesService,
+    ResourceManifestService,
+    ResourceCatalogService,
     AuthService,
     PairingService,
     VoiceMcpService,

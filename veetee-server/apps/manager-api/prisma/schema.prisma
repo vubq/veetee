@@ -41,6 +41,33 @@ enum ProviderHealth {
   DEGRADED
 }
 
+enum ArtifactKind {
+  RESOURCE_BUNDLE
+  MODEL_PACK
+  DISPLAY_ASSETS
+  AUDIO_ASSETS
+  ADMISSION_MODEL
+}
+
+enum ArtifactStatus {
+  VALIDATED
+  PUBLISHED
+  REVOKED
+}
+
+enum ArtifactBenchmarkStatus {
+  NOT_RUN
+  PASSED
+  FAILED
+}
+
+enum ResourceRolloutStatus {
+  ACTIVE
+  COMPLETE
+  FAILED
+  ROLLED_BACK
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -53,8 +80,11 @@ model Tenant {
   devices            Device[]
   providers          ProviderBinding[]
   auditEvents        AuditEvent[]
+  artifacts          Artifact[]
   conversationEvents ConversationEvent[]
   refreshSessions    RefreshSession[]
+  resourceRollouts   ResourceRollout[]
+  wakeProfiles       WakeProfile[]
 }
 
 model User {
@@ -138,6 +168,7 @@ model Device {
   desiredState       DeviceDesiredState?
   reportedState      DeviceReportedState?
   conversationEvents ConversationEvent[]
+  resourceRollouts   ResourceRollout[]
 
   @@index([tenantId, status])
   @@index([tenantId, agentId])
@@ -239,4 +270,96 @@ model ConversationEvent {
   @@index([deviceId, occurredAt])
   @@index([sessionId, occurredAt])
   @@index([retentionUntil])
+}
+
+model Artifact {
+  id              String                  @id
+  tenantId        String
+  kind            ArtifactKind
+  version         String
+  channel         String
+  sizeBytes       Int
+  sha256          String
+  contentType     String
+  runtime         String
+  runtimeAbi      Int
+  license         String
+  board           String
+  minFirmware     String
+  maxFirmware     String
+  signatureKeyId  String
+  securityEpoch   Int
+  benchmarkStatus ArtifactBenchmarkStatus @default(NOT_RUN)
+  status          ArtifactStatus          @default(VALIDATED)
+  manifest        Json
+  publishedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  wakeProfiles        WakeProfile[]
+  wakeProfileVersions WakeProfileVersion[]
+  resourceRollouts    ResourceRollout[]
+
+  @@unique([tenantId, kind, version])
+  @@index([tenantId, status, createdAt])
+}
+
+model WakeProfile {
+  id               String   @id @default(uuid())
+  tenantId         String
+  artifactId       String
+  name             String
+  locale           String
+  channel          String
+  activationPhrase String
+  activation       Json
+  interrupt        Json
+  version          Int      @default(1)
+  publishedVersion Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  artifact Artifact             @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  versions WakeProfileVersion[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, updatedAt])
+}
+
+model WakeProfileVersion {
+  id            String   @id @default(uuid())
+  wakeProfileId String
+  artifactId    String
+  version       Int
+  snapshot      Json
+  publishedAt   DateTime @default(now())
+
+  wakeProfile WakeProfile       @relation(fields: [wakeProfileId], references: [id], onDelete: Cascade)
+  artifact    Artifact          @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  rollouts    ResourceRollout[]
+
+  @@unique([wakeProfileId, version])
+  @@index([wakeProfileId, publishedAt])
+}
+
+model ResourceRollout {
+  id                   String                @id @default(uuid())
+  tenantId             String
+  deviceId             String
+  artifactId           String
+  wakeProfileVersionId String
+  status               ResourceRolloutStatus @default(ACTIVE)
+  desiredStateVersion  Int
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  device             Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  artifact           Artifact           @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  wakeProfileVersion WakeProfileVersion @relation(fields: [wakeProfileVersionId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([deviceId, status])
 }

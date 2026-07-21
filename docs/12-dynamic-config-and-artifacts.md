@@ -154,6 +154,13 @@ container header.
 
 Native executable code, shared library hoặc arbitrary plugin không được đưa vào resource bundle. Nếu model cần operator/runtime mới, cập nhật `firmware` trước. MCP mở rộng behavior qua server/tool registry; không dùng dynamic native code trên ESP32.
 
+Manager V1 không nhận binary upload trực tiếp. Release signer ghi artifact immutable
+vào storage rồi Manager đăng ký metadata sau khi tự stream SHA-256, kiểm payload URL
+canonical, target N16R8, resource ABI, member data-only và Ed25519 trust root. Artifact
+`published` chỉ có nghĩa đủ điều kiện rollout; wake profile `stable` còn bắt buộc
+benchmark status `passed`. Phrase label như `Hey VeeTee` không thay thế detector
+model/corpus và không được coi product-ready chỉ vì đã lưu trong profile.
+
 ### Resource payload ABI V1 và hướng V2
 
 V1 chỉ có một member `model_pack/esp-sr`, member bytes/hash bằng payload bytes/hash.

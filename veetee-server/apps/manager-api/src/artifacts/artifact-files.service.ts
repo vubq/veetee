@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -27,6 +29,12 @@ export interface ArtifactFileResponse {
 export interface ByteRange {
   start: number;
   end: number;
+}
+
+export interface InspectedArtifactRelease {
+  manifest: unknown;
+  sizeBytes: number;
+  sha256: string;
 }
 
 export class ArtifactRangeNotSatisfiableException extends HttpException {
@@ -93,6 +101,38 @@ export class ArtifactFilesService {
       },
       stream: file.createReadStream({ autoClose: true }),
     };
+  }
+
+  async inspectRelease(artifactId: string): Promise<InspectedArtifactRelease> {
+    const manifestFile = await this.openArtifactFile(artifactId, manifestFileName);
+    let manifestBytes: Buffer;
+    try {
+      const stat = await manifestFile.stat();
+      if (!stat.isFile() || stat.size <= 0 || stat.size > maximumManifestBytes) {
+        throw new Error("Artifact manifest is invalid");
+      }
+      manifestBytes = await manifestFile.readFile();
+    } finally {
+      await manifestFile.close();
+    }
+
+    const contentFile = await this.openArtifactFile(artifactId, contentFileName);
+    const stat = await contentFile.stat();
+    if (!stat.isFile() || stat.size <= 0 || stat.size > this.maximumArtifactBytes()) {
+      await contentFile.close();
+      throw new PayloadTooLargeException("Artifact content is invalid or too large");
+    }
+    const hash = createHash("sha256");
+    for await (const chunk of contentFile.createReadStream({ autoClose: true })) {
+      hash.update(chunk);
+    }
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(manifestBytes.toString("utf8"));
+    } catch {
+      throw new BadRequestException("Artifact manifest is not valid JSON");
+    }
+    return { manifest, sizeBytes: stat.size, sha256: hash.digest("hex") };
   }
 
   async openContent(

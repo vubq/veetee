@@ -8,8 +8,8 @@ reported-state đã chạy trên board. Phase 4 cascade local đã pass host wir
 Silero -> Zipformer -> semantic gate/9Router -> VieNeu -> Opus, cancellation,
 inactivity và semantic reject. Phase 6 MCP đã pass firmware/voice/Manager end-to-end
 trên host. Phase 5 có auth, pairing, agent/provider config, desired/reported state,
-Manager Web theo prototype với live MCP và Realtime Lab dùng event metadata thật;
-phần artifact/wake rollout UI vẫn là lát dọc phần mềm chính còn lại. Custom `Hey VeeTee`, AEC và
+Manager Web theo prototype với live MCP, Realtime Lab dùng event metadata thật và
+catalog/wake rollout cơ bản. Custom `Hey VeeTee`, AEC, canary pause/resume và
 soak phần cứng vẫn phải qua benchmark trên thiết bị thật.
 
 ## Phase 0 - Freeze contract và board (1-2 ngày)
@@ -160,6 +160,12 @@ Realtime event ingestion đã đạt gate host: service-authenticated batch, UUI
 idempotency, tenant scope derive từ device, retention 1-30 ngày, queue voice-server
 không chặn và UI không còn phát event mô phỏng. First-audio hiện tính từ metadata
 `stt.final -> tts.start`; abort-to-silence chính xác vẫn chờ playback ACK/hardware.
+
+Resource control plane đã đạt gate host: signed artifact registration, immutable
+artifact/wake publish, activation/interrupt profile tách riêng, stable benchmark gate,
+tenant audit và explicit-device rollout. Desired state không được coi là active;
+rollout chỉ chuyển terminal khi reported resource phase tương ứng. Upload object-store,
+percentage rollout, pause/resume và rollback command vẫn thuộc Phase 8 hardening.
 
 ## Phase 6 - MCP + device tools (3-5 ngày)
 

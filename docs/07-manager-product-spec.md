@@ -10,8 +10,10 @@ live device MCP proxy có confirmation/audit, cùng Manager Web responsive giữ
 prototype đã duyệt. Conversation timeout được validate ở Manager và clamp lại ở
 voice-server; extension field được bảo toàn khi UI cập nhật draft. Realtime Lab đã
 nhận event metadata thật theo batch idempotent, retention mặc định 7 ngày và không
-lưu transcript/audio thô. Catalog/rollout wake-artifact vẫn là lát dọc tiếp theo,
-không được giả lập thành trạng thái production.
+lưu transcript/audio thô. Catalog artifact đã kiểm file immutable, SHA-256,
+restricted JCS/Ed25519, board/ABI/license; wake profile activation và interrupt được
+version riêng, rollout ghi desired state và chỉ hoàn tất theo reported state. Custom
+`Hey VeeTee` vẫn chưa product-ready trước corpus benchmark thật.
 
 ## 2. Data model lõi
 
@@ -100,12 +102,13 @@ GET    /api/v1/firmware/devices/:id
 ```text
 GET/POST/PATCH /api/v1/wake-profiles
 POST           /api/v1/wake-profiles/:id/publish
-POST           /api/v1/artifacts/uploads
-GET            /api/v1/artifacts/:id
-POST           /api/v1/artifacts/:id/validate
-POST           /api/v1/resource-bundles
-POST           /api/v1/resource-bundles/:id/publish
-POST           /api/v1/resource-bundles/:id/rollout
+GET            /api/v1/artifacts
+POST           /api/v1/artifacts/register
+POST           /api/v1/artifacts/:id/publish
+PATCH          /api/v1/artifacts/:id/benchmark
+GET/POST/PATCH /api/v1/wake-profiles
+POST           /api/v1/wake-profiles/:id/publish
+GET/POST       /api/v1/resource-rollouts
 GET            /api/v1/devices/:id/effective-config
 POST           /api/v1/devices/:id/reconcile
 GET            /api/v1/devices/:id/apply-events
@@ -189,6 +192,12 @@ Hiển thị health của voice-server, provider, Redis/Postgres, số thiết b
 - Artifact library hiển thị kind, size, hash, signature, runtime ABI, license và scan status.
 - Resource bundle composer kiểm tra flash/PSRAM budget và device capability trước publish.
 - Rollout canary/percentage/pause/resume/rollback; publish không đồng nghĩa device đã apply.
+
+V1 không upload binary lớn qua Manager API. Release signer tạo directory immutable
+`manifest.json + content.bin + .complete`; endpoint `artifacts/register` chỉ catalog
+hóa sau khi stream hash content, kiểm canonical signature, target, 4 MiB slot và
+runtime ABI. Object-store scoped upload/canary percentage/pause/resume là hardening
+tiếp theo; rollout hiện chọn explicit device IDs để tránh mở rộng ngoài ý muốn.
 
 ### Provider hub
 

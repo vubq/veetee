@@ -3,13 +3,16 @@ import { z } from "zod";
 import {
   agentSchema,
   apiErrorSchema,
+  artifactSchema,
   conversationEventSchema,
   deviceSchema,
   healthSchema,
   mcpToolSchema,
   principalSchema,
   providerSchema,
+  resourceRolloutSchema,
   tokenResponseSchema,
+  wakeProfileSchema,
   type Agent,
 } from "./schemas";
 
@@ -144,6 +147,10 @@ export const managerApi = {
       `/api/v1/conversation-events?deviceId=${encodeURIComponent(deviceId)}&limit=${limit}`,
       z.array(conversationEventSchema),
     ),
+  artifacts: () => request("/api/v1/artifacts", z.array(artifactSchema)),
+  wakeProfiles: () => request("/api/v1/wake-profiles", z.array(wakeProfileSchema)),
+  resourceRollouts: () =>
+    request("/api/v1/resource-rollouts", z.array(resourceRolloutSchema)),
 
   async logout(): Promise<void> {
     const response = await rawRequest("/api/v1/auth/logout", { method: "POST" });
@@ -174,6 +181,57 @@ export const managerApi = {
   testProvider(id: string) {
     return request(`/api/v1/providers/${encodeURIComponent(id)}/test`, providerSchema, {
       method: "POST",
+    });
+  },
+
+  registerArtifact(artifactId: string, license: string) {
+    return request("/api/v1/artifacts/register", artifactSchema, {
+      method: "POST",
+      body: JSON.stringify({ artifactId, license, benchmarkStatus: "not_run" }),
+    });
+  },
+
+  publishArtifact(id: string) {
+    return request(`/api/v1/artifacts/${encodeURIComponent(id)}/publish`, artifactSchema, {
+      method: "POST",
+    });
+  },
+
+  createWakeProfile(input: {
+    artifactId: string;
+    name: string;
+    locale: string;
+    channel: string;
+    activationPhrase: string;
+    activation: {
+      detectorId: string;
+      sensitivity: number;
+      cooldownMs: number;
+      allowedStates: string[];
+    };
+    interrupt: {
+      detectorId: string;
+      sensitivity: number;
+      cooldownMs: number;
+      allowedStates: string[];
+    };
+  }) {
+    return request("/api/v1/wake-profiles", wakeProfileSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  publishWakeProfile(id: string) {
+    return request(`/api/v1/wake-profiles/${encodeURIComponent(id)}/publish`, wakeProfileSchema, {
+      method: "POST",
+    });
+  },
+
+  rolloutWakeProfile(wakeProfileId: string, deviceIds: string[]) {
+    return request("/api/v1/resource-rollouts", z.array(resourceRolloutSchema), {
+      method: "POST",
+      body: JSON.stringify({ wakeProfileId, deviceIds }),
     });
   },
 

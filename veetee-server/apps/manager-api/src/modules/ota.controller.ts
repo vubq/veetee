@@ -96,7 +96,9 @@ export class OtaController {
       etag: `agent-config-${state.configVersion}`,
       url: `${managerUrl}/veetee/config/v1/devices/${encodeURIComponent(state.deviceId)}`,
     };
-    const manifestUrl = process.env.VEETEE_RESOURCE_MANIFEST_URL;
+    const manifestUrl = state.resourceManifestId
+      ? `${managerUrl}/veetee/artifacts/manifests/${encodeURIComponent(state.resourceManifestId)}`
+      : process.env.VEETEE_RESOURCE_MANIFEST_URL;
     if (manifestUrl) {
       response.resources = {
         version: state.resourceVersion ?? process.env.VEETEE_RESOURCE_VERSION ?? "0.0.0",

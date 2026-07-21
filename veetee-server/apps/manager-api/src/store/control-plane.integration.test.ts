@@ -3,6 +3,9 @@ import { TenantRole } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AuditService } from "../audit/audit.service.js";
+import { ArtifactFilesService } from "../artifacts/artifact-files.service.js";
+import { ResourceCatalogService } from "../artifacts/resource-catalog.service.js";
+import { ResourceManifestService } from "../artifacts/resource-manifest.service.js";
 import { AuthService } from "../auth/auth.service.js";
 import type { Principal } from "../auth/auth.types.js";
 import { PrismaService } from "../database/prisma.service.js";
@@ -23,6 +26,11 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     audit,
     new SecretCryptoService(),
   );
+  const resourceCatalog = new ResourceCatalogService(
+    prisma,
+    audit,
+    new ResourceManifestService(new ArtifactFilesService()),
+  );
   let principal: Principal;
 
   beforeAll(async () => {
@@ -33,6 +41,10 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await redis.client.flushdb();
     await prisma.auditEvent.deleteMany();
     await prisma.conversationEvent.deleteMany();
+    await prisma.resourceRollout.deleteMany();
+    await prisma.wakeProfileVersion.deleteMany();
+    await prisma.wakeProfile.deleteMany();
+    await prisma.artifact.deleteMany();
     await prisma.refreshSession.deleteMany();
     await prisma.deviceReportedState.deleteMany();
     await prisma.deviceDesiredState.deleteMany();
@@ -182,6 +194,91 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       },
     ]);
     await expect(prisma.conversationEvent.findUnique({ where: { id: eventId } })).resolves.toBeNull();
+
+    await store.bootstrapDevice("esp32-integration", activation?.token, "0.2.0");
+    const artifact = await resourceCatalog.registerArtifact(
+      "stable",
+      "ESP-SR model pack bring-up; benchmark not yet a Hey VeeTee product pass",
+      "not_run",
+      { principal, requestId: "integration-artifact-register" },
+    );
+    expect(artifact).toMatchObject({
+      status: "validated",
+      runtime: "esp-sr",
+      benchmarkStatus: "not_run",
+    });
+    await resourceCatalog.publishArtifact(artifact.id, {
+      principal,
+      requestId: "integration-artifact-publish",
+    });
+    const wakeProfile = await resourceCatalog.createWakeProfile(
+      {
+        artifactId: artifact.id,
+        name: "ESP-SR bring-up",
+        locale: "vi-VN",
+        channel: "development",
+        activationPhrase: "Hi ESP",
+        activation: {
+          detectorId: "wakenet:hi_esp",
+          sensitivity: 0.5,
+          cooldownMs: 1_500,
+          allowedStates: ["standby"],
+        },
+        interrupt: {
+          detectorId: "multinet:stop",
+          sensitivity: 0.6,
+          cooldownMs: 800,
+          allowedStates: ["thinking", "speaking"],
+        },
+      },
+      { principal, requestId: "integration-wake-create" },
+    );
+    expect(wakeProfile.productReady).toBe(false);
+    const publishedWake = await resourceCatalog.publishWakeProfile(wakeProfile.id, {
+      principal,
+      requestId: "integration-wake-publish",
+    });
+    const rollouts = await resourceCatalog.rollout(
+      wakeProfile.id,
+      publishedWake.publishedVersion,
+      [device.id],
+      { principal, requestId: "integration-resource-rollout" },
+    );
+    expect(rollouts).toHaveLength(1);
+    await expect(store.device(principal.tenantId, device.id)).resolves.toMatchObject({
+      desiredState: {
+        state: {
+          resourceBundleVersion: "1.0.0",
+          resourceManifestId: "stable",
+          wakeProfile: {
+            activationPhrase: "Hi ESP",
+            productReady: false,
+          },
+        },
+      },
+    });
+    await store.updateReportedState(
+      device.id,
+      5,
+      {
+        schemaVersion: 1,
+        firmware: { version: "0.2.0" },
+        resource: {
+          phase: "active",
+          currentVersion: "1.0.0",
+          desiredVersion: "1.0.0",
+          activeSlot: 1,
+          targetSlot: 1,
+          expectedBytes: 125_943,
+          downloadedBytes: 125_943,
+          securityEpoch: 1,
+        },
+      },
+      "d83018a5-b419-48cc-af33-7fd0d753f389",
+    );
+    await expect(resourceCatalog.listRollouts(principal.tenantId)).resolves.toEqual([
+      expect.objectContaining({ id: rollouts[0]?.id, status: "complete" }),
+    ]);
   });
 
   it("atomically rotates a refresh token", async () => {

@@ -1,10 +1,13 @@
 import type {
   Agent,
+  Artifact,
   ConversationEvent,
   Device,
   McpTool,
   Principal,
   Provider,
+  ResourceRollout,
+  WakeProfile,
 } from "./api/schemas";
 
 const pageNames: Record<string, string> = {
@@ -36,7 +39,32 @@ interface PrototypeCallbacks {
     argumentsValue: Record<string, unknown>,
     confirmed: boolean,
   ): Promise<Record<string, unknown>>;
+  registerArtifact(artifactId: string, license: string): Promise<void>;
+  publishArtifact(id: string): Promise<void>;
+  createWakeProfile(input: WakeProfileDraftInput): Promise<void>;
+  publishWakeProfile(id: string): Promise<void>;
+  rolloutWakeProfile(id: string, deviceIds: string[]): Promise<void>;
   logout(): Promise<void>;
+}
+
+export interface WakeProfileDraftInput {
+  artifactId: string;
+  name: string;
+  locale: string;
+  channel: string;
+  activationPhrase: string;
+  activation: {
+    detectorId: string;
+    sensitivity: number;
+    cooldownMs: number;
+    allowedStates: string[];
+  };
+  interrupt: {
+    detectorId: string;
+    sensitivity: number;
+    cooldownMs: number;
+    allowedStates: string[];
+  };
 }
 
 export interface PrototypeController {
@@ -52,6 +80,9 @@ export interface ManagerViewData {
   providers: Provider[];
   tools: McpTool[];
   conversationEvents: ConversationEvent[];
+  artifacts: Artifact[];
+  wakeProfiles: WakeProfile[];
+  resourceRollouts: ResourceRollout[];
   activeDeviceId: string | undefined;
   toolsLive: boolean;
   apiHost: string;
@@ -414,20 +445,71 @@ function renderTelemetry(root: HTMLElement, data: ManagerViewData): void {
   }
 }
 
+function reportedResourceVersion(device: Device): string | undefined {
+  const resource = device.reportedState.state.resource;
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) return undefined;
+  const version = (resource as Record<string, unknown>).currentVersion;
+  return typeof version === "string" ? version : undefined;
+}
+
+function renderResources(root: HTMLElement, data: ManagerViewData): void {
+  const latestArtifact = data.artifacts.find((artifact) => artifact.status === "published");
+  const releaseHero = query<HTMLElement>(root, ".release-hero");
+  if (releaseHero) {
+    if (!latestArtifact) {
+      releaseHero.innerHTML = '<div><span class="status-pill neutral"><i></i> CHƯA CÓ ARTIFACT PUBLISHED</span><h2>Đăng ký release đã ký từ artifact storage</h2><p>Manager chỉ nhận catalog metadata sau khi kiểm tra file immutable, SHA-256, restricted JCS, Ed25519, board, ABI và route canonical.</p><div class="release-meta"><span><small>Executable</small><b>không cho phép</b></span><span><small>Resource ABI</small><b>data/model only</b></span><span><small>Rollout</small><b>desired ≠ active</b></span></div></div><div class="rollout-ring"><b>0%</b><span>0 thiết bị</span><small>active</small></div>';
+    } else {
+      const desired = data.devices.filter(
+        (device) => device.desiredState.state.resourceManifestId === latestArtifact.id,
+      );
+      const active = desired.filter(
+        (device) => reportedResourceVersion(device) === latestArtifact.version,
+      ).length;
+      const percent = desired.length ? Math.round((active / desired.length) * 100) : 0;
+      releaseHero.innerHTML = `<div><span class="status-pill"><i></i> ${escapeHtml(latestArtifact.status.toUpperCase())} · ${escapeHtml(latestArtifact.channel)}</span><h2>Resource ${escapeHtml(latestArtifact.version)}</h2><p>${escapeHtml(latestArtifact.kind)} · ${escapeHtml(latestArtifact.runtime)} ABI ${latestArtifact.runtimeAbi} · benchmark ${escapeHtml(latestArtifact.benchmarkStatus)}</p><div class="release-meta"><span><small>SHA-256</small><b>${escapeHtml(latestArtifact.sha256.slice(0, 12))}…</b></span><span><small>Signature</small><b>${escapeHtml(latestArtifact.signatureKeyId)} · epoch ${latestArtifact.securityEpoch}</b></span><span><small>License</small><b>${escapeHtml(latestArtifact.license)}</b></span></div></div><div class="rollout-ring"><b>${percent}%</b><span>${active} / ${desired.length} thiết bị</span><small>reported active</small></div>`;
+    }
+  }
+
+  const releaseList = query<HTMLElement>(root, ".release-list");
+  if (!releaseList) return;
+  const canAdmin = ["OWNER", "ADMIN"].includes(data.principal.role);
+  const publishedArtifacts = data.artifacts.filter((artifact) => artifact.status === "published");
+  const artifactOptions = publishedArtifacts
+    .map(
+      (artifact) => `<option value="${escapeHtml(artifact.id)}">${escapeHtml(artifact.id)} · ${escapeHtml(artifact.version)}</option>`,
+    )
+    .join("");
+  const registerForm = canAdmin
+    ? `<form class="config-panel resource-form artifact-register-form"><span class="eyebrow">SIGNED ARTIFACT CATALOG</span><div class="two-cols"><label>Artifact ID<input name="artifactId" value="stable" maxlength="64" required></label><label>License / provenance<input name="license" value="ESP-SR bring-up model pack; verify production redistribution" maxlength="120" required></label></div><button class="button button-primary" type="submit">Đăng ký và xác minh</button><small class="audit-note">Binary phải được tạo trước bằng release signer; Web không upload runtime/native code.</small></form>`
+    : "";
+  const artifactRows = data.artifacts
+    .map(
+      (artifact) => `<div class="release-row"><span class="release-version">${escapeHtml(artifact.version)}</span><div><b>${escapeHtml(artifact.id)} · ${escapeHtml(artifact.status)}</b><small>${escapeHtml(artifact.runtime)} ABI ${artifact.runtimeAbi} · ${(artifact.sizeBytes / 1024).toFixed(1)} KiB · ${escapeHtml(artifact.benchmarkStatus)}</small></div><span class="release-date">${escapeHtml(artifact.channel)}</span>${artifact.status === "validated" && canAdmin ? `<button class="publish-artifact" data-artifact-id="${escapeHtml(artifact.id)}" type="button">Publish →</button>` : ""}</div>`,
+    )
+    .join("");
+  const wakeForm = publishedArtifacts.length
+    ? `<form class="config-panel resource-form wake-profile-form"><span class="eyebrow">WAKE PROFILE DRAFT</span><div class="two-cols"><label>Tên profile<input name="name" value="Hey VeeTee development" maxlength="80" required></label><label>Artifact<select name="artifactId">${artifactOptions}</select></label></div><div class="two-cols"><label>Activation phrase<input name="activationPhrase" value="Hey VeeTee" maxlength="80" required></label><label>Channel<select name="channel"><option value="development">development</option><option value="canary">canary</option><option value="stable">stable (cần benchmark pass)</option></select></label></div><div class="two-cols"><label>Activation detector ID<input name="activationDetectorId" placeholder="wakenet:model_id" required></label><label>Interrupt detector ID<input name="interruptDetectorId" placeholder="multinet:model_id" required></label></div><button class="button button-primary" type="submit">Tạo wake profile draft</button><small class="audit-note">Nhập phrase không tự tạo model. “Hey VeeTee” chỉ product-ready sau corpus FAR/FRR/latency pass.</small></form>`
+    : "";
+  const profileRows = data.wakeProfiles
+    .map(
+      (profile) => `<div class="release-row"><span class="release-version ${profile.productReady ? "" : "old"}">W${profile.publishedVersion || profile.version}</span><div><b>${escapeHtml(profile.name)} · ${escapeHtml(profile.activationPhrase)}</b><small>${escapeHtml(profile.channel)} · activation ${escapeHtml(profile.activation.detectorId)} · interrupt ${escapeHtml(profile.interrupt.detectorId)} · ${profile.productReady ? "product-ready" : "bring-up/not benchmarked"}</small></div><span class="release-date">${profile.publishedVersion ? `published v${profile.publishedVersion}` : "draft"}</span>${profile.publishedVersion === 0 ? `<button class="publish-wake-profile" data-wake-profile-id="${profile.id}" type="button">Publish →</button>` : data.activeDeviceId ? `<button class="rollout-wake-profile" data-wake-profile-id="${profile.id}" data-device-id="${data.activeDeviceId}" type="button">Rollout →</button>` : ""}</div>`,
+    )
+    .join("");
+  const rolloutRows = data.resourceRollouts
+    .slice(0, 5)
+    .map(
+      (rollout) => `<div class="release-row"><span class="release-version old">R</span><div><b>${escapeHtml(rollout.artifactId)} → ${escapeHtml(rollout.deviceId.slice(0, 8))}</b><small>wake v${rollout.wakeProfileVersion} · desired state v${rollout.desiredStateVersion}</small></div><span class="release-date">${escapeHtml(rollout.status)}</span><button type="button" disabled>reported ≠ assumed</button></div>`,
+    )
+    .join("");
+  releaseList.innerHTML = `${registerForm}${artifactRows || '<div class="empty-state"><b>Catalog trống.</b><small>Đăng ký artifact đã ký trong storage để bắt đầu.</small></div>'}${wakeForm}${profileRows}${rolloutRows}`;
+}
+
 function renderAvailability(root: HTMLElement, data: ManagerViewData): void {
   const device = data.devices[0];
   const agent = data.agents[0];
   const consoleTop = query<HTMLElement>(root, ".console-top");
   if (consoleTop) {
     consoleTop.innerHTML = `<div><span>DEVICE</span><b>${escapeHtml(device?.name ?? "Chưa có thiết bị")}</b></div><div><span>AGENT</span><b>${escapeHtml(agent ? `${agent.name} · v${agent.publishedVersion}` : "Chưa có agent")}</b></div><div><span>ENGINE</span><b>${escapeHtml(agent ? `${agent.interactionMode} · auto gate` : "Cascade · auto")}</b></div>`;
-  }
-  const releaseHero = query<HTMLElement>(root, ".release-hero");
-  const releaseList = query<HTMLElement>(root, ".release-list");
-  if (releaseHero) {
-    releaseHero.innerHTML = '<div><span class="status-pill neutral"><i></i> CHƯA CÓ ARTIFACT</span><h2>OTA signing pipeline chưa được cấu hình</h2><p>Firmware chỉ xuất hiện ở đây sau khi artifact đã validate, ký và có manifest tương thích board veetee-s3-n16r8.</p><div class="release-meta"><span><small>Executable OTA</small><b>A/B required</b></span><span><small>Resource bundle</small><b>signed inactive slot</b></span><span><small>Rollout</small><b>canary first</b></span></div></div><div class="rollout-ring"><b>0%</b><span>0 thiết bị</span><small>rollout</small></div>';
-  }
-  if (releaseList) {
-    releaseList.innerHTML = '<div class="empty-state"><b>Chưa có release thật.</b><small>UI không hiển thị firmware mẫu để tránh nhầm với artifact đã ký.</small></div>';
   }
 }
 
@@ -479,6 +561,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
   renderSignatures.set(root, signatures);
   renderOverview(root, data);
   renderTelemetry(root, data);
+  renderResources(root, data);
   renderAvailability(root, data);
 }
 
@@ -553,6 +636,70 @@ export function initializePrototype(
     }) as EventListener);
   });
 
+  listen(root, "submit", (async (event: Event) => {
+    const form = event.target as HTMLFormElement;
+    if (form.matches(".artifact-register-form")) {
+      event.preventDefault();
+      const artifactId = new FormData(form).get("artifactId")?.toString().trim() ?? "";
+      const license = new FormData(form).get("license")?.toString().trim() ?? "";
+      if (!artifactId || !license) return toast("Artifact ID và license không được để trống.");
+      const submit = query<HTMLButtonElement>(form, 'button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        await callbacks.registerArtifact(artifactId, license);
+        toast("Artifact đã pass hash, signature, ABI và được thêm vào catalog.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể đăng ký artifact.");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+      return;
+    }
+    if (form.matches(".wake-profile-form")) {
+      event.preventDefault();
+      const values = new FormData(form);
+      const artifactId = values.get("artifactId")?.toString() ?? "";
+      const name = values.get("name")?.toString().trim() ?? "";
+      const activationPhrase = values.get("activationPhrase")?.toString().trim() ?? "";
+      const channel = values.get("channel")?.toString() ?? "development";
+      const activationDetectorId =
+        values.get("activationDetectorId")?.toString().trim() ?? "";
+      const interruptDetectorId =
+        values.get("interruptDetectorId")?.toString().trim() ?? "";
+      if (!artifactId || !name || !activationPhrase || !activationDetectorId || !interruptDetectorId) {
+        return toast("Hãy nhập đủ artifact, phrase và detector ID.");
+      }
+      const submit = query<HTMLButtonElement>(form, 'button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        await callbacks.createWakeProfile({
+          artifactId,
+          name,
+          locale: "vi-VN",
+          channel,
+          activationPhrase,
+          activation: {
+            detectorId: activationDetectorId,
+            sensitivity: 0.5,
+            cooldownMs: 1_500,
+            allowedStates: ["standby"],
+          },
+          interrupt: {
+            detectorId: interruptDetectorId,
+            sensitivity: 0.6,
+            cooldownMs: 800,
+            allowedStates: ["thinking", "speaking"],
+          },
+        });
+        toast("Đã tạo wake profile draft; phrase chưa đồng nghĩa model đã benchmark.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể tạo wake profile.");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    }
+  }) as EventListener);
+
   listen(root, "click", (async (event: Event) => {
     const target = event.target as Element;
     const page = target.closest<HTMLElement>("[data-page-link]")?.dataset.pageLink;
@@ -564,6 +711,41 @@ export function initializePrototype(
     if (target.closest("[data-open-pair]")) return openPairing();
     if (target.closest("[data-close-modal]")) return closePairing();
     if (target === query(root, "#pairModal")) return closePairing();
+    const publishArtifact = target.closest<HTMLButtonElement>(".publish-artifact");
+    if (publishArtifact?.dataset.artifactId) {
+      publishArtifact.disabled = true;
+      try {
+        await callbacks.publishArtifact(publishArtifact.dataset.artifactId);
+        toast("Artifact immutable đã được publish; chưa có nghĩa thiết bị đã apply.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể publish artifact.");
+      }
+      return;
+    }
+    const publishWake = target.closest<HTMLButtonElement>(".publish-wake-profile");
+    if (publishWake?.dataset.wakeProfileId) {
+      publishWake.disabled = true;
+      try {
+        await callbacks.publishWakeProfile(publishWake.dataset.wakeProfileId);
+        toast("Wake profile version immutable đã được publish.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể publish wake profile.");
+      }
+      return;
+    }
+    const rolloutWake = target.closest<HTMLButtonElement>(".rollout-wake-profile");
+    if (rolloutWake?.dataset.wakeProfileId && rolloutWake.dataset.deviceId) {
+      rolloutWake.disabled = true;
+      try {
+        await callbacks.rolloutWakeProfile(rolloutWake.dataset.wakeProfileId, [
+          rolloutWake.dataset.deviceId,
+        ]);
+        toast("Đã tạo desired rollout; chờ reported state xác nhận active.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Rollout bị từ chối.");
+      }
+      return;
+    }
     const toolItem = target.closest<HTMLButtonElement>(".tool-item[data-tool-name]");
     if (toolItem?.dataset.toolName) {
       const catalog = toolCatalogs.get(root);

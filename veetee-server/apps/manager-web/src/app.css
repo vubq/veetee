@@ -61,6 +61,13 @@
 .tool-call-form .confirmation { border-radius: 9px; padding: 10px; color: var(--ink); background: #fff1db; }
 .tool-call-form .button:disabled { cursor: not-allowed; opacity: .55; }
 
+.release-list .resource-form { margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 22px; box-shadow: none; background: rgba(255, 255, 255, .34); }
+.release-list .resource-form .eyebrow { display: block; margin-bottom: 16px; }
+.release-list .resource-form label { margin-bottom: 12px; }
+.release-list .resource-form .button { margin-right: 10px; }
+.release-list .audit-note { color: var(--ink-soft); font-size: 8px; line-height: 1.55; }
+.release-row button:disabled { cursor: not-allowed; opacity: .55; }
+
 @media (max-width: 900px) {
   .login-page { grid-template-columns: 1fr; padding: 18px; }
   .login-story { min-height: 470px; }

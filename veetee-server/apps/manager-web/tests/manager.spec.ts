@@ -14,6 +14,8 @@ async function mockManagerApi(
   options: {
     withDevice?: boolean;
     withConversationEvents?: boolean;
+    withResources?: boolean;
+    rolloutCalls?: unknown[];
     toolCalls?: unknown[];
     agentPatches?: unknown[];
   } = {},
@@ -95,6 +97,83 @@ async function mockManagerApi(
             ]
           : [],
       );
+    }
+    if (url.pathname === "/api/v1/artifacts") {
+      return json(
+        options.withResources
+          ? [
+              {
+                id: "stable",
+                kind: "resource_bundle",
+                version: "1.0.0",
+                channel: "stable",
+                sizeBytes: 125943,
+                sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+                contentType: "application/vnd.veetee.esp-sr-model-pack",
+                runtime: "esp-sr",
+                runtimeAbi: 1,
+                license: "ESP-SR bring-up model pack",
+                board: "veetee-s3-n16r8",
+                minFirmware: "0.2.0",
+                maxFirmware: "0.3.0",
+                signatureKeyId: "veetee-dev-release-2026-01",
+                securityEpoch: 1,
+                benchmarkStatus: "not_run",
+                status: "published",
+                publishedAt: "2026-07-22T03:45:00.000Z",
+                createdAt: "2026-07-22T03:44:00.000Z",
+              },
+            ]
+          : [],
+      );
+    }
+    if (url.pathname === "/api/v1/wake-profiles") {
+      return json(
+        options.withResources
+          ? [
+              {
+                id: "a9dc1d82-e265-47cc-a6a0-73f938dcf3b8",
+                artifactId: "stable",
+                name: "ESP-SR bring-up",
+                locale: "vi-VN",
+                channel: "development",
+                activationPhrase: "Hi ESP",
+                activation: {
+                  detectorId: "wakenet:hi_esp",
+                  sensitivity: 0.5,
+                  cooldownMs: 1500,
+                  allowedStates: ["standby"],
+                },
+                interrupt: {
+                  detectorId: "multinet:stop",
+                  sensitivity: 0.6,
+                  cooldownMs: 800,
+                  allowedStates: ["thinking", "speaking"],
+                },
+                version: 2,
+                publishedVersion: 2,
+                productReady: false,
+              },
+            ]
+          : [],
+      );
+    }
+    if (url.pathname === "/api/v1/resource-rollouts" && request.method() === "GET") {
+      return json([]);
+    }
+    if (url.pathname === "/api/v1/resource-rollouts" && request.method() === "POST") {
+      options.rolloutCalls?.push(request.postDataJSON());
+      return json([
+        {
+          id: "cb00e69d-e7c3-4e72-bfd0-37711ec4ebbf",
+          deviceId: "b72559f9-8a1c-47fa-b2af-7c2a85098b2f",
+          artifactId: "stable",
+          wakeProfileVersion: 2,
+          status: "active",
+          desiredStateVersion: 3,
+          createdAt: "2026-07-22T03:50:00.000Z",
+        },
+      ]);
     }
     if (url.pathname === "/api/v1/agents") {
       return json([
@@ -296,4 +375,27 @@ test("renders the redacted realtime timeline from Manager API events", async ({ 
   await expect(page.locator("#eventLog")).toContainText("28 ký tự · transcript đã redact");
   await expect(page.locator(".latency-row")).toContainText("450");
   await expect(page.locator("#interruptButton")).toBeDisabled();
+});
+
+test("shows signed wake resources and creates desired rollout without claiming apply", async ({
+  page,
+}) => {
+  const rolloutCalls: unknown[] = [];
+  await mockManagerApi(page, { withDevice: true, withResources: true, rolloutCalls });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="ota"]').first().click();
+  await expect(page.locator(".release-hero")).toContainText("Resource 1.0.0");
+  await expect(page.locator(".release-list")).toContainText("bring-up/not benchmarked");
+  await page.getByRole("button", { name: "Rollout →" }).click();
+  await expect.poll(() => rolloutCalls).toEqual([
+    {
+      wakeProfileId: "a9dc1d82-e265-47cc-a6a0-73f938dcf3b8",
+      deviceIds: ["device-1"],
+    },
+  ]);
+  await expect(page.locator("#toast")).toContainText("chờ reported state");
 });

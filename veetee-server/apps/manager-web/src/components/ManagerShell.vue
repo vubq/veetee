@@ -27,6 +27,12 @@ const devices = useQuery({ queryKey: ["devices"], queryFn: managerApi.devices })
 const agents = useQuery({ queryKey: ["agents"], queryFn: managerApi.agents });
 const providers = useQuery({ queryKey: ["providers"], queryFn: managerApi.providers });
 const baselineTools = useQuery({ queryKey: ["mcp-tools"], queryFn: managerApi.mcpTools });
+const artifacts = useQuery({ queryKey: ["artifacts"], queryFn: managerApi.artifacts });
+const wakeProfiles = useQuery({ queryKey: ["wake-profiles"], queryFn: managerApi.wakeProfiles });
+const resourceRollouts = useQuery({
+  queryKey: ["resource-rollouts"],
+  queryFn: managerApi.resourceRollouts,
+});
 const activeDeviceId = computed(() => devices.data.value?.[0]?.id ?? "");
 const deviceTools = useQuery({
   queryKey: computed(() => ["device-mcp-tools", activeDeviceId.value]),
@@ -98,6 +104,31 @@ async function callTool(
   return managerApi.callDeviceTool(deviceId, name, argumentsValue, confirmed);
 }
 
+async function registerArtifact(artifactId: string, license: string): Promise<void> {
+  await managerApi.registerArtifact(artifactId, license);
+  await refresh("artifacts");
+}
+
+async function publishArtifact(id: string): Promise<void> {
+  await managerApi.publishArtifact(id);
+  await refresh("artifacts");
+}
+
+async function createWakeProfile(input: Parameters<typeof managerApi.createWakeProfile>[0]) {
+  await managerApi.createWakeProfile(input);
+  await refresh("wake-profiles");
+}
+
+async function publishWakeProfile(id: string): Promise<void> {
+  await managerApi.publishWakeProfile(id);
+  await refresh("wake-profiles");
+}
+
+async function rolloutWakeProfile(id: string, deviceIds: string[]): Promise<void> {
+  await managerApi.rolloutWakeProfile(id, deviceIds);
+  await Promise.all([refresh("resource-rollouts"), refresh("devices")]);
+}
+
 onMounted(async () => {
   await nextTick();
   if (!root.value) return;
@@ -106,6 +137,11 @@ onMounted(async () => {
     testProvider,
     publishAgent,
     callTool,
+    registerArtifact,
+    publishArtifact,
+    createWakeProfile,
+    publishWakeProfile,
+    rolloutWakeProfile,
     logout: () => auth.logout(),
   });
 });
@@ -119,6 +155,9 @@ watchEffect(() => {
     providers: providers.data.value ?? [],
     tools: tools.value,
     conversationEvents: conversationEvents.data.value ?? [],
+    artifacts: artifacts.data.value ?? [],
+    wakeProfiles: wakeProfiles.data.value ?? [],
+    resourceRollouts: resourceRollouts.data.value ?? [],
     activeDeviceId: activeDeviceId.value || undefined,
     toolsLive: Boolean(deviceTools.data.value),
     apiHost: apiHost.value,

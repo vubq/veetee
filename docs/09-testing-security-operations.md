@@ -40,6 +40,8 @@
 - WebSocket reconnect/timeout/malformed/flood.
 - MCP authorization/SSRF/schema.
 - Manager API tenant isolation/idempotency/migration.
+- Manager integration suite phải dùng `VEETEE_INTEGRATION_DATABASE_URL` trỏ tới
+  database riêng có hậu tố `_test`; runner từ chối chạy nếu trùng database dev.
 - Playwright pairing/provider/publish/OTA flows.
 
 ## 2. End-to-end scenarios

@@ -13,6 +13,7 @@ import {
   Prisma,
   ProviderHealth,
   ProviderKind,
+  ResourceRolloutStatus,
 } from "@prisma/client";
 
 import { AuditService } from "../audit/audit.service.js";
@@ -91,6 +92,7 @@ export type DeviceBootstrapResult =
       agentId: string | null;
       configVersion: number;
       resourceVersion?: string;
+      resourceManifestId?: string;
     };
 
 export interface DeviceActivationResult {
@@ -194,12 +196,14 @@ export class ControlPlaneStore {
     });
     const desired = (device.desiredState?.state ?? {}) as Record<string, unknown>;
     const resourceVersion = desired.resourceBundleVersion;
+    const resourceManifestId = desired.resourceManifestId;
     return {
       state: "active",
       deviceId: device.id,
       agentId: device.agentId,
       configVersion: device.agent?.publishedVersion ?? 0,
       ...(typeof resourceVersion === "string" ? { resourceVersion } : {}),
+      ...(typeof resourceManifestId === "string" ? { resourceManifestId } : {}),
     };
   }
 
@@ -440,6 +444,33 @@ export class ControlPlaneStore {
           throw new ConflictException("Reported state version is stale");
         }
         // Equal versions are idempotent retries and must not mutate the stored state.
+      } else {
+        const resource = state.resource;
+        if (resource && typeof resource === "object" && !Array.isArray(resource)) {
+          const report = resource as Record<string, unknown>;
+          const desiredVersion =
+            typeof report.desiredVersion === "string" ? report.desiredVersion : undefined;
+          const rolloutStatus =
+            report.phase === "active"
+              ? ResourceRolloutStatus.COMPLETE
+              : report.phase === "failed"
+                ? ResourceRolloutStatus.FAILED
+                : report.phase === "rolled_back"
+                  ? ResourceRolloutStatus.ROLLED_BACK
+                  : undefined;
+          if (rolloutStatus) {
+            await transaction.resourceRollout.updateMany({
+              where: {
+                deviceId: id,
+                status: ResourceRolloutStatus.ACTIVE,
+                ...(desiredVersion
+                  ? { artifact: { is: { version: desiredVersion } } }
+                  : {}),
+              },
+              data: { status: rolloutStatus },
+            });
+          }
+        }
       }
       await transaction.device.update({
         where: { id },

@@ -63,6 +63,7 @@ describe("OtaController", () => {
         agentId: "01JAGENT",
         configVersion: 3,
         resourceVersion: "1.2.0",
+        resourceManifestId: "canary-vi-v2",
       }),
     } as unknown as ControlPlaneStore;
     vi.stubEnv("VEETEE_MANAGER_PUBLIC_URL", "http://192.168.1.20:8001");
@@ -86,6 +87,9 @@ describe("OtaController", () => {
       url: "http://192.168.1.20:8001/veetee/config/v1/devices/01JDEVICE",
     });
     expect(response.resources?.version).toBe("1.2.0");
+    expect(response.resources?.manifest_url).toBe(
+      "http://192.168.1.20:8001/veetee/artifacts/manifests/canary-vi-v2",
+    );
   });
 
   it("keeps activation polling pending until the device is bound", async () => {

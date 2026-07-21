@@ -79,6 +79,65 @@ export const conversationEventSchema = z.object({
   occurredAt: z.string(),
 });
 
+const detectorProfileSchema = z.object({
+  detectorId: z.string(),
+  sensitivity: z.number().min(0).max(1),
+  cooldownMs: z.number().int().nonnegative(),
+  allowedStates: z.array(z.string()),
+});
+
+export const artifactSchema = z.object({
+  id: z.string(),
+  kind: z.enum([
+    "resource_bundle",
+    "model_pack",
+    "display_assets",
+    "audio_assets",
+    "admission_model",
+  ]),
+  version: z.string(),
+  channel: z.string(),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string(),
+  contentType: z.string(),
+  runtime: z.string(),
+  runtimeAbi: z.number().int().positive(),
+  license: z.string(),
+  board: z.string(),
+  minFirmware: z.string(),
+  maxFirmware: z.string(),
+  signatureKeyId: z.string(),
+  securityEpoch: z.number().int().positive(),
+  benchmarkStatus: z.enum(["not_run", "passed", "failed"]),
+  status: z.enum(["validated", "published", "revoked"]),
+  publishedAt: z.string().optional(),
+  createdAt: z.string(),
+});
+
+export const wakeProfileSchema = z.object({
+  id: z.string().uuid(),
+  artifactId: z.string(),
+  name: z.string(),
+  locale: z.string(),
+  channel: z.string(),
+  activationPhrase: z.string(),
+  activation: detectorProfileSchema,
+  interrupt: detectorProfileSchema,
+  version: z.number().int().positive(),
+  publishedVersion: z.number().int().nonnegative(),
+  productReady: z.boolean(),
+});
+
+export const resourceRolloutSchema = z.object({
+  id: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  artifactId: z.string(),
+  wakeProfileVersion: z.number().int().positive(),
+  status: z.enum(["active", "complete", "failed", "rolled_back"]),
+  desiredStateVersion: z.number().int().positive(),
+  createdAt: z.string(),
+});
+
 export const healthSchema = z.object({
   status: z.string(),
   service: z.string().optional(),
@@ -98,3 +157,6 @@ export type Agent = z.infer<typeof agentSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
 export type ConversationEvent = z.infer<typeof conversationEventSchema>;
+export type Artifact = z.infer<typeof artifactSchema>;
+export type WakeProfile = z.infer<typeof wakeProfileSchema>;
+export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;
