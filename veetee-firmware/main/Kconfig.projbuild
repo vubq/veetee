@@ -104,4 +104,30 @@ menu "Veetee hardware bring-up"
             portal is persisted in NVS so changing host/domain does not require
             rebuilding firmware.
 
+    config VEETEE_ESP_SR_BRINGUP
+        bool "Enable ESP-SR wake detector bring-up profile"
+        default y
+        select SR_WN_WN9S_HIESP
+        help
+            Loads ESP-SR WakeNet9s with its built-in English "Hi ESP"
+            model to validate microphone fan-out, task isolation and wake
+            cancellation on the target board. This is not the production
+            Vietnamese/Veetee model and must be replaced by a signed model
+            pack before release.
+
+    config VEETEE_WAKE_MODEL_PARTITION
+        string "ESP-SR bring-up model partition label"
+        default "resource_0"
+        depends on VEETEE_ESP_SR_BRINGUP
+        help
+            Development-only source slot for srmodels.bin. Production uses
+            the verified active resource slot selected by the resource
+            manifest and never overwrites both A/B slots at once.
+
+    config VEETEE_WAKE_COOLDOWN_MS
+        int "Local wake detector cooldown (ms)"
+        range 250 10000
+        default 1200
+        depends on VEETEE_ESP_SR_BRINGUP
+
 endmenu

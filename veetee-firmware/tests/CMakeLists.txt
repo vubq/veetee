@@ -15,6 +15,17 @@ target_compile_options(state_machine_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME state_machine_test COMMAND state_machine_test)
 
 add_executable(
+    wake_detector_policy_test
+    wake_detector_policy_test.cpp
+    ../main/audio/wake_detector_policy.cpp
+)
+target_include_directories(wake_detector_policy_test PRIVATE ../main)
+target_compile_features(wake_detector_policy_test PRIVATE cxx_std_17)
+target_compile_options(wake_detector_policy_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME wake_detector_policy_test COMMAND wake_detector_policy_test)
+
+add_executable(
     endpoint_url_test
     endpoint_url_test.cpp
     ../main/network/endpoint_url.cpp

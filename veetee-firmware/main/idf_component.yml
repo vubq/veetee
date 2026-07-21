@@ -1,4 +1,5 @@
 dependencies:
   espressif/cjson: "^1.7.19"
   espressif/esp_audio_codec: "~2.5.0"
+  espressif/esp-sr: "~2.4.6"
   espressif/esp_websocket_client: "^1.7.0"

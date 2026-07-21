@@ -10,6 +10,24 @@ namespace {
 
 constexpr char kTag[] = "veetee_board";
 
+#if CONFIG_VEETEE_ESP_SR_BRINGUP
+constexpr audio::DetectorProfile kBringupProfiles[] = {
+    {
+        .role = audio::DetectorRole::kActivation,
+        .profile_id = "bringup-en-hi-esp-v1",
+        .model_id = "wn9s_hiesp",
+        .cooldown_ms = CONFIG_VEETEE_WAKE_COOLDOWN_MS,
+        .detection_threshold = 0.0F,
+    },
+};
+#endif
+
+bool OnDetectorPcm(const std::int16_t* samples, std::size_t sample_count,
+                   void* context) {
+    return static_cast<audio::WakeDetector*>(context)->SubmitPcm(samples,
+                                                                 sample_count);
+}
+
 }  // namespace
 
 VeeteeBoard::VeeteeBoard()
@@ -17,6 +35,7 @@ VeeteeBoard::VeeteeBoard()
               CONFIG_VEETEE_BUTTON_WIFI_RESET_MS) {}
 
 esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
+                                  DetectorEventSink detector_event_sink,
                                   EncodedAudioSink encoded_audio_sink,
                                   PlaybackFinishedSink playback_finished_sink,
                                   void* context) {
@@ -34,8 +53,17 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
 
     if ((error = display_.Initialize()) != ESP_OK ||
         (error = display_.DrawColorBars()) != ESP_OK ||
-        (error = audio_.Initialize(encoded_audio_sink, playback_finished_sink,
-                                   context)) != ESP_OK ||
+        (error = wake_detector_.Initialize(
+#if CONFIG_VEETEE_ESP_SR_BRINGUP
+             CONFIG_VEETEE_WAKE_MODEL_PARTITION, kBringupProfiles,
+             sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0]),
+#else
+             nullptr, nullptr, 0,
+#endif
+             detector_event_sink, context)) != ESP_OK ||
+        (error = audio_.Initialize(encoded_audio_sink, &OnDetectorPcm,
+                                   playback_finished_sink,
+                                   context, &wake_detector_)) != ESP_OK ||
         (error = button_.Start(button_sink, context)) != ESP_OK) {
         return error;
     }
@@ -45,6 +73,8 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
 }
 
 esp_err_t VeeteeBoard::StartAudio() {
+    esp_err_t error = wake_detector_.Start();
+    if (error != ESP_OK) return error;
     return audio_.Start();
 }
 
@@ -66,6 +96,14 @@ void VeeteeBoard::ApplyState(app::State state) {
                         state == app::State::kClosing;
     gpio_set_level(kStatusLed, active ? 1 : 0);
     audio_.SetCaptureEnabled(state == app::State::kListening);
+    const audio::DetectorRole detector_role = audio::DetectorRoleForState(
+        state,
+        wake_detector_.HasProfile(audio::DetectorRole::kActivation),
+        wake_detector_.HasProfile(audio::DetectorRole::kInterrupt));
+    if (!wake_detector_.SetRole(detector_role)) {
+        ESP_LOGW(kTag, "Unable to apply detector role %s",
+                 audio::ToString(detector_role));
+    }
 }
 
 void VeeteeBoard::BeginPlayback() {

@@ -36,15 +36,20 @@ std::int32_t ToSpeakerSample(std::int16_t sample, int volume_percent) {
 }  // namespace
 
 esp_err_t I2sAudio::Initialize(EncodedAudioSink encoded_sink,
+                               PcmFrameSink pcm_frame_sink,
                                PlaybackFinishedSink playback_finished_sink,
-                               void* context) {
-    if (encoded_sink == nullptr || playback_finished_sink == nullptr ||
-        encoder_ != nullptr || decoder_ != nullptr) {
+                               void* sink_context,
+                               void* pcm_frame_context) {
+    if (encoded_sink == nullptr || pcm_frame_sink == nullptr ||
+        playback_finished_sink == nullptr || encoder_ != nullptr ||
+        decoder_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     encoded_sink_ = encoded_sink;
+    pcm_frame_sink_ = pcm_frame_sink;
     playback_finished_sink_ = playback_finished_sink;
-    sink_context_ = context;
+    sink_context_ = sink_context;
+    pcm_frame_context_ = pcm_frame_context;
     volume_percent_.store(CONFIG_VEETEE_DEFAULT_VOLUME_PERCENT);
 
     i2s_chan_config_t tx_channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -252,6 +257,7 @@ void I2sAudio::RunCapture() {
         const std::size_t samples = bytes_read / sizeof(mic_dma_buffer_[0]);
         for (std::size_t index = 0; index < samples; ++index) {
             const std::int16_t pcm = ToPcm16(mic_dma_buffer_[index]);
+            detector_pcm_[index] = pcm;
 #if CONFIG_VEETEE_MIC_DIAGNOSTICS
             sum_squares += static_cast<std::int64_t>(pcm) * pcm;
             ++diagnostic_samples;
@@ -259,6 +265,10 @@ void I2sAudio::RunCapture() {
             if (capture_enabled_.load() && captured_samples < capture_pcm_.size()) {
                 capture_pcm_[captured_samples++] = pcm;
             }
+        }
+        if (!pcm_frame_sink_(detector_pcm_.data(), samples,
+                             pcm_frame_context_)) {
+            ESP_LOGD(kTag, "Dropped local detector PCM frame");
         }
 
 #if CONFIG_VEETEE_MIC_DIAGNOSTICS

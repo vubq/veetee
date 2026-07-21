@@ -12,6 +12,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Manager Web visual | Giữ nguyên visual/interaction của `veetee-server/prototypes/manager-web/index.html`; khi chuyển Vue chỉ thay data layer và bổ sung màn hình vận hành đã ghi trong spec. |
 | Conversation | `mode=auto` là mặc định: wake/button mở assistant gate, VAD tự finalize, AI tự trả lời; không cần bấm nút lần hai. |
 | Wake | Button và activation wake word mở cùng một flow; activation/interrupt detector profile tách lifecycle. |
+| Product wake phrase | `Hey VeeTee`, cách đọc mục tiêu `hây vi ti` (`heɪ viː tiː`). Phrase/pronunciation là metadata train/benchmark của profile, không phải nhánh so chuỗi trong firmware. |
 | Wake runtime V1 | ESP-SR model pack (`srmodels.bin`), detector id nằm trong profile; runtime/operator mới chỉ qua firmware OTA. |
 | Interrupt | Button interrupt là hard guarantee. Voice interrupt khi loa đang phát là best-effort cho tới khi AEC/far-end reference benchmark pass. |
 | Conversation runtime | `TurnArbiter` + cancellation token + deadline + generation check; stale result không được phát TTS hay kích hoạt tool tiếp theo. |

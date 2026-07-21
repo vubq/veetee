@@ -17,11 +17,15 @@ class I2sAudio {
 public:
     using EncodedAudioSink = bool (*)(const std::uint8_t* packet,
                                       std::size_t length, void* context);
+    using PcmFrameSink = bool (*)(const std::int16_t* samples,
+                                  std::size_t sample_count, void* context);
     using PlaybackFinishedSink = bool (*)(void* context);
 
     esp_err_t Initialize(EncodedAudioSink encoded_sink,
+                         PcmFrameSink pcm_frame_sink,
                          PlaybackFinishedSink playback_finished_sink,
-                         void* context);
+                         void* sink_context,
+                         void* pcm_frame_context);
     esp_err_t Start();
 
     void SetCaptureEnabled(bool enabled);
@@ -71,10 +75,13 @@ private:
     TaskHandle_t capture_task_ = nullptr;
     TaskHandle_t playback_task_ = nullptr;
     EncodedAudioSink encoded_sink_ = nullptr;
+    PcmFrameSink pcm_frame_sink_ = nullptr;
     PlaybackFinishedSink playback_finished_sink_ = nullptr;
     void* sink_context_ = nullptr;
+    void* pcm_frame_context_ = nullptr;
 
     std::array<std::int32_t, kMicReadSamples> mic_dma_buffer_{};
+    std::array<std::int16_t, kMicReadSamples> detector_pcm_{};
     std::array<std::int16_t, kUplinkFrameSamples> capture_pcm_{};
     std::array<std::uint8_t, 1500> encoded_buffer_{};
     std::array<std::int16_t, kDownlinkFrameSamples> playback_pcm_{};

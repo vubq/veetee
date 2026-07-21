@@ -82,6 +82,21 @@ void OnButtonEvent(veetee::input::ButtonEvent event, void*) {
     }
 }
 
+bool OnDetectorEvent(veetee::audio::DetectorRole role, const char* profile_id,
+                     void*) {
+    ESP_LOGI(kTag, "Local detector event role=%s profile=%s",
+             veetee::audio::ToString(role), profile_id);
+    switch (role) {
+        case veetee::audio::DetectorRole::kActivation:
+            return PostEvent(veetee::app::Event::kActivationWakeDetected);
+        case veetee::audio::DetectorRole::kInterrupt:
+            return PostEvent(veetee::app::Event::kInterruptDetected);
+        case veetee::audio::DetectorRole::kDisabled:
+            return false;
+    }
+    return false;
+}
+
 void OnWifiEvent(veetee::network::WifiManagerEvent event, void*) {
     switch (event) {
         case veetee::network::WifiManagerEvent::kConnected:
@@ -338,7 +353,8 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,
                                            &OnDownlinkAudio, &OnMcpEnvelope,
                                            nullptr));
-    ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, &OnEncodedAudio,
+    ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, &OnDetectorEvent,
+                                       &OnEncodedAudio,
                                        &OnPlaybackFinished, nullptr));
     ESP_ERROR_CHECK(g_board.StartAudio());
     if (!g_mcp.Initialize(&ReadDeviceStatus, &SetSpeakerVolume,

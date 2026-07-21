@@ -60,6 +60,7 @@ E2E-15 Zipformer low-confidence -> ChunkFormer re-decode -> accepted transcript,
 E2E-16 Zipformer stable -> không khởi chạy ChunkFormer
 E2E-17 VieNeu batch/stream capability được phản ánh đúng, abort không phát audio stale
 E2E-18 9router abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
+E2E-19 "Hey VeeTee" corpus -> FAR/FRR/latency gate; `Hi ESP` bring-up không được tính là product pass
 ```
 
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.

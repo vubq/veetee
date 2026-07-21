@@ -202,9 +202,10 @@ Cấu hình profile ví dụ:
   "id": "wake-vi-home-v4",
   "locale": "vi-VN",
   "activation": {
-    "examples": ["veetee ơi", "chào veetee"],
-    "model_pack_artifact_id": "model:esp-sr-vi-home:3.0.1",
-    "detector_id": "wakenet:veetee_vi",
+    "examples": ["Hey VeeTee"],
+    "pronunciation_hints": {"vi-VN": ["hây vi ti"]},
+    "model_pack_artifact_id": "model:esp-sr-hey-veetee:1.0.0",
+    "detector_id": "wakenet:hey_veetee",
     "sensitivity": 0.62
   },
   "interrupt": {
@@ -220,6 +221,12 @@ Cấu hình profile ví dụ:
 Activation/interrupt phrase và exit phrase không được xử lý bằng một chuỗi `if/else` hard-code trong firmware. Local detector dùng signed model/config profile vì phải hoạt động khi chưa mở cloud session hoặc cần abort tức thời. Exit intent và các interrupt diễn đạt tự do do ASR + intent model/LLM trên server suy luận theo ngữ cảnh khi audio path cho phép. Các câu trong profile chỉ là examples/training/config data, không phải toàn bộ ngôn ngữ được hỗ trợ.
 
 Runtime wake V1 trên ESP32-S3 là ESP-SR: WakeNet cho activation hoặc MultiNet cho command/interrupt tùy model pack đã build. Firmware load một `srmodels.bin` tương thích resource ABI; `detector_id` chỉ chọn detector/command đã tồn tại trong model pack, không tải native operator tùy ý. Runtime khác như `sherpa-onnx` chỉ được thêm bằng firmware OTA và ADR sau khi benchmark CPU/RAM/latency trên board thật.
+
+ESP-SR `2.4.7` không cung cấp sẵn model tiếng Việt đã được Veetee xác nhận. WakeNet hiện có model/tài liệu built-in hoặc custom cho một số ngôn ngữ như Trung, Anh, Nhật, Pháp; MultiNet command chủ yếu Trung/Anh. Vì `Hey VeeTee` dùng cách đọc mục tiêu của người Việt, production chỉ được bật sau khi model riêng pass corpus giọng Việt, nhiễu/media và near-confusion. Nếu pipeline custom ESP-SR không đạt gate, phải thêm runtime KWS khác bằng signed firmware OTA; không đổi UI text thành model giả và không quảng bá hỗ trợ trước benchmark.
+
+Firmware bring-up hiện dùng model WakeNet9s built-in `Hi ESP` sau cờ `VEETEE_ESP_SR_BRINGUP`. Đây chỉ là profile kỹ thuật để kiểm tra I2S fan-out, queue, task inference, event và cancellation trên board. Model được pack vào `resource_0` khi flash dev; đường production vẫn phải verify manifest/hash/signature, stage inactive resource slot và rollback trước khi chọn active slot.
+
+Mic chỉ có một I2S RX reader. Mỗi frame PCM16 20 ms được gửi không-blocking vào queue detector hữu hạn; task WakeNet riêng drop frame cũ khi backpressure. Mỗi lần đổi detector role tăng generation, nên frame/kết quả của role cũ không thể đánh thức hoặc abort session mới. Detector activation chỉ chạy ở `idle/closing`; detector interrupt chỉ chạy ở `evaluating/thinking/speaking` khi có profile interrupt riêng đã validate. Button luôn hoạt động kể cả model lỗi.
 
 Button interrupt là guarantee của V1. Interrupt bằng giọng nói khi loa đang phát chỉ là best-effort cho tới khi audio path có far-end playback reference và AEC benchmark pass; firmware/UI không được quảng bá full-duplex trước gate này.
 

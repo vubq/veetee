@@ -15,3 +15,7 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions/veetee_16mb.csv"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Development board plumbing only. Product wake phrase "Hey VeeTee" is
+# delivered later as a benchmarked, signed model-pack resource.
+CONFIG_VEETEE_ESP_SR_BRINGUP=y

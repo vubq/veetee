@@ -2,6 +2,7 @@
 
 #include "app/state_machine.h"
 #include "audio/i2s_audio.h"
+#include "audio/wake_detector.h"
 #include "display/st7789_display.h"
 #include "esp_err.h"
 #include "input/button.h"
@@ -13,10 +14,12 @@ public:
     using ButtonSink = input::Button::EventSink;
     using EncodedAudioSink = audio::I2sAudio::EncodedAudioSink;
     using PlaybackFinishedSink = audio::I2sAudio::PlaybackFinishedSink;
+    using DetectorEventSink = audio::WakeDetector::EventSink;
 
     VeeteeBoard();
 
     esp_err_t Initialize(ButtonSink button_sink,
+                         DetectorEventSink detector_event_sink,
                          EncodedAudioSink encoded_audio_sink,
                          PlaybackFinishedSink playback_finished_sink,
                          void* context);
@@ -34,6 +37,7 @@ public:
 private:
     display::St7789Display display_;
     audio::I2sAudio audio_;
+    audio::WakeDetector wake_detector_;
     input::Button button_;
 };
 

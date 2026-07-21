@@ -85,7 +85,7 @@ Hai nguồn đánh thức phải hội tụ vào cùng flow:
 
 ```jsonl
 {"type":"listen","state":"start","mode":"auto","source":"button"}
-{"type":"listen","state":"detect","text":"veetee ơi","source":"wake_word"}
+{"type":"listen","state":"detect","text":"Hey VeeTee","source":"wake_word"}
 {"type":"listen","state":"start","mode":"auto","source":"wake_word"}
 ```
 

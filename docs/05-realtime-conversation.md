@@ -198,7 +198,7 @@ Khi assistant đang `thinking/speaking`, detector có thể nhận `interrupt pr
 
 Có hai profile khác nhau:
 
-- `activation_profile`: đánh thức từ standby/sleep, ví dụ “Veetee ơi”.
+- `activation_profile`: đánh thức từ standby/sleep; phrase sản phẩm V1 là “Hey VeeTee”, cách đọc “hây vi ti”.
 - `interrupt_profile`: dừng AI khi đang thinking/speaking, ví dụ “dừng lại”.
 
 Một profile không được dùng thay cho profile kia vì false positive và UX khác nhau.
@@ -306,7 +306,7 @@ Mục tiêu cascade trên Wi-Fi tốt:
 ## 10. Acceptance scenarios
 
 1. Click mở assistant -> nói câu hỏi -> VAD tự finalize -> qua quality/intent gate -> LLM/TTS trả lời, không click lần hai.
-2. “Veetee ơi” khi standby -> channel mở và bắt đầu nghe mode auto.
+2. “Hey VeeTee” (đọc “hây vi ti”) khi standby -> channel mở và bắt đầu nghe mode auto.
 3. Bất kỳ input không hợp lệ/không chủ đích/không hướng tới robot -> bị admission gate loại, không gọi LLM/MCP; tiếng môi trường hoặc media chỉ là test examples.
 4. Câu ASR confidence thấp -> robot hỏi lại tối đa một lần, không tự bịa câu trả lời.
 5. Câu hỏi cần thiết bị -> planner tạo MCP call, policy validate, tool timeout/cancel đúng và LLM nói kết quả tự nhiên.

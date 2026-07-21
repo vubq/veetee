@@ -15,6 +15,12 @@ Source repo firmware của robot Veetee, mục tiêu đầu tiên là ESP32-S3 N
 - Device MCP `initialize`, `tools/list`, `tools/call`.
 - Locale mặc định `vi-VN`, fallback `en-US`.
 
+Wake phrase sản phẩm là `Hey VeeTee`, đọc “hây vi ti”. Firmware không so transcript
+với phrase này; Web/API lưu profile/model ID và metadata pronunciation để train,
+benchmark rồi phân phối model pack đã ký. ESP-SR `2.4.7` chưa có model tiếng Việt
+hoặc `Hey VeeTee` built-in đã validate. Build dev hiện dùng `Hi ESP` chỉ để bring-up
+đường PCM/task/event trên board và không được dùng làm capability production.
+
 ## Source layout mục tiêu
 
 ```text
@@ -66,6 +72,17 @@ Firmware bring-up hiện hiển thị color bars, phát tone ngắn, log thống
 của mic và đưa button event qua application queue. Kích thước/offset/mirror màn
 hình và INMP441 slot được đổi bằng `idf.py menuconfig`; giá trị mặc định vẫn là
 baseline provisional cho tới khi kiểm tra trực tiếp trên phần cứng.
+
+ESP-SR bring-up được bật bởi `CONFIG_VEETEE_ESP_SR_BRINGUP`. Build tạo
+`build/srmodels/srmodels.bin`, kiểm tra không vượt partition và `idf.py flash` ghi
+nó vào `resource_0`. Một I2S reader fan-out frame PCM 20 ms vào queue hữu hạn;
+WakeNet chạy ở task riêng, drop frame cũ khi nghẽn và generation-check khi đổi
+activation/interrupt role. Đây là layout development; resource updater production
+phải stage/verify/activate slot A/B theo signed manifest trước khi hot-reload.
+Board smoke đã xác nhận model load, contract 16 kHz mono/chunk 512, boot tone và
+mic chạy liên tục hơn 45 giây không panic/watchdog. Wake-to-WebSocket vật lý còn
+cần provision Wi-Fi và bind code 6 số để state machine vào `idle`; captive portal
+không bật detector vì wake không được phép bỏ qua activation.
 
 Khi chưa có cấu hình, firmware phát AP `Veetee-XXXX` và captive portal tại
 `http://192.168.4.1`. Portal scan SSID, nhận Wi-Fi, bootstrap URL LAN, locale và

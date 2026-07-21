@@ -82,9 +82,10 @@ Ví dụ profile:
   "version": 4,
   "locale": "vi-VN",
   "activation": {
-    "examples": ["veetee ơi", "chào veetee"],
-    "model_pack_artifact_id": "model:esp-sr-vi-home:3.0.1",
-    "detector_id": "wakenet:veetee_vi",
+    "examples": ["Hey VeeTee"],
+    "pronunciation_hints": {"vi-VN": ["hây vi ti"]},
+    "model_pack_artifact_id": "model:esp-sr-hey-veetee:1.0.0",
+    "detector_id": "wakenet:hey_veetee",
     "sensitivity": 0.64,
     "cooldown_ms": 1200
   },
@@ -100,6 +101,7 @@ Ví dụ profile:
 ```
 
 `examples` là metadata/training/test data, không phải exact-string branch trong firmware.
+`pronunciation_hints` cũng chỉ phục vụ dataset, review và UI theo locale; firmware chọn detector đã compile bằng ID bất biến. Manager không chuyển chuỗi này thành command grammar tại runtime.
 
 ### Wake word tùy chỉnh
 
@@ -110,9 +112,14 @@ Có hai capability khác nhau:
 
 Không hứa rằng nhập một chuỗi bất kỳ trên Web sẽ lập tức thành wake word tốt. V1 hỗ trợ chọn/upload model đã build; service generate/train custom wake model là phase sau. Model không được train trên ESP32.
 
+Wake phrase sản phẩm đã chốt là `Hey VeeTee`, cách đọc `hây vi ti` (`heɪ viː tiː`). Trước publish, model phải có benchmark versioned gồm người nói/giới tính/vùng giọng Việt khác nhau, khoảng cách/góc nói, âm lượng, phòng vang, TV/nhạc/quạt/đường phố và các từ gần âm. Gate khởi đầu đề xuất: false accept không quá `0.5/device-day` trong soak, false reject không quá `10%` ở tập near-field mục tiêu, p95 detect không quá `250 ms` sau cuối phrase và không làm mất frame capture. Đây là release gate có thể siết theo dữ liệu thực, không phải rule phân loại âm thanh hard-code.
+
+ESP-SR `2.4.7` chỉ có `Hi ESP` phù hợp làm bring-up sẵn có cho board; không được gắn nhãn nó là `Hey VeeTee`. Production ưu tiên model custom ESP-SR nếu quyền sử dụng/toolchain và benchmark đạt gate. Nếu không đạt, Veetee thêm một KWS runtime đã benchmark bằng firmware OTA rồi vẫn phân phối model qua signed `model_pack`.
+
 ### Quy tắc apply
 
 - Thay sensitivity/cooldown: apply khi device ở standby hoặc giữa hai turn.
+- `sensitivity` là giá trị sản phẩm chuẩn hóa; adapter runtime map sang threshold/mode cụ thể trong safe range, không truyền mù quáng vào SDK.
 - Thay model cùng runtime/format: stage rồi restart wake subsystem, không bắt buộc reboot.
 - Thay runtime/operator hoặc vượt memory requirement: yêu cầu firmware tương thích trước.
 - Apply lỗi: giữ model/profile cũ, report reason và không làm mất button wake.
