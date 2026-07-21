@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://127.0.0.1:6379/0"
     manager_api_url: HttpUrl = HttpUrl("http://127.0.0.1:8001")
+    manager_internal_token: str = Field(default="", repr=False)
+    manager_request_seconds: float = Field(default=3.0, gt=0.1, le=15.0)
+    require_device_auth: bool = True
 
     nine_router_base_url: HttpUrl = Field(
         default=HttpUrl("http://127.0.0.1:20128/v1"),

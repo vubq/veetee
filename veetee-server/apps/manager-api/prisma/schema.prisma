@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum InteractionMode {
+  AUTO
+  MANUAL
+  REALTIME
+}
+
+enum DeviceStatus {
+  ONLINE
+  IDLE
+  OFFLINE
+}
+
+enum ProviderKind {
+  VAD
+  ASR
+  LLM
+  TTS
+  REALTIME
+  MEMORY
+}
+
+enum ProviderHealth {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  agents          Agent[]
+  devices         Device[]
+  providers       ProviderBinding[]
+  auditEvents     AuditEvent[]
+  refreshSessions RefreshSession[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships     Membership[]
+  refreshSessions RefreshSession[]
+  auditEvents     AuditEvent[]     @relation("AuditActor")
+}
+
+model Membership {
+  tenantId  String
+  userId    String
+  role      TenantRole
+  createdAt DateTime   @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, userId])
+  @@index([userId])
+}
+
+model Agent {
+  id               String          @id @default(uuid())
+  tenantId         String
+  name             String
+  defaultLocale    String          @default("vi-VN")
+  interactionMode  InteractionMode @default(AUTO)
+  persona          String
+  draftConfig      Json            @default("{}")
+  version          Int             @default(1)
+  publishedVersion Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  configVersions AgentConfigVersion[]
+  devices        Device[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, updatedAt])
+}
+
+model AgentConfigVersion {
+  id          String   @id @default(uuid())
+  agentId     String
+  version     Int
+  snapshot    Json
+  publishedAt DateTime @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, version])
+  @@index([agentId, publishedAt])
+}
+
+model Device {
+  id                      String       @id @default(uuid())
+  tenantId                String
+  hardwareId              String       @unique
+  name                    String
+  status                  DeviceStatus @default(IDLE)
+  agentId                 String?
+  firmwareVersion         String?
+  tokenHash               String?
+  activationChallengeHash String?
+  pairedAt                DateTime     @default(now())
+  lastSeenAt              DateTime?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  agent         Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  desiredState  DeviceDesiredState?
+  reportedState DeviceReportedState?
+
+  @@index([tenantId, status])
+  @@index([tenantId, agentId])
+}
+
+model DeviceDesiredState {
+  deviceId  String   @id
+  version   Int      @default(1)
+  state     Json     @default("{}")
+  updatedAt DateTime @updatedAt
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+model DeviceReportedState {
+  deviceId  String   @id
+  version   Int      @default(0)
+  state     Json     @default("{}")
+  bootId    String?
+  updatedAt DateTime @updatedAt
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+}
+
+model ProviderBinding {
+  id               String         @id @default(uuid())
+  tenantId         String
+  kind             ProviderKind
+  adapter          String
+  model            String
+  baseUrl          String?
+  secretCiphertext String?
+  secretConfigured Boolean        @default(false)
+  enabled          Boolean        @default(true)
+  health           ProviderHealth @default(UNKNOWN)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, adapter, model])
+  @@index([tenantId, kind, enabled])
+}
+
+model RefreshSession {
+  id        String    @id @default(uuid())
+  userId    String
+  tenantId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([tenantId, expiresAt])
+}
+
+model AuditEvent {
+  id          String   @id @default(uuid())
+  tenantId    String
+  actorUserId String?
+  action      String
+  targetType  String
+  targetId    String
+  requestId   String
+  beforeHash  String?
+  afterHash   String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?  @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([targetType, targetId])
+}

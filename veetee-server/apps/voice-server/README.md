@@ -2,7 +2,7 @@
 
 Hot path WebSocket/Opus và conversation engines. App này không phụ thuộc manager API cho mỗi audio frame; config được tải theo immutable snapshot/version.
 
-Vertical slice hiện chạy thật tại `/xiaozhi/v1/`:
+Vertical slice hiện chạy thật tại `/xiaozhi/v1/` và native alias `/veetee/v1/`:
 
 ```text
 Opus -> Silero VAD -> Zipformer Vietnamese INT8 -> local admission
@@ -14,6 +14,9 @@ VieNeu đọc toàn bộ graph/codec từ `models/` và khởi động được 
 `HF_HUB_OFFLINE=1`. Model được prewarm trước khi `/health/ready` trả `200`.
 Button/wake word mở cùng assistant gate; `abort` tăng generation, hủy provider
 scope và loại output cũ. Inactivity timeout synthesize goodbye từ config rồi sleep.
+WebSocket handshake xác thực `Device-Id` + device token qua Manager một lần khi mở
+session; sau đó audio hot path dùng immutable config snapshot đã cache, không gọi
+Manager theo từng frame.
 
 Chạy local:
 

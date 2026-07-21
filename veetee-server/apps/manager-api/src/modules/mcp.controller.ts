@@ -1,6 +1,6 @@
 import { Controller, Get } from "@nestjs/common";
 
-@Controller("api/mcp")
+@Controller("api/v1/mcp")
 export class McpController {
   @Get("tools")
   list(): Array<Record<string, unknown>> {

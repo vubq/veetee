@@ -44,6 +44,7 @@ class ConversationEngine:
         tools: ToolBroker,
         sink: ConversationSink,
         policy: ConversationPolicy | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self._arbiter = arbiter
         self._admission = admission
@@ -53,6 +54,7 @@ class ConversationEngine:
         self._tools = tools
         self._sink = sink
         self._policy = policy or ConversationPolicy()
+        self._system_prompt = system_prompt
 
     async def handle_transcript(self, transcript: Transcript) -> None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
@@ -150,7 +152,13 @@ class ConversationEngine:
 
         if plan.response_required:
             await self._stream_response(
-                LlmRequest(transcript=transcript, plan=plan, tool_result=tool_result), context
+                LlmRequest(
+                    transcript=transcript,
+                    plan=plan,
+                    tool_result=tool_result,
+                    system_prompt=self._system_prompt,
+                ),
+                context,
             )
 
     async def _stream_response(self, request: LlmRequest, context: OperationContext) -> None:

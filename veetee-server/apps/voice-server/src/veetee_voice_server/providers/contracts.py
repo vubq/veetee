@@ -18,6 +18,7 @@ class LlmRequest:
     transcript: Transcript
     plan: ConversationPlan
     tool_result: Any | None = None
+    system_prompt: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

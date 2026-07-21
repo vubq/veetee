@@ -186,10 +186,15 @@ class NineRouterLlmProvider:
         if request.tool_result is not None:
             tool_json = json.dumps(request.tool_result, ensure_ascii=False)
             user_content = f"{user_content}\n\nTool result:\n{tool_json}"
+        messages: list[dict[str, str]] = []
+        system_prompt = getattr(request, "system_prompt", None)
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_content})
         payload: dict[str, Any] = {
             "model": self._model,
             "stream": True,
-            "messages": [{"role": "user", "content": user_content}],
+            "messages": messages,
         }
         if self._reasoning_effort:
             payload["reasoning_effort"] = self._reasoning_effort

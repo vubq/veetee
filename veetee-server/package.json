@@ -15,7 +15,10 @@
     "models:prepare-native": "uv run --project apps/voice-server python scripts/prepare_native_tts.py",
     "models:benchmark": "HF_HUB_OFFLINE=1 uv run --project apps/voice-server python scripts/benchmark_local_ai.py",
     "infra:up": "docker compose -f compose.infra.yaml up -d postgres redis",
-    "infra:down": "docker compose -f compose.infra.yaml down"
+    "infra:down": "docker compose -f compose.infra.yaml down",
+    "infra:host:prepare": "bash scripts/infra-host-prepare.sh",
+    "infra:host:up": "bash scripts/infra-host-up.sh",
+    "infra:host:down": "bash scripts/infra-host-down.sh"
   },
   "keywords": [],
   "author": "",
@@ -35,5 +38,12 @@
     "@types/node": "^24.13.3",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "@node-rs/argon2@2.0.2": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.1": true,
+    "prisma@6.19.3": true
   }
 }

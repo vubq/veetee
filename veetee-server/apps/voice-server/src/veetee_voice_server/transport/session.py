@@ -25,6 +25,7 @@ from veetee_voice_server.conversation.types import (
     Transcript,
     WakeSource,
 )
+from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.contracts import TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
@@ -32,8 +33,15 @@ from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder
 
 
 class WebSocketConversationSink:
-    def __init__(self, websocket: WebSocket, *, output_sample_rate: int = 16_000) -> None:
+    def __init__(
+        self,
+        websocket: WebSocket,
+        *,
+        session_id: str,
+        output_sample_rate: int = 16_000,
+    ) -> None:
         self._websocket = websocket
+        self._session_id = session_id
         self._output_sample_rate = output_sample_rate
         self._encoder = OpusEncoder(output_sample_rate)
         self._lock = asyncio.Lock()
@@ -64,6 +72,7 @@ class WebSocketConversationSink:
 
     async def send_control(self, payload: dict[str, Any]) -> None:
         async with self._lock:
+            payload = {"session_id": self._session_id, **payload}
             await self._websocket.send_text(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             )
@@ -79,9 +88,13 @@ class WebSocketConversationSink:
         converted = soxr.resample(samples, source_rate, target_rate, quality="HQ")
         return bytes((np.clip(converted, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
 
-    @staticmethod
-    def _json_output(output: ConversationOutput) -> dict[str, Any]:
-        payload = {"type": output.kind.value, "generation": output.generation, **output.payload}
+    def _json_output(self, output: ConversationOutput) -> dict[str, Any]:
+        payload = {
+            "session_id": self._session_id,
+            "type": output.kind.value,
+            "generation": output.generation,
+            **output.payload,
+        }
         if output.turn_id is not None:
             payload["turn_id"] = output.turn_id
         return payload
@@ -96,17 +109,23 @@ class VoiceSession:
         websocket: WebSocket,
         *,
         settings: Settings,
+        profile: SessionProfile,
         asr: SherpaZipformerAsrProvider,
         vad_model: SileroVadModel,
         tts: TtsProvider,
-        engine_factory: Callable[[TurnArbiter, WebSocketConversationSink], ConversationEngine],
+        engine_factory: Callable[
+            [TurnArbiter, WebSocketConversationSink, SessionProfile], ConversationEngine
+        ],
     ) -> None:
         self.websocket = websocket
         self.settings = settings
+        self.profile = profile
         self.session_id = uuid4().hex
         self.arbiter = TurnArbiter(self.session_id)
         self.sink = WebSocketConversationSink(
-            websocket, output_sample_rate=settings.wire_sample_rate
+            websocket,
+            session_id=self.session_id,
+            output_sample_rate=settings.wire_sample_rate,
         )
         self.asr = asr
         self.tts = tts
@@ -117,12 +136,12 @@ class VoiceSession:
             min_silence_ms=settings.vad_min_silence_ms,
             max_speech_seconds=settings.max_utterance_seconds,
         )
-        self.engine = engine_factory(self.arbiter, self.sink)
+        self.engine = engine_factory(self.arbiter, self.sink, profile)
         self.inactivity = InactivityController(
             arbiter=self.arbiter,
-            first_input_seconds=settings.first_input_seconds,
-            between_turns_seconds=settings.between_turns_seconds,
-            closing_grace_seconds=settings.closing_grace_seconds,
+            first_input_seconds=profile.policy.first_input_seconds,
+            between_turns_seconds=profile.policy.between_turns_seconds,
+            closing_grace_seconds=profile.policy.closing_grace_seconds,
             goodbye=self._goodbye,
         )
         self._decoder = OpusDecoder(settings.input_sample_rate)
@@ -135,8 +154,9 @@ class VoiceSession:
         await self.sink.send_control(
             {
                 "type": "hello",
+                "version": 1,
                 "transport": "websocket",
-                "session_id": self.session_id,
+                "config_version": self.profile.config_version,
                 "audio_params": {
                     "format": "opus",
                     "sample_rate": self.settings.wire_sample_rate,
@@ -250,7 +270,7 @@ class VoiceSession:
             transcript = await self.asr.transcribe_pcm(
                 pcm,
                 sample_rate=self.settings.input_sample_rate,
-                locale=self.settings.default_locale,
+                locale=self.profile.locale,
                 context=context,
             )
             if transcript.text:
@@ -275,10 +295,10 @@ class VoiceSession:
             f"goodbye:{uuid4().hex}",
             self.arbiter.snapshot.generation,
             token,
-            monotonic() + self.settings.closing_grace_seconds,
+            monotonic() + self.profile.policy.closing_grace_seconds,
         )
         async for audio in iterate_operation(
-            self.tts.synthesize(self.settings.goodbye_text, self.settings.default_locale, context),
+            self.tts.synthesize(self.profile.goodbye_text, self.profile.locale, context),
             context,
         ):
             await self.sink.emit(
