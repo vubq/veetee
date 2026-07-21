@@ -69,6 +69,14 @@ interface AgentInput {
   draftConfig?: Record<string, unknown>;
 }
 
+interface AgentPatch {
+  name?: string;
+  defaultLocale?: string;
+  interactionMode?: AgentRecord["interactionMode"];
+  persona?: string;
+  draftConfig?: Record<string, unknown>;
+}
+
 interface ProviderInput {
   kind: ProviderRecord["kind"];
   adapter: string;
@@ -364,6 +372,49 @@ export class ControlPlaneStore {
         transaction,
       );
       return this.toAgentRecord(agent);
+    });
+  }
+
+  async updateAgent(
+    id: string,
+    input: AgentPatch,
+    context: MutationContext,
+  ): Promise<AgentRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const agent = await transaction.agent.findFirst({
+        where: { id, tenantId: context.principal.tenantId },
+      });
+      if (!agent) throw new NotFoundException("Agent not found");
+      const updated = await transaction.agent.update({
+        where: { id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.defaultLocale !== undefined
+            ? { defaultLocale: input.defaultLocale }
+            : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: interactionModeToDatabase[input.interactionMode] }
+            : {}),
+          ...(input.persona !== undefined ? { persona: input.persona } : {}),
+          ...(input.draftConfig !== undefined
+            ? { draftConfig: input.draftConfig as Prisma.InputJsonValue }
+            : {}),
+        },
+      });
+      await this.audit.record(
+        {
+          tenantId: context.principal.tenantId,
+          actorUserId: context.principal.userId,
+          action: "agent.update",
+          targetType: "agent",
+          targetId: id,
+          requestId: context.requestId,
+          before: this.toAgentRecord(agent),
+          after: this.toAgentRecord(updated),
+        },
+        transaction,
+      );
+      return this.toAgentRecord(updated);
     });
   }
 

@@ -30,7 +30,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
   });
   const user = await prisma.user.upsert({
     where: { email: input.adminEmail.toLowerCase() },
-    update: { displayName: input.adminName, active: true },
+    update: { displayName: input.adminName, active: true, passwordHash },
     create: {
       email: input.adminEmail.toLowerCase(),
       displayName: input.adminName,

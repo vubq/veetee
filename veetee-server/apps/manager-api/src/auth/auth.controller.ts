@@ -53,6 +53,7 @@ export class AuthController {
     return this.publicTokenResponse(pair);
   }
 
+  @Public()
   @Post("logout")
   async logout(
     @Req() request: RequestWithPrincipal,

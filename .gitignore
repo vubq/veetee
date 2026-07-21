@@ -35,6 +35,9 @@ dist/
 coverage/
 .nuxt/
 .next/
+test-results/
+playwright-report/
+blob-report/
 
 # ESP-IDF generated state
 build/

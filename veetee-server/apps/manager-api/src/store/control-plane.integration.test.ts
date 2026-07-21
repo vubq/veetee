@@ -86,6 +86,12 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       principal,
       requestId: "integration-publish",
     });
+    const edited = await store.updateAgent(
+      agent.id,
+      { persona: "Updated Vietnamese integration agent" },
+      { principal, requestId: "integration-update" },
+    );
+    expect(edited.persona).toBe("Updated Vietnamese integration agent");
     const ticket = await store.createPairingCode("esp32-integration");
     const device = await store.claimPairing(
       ticket.code,

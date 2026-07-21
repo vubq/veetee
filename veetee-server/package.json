@@ -10,6 +10,7 @@
     "docs:validate": "node scripts/validate-docs.mjs",
     "dev:voice": "uv run --project apps/voice-server python apps/voice-server/main.py",
     "test:voice": "uv run --project apps/voice-server pytest",
+    "test:web:e2e": "npm run test:e2e --workspace @veetee/manager-web",
     "lint:voice": "uv run --project apps/voice-server ruff check apps/voice-server && uv run --project apps/voice-server mypy --config-file apps/voice-server/pyproject.toml -p veetee_voice_server",
     "models:prepare": "uv run --project apps/voice-server python scripts/prepare_local_ai.py",
     "models:prepare-native": "uv run --project apps/voice-server python scripts/prepare_native_tts.py",
