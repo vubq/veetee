@@ -18,6 +18,7 @@ async function mockManagerApi(
     rolloutCalls?: unknown[];
     toolCalls?: unknown[];
     agentPatches?: unknown[];
+    providerPatches?: unknown[];
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
@@ -186,6 +187,9 @@ async function mockManagerApi(
           draftConfig: {
             conversation: { betweenTurnsSeconds: 30, plannerSeconds: 8 },
             futureExtension: { enabled: true },
+            providerChains: [
+              { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
+            ],
           },
           version: 1,
           publishedVersion: 1,
@@ -228,7 +232,31 @@ async function mockManagerApi(
         baseUrl: "http://127.0.0.1:20128/v1",
         secretConfigured: true,
         enabled: true,
+        priority: 10,
+        locales: ["vi-VN"],
         health: providerHealth,
+        healthLatencyMs: 420,
+        healthCheckedAt: "2026-07-22T04:00:00.000Z",
+        circuitState: "closed",
+        failureCount: 0,
+      });
+    }
+    if (url.pathname === "/api/v1/providers/llm-1" && request.method() === "PATCH") {
+      const patch = request.postDataJSON();
+      options.providerPatches?.push(patch);
+      return json({
+        id: "llm-1",
+        kind: "llm",
+        adapter: patch.adapter,
+        model: patch.model,
+        ...(patch.baseUrl ? { baseUrl: patch.baseUrl } : {}),
+        secretConfigured: patch.secretAction === "clear" ? false : true,
+        enabled: patch.enabled,
+        priority: patch.priority,
+        locales: patch.locales,
+        health: "unknown",
+        circuitState: "closed",
+        failureCount: 0,
       });
     }
     if (url.pathname === "/api/v1/providers") {
@@ -241,7 +269,11 @@ async function mockManagerApi(
           baseUrl: "http://127.0.0.1:20128/v1",
           secretConfigured: true,
           enabled: true,
+          priority: 10,
+          locales: ["vi-VN"],
           health: providerHealth,
+          circuitState: "closed",
+          failureCount: 0,
         },
       ]);
     }
@@ -316,6 +348,38 @@ test("keeps the approved mobile navigation", async ({ page }) => {
   await expect(page.locator(".mobile-brand")).toBeVisible();
 });
 
+test("edits provider routing and rotates secrets without reading the old secret", async ({
+  page,
+}) => {
+  const providerPatches: unknown[] = [];
+  await mockManagerApi(page, { providerPatches });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="providers"]').first().click();
+  await page.getByRole("button", { name: "Sửa" }).click();
+  await page.getByLabel("Priority").fill("20");
+  await page.getByLabel("Locales").fill("vi-VN, en-US");
+  await page.locator('select[name="secretAction"]').selectOption("rotate");
+  await page.getByLabel("Secret mới").fill("new-provider-secret");
+  await page.getByRole("button", { name: "Lưu provider" }).click();
+
+  await expect.poll(() => providerPatches).toEqual([
+    {
+      adapter: "openai-compatible-9router",
+      model: "cx/gpt-5.6-terra",
+      baseUrl: "http://127.0.0.1:20128/v1",
+      enabled: true,
+      priority: 20,
+      locales: ["vi-VN", "en-US"],
+      secretAction: "rotate",
+      secret: "new-provider-secret",
+    },
+  ]);
+});
+
 test("builds a live MCP form from the device JSON Schema", async ({ page }) => {
   const toolCalls: unknown[] = [];
   await mockManagerApi(page, { withDevice: true, toolCalls });
@@ -361,6 +425,13 @@ test("publishes bounded conversation changes without dropping extension fields",
       },
     },
   });
+  const draftConfig = (agentPatches[0] as { draftConfig: Record<string, unknown> })
+    .draftConfig;
+  expect(draftConfig.providerChains).toEqual(
+    expect.arrayContaining([
+      { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
+    ]),
+  );
 });
 
 test("renders the redacted realtime timeline from Manager API events", async ({ page }) => {

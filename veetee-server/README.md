@@ -10,8 +10,13 @@ giảm overhead và dễ monitor model/GPU; Docker chỉ là tùy chọn cho h�
 cp .env.example .env
 npm ci
 uv sync --project apps/voice-server --all-groups
+npm run env:voice:sync
 npm run dev:voice
 ```
+
+`env:voice:sync` tạo file ignored `apps/voice-server/.env` mode `0600`, dùng cùng
+Manager service token và API key active do local 9Router quản lý. Script không đọc
+hoặc copy Codex OAuth token, không in secret và có thể chạy lại sau khi rotate key.
 
 PostgreSQL/Redis có thể dùng bản cài trên host hoặc khởi động riêng bằng:
 
@@ -47,14 +52,16 @@ prototypes/
 | Service | Port | URL mẫu |
 |---|---:|---|
 | Voice WebSocket | 8000 | `ws://192.168.1.20:8000/veetee/v1/` |
-| Manager API | 8002 | `http://192.168.1.20:8002/api/v1` |
-| Device edge/bootstrap | 8003 | `http://192.168.1.20:8003/veetee/ota/` |
+| Manager API + device edge | 8001 | `http://192.168.1.20:8001/veetee/ota/` |
 | Manager Web | 8081 | `http://192.168.1.20:8081` |
 | 9Router (internal) | 20128 | `http://127.0.0.1:20128/v1` |
 
 Runtime chỉ publish canonical namespace `/veetee/...`. Wire semantics tương thích được khóa bằng schema/fixture; nếu cần thử một client tham chiếu cũ thì dùng rewrite tạm ở reverse proxy development, không thêm branded route vào source sản phẩm.
 
-Manager API cũng publish desired config, wake profiles và signed resource bundles; device-edge expose canonical device routes, firmware tự pull/verify/apply theo manifest. Artifact download không đi qua voice WebSocket. Dev có thể proxy port 8003 bằng Caddy/Nginx; không tạo database/config source thứ hai.
+Manager API cũng publish desired config, wake profiles và signed resource bundles;
+firmware tự pull/verify/apply qua canonical device routes cùng port `8001` trong
+development. Artifact download không đi qua voice WebSocket. Production có thể
+expose device routes ở `8003` qua Caddy/Nginx; không tạo database/config source thứ hai.
 
 Device report resource apply state qua authenticated
 `PUT /veetee/devices/:id/reported-state`. Sequence cao hơn

@@ -11,6 +11,7 @@ import {
   DeviceStatus,
   InteractionMode,
   Prisma,
+  ProviderCircuitState,
   ProviderHealth,
   ProviderKind,
   ResourceRolloutStatus,
@@ -18,7 +19,11 @@ import {
 
 import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
-import { validateAgentDraftConfig } from "../config/agent-config.policy.js";
+import {
+  expandProviderChains,
+  validateAgentDraftConfig,
+  type ProviderPolicyBinding,
+} from "../config/agent-config.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
@@ -55,7 +60,25 @@ export interface ProviderRecord {
   baseUrl?: string;
   secretConfigured: boolean;
   enabled: boolean;
+  priority: number;
+  locales: string[];
   health: "unknown" | "healthy" | "degraded";
+  healthLatencyMs?: number;
+  healthErrorCode?: string;
+  healthCheckedAt?: string;
+  circuitState: "closed" | "open" | "half_open";
+  failureCount: number;
+}
+
+export interface ProviderRuntimeRecord {
+  id: string;
+  kind: ProviderRecord["kind"];
+  adapter: string;
+  model: string;
+  baseUrl?: string;
+  secret?: string;
+  priority: number;
+  locales: string[];
 }
 
 export interface ConversationEventInput {
@@ -131,6 +154,19 @@ interface ProviderInput {
   baseUrl?: string;
   secret?: string;
   enabled: boolean;
+  priority?: number;
+  locales?: string[];
+}
+
+interface ProviderPatch {
+  adapter?: string;
+  model?: string;
+  baseUrl?: string | null;
+  enabled?: boolean;
+  priority?: number;
+  locales?: string[];
+  secretAction?: "keep" | "rotate" | "clear";
+  secret?: string;
 }
 
 const interactionModeToDatabase: Record<AgentRecord["interactionMode"], InteractionMode> = {
@@ -613,7 +649,17 @@ export class ControlPlaneStore {
       validateAgentDraftConfig(agent.draftConfig as Record<string, unknown>);
       const providers = await transaction.providerBinding.findMany({
         where: { tenantId: context.principal.tenantId, enabled: true },
+        orderBy: [{ kind: "asc" }, { priority: "asc" }, { createdAt: "asc" }],
       });
+      const providerChains = expandProviderChains(
+        agent.draftConfig as Record<string, unknown>,
+        providers.map((provider) => this.toProviderPolicyBinding(provider)),
+        agent.defaultLocale,
+        agent.interactionMode.toLowerCase() as AgentRecord["interactionMode"],
+      );
+      const selectedProviderIds = new Set(
+        providerChains.flatMap((chain) => chain.providers.map((provider) => provider.id)),
+      );
       const version = agent.version + 1;
       const snapshot = {
         ...(agent.draftConfig as Record<string, unknown>),
@@ -623,21 +669,21 @@ export class ControlPlaneStore {
         defaultLocale: agent.defaultLocale,
         interactionMode: agent.interactionMode.toLowerCase(),
         persona: agent.persona,
-        providers: providers.map((provider) => ({
-          id: provider.id,
-          kind: provider.kind.toLowerCase(),
-          adapter: provider.adapter,
-          model: provider.model,
-          ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
-          secretConfigured: provider.secretConfigured,
-        })),
+        providerChains,
+        providers: providers
+          .filter((provider) => selectedProviderIds.has(provider.id))
+          .map((provider) => this.toProviderSnapshot(provider)),
       };
       const updated = await transaction.agent.update({
         where: { id },
         data: { version, publishedVersion: version },
       });
       await transaction.agentConfigVersion.create({
-        data: { agentId: id, version, snapshot: snapshot as Prisma.InputJsonValue },
+        data: {
+          agentId: id,
+          version,
+          snapshot: snapshot as unknown as Prisma.InputJsonValue,
+        },
       });
       await this.audit.record(
         {
@@ -670,13 +716,14 @@ export class ControlPlaneStore {
   async listProviders(tenantId: string): Promise<ProviderRecord[]> {
     const providers = await this.prisma.providerBinding.findMany({
       where: { tenantId },
-      orderBy: [{ kind: "asc" }, { adapter: "asc" }],
+      orderBy: [{ kind: "asc" }, { priority: "asc" }, { adapter: "asc" }],
     });
     return providers.map((provider) => this.toProviderRecord(provider));
   }
 
   async createProvider(input: ProviderInput, context: MutationContext): Promise<ProviderRecord> {
     if (input.baseUrl) this.validateProviderUrl(input.baseUrl);
+    const locales = this.validateProviderLocales(input.locales ?? ["*"]);
     return this.prisma.$transaction(async (transaction) => {
       const provider = await transaction.providerBinding.create({
         data: {
@@ -689,6 +736,8 @@ export class ControlPlaneStore {
             ? { secretCiphertext: this.secretCrypto.encrypt(input.secret), secretConfigured: true }
             : {}),
           enabled: input.enabled,
+          priority: input.priority ?? 100,
+          locales,
         },
       });
       await this.audit.record(
@@ -707,32 +756,140 @@ export class ControlPlaneStore {
     });
   }
 
+  async updateProvider(
+    id: string,
+    input: ProviderPatch,
+    context: MutationContext,
+  ): Promise<ProviderRecord> {
+    if (input.baseUrl) this.validateProviderUrl(input.baseUrl);
+    const locales = input.locales
+      ? this.validateProviderLocales(input.locales)
+      : undefined;
+    if (input.secretAction === "rotate" && !input.secret) {
+      throw new BadRequestException("secret is required when secretAction is rotate");
+    }
+    if (input.secretAction !== "rotate" && input.secret !== undefined) {
+      throw new BadRequestException("secret is only accepted when secretAction is rotate");
+    }
+    return this.prisma.$transaction(async (transaction) => {
+      const provider = await transaction.providerBinding.findFirst({
+        where: { id, tenantId: context.principal.tenantId },
+      });
+      if (!provider) throw new NotFoundException("Provider not found");
+      const secretUpdate =
+        input.secretAction === "rotate"
+          ? {
+              secretCiphertext: this.secretCrypto.encrypt(input.secret as string),
+              secretConfigured: true,
+            }
+          : input.secretAction === "clear"
+            ? { secretCiphertext: null, secretConfigured: false }
+            : {};
+      const updated = await transaction.providerBinding.update({
+        where: { id },
+        data: {
+          ...(input.adapter !== undefined ? { adapter: input.adapter } : {}),
+          ...(input.model !== undefined ? { model: input.model } : {}),
+          ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+          ...(input.priority !== undefined ? { priority: input.priority } : {}),
+          ...(locales ? { locales } : {}),
+          ...secretUpdate,
+          health: ProviderHealth.UNKNOWN,
+          healthLatencyMs: null,
+          healthErrorCode: null,
+          healthCheckedAt: null,
+          circuitState: ProviderCircuitState.CLOSED,
+          failureCount: 0,
+          circuitOpenedAt: null,
+        },
+      });
+      await this.audit.record(
+        {
+          tenantId: context.principal.tenantId,
+          actorUserId: context.principal.userId,
+          action:
+            input.secretAction === "rotate"
+              ? "provider.secret.rotate"
+              : input.secretAction === "clear"
+                ? "provider.secret.clear"
+                : "provider.update",
+          targetType: "provider",
+          targetId: id,
+          requestId: context.requestId,
+          before: this.toProviderRecord(provider),
+          after: this.toProviderRecord(updated),
+        },
+        transaction,
+      );
+      return this.toProviderRecord(updated);
+    });
+  }
+
+  async resolveProviderRuntime(ids: string[]): Promise<ProviderRuntimeRecord[]> {
+    if (ids.length === 0 || ids.length > 24 || new Set(ids).size !== ids.length) {
+      throw new BadRequestException("providerIds must contain 1 to 24 unique ids");
+    }
+    const providers = await this.prisma.providerBinding.findMany({
+      where: { id: { in: ids }, enabled: true },
+    });
+    if (providers.length !== ids.length) {
+      throw new NotFoundException("One or more provider bindings are missing or disabled");
+    }
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    return ids.map((id) => {
+      const provider = byId.get(id);
+      if (!provider) throw new NotFoundException("Provider not found");
+      return {
+        id: provider.id,
+        kind: provider.kind.toLowerCase() as ProviderRecord["kind"],
+        adapter: provider.adapter,
+        model: provider.model,
+        ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+        ...(provider.secretCiphertext
+          ? { secret: this.secretCrypto.decrypt(provider.secretCiphertext) }
+          : {}),
+        priority: provider.priority,
+        locales: provider.locales,
+      };
+    });
+  }
+
   async testProvider(id: string, context: MutationContext): Promise<ProviderRecord> {
     const provider = await this.prisma.providerBinding.findFirst({
       where: { id, tenantId: context.principal.tenantId },
     });
     if (!provider) throw new NotFoundException("Provider not found");
-    let health = provider.enabled ? ProviderHealth.HEALTHY : ProviderHealth.DEGRADED;
-    if (provider.enabled && provider.baseUrl) {
-      this.validateProviderUrl(provider.baseUrl);
-      try {
-        const headers: Record<string, string> = {};
-        if (provider.secretCiphertext) {
-          headers.authorization = `Bearer ${this.secretCrypto.decrypt(provider.secretCiphertext)}`;
-        }
-        const response = await fetch(`${provider.baseUrl.replace(/\/$/, "")}/models`, {
-          headers,
-          signal: AbortSignal.timeout(3_000),
-        });
-        health = response.ok ? ProviderHealth.HEALTHY : ProviderHealth.DEGRADED;
-      } catch {
-        health = ProviderHealth.DEGRADED;
-      }
-    }
+    const startedAt = Date.now();
+    const result = await this.probeProvider(provider);
+    const healthLatencyMs = Date.now() - startedAt;
+    const failureCount =
+      result.health === ProviderHealth.HEALTHY
+        ? 0
+        : result.health === ProviderHealth.DEGRADED
+          ? provider.failureCount + 1
+          : provider.failureCount;
+    const circuitState =
+      result.health === ProviderHealth.HEALTHY
+        ? ProviderCircuitState.CLOSED
+        : failureCount >= 3
+          ? ProviderCircuitState.OPEN
+          : provider.circuitState;
     return this.prisma.$transaction(async (transaction) => {
       const updated = await transaction.providerBinding.update({
         where: { id },
-        data: { health },
+        data: {
+          health: result.health,
+          healthLatencyMs,
+          healthErrorCode: result.errorCode,
+          healthCheckedAt: new Date(),
+          failureCount,
+          circuitState,
+          circuitOpenedAt:
+            circuitState === ProviderCircuitState.OPEN
+              ? provider.circuitOpenedAt ?? new Date()
+              : null,
+        },
       });
       await this.audit.record(
         {
@@ -742,7 +899,12 @@ export class ControlPlaneStore {
           targetType: "provider",
           targetId: id,
           requestId: context.requestId,
-          after: { health: health.toLowerCase() },
+          after: {
+            health: result.health.toLowerCase(),
+            latencyMs: healthLatencyMs,
+            errorCode: result.errorCode,
+            circuitState: circuitState.toLowerCase(),
+          },
         },
         transaction,
       );
@@ -817,7 +979,14 @@ export class ControlPlaneStore {
     baseUrl: string | null;
     secretConfigured: boolean;
     enabled: boolean;
+    priority: number;
+    locales: string[];
     health: ProviderHealth;
+    healthLatencyMs: number | null;
+    healthErrorCode: string | null;
+    healthCheckedAt: Date | null;
+    circuitState: ProviderCircuitState;
+    failureCount: number;
   }): ProviderRecord {
     return {
       id: provider.id,
@@ -827,8 +996,113 @@ export class ControlPlaneStore {
       ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
       secretConfigured: provider.secretConfigured,
       enabled: provider.enabled,
+      priority: provider.priority,
+      locales: provider.locales,
       health: provider.health.toLowerCase() as ProviderRecord["health"],
+      ...(provider.healthLatencyMs !== null ? { healthLatencyMs: provider.healthLatencyMs } : {}),
+      ...(provider.healthErrorCode ? { healthErrorCode: provider.healthErrorCode } : {}),
+      ...(provider.healthCheckedAt
+        ? { healthCheckedAt: provider.healthCheckedAt.toISOString() }
+        : {}),
+      circuitState: provider.circuitState.toLowerCase() as ProviderRecord["circuitState"],
+      failureCount: provider.failureCount,
     };
+  }
+
+  private toProviderPolicyBinding(provider: {
+    id: string;
+    kind: ProviderKind;
+    adapter: string;
+    model: string;
+    baseUrl: string | null;
+    secretConfigured: boolean;
+    enabled: boolean;
+    priority: number;
+    locales: string[];
+  }): ProviderPolicyBinding {
+    return {
+      id: provider.id,
+      kind: provider.kind.toLowerCase() as ProviderRecord["kind"],
+      adapter: provider.adapter,
+      model: provider.model,
+      ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+      secretConfigured: provider.secretConfigured,
+      enabled: provider.enabled,
+      priority: provider.priority,
+      locales: provider.locales,
+    };
+  }
+
+  private toProviderSnapshot(provider: Parameters<ControlPlaneStore["toProviderPolicyBinding"]>[0]) {
+    const snapshot = this.toProviderPolicyBinding(provider);
+    const { enabled: _enabled, ...published } = snapshot;
+    return published;
+  }
+
+  private validateProviderLocales(locales: string[]): string[] {
+    const normalized = [...new Set(locales.map((locale) => locale.trim()))];
+    if (normalized.length === 0 || normalized.length > 16 || normalized.some((locale) => !locale)) {
+      throw new BadRequestException("Provider locales must contain 1 to 16 unique values");
+    }
+    for (const locale of normalized) {
+      if (locale === "*") continue;
+      try {
+        if (new Intl.Locale(locale).toString() !== locale) throw new Error("not canonical");
+      } catch {
+        throw new BadRequestException(`Provider locale ${locale} is invalid or not canonical`);
+      }
+    }
+    return normalized;
+  }
+
+  private async probeProvider(provider: {
+    enabled: boolean;
+    kind: ProviderKind;
+    adapter: string;
+    model: string;
+    baseUrl: string | null;
+    secretCiphertext: string | null;
+  }): Promise<{ health: ProviderHealth; errorCode: string | null }> {
+    if (!provider.enabled) {
+      return { health: ProviderHealth.DEGRADED, errorCode: "disabled" };
+    }
+    if (!provider.baseUrl) {
+      return { health: ProviderHealth.UNKNOWN, errorCode: "runtime_probe_unavailable" };
+    }
+    this.validateProviderUrl(provider.baseUrl);
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (provider.secretCiphertext) {
+      headers.authorization = `Bearer ${this.secretCrypto.decrypt(provider.secretCiphertext)}`;
+    }
+    try {
+      const baseUrl = provider.baseUrl.replace(/\/$/, "");
+      const response =
+        provider.kind === ProviderKind.LLM && provider.adapter.includes("openai-compatible")
+          ? await fetch(`${baseUrl}/chat/completions`, {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify({
+                model: provider.model,
+                stream: false,
+                max_tokens: 4,
+                reasoning_effort: "none",
+                messages: [{ role: "user", content: "Reply with OK." }],
+              }),
+              signal: AbortSignal.timeout(8_000),
+            })
+          : await fetch(`${baseUrl}/models`, {
+              headers,
+              signal: AbortSignal.timeout(3_000),
+            });
+      return response.ok
+        ? { health: ProviderHealth.HEALTHY, errorCode: null }
+        : { health: ProviderHealth.DEGRADED, errorCode: `http_${response.status}` };
+    } catch (error) {
+      return {
+        health: ProviderHealth.DEGRADED,
+        errorCode: error instanceof DOMException && error.name === "TimeoutError" ? "timeout" : "unreachable",
+      };
+    }
   }
 
   private hashToken(token: string): string {

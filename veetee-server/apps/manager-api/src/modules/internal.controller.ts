@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from "@nestjs/common";
-import { IsString, Length } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsString, IsUUID, Length } from "class-validator";
 
 import { Public } from "../auth/public.decorator.js";
 import { ServiceTokenGuard } from "../auth/service-token.guard.js";
@@ -13,6 +13,14 @@ class AuthenticateDeviceDto {
   @IsString()
   @Length(32, 256)
   token!: string;
+}
+
+class ResolveProvidersDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(24)
+  @IsUUID("4", { each: true })
+  providerIds!: string[];
 }
 
 @Public()
@@ -32,5 +40,10 @@ export class InternalController {
   @Post("devices/authenticate")
   async authenticate(@Body() input: AuthenticateDeviceDto): Promise<Record<string, unknown>> {
     return this.store.authenticateDeviceByHardware(input.hardwareId, input.token);
+  }
+
+  @Post("providers/resolve")
+  async resolveProviders(@Body() input: ResolveProvidersDto) {
+    return this.store.resolveProviderRuntime(input.providerIds);
   }
 }

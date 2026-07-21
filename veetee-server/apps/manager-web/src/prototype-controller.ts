@@ -29,9 +29,21 @@ export interface AgentDraftInput {
   draftConfig: Record<string, unknown>;
 }
 
+export interface ProviderUpdateInput {
+  adapter: string;
+  model: string;
+  baseUrl: string | null;
+  enabled: boolean;
+  priority: number;
+  locales: string[];
+  secretAction: "keep" | "rotate" | "clear";
+  secret?: string;
+}
+
 interface PrototypeCallbacks {
   pair(code: string, name: string, agentId?: string): Promise<void>;
   testProvider(providerId: string): Promise<void>;
+  updateProvider(providerId: string, input: ProviderUpdateInput): Promise<void>;
   publishAgent(input: AgentDraftInput): Promise<void>;
   callTool(
     deviceId: string,
@@ -101,6 +113,7 @@ const toolCatalogs = new WeakMap<
   HTMLElement,
   { tools: McpTool[]; activeDeviceId: string | undefined; live: boolean }
 >();
+const providerCatalogs = new WeakMap<HTMLElement, Provider[]>();
 
 function query<T extends Element>(root: ParentNode, selector: string): T | null {
   return root.querySelector<T>(selector);
@@ -169,7 +182,7 @@ function renderDevices(root: HTMLElement, devices: Device[], agents: Agent[]): v
   if (count) count.textContent = String(devices.length);
 }
 
-function renderAgents(root: HTMLElement, agents: Agent[]): void {
+function renderAgents(root: HTMLElement, agents: Agent[], providers: Provider[]): void {
   const poster = query<HTMLElement>(root, ".agent-poster");
   const panel = query<HTMLElement>(root, ".config-panel");
   const agent = agents[0];
@@ -185,6 +198,9 @@ function renderAgents(root: HTMLElement, agents: Agent[]): void {
   const closingGrace = Number(conversation.closingGraceSeconds ?? 5);
   const maxSession = Number(conversation.maxSessionSeconds ?? 600);
   const timeoutGoodbye = String(conversation.timeoutGoodbye ?? "Tạm biệt, hẹn gặp lại.");
+  const providerChainRows = ["vad", "asr", "llm", "tts"]
+    .map((kind) => renderAgentProviderChain(agent, providers, kind))
+    .join("");
   poster.innerHTML = `<span class="poster-tag">PUBLISHED · V${agent.publishedVersion}</span><div class="poster-face"><i></i><i></i><b>⌣</b></div><h2>${escapeHtml(agent.name)}</h2><p>${escapeHtml(agent.persona)}</p><div class="poster-meta"><span>${escapeHtml(agent.defaultLocale)}</span><span>${escapeHtml(agent.interactionMode)}</span><span>version ${agent.publishedVersion}</span></div>`;
   panel.dataset.agentId = agent.id;
   panel.innerHTML = `<div class="tabs"><button class="active">Hành vi</button><button>Providers</button><button>Ngôn ngữ</button><button>Tools</button></div>
@@ -196,6 +212,8 @@ function renderAgents(root: HTMLElement, agents: Agent[]): void {
     <div class="two-cols"><label>Closing grace (giây)<input data-agent-field="closing-grace" type="number" min="0.5" max="60" step="0.5" value="${closingGrace}"></label><label>Giới hạn phiên (giây)<input data-agent-field="max-session" type="number" min="10" max="3600" value="${maxSession}"></label></div>
     <label>Lời chào khi hết thời gian<input data-agent-field="timeout-goodbye" maxlength="240" value="${escapeHtml(timeoutGoodbye)}"></label>
     <div class="two-cols"><label>Input admission<select disabled><option>Semantic + quality gate</option></select></label><label>TurnArbiter<select disabled><option>Generation cancellation</option></select></label></div>
+    <span class="eyebrow">PROVIDER CHAINS · ${escapeHtml(agent.defaultLocale)}</span>
+    ${providerChainRows}
     <div class="publish-bar"><div><span class="unsaved-dot"></span><p><b>Lưu draft và publish immutable version</b><small>Thiết bị đang dùng version ${agent.publishedVersion}</small></p></div><button class="button button-primary publish-agent" type="button">Publish version ${agent.version + 1}</button></div>`;
 
   const select = query<HTMLSelectElement>(root, "#pairModal select");
@@ -205,11 +223,12 @@ function renderAgents(root: HTMLElement, agents: Agent[]): void {
 }
 
 function renderProviders(root: HTMLElement, providers: Provider[]): void {
+  providerCatalogs.set(root, providers);
   const table = query<HTMLElement>(root, ".provider-table");
   if (table) {
-    table.innerHTML = `<div class="provider-row table-head"><span>Provider</span><span>Loại</span><span>Locale / model</span><span>Secret</span><span>Health</span><span></span></div>${providers
+    table.innerHTML = `<div class="provider-row table-head"><span>Provider</span><span>Loại</span><span>Locale / model</span><span>Latency</span><span>Health / circuit</span><span></span></div>${providers
       .map(
-        (provider) => `<div class="provider-row"><span><i class="provider-logo local">${escapeHtml(provider.kind.slice(0, 2).toUpperCase())}</i><b>${escapeHtml(provider.adapter)}</b></span><span>${escapeHtml(provider.kind.toUpperCase())}</span><span>${escapeHtml(provider.model)}</span><span>${provider.secretConfigured ? "configured" : "local / none"}</span><span class="health-text ${provider.health === "healthy" ? "ok-text" : provider.health === "degraded" ? "warn-text" : ""}">${escapeHtml(provider.health)}</span><button class="test-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Test</button></div>`,
+        (provider) => `<div class="provider-row"><span><i class="provider-logo local">${escapeHtml(provider.kind.slice(0, 2).toUpperCase())}</i><b>${escapeHtml(provider.adapter)}</b></span><span>${escapeHtml(provider.kind.toUpperCase())}<small>P${provider.priority}</small></span><span>${escapeHtml(provider.model)}<small>${escapeHtml(provider.locales.join(", "))} · ${provider.secretConfigured ? "secret" : "no secret"}</small></span><span>${provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "—"}<small>${provider.healthCheckedAt ? new Date(provider.healthCheckedAt).toLocaleTimeString("vi-VN") : "chưa test"}</small></span><span class="health-text ${provider.health === "healthy" ? "ok-text" : provider.health === "degraded" ? "warn-text" : ""}">${escapeHtml(provider.health)} · ${escapeHtml(provider.circuitState)}${provider.healthErrorCode ? `<small>${escapeHtml(provider.healthErrorCode)}</small>` : ""}</span><span><button class="edit-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Sửa</button> <button class="test-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Test</button></span></div>`,
       )
       .join("")}`;
   }
@@ -219,6 +238,37 @@ function renderProviders(root: HTMLElement, providers: Provider[]): void {
     const percent = providers.length ? Math.round((healthy / providers.length) * 100) : 0;
     summary.innerHTML = `<div><small>Đang healthy</small><b>${healthy} / ${providers.length}</b><span class="bar"><i style="width:${percent}%"></i></span></div><div><small>Local providers</small><b>${providers.filter((item) => !item.baseUrl || item.baseUrl.includes("127.0.0.1")).length}</b><em>Không rời khỏi máy chủ</em></div><div><small>Model registry</small><b>${new Set(providers.map((item) => item.kind)).size} capability</b><em>Vietnamese-first</em></div>`;
   }
+}
+
+function renderAgentProviderChain(agent: Agent, providers: Provider[], kind: string): string {
+  const chains = Array.isArray(agent.draftConfig.providerChains)
+    ? agent.draftConfig.providerChains
+    : [];
+  const chain = chains.find(
+    (value) =>
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as Record<string, unknown>).kind === kind &&
+      (value as Record<string, unknown>).locale === agent.defaultLocale,
+  ) as Record<string, unknown> | undefined;
+  const ids = Array.isArray(chain?.providerIds)
+    ? chain.providerIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const compatible = providers.filter(
+    (provider) =>
+      provider.kind === kind &&
+      provider.enabled &&
+      (provider.locales.includes("*") || provider.locales.includes(agent.defaultLocale)),
+  );
+  const options = (selectedId?: string) =>
+    compatible
+      .map(
+        (provider) =>
+          `<option value="${escapeHtml(provider.id)}" ${provider.id === selectedId ? "selected" : ""}>P${provider.priority} · ${escapeHtml(provider.adapter)} · ${escapeHtml(provider.model)}</option>`,
+      )
+      .join("");
+  return `<div class="two-cols"><label>${kind.toUpperCase()} primary<select data-provider-chain-kind="${kind}" data-provider-chain-role="primary"><option value="">Chọn provider</option>${options(ids[0])}</select></label><label>${kind.toUpperCase()} fallback<select data-provider-chain-kind="${kind}" data-provider-chain-role="fallback"><option value="">Không dùng fallback</option>${options(ids[1])}</select></label></div>`;
 }
 
 function schemaProperties(tool: McpTool): Record<string, Record<string, unknown>> {
@@ -535,7 +585,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
   }
   const signatures = renderSignatures.get(root) ?? {};
   const devicesSignature = JSON.stringify([data.devices, data.agents.map((agent) => [agent.id, agent.name])]);
-  const agentsSignature = JSON.stringify(data.agents);
+  const agentsSignature = JSON.stringify([data.agents, data.providers]);
   const providersSignature = JSON.stringify(data.providers);
   const toolsSignature = JSON.stringify([
     data.tools,
@@ -547,7 +597,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
     signatures.devices = devicesSignature;
   }
   if (signatures.agents !== agentsSignature) {
-    renderAgents(root, data.agents);
+    renderAgents(root, data.agents, data.providers);
     signatures.agents = agentsSignature;
   }
   if (signatures.providers !== providersSignature) {
@@ -572,6 +622,13 @@ export function initializePrototype(
   const abort = new AbortController();
   const signal = abort.signal;
   let toastTimer = 0;
+
+  if (!query(root, "#providerModal")) {
+    root.insertAdjacentHTML(
+      "beforeend",
+      `<div class="modal-backdrop" id="providerModal" hidden><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="providerTitle"><button class="modal-close" type="button" data-close-provider-modal aria-label="Đóng">×</button><span class="modal-kicker">PROVIDER BINDING</span><h2 id="providerTitle">Cấu hình provider</h2><form class="provider-edit-form"><input type="hidden" name="providerId"><label>Adapter<input name="adapter" required maxlength="120"></label><label>Model<input name="model" required maxlength="200"></label><label>Base URL<input name="baseUrl" placeholder="http://127.0.0.1:20128/v1"></label><div class="two-cols"><label>Priority<input name="priority" type="number" min="0" max="1000" required></label><label>Locales<input name="locales" placeholder="vi-VN, en-US" required></label></div><div class="two-cols"><label>Trạng thái<select name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label><label>Secret<select name="secretAction"><option value="keep">Giữ nguyên</option><option value="rotate">Thay secret</option><option value="clear">Xóa secret</option></select></label></div><label>Secret mới<input name="secret" type="password" autocomplete="new-password" placeholder="Chỉ nhập khi chọn Thay secret"></label><button class="button button-primary modal-submit" type="submit">Lưu provider</button></form></div></div>`,
+    );
+  }
 
   const listen = (target: EventTarget | null, event: string, handler: EventListener): void => {
     target?.addEventListener(event, handler, { signal });
@@ -611,6 +668,31 @@ export function initializePrototype(
     if (modal) modal.hidden = true;
   };
 
+  const closeProvider = (): void => {
+    const modal = query<HTMLElement>(root, "#providerModal");
+    if (modal) modal.hidden = true;
+  };
+
+  const openProvider = (provider: Provider): void => {
+    const modal = query<HTMLElement>(root, "#providerModal");
+    const form = query<HTMLFormElement>(root, ".provider-edit-form");
+    if (!modal || !form) return;
+    const set = (name: string, value: string): void => {
+      const input = query<HTMLInputElement | HTMLSelectElement>(form, `[name="${name}"]`);
+      if (input) input.value = value;
+    };
+    set("providerId", provider.id);
+    set("adapter", provider.adapter);
+    set("model", provider.model);
+    set("baseUrl", provider.baseUrl ?? "");
+    set("priority", String(provider.priority));
+    set("locales", provider.locales.join(", "));
+    set("enabled", String(provider.enabled));
+    set("secretAction", "keep");
+    set("secret", "");
+    modal.hidden = false;
+  };
+
   queryAll<HTMLElement>(root, ".wave, .lab-wave").forEach((wave) => {
     if (wave.children.length) return;
     const count = wave.classList.contains("lab-wave") ? 42 : 25;
@@ -638,6 +720,49 @@ export function initializePrototype(
 
   listen(root, "submit", (async (event: Event) => {
     const form = event.target as HTMLFormElement;
+    if (form.matches(".provider-edit-form")) {
+      event.preventDefault();
+      const values = new FormData(form);
+      const providerId = values.get("providerId")?.toString() ?? "";
+      const adapter = values.get("adapter")?.toString().trim() ?? "";
+      const model = values.get("model")?.toString().trim() ?? "";
+      const baseUrl = values.get("baseUrl")?.toString().trim() ?? "";
+      const priority = Number(values.get("priority"));
+      const locales = (values.get("locales")?.toString() ?? "")
+        .split(",")
+        .map((locale) => locale.trim())
+        .filter(Boolean);
+      const secretAction = (values.get("secretAction")?.toString() ??
+        "keep") as ProviderUpdateInput["secretAction"];
+      const secret = values.get("secret")?.toString() ?? "";
+      if (!providerId || !adapter || !model || !locales.length || !Number.isInteger(priority)) {
+        return toast("Provider cần adapter, model, priority và locale hợp lệ.");
+      }
+      if (secretAction === "rotate" && !secret) {
+        return toast("Hãy nhập secret mới trước khi luân chuyển.");
+      }
+      const submit = query<HTMLButtonElement>(form, 'button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        await callbacks.updateProvider(providerId, {
+          adapter,
+          model,
+          baseUrl: baseUrl || null,
+          enabled: values.get("enabled") === "true",
+          priority,
+          locales,
+          secretAction,
+          ...(secretAction === "rotate" ? { secret } : {}),
+        });
+        closeProvider();
+        toast("Provider đã cập nhật; health và circuit được reset để probe lại.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể cập nhật provider.");
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+      return;
+    }
     if (form.matches(".artifact-register-form")) {
       event.preventDefault();
       const artifactId = new FormData(form).get("artifactId")?.toString().trim() ?? "";
@@ -710,7 +835,9 @@ export function initializePrototype(
     }
     if (target.closest("[data-open-pair]")) return openPairing();
     if (target.closest("[data-close-modal]")) return closePairing();
+    if (target.closest("[data-close-provider-modal]")) return closeProvider();
     if (target === query(root, "#pairModal")) return closePairing();
+    if (target === query(root, "#providerModal")) return closeProvider();
     const publishArtifact = target.closest<HTMLButtonElement>(".publish-artifact");
     if (publishArtifact?.dataset.artifactId) {
       publishArtifact.disabled = true;
@@ -821,6 +948,14 @@ export function initializePrototype(
       }
       return;
     }
+    const editButton = target.closest<HTMLButtonElement>(".edit-provider");
+    if (editButton?.dataset.providerId) {
+      const provider = providerCatalogs
+        .get(root)
+        ?.find((item) => item.id === editButton.dataset.providerId);
+      if (provider) openProvider(provider);
+      return;
+    }
     if (target.closest(".publish-agent")) {
       const panel = query<HTMLElement>(root, ".config-panel");
       const id = panel?.dataset.agentId;
@@ -844,6 +979,21 @@ export function initializePrototype(
       const timeoutGoodbye =
         query<HTMLInputElement>(panel, '[data-agent-field="timeout-goodbye"]')?.value.trim() ??
         "";
+      const providerChains = ["vad", "asr", "llm", "tts"].map((kind) => {
+        const primary = query<HTMLSelectElement>(
+          panel,
+          `[data-provider-chain-kind="${kind}"][data-provider-chain-role="primary"]`,
+        )?.value;
+        const fallback = query<HTMLSelectElement>(
+          panel,
+          `[data-provider-chain-kind="${kind}"][data-provider-chain-role="fallback"]`,
+        )?.value;
+        return {
+          kind,
+          locale: defaultLocale,
+          providerIds: [primary, fallback].filter((value): value is string => Boolean(value)),
+        };
+      });
       if (!name || !persona) return toast("Tên và system prompt không được để trống.");
       if (!timeoutGoodbye) return toast("Lời chào khi timeout không được để trống.");
       try {
@@ -854,6 +1004,7 @@ export function initializePrototype(
           defaultLocale,
           interactionMode,
           draftConfig: {
+            providerChains,
             conversation: {
               firstInputSeconds,
               betweenTurnsSeconds,
@@ -915,6 +1066,7 @@ export function initializePrototype(
     if (event.key === "Escape") {
       closePalette();
       closePairing();
+      closeProvider();
     }
   }) as EventListener);
   listen(palette, "click", ((event: MouseEvent) => {

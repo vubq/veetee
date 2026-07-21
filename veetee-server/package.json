@@ -19,6 +19,7 @@
     "providers:probe:9router": "uv run --env-file apps/voice-server/.env --project apps/voice-server python scripts/probe_nine_router.py",
     "resources:release": "node scripts/release_resource.mjs",
     "env:local:init": "node scripts/configure_local_env.mjs",
+    "env:voice:sync": "python3 scripts/configure_voice_env.py",
     "test:artifact-edge:e2e": "node scripts/e2e_artifact_edge.mjs",
     "infra:up": "docker compose -f compose.infra.yaml up -d postgres redis",
     "infra:down": "docker compose -f compose.infra.yaml down",

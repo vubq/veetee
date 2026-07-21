@@ -86,12 +86,57 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
   });
 
   it("persists pairing, device activation and monotonic desired/reported state", async () => {
+    const providerIds: Record<string, string> = {};
+    for (const kind of ["vad", "asr", "llm", "tts"] as const) {
+      const provider = await store.createProvider(
+        {
+          kind,
+          adapter: `${kind}-integration`,
+          model: `${kind}-model`,
+          ...(kind === "llm" ? { secret: "integration-provider-secret" } : {}),
+          enabled: true,
+          priority: 10,
+          locales: ["vi-VN"],
+        },
+        { principal, requestId: `integration-provider-${kind}` },
+      );
+      providerIds[kind] = provider.id;
+      expect(JSON.stringify(provider)).not.toContain("integration-provider-secret");
+    }
+    const llmId = providerIds.llm as string;
+    const rotated = await store.updateProvider(
+      llmId,
+      { secretAction: "rotate", secret: "rotated-provider-secret" },
+      { principal, requestId: "integration-provider-rotate" },
+    );
+    expect(rotated.secretConfigured).toBe(true);
+    expect(JSON.stringify(rotated)).not.toContain("rotated-provider-secret");
+    await expect(store.resolveProviderRuntime([llmId])).resolves.toEqual([
+      expect.objectContaining({ id: llmId, secret: "rotated-provider-secret" }),
+    ]);
+    const cleared = await store.updateProvider(
+      llmId,
+      { secretAction: "clear" },
+      { principal, requestId: "integration-provider-clear" },
+    );
+    expect(cleared.secretConfigured).toBe(false);
+    await expect(store.resolveProviderRuntime([llmId])).resolves.toEqual([
+      expect.not.objectContaining({ secret: expect.anything() }),
+    ]);
+
     const agent = await store.createAgent(
       {
         name: "Integration Agent",
         defaultLocale: "vi-VN",
         interactionMode: "auto",
         persona: "Vietnamese integration agent",
+        draftConfig: {
+          providerChains: ["vad", "asr", "llm", "tts"].map((kind) => ({
+            kind,
+            locale: "vi-VN",
+            providerIds: [providerIds[kind]],
+          })),
+        },
       },
       { principal, requestId: "integration-agent" },
     );

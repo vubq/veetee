@@ -148,6 +148,19 @@ Không retry mù các request đã bị user abort; retry chỉ khi provider err
 
 Conversation timeout và provider deadline là config độc lập. Registry khai báo deadline tối đa cho admission, ASR, planner, LLM, TTS và MCP; `TurnArbiter` hủy cả chain khi button/interrupt profile phát abort.
 
+Source hiện publish `providerChains` tường minh theo `kind + locale`; mỗi chain chứa
+1 primary và tối đa 3 fallback theo đúng thứ tự đã cấu hình. Publish bị từ chối nếu
+provider sai tenant/kind, bị disable, không support locale hoặc thiếu capability bắt
+buộc. Snapshot chỉ chứa metadata/reference, không chứa credential. Voice-server dùng
+service token để resolve secret cho session mới và cache theo immutable config version.
+
+LLM failover hiện đã chạy trong cùng `OperationContext`: circuit mở sau 3 lỗi liên
+tiếp, thử half-open sau 30 giây, chỉ fallback với timeout/network/HTTP retryable và
+chỉ trước output đầu tiên. Sau khi đã có token user-visible, lỗi được trả về turn hiện
+tại thay vì nối câu trả lời từ model khác. `abort`/deadline không bao giờ fallback.
+ASR chain đã có contract/config nhưng ChunkFormer vẫn chỉ được bật sau benchmark
+conditional re-decode; source không chạy hai ASR song song trên mọi utterance.
+
 ## 4. MCP trên firmware
 
 Giữ JSON-RPC flow của Xiaozhi:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 from collections.abc import AsyncIterator
@@ -29,6 +30,10 @@ from veetee_voice_server.manager import (
     SessionProfile,
 )
 from veetee_voice_server.providers.contracts import ToolBroker
+from veetee_voice_server.providers.failover import (
+    FailoverLlmProvider,
+    LlmProviderCandidate,
+)
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
 from veetee_voice_server.providers.nine_router import NineRouterLlmProvider
@@ -211,21 +216,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(resolved_settings)
     readiness = ReadinessRegistry()
     runtime: dict[str, object] = {}
-    llm_registry: dict[tuple[str, str, str], NineRouterLlmProvider] = {}
+    llm_registry: dict[tuple[str, str, str, str, str], LlmProviderCandidate] = {}
+    llm_chain_registry: dict[tuple[tuple[str, str, str, str, str], ...], FailoverLlmProvider] = {}
     device_sessions = DeviceSessionRegistry()
 
-    def llm_for_profile(profile: SessionProfile) -> NineRouterLlmProvider:
-        key = (profile.llm_base_url, profile.llm_model, profile.llm_reasoning_effort)
-        provider = llm_registry.get(key)
-        if provider is None:
-            provider = NineRouterLlmProvider(
-                base_url=profile.llm_base_url,
-                model=profile.llm_model,
-                api_key=resolved_settings.nine_router_api_key,
-                reasoning_effort=profile.llm_reasoning_effort,
+    def llm_for_profile(profile: SessionProfile) -> FailoverLlmProvider:
+        keys: list[tuple[str, str, str, str, str]] = []
+        candidates: list[LlmProviderCandidate] = []
+        for endpoint in profile.llm_chain:
+            secret_fingerprint = hashlib.sha256(endpoint.api_key.encode()).hexdigest()[:16]
+            key = (
+                endpoint.provider_id,
+                endpoint.base_url,
+                endpoint.model,
+                endpoint.reasoning_effort,
+                secret_fingerprint,
             )
-            llm_registry[key] = provider
-        return provider
+            candidate = llm_registry.get(key)
+            if candidate is None:
+                candidate = LlmProviderCandidate(
+                    endpoint.provider_id,
+                    NineRouterLlmProvider(
+                        base_url=endpoint.base_url,
+                        model=endpoint.model,
+                        api_key=endpoint.api_key,
+                        reasoning_effort=endpoint.reasoning_effort,
+                    ),
+                )
+                llm_registry[key] = candidate
+            keys.append(key)
+            candidates.append(candidate)
+        chain_key = tuple(keys)
+        chain = llm_chain_registry.get(chain_key)
+        if chain is None:
+            chain = FailoverLlmProvider(tuple(candidates))
+            llm_chain_registry[chain_key] = chain
+        return chain
 
     def engine_factory(
         arbiter: TurnArbiter,
@@ -312,7 +338,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bind_port=resolved_settings.port,
         )
         yield
-        await asyncio.gather(*(provider.close() for provider in llm_registry.values()))
+        await asyncio.gather(
+            *(candidate.provider.close() for candidate in llm_registry.values())
+        )
         await manager.close()
         logger.info("voice_server_stopped")
 
@@ -520,7 +548,7 @@ def _llm_context(operation: str, timeout_seconds: float) -> OperationContext:
     )
 
 
-async def _prewarm_llm(provider: NineRouterLlmProvider, timeout_seconds: float) -> bool:
+async def _prewarm_llm(provider: FailoverLlmProvider, timeout_seconds: float) -> bool:
     try:
         await provider.prewarm(_llm_context("llm-prewarm", timeout_seconds))
         logger.info("llm_prewarm_complete")
@@ -533,7 +561,7 @@ async def _prewarm_llm(provider: NineRouterLlmProvider, timeout_seconds: float) 
 class _LlmReadinessProbe:
     def __init__(
         self,
-        provider: NineRouterLlmProvider,
+        provider: FailoverLlmProvider,
         timeout_seconds: float,
         *,
         prewarmed: bool,
@@ -554,11 +582,11 @@ class _LlmReadinessProbe:
 
 
 async def _llm_health(
-    provider: NineRouterLlmProvider,
+    provider: FailoverLlmProvider,
     timeout_seconds: float,
 ) -> ComponentHealth:
     try:
-        healthy = await provider.health(_llm_context("llm-health", timeout_seconds))
+        healthy = await provider.check_health(_llm_context("llm-health", timeout_seconds))
     except Exception:
         healthy = False
     return ComponentHealth(

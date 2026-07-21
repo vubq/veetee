@@ -97,9 +97,15 @@ Prepare the default stack:
 
 ```bash
 cd veetee-server
+npm run env:voice:sync
 npm run models:prepare
 npm run models:benchmark
 ```
+
+The sync command writes only the ignored voice runtime environment with mode
+`0600`. It copies the Manager internal service token and the active 9Router API key
+without printing either value; Codex OAuth/session credentials remain owned by
+9Router and never enter Veetee configuration.
 
 The benchmark accepts separate controls, for example:
 
@@ -139,9 +145,10 @@ The 2026-07-22 run passed `Opus uplink -> Silero -> Zipformer -> fused semantic
 admission/plan -> 9Router -> VieNeu -> paced Opus downlink`. The fused structured
 call returns admission, dialogue act and plan together. Direct short responses go
 straight to TTS without a second model call; MCP turns keep a second prose pass so
-the spoken result is grounded in the actual tool response. First downlink audio in
-the current smoke runs arrived about 4.0--6.5 s after final upload depending on the
-tool path and 9Router latency; this is not the final p95 gate.
+the spoken result is grounded in the actual tool response. The post-provider-routing
+regression run reached first downlink audio at about 2.75 s for direct clarification
+and 3.87 s for the tool/abort path. Earlier cold or slower 9Router samples reached
+about 4.0--6.5 s; none of these small smoke samples is the final p95 gate.
 
 The same run verified semantic no-response for incidental speech, first-audio
 button abort, abort while MCP was pending with a late result, first-input goodbye,
@@ -178,8 +185,9 @@ same Vietnamese sentence chunker as streamed prose. Each sentence receives a
 bounded TTS operation context while the device sees one continuous
 `tts:start`/audio/`tts:stop` lifecycle.
 
-The cancellation run sent abort on the first downlink frame. `tts:stop` and the
-next `listen:start` arrived within about 0.5--2.1 ms on loopback. At most two more
+The latest cancellation run sent abort on the first downlink frame. `tts:stop` and
+the next `listen:start` arrived in about 6.4 ms on loopback (earlier warm samples
+were about 0.5--2.1 ms). At most two more
 frames from the three-frame prebuffer were already on the wire; firmware closes
 its local playback generation before sending abort, so those stale frames do not
 reach the speaker. The paced sender now runs independently from TTS inference,

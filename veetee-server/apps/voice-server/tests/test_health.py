@@ -95,7 +95,7 @@ async def test_llm_readiness_retries_a_failed_startup_prewarm() -> None:
             if self.prewarm_calls == 1:
                 raise RuntimeError("temporary failure")
 
-        async def health(self, _: object) -> bool:
+        async def check_health(self, _: object) -> bool:
             return True
 
     provider = RecoveringLlm()

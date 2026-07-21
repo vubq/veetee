@@ -123,11 +123,11 @@ Bootstrap giữ các field Xiaozhi cũ và có thể thêm optional `config`/`re
   "config": {
     "version": 13,
     "etag": "agent-config-13",
-    "url": "http://192.168.1.20:8003/veetee/config/v1/devices/AA-BB"
+    "url": "http://192.168.1.20:8001/veetee/config/v1/devices/AA-BB"
   },
   "resources": {
     "version": "1.4.0",
-    "manifest_url": "http://192.168.1.20:8003/veetee/artifacts/manifests/01JRESOURCE"
+    "manifest_url": "http://192.168.1.20:8001/veetee/artifacts/manifests/01JRESOURCE"
   }
 }
 ```

@@ -148,17 +148,20 @@ Chi tiết nằm trong `docs/12-dynamic-config-and-artifacts.md`.
 
 ### Device edge và local deployment
 
-`device-edge` là route surface, không phải business domain mới. Trong dev có thể là Caddy/Nginx proxy:
+`device-edge` là route surface, không phải business domain mới. Profile development
+single-node hiện tại không chạy reverse proxy và dùng một Manager process:
 
 ```text
 8000  voice-server WebSocket
-8002  manager-api admin REST/OpenAPI
-8003  device-edge: bootstrap/config/artifact/reported-state
+8001  manager-api: admin + bootstrap/config/artifact/reported-state
 8081  manager-web
 20128  9Router loopback-only, không expose trực tiếp cho ESP32/LAN
 ```
 
-Port 8003 proxy tới device-facing routes của manager-api/object store; không tạo một nguồn dữ liệu thứ hai. Nếu không dùng reverse proxy, manager-api phải expose rõ cả admin và device routes bằng một process/port duy nhất và docs/fixtures phải đổi theo.
+Khi production cần tách ingress, Caddy/Nginx có thể expose admin ở `8002` và
+device-edge ở `8003`, cùng proxy về Manager/object store; không tạo nguồn dữ liệu
+thứ hai. URL là environment/config, vì vậy thay ingress không đổi protocol hay cần
+rebuild firmware.
 
 ## 5. Multi-tenant và mở rộng quốc gia
 

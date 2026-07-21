@@ -53,7 +53,14 @@ export const providerSchema = z.object({
   baseUrl: z.string().optional(),
   secretConfigured: z.boolean(),
   enabled: z.boolean(),
+  priority: z.number().int().min(0).max(1_000),
+  locales: z.array(z.string()),
   health: z.enum(["unknown", "healthy", "degraded"]),
+  healthLatencyMs: z.number().int().nonnegative().optional(),
+  healthErrorCode: z.string().optional(),
+  healthCheckedAt: z.string().optional(),
+  circuitState: z.enum(["closed", "open", "half_open"]),
+  failureCount: z.number().int().nonnegative(),
 });
 
 export const mcpToolSchema = z.object({

@@ -81,12 +81,21 @@ POST   /api/v1/devices/:id/mcp/tools/:name/call
 ### Provider
 
 ```text
-GET    /api/v1/providers/catalog
-POST   /api/v1/providers/credentials
-PATCH  /api/v1/providers/credentials/:id
-POST   /api/v1/providers/credentials/:id/health
-GET    /api/v1/providers/models?kind=llm&locale=vi-VN
+GET    /api/v1/providers
+POST   /api/v1/providers
+PATCH  /api/v1/providers/:id
+POST   /api/v1/providers/:id/test
 ```
+
+`PATCH` dùng `secretAction=keep|rotate|clear`; raw secret không xuất hiện trong
+response/audit. Provider record có `priority`, `locales`, latency/error của lần probe
+cuối, `failureCount` và `circuitState`. Probe OpenAI-compatible gọi đúng model binding,
+không coi `/models` là bằng chứng model thực sự dùng được. Local provider chưa có
+runtime reporter giữ `health=unknown` thay vì giả `healthy`.
+
+Internal control plane có `POST /internal/v1/providers/resolve`, chỉ nhận service
+token và danh sách provider ID của immutable agent snapshot. Endpoint này là secret
+resolver cho voice-server single-node; không public cho Manager Web/firmware.
 
 ### OTA
 
@@ -212,6 +221,8 @@ tiếp theo; rollout hiện chọn explicit device IDs để tránh mở rộng 
 - Không cho operator cấu hình “chạy cả hai ASR luôn” nếu không có evaluation profile;
   production profile dùng confidence/quality trigger có safe range.
 - Hiển thị secret reference/health, không hiển thị raw credential; voice-server resolve credential qua secret service.
+- Agent editor cấu hình primary/fallback riêng theo capability và locale; publish
+  không tự gom toàn bộ provider enabled.
 
 ### Realtime lab
 
@@ -251,10 +262,10 @@ Dev UI và firmware bootstrap phải chạy được bằng IP/port:
 
 ```text
 Manager Web:  http://192.168.1.20:8081
-Manager API:  http://192.168.1.20:8002
+Manager API:  http://192.168.1.20:8001
 Voice WS:     ws://192.168.1.20:8000/veetee/v1/
-OTA:          http://192.168.1.20:8003/veetee/ota/
-Artifacts:    http://192.168.1.20:8003/veetee/artifacts/
+OTA:          http://192.168.1.20:8001/veetee/ota/
+Artifacts:    http://192.168.1.20:8001/veetee/artifacts/
 ```
 
 URL được lưu trong environment/config, không hard-code trong firmware. Khi cần truy cập từ ngoài LAN mà chưa mua domain:

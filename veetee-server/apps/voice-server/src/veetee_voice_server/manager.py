@@ -23,6 +23,16 @@ class DeviceContext:
 
 
 @dataclass(frozen=True, slots=True)
+class LlmEndpoint:
+    provider_id: str
+    adapter: str
+    base_url: str
+    model: str
+    api_key: str
+    reasoning_effort: str
+
+
+@dataclass(frozen=True, slots=True)
 class SessionProfile:
     agent_id: str | None
     config_version: int
@@ -30,9 +40,19 @@ class SessionProfile:
     persona: str
     goodbye_text: str
     policy: ConversationPolicy
-    llm_base_url: str
-    llm_model: str
-    llm_reasoning_effort: str
+    llm_chain: tuple[LlmEndpoint, ...]
+
+    @property
+    def llm_base_url(self) -> str:
+        return self.llm_chain[0].base_url
+
+    @property
+    def llm_model(self) -> str:
+        return self.llm_chain[0].model
+
+    @property
+    def llm_reasoning_effort(self) -> str:
+        return self.llm_chain[0].reasoning_effort
 
     @classmethod
     def defaults(cls, settings: Settings) -> SessionProfile:
@@ -54,26 +74,38 @@ class SessionProfile:
                 tts_seconds=10.0,
                 mcp_seconds=10.0,
             ),
-            llm_base_url=str(settings.nine_router_base_url),
-            llm_model=settings.nine_router_model,
-            llm_reasoning_effort=settings.nine_router_reasoning_effort,
+            llm_chain=(
+                LlmEndpoint(
+                    provider_id="settings:9router",
+                    adapter="openai-compatible-9router",
+                    base_url=str(settings.nine_router_base_url),
+                    model=settings.nine_router_model,
+                    api_key=settings.nine_router_api_key,
+                    reasoning_effort=settings.nine_router_reasoning_effort,
+                ),
+            ),
         )
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any], settings: Settings) -> SessionProfile:
+    def from_payload(
+        cls,
+        payload: dict[str, Any],
+        settings: Settings,
+        runtime_providers: list[dict[str, Any]] | None = None,
+    ) -> SessionProfile:
         defaults = cls.defaults(settings)
         conversation = payload.get("conversation")
         if not isinstance(conversation, dict):
             conversation = {}
-        llm = _find_llm(payload)
+        locale = (
+            _optional_string(payload.get("defaultLocale"))
+            or _optional_string(payload.get("locale"))
+            or defaults.locale
+        )
         return cls(
             agent_id=_optional_string(payload.get("agentId")),
             config_version=_bounded_int(payload.get("version"), 0, 0, 2_147_483_647),
-            locale=(
-                _optional_string(payload.get("defaultLocale"))
-                or _optional_string(payload.get("locale"))
-                or defaults.locale
-            ),
+            locale=locale,
             persona=_optional_string(payload.get("persona")) or defaults.persona,
             goodbye_text=(
                 _optional_string(conversation.get("timeoutGoodbye"))
@@ -121,11 +153,7 @@ class SessionProfile:
                 tts_seconds=_bounded_float(conversation.get("ttsSeconds"), 10.0, 1.0, 30.0),
                 mcp_seconds=_bounded_float(conversation.get("mcpSeconds"), 10.0, 0.5, 30.0),
             ),
-            llm_base_url=_optional_string(llm.get("baseUrl")) or defaults.llm_base_url,
-            llm_model=_optional_string(llm.get("model")) or defaults.llm_model,
-            llm_reasoning_effort=(
-                _reasoning_effort(llm.get("reasoningEffort")) or defaults.llm_reasoning_effort
-            ),
+            llm_chain=_llm_chain(payload, runtime_providers or [], locale, defaults, settings),
         )
 
 
@@ -190,7 +218,25 @@ class ManagerClient:
                 headers=self._service_headers(),
             )
             response.raise_for_status()
-            profile = SessionProfile.from_payload(response.json(), self._settings)
+            payload = response.json()
+            provider_ids = _provider_ids(payload)
+            runtime_providers: list[dict[str, Any]] = []
+            if provider_ids:
+                providers_response = await self._client.post(
+                    "/internal/v1/providers/resolve",
+                    headers=self._service_headers(),
+                    json={"providerIds": provider_ids},
+                )
+                providers_response.raise_for_status()
+                resolved = providers_response.json()
+                if not isinstance(resolved, list):
+                    raise ValueError("Manager provider resolver returned an invalid payload")
+                runtime_providers = [item for item in resolved if isinstance(item, dict)]
+            profile = SessionProfile.from_payload(
+                payload,
+                self._settings,
+                runtime_providers=runtime_providers,
+            )
             profile = replace(
                 profile,
                 agent_id=device.agent_id,
@@ -226,6 +272,99 @@ def _find_llm(payload: dict[str, Any]) -> dict[str, Any]:
                 return provider
     llm = payload.get("llm")
     return llm if isinstance(llm, dict) else {}
+
+
+def _provider_ids(payload: dict[str, Any]) -> list[str]:
+    chains = payload.get("providerChains")
+    if not isinstance(chains, list):
+        return []
+    output: list[str] = []
+    for chain in chains:
+        if not isinstance(chain, dict):
+            continue
+        providers = chain.get("providers")
+        if not isinstance(providers, list):
+            continue
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            provider_id = _optional_string(provider.get("id"))
+            if provider_id and provider_id not in output:
+                output.append(provider_id)
+    return output
+
+
+def _llm_chain(
+    payload: dict[str, Any],
+    runtime_providers: list[dict[str, Any]],
+    locale: str,
+    defaults: SessionProfile,
+    settings: Settings,
+) -> tuple[LlmEndpoint, ...]:
+    runtime_by_id = {
+        provider_id: provider
+        for provider in runtime_providers
+        if (provider_id := _optional_string(provider.get("id")))
+    }
+    chains = payload.get("providerChains")
+    if isinstance(chains, list):
+        for selected_locale in (locale, "*"):
+            for chain in chains:
+                if (
+                    not isinstance(chain, dict)
+                    or chain.get("kind") != "llm"
+                    or chain.get("locale") != selected_locale
+                ):
+                    continue
+                providers = chain.get("providers")
+                if not isinstance(providers, list):
+                    continue
+                endpoints = tuple(
+                    endpoint
+                    for provider in providers
+                    if isinstance(provider, dict)
+                    and (endpoint := _llm_endpoint(provider, runtime_by_id, defaults, settings))
+                    is not None
+                )
+                if endpoints:
+                    return endpoints
+
+    legacy = _find_llm(payload)
+    endpoint = _llm_endpoint(legacy, runtime_by_id, defaults, settings)
+    return (endpoint,) if endpoint is not None else defaults.llm_chain
+
+
+def _llm_endpoint(
+    published: dict[str, Any],
+    runtime_by_id: dict[str, dict[str, Any]],
+    defaults: SessionProfile,
+    settings: Settings,
+) -> LlmEndpoint | None:
+    provider_id = _optional_string(published.get("id"))
+    runtime = runtime_by_id.get(provider_id or "", published)
+    if runtime.get("kind") not in {None, "llm"}:
+        return None
+    model = _optional_string(runtime.get("model")) or _optional_string(published.get("model"))
+    base_url = _optional_string(runtime.get("baseUrl")) or _optional_string(
+        published.get("baseUrl")
+    )
+    if not model or not base_url:
+        return None
+    return LlmEndpoint(
+        provider_id=provider_id or f"legacy:{model}",
+        adapter=(
+            _optional_string(runtime.get("adapter"))
+            or _optional_string(published.get("adapter"))
+            or "openai-compatible"
+        ),
+        base_url=base_url,
+        model=model,
+        api_key=_optional_string(runtime.get("secret")) or settings.nine_router_api_key,
+        reasoning_effort=(
+            _reasoning_effort(published.get("reasoningEffort"))
+            or defaults.llm_reasoning_effort
+        ),
+    )
 
 
 def _optional_string(value: object) -> str | None:

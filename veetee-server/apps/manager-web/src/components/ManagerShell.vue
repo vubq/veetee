@@ -71,10 +71,41 @@ async function testProvider(providerId: string): Promise<void> {
   await refresh("providers");
 }
 
+async function updateProvider(
+  providerId: string,
+  input: Parameters<typeof managerApi.updateProvider>[1],
+): Promise<void> {
+  await managerApi.updateProvider(providerId, input);
+  await refresh("providers");
+}
+
 async function publishAgent(input: AgentDraftInput): Promise<void> {
   const current = agents.data.value?.find((agent) => agent.id === input.id);
   const currentConversation = current?.draftConfig.conversation;
   const nextConversation = input.draftConfig.conversation;
+  const currentProviderChains = Array.isArray(current?.draftConfig.providerChains)
+    ? current.draftConfig.providerChains
+    : [];
+  const nextProviderChains = Array.isArray(input.draftConfig.providerChains)
+    ? input.draftConfig.providerChains
+    : [];
+  const replacedChainKeys = new Set(
+    nextProviderChains.flatMap((chain) => {
+      if (!chain || typeof chain !== "object" || Array.isArray(chain)) return [];
+      const value = chain as Record<string, unknown>;
+      return typeof value.kind === "string" && typeof value.locale === "string"
+        ? [`${value.kind}:${value.locale}`]
+        : [];
+    }),
+  );
+  const providerChains = [
+    ...currentProviderChains.filter((chain) => {
+      if (!chain || typeof chain !== "object" || Array.isArray(chain)) return true;
+      const value = chain as Record<string, unknown>;
+      return !replacedChainKeys.has(`${String(value.kind)}:${String(value.locale)}`);
+    }),
+    ...nextProviderChains,
+  ];
   await managerApi.updateAgent(input.id, {
     name: input.name,
     defaultLocale: input.defaultLocale,
@@ -83,6 +114,7 @@ async function publishAgent(input: AgentDraftInput): Promise<void> {
     draftConfig: {
       ...(current?.draftConfig ?? {}),
       ...input.draftConfig,
+      providerChains,
       conversation: {
         ...(currentConversation && typeof currentConversation === "object"
           ? currentConversation
@@ -135,6 +167,7 @@ onMounted(async () => {
   controller.value = initializePrototype(root.value, {
     pair,
     testProvider,
+    updateProvider,
     publishAgent,
     callTool,
     registerArtifact,

@@ -57,31 +57,18 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       draftConfig: defaultAgentConfig() as Prisma.InputJsonValue,
     },
   });
-  await prisma.agentConfigVersion.upsert({
-    where: { agentId_version: { agentId: agent.id, version: 1 } },
-    update: {
-      snapshot: agentSnapshot(agent.id, defaultAgentConfig()) as Prisma.InputJsonValue,
-    },
-    create: {
-      agentId: agent.id,
-      version: 1,
-      snapshot: agentSnapshot(agent.id, defaultAgentConfig()) as Prisma.InputJsonValue,
-    },
-  });
-
   const providers = [
-    [ProviderKind.VAD, "silero-local", "silero-vad", null, true],
-    [ProviderKind.ASR, "sherpa-onnx", "zipformer-vi-30m-int8", null, true],
+    [ProviderKind.VAD, "silero-local", "silero-vad", null],
+    [ProviderKind.ASR, "sherpa-onnx", "zipformer-vi-30m-int8", null],
     [
       ProviderKind.LLM,
       "openai-compatible-9router",
       "cx/gpt-5.6-terra",
       "http://127.0.0.1:20128/v1",
-      false,
     ],
-    [ProviderKind.TTS, "vieneu-local", "vieneu-tts-v3-turbo", null, true],
+    [ProviderKind.TTS, "vieneu-local", "vieneu-tts-v3-turbo", null],
   ] as const;
-  for (const [kind, adapter, model, baseUrl, secretConfigured] of providers) {
+  for (const [kind, adapter, model, baseUrl] of providers) {
     await prisma.providerBinding.upsert({
       where: { tenantId_kind_adapter_model: { tenantId: tenant.id, kind, adapter, model } },
       update: {},
@@ -91,15 +78,40 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
         adapter,
         model,
         baseUrl,
-        secretConfigured,
+        secretConfigured: false,
         enabled: true,
+        priority: 100,
+        locales: ["vi-VN"],
         health: ProviderHealth.UNKNOWN,
       },
     });
   }
+  const persistedProviders = await prisma.providerBinding.findMany({
+    where: { tenantId: tenant.id, enabled: true },
+    orderBy: [{ kind: "asc" }, { priority: "asc" }],
+  });
+  const providerIds = Object.fromEntries(
+    persistedProviders.map((provider) => [provider.kind.toLowerCase(), provider.id]),
+  );
+  const config = defaultAgentConfig(providerIds);
+  await prisma.agent.update({
+    where: { id: agent.id },
+    data: { draftConfig: config as Prisma.InputJsonValue },
+  });
+  await prisma.agentConfigVersion.upsert({
+    where: { agentId_version: { agentId: agent.id, version: 1 } },
+    update: {
+      snapshot: agentSnapshot(agent.id, config, persistedProviders) as Prisma.InputJsonValue,
+    },
+    create: {
+      agentId: agent.id,
+      version: 1,
+      snapshot: agentSnapshot(agent.id, config, persistedProviders) as Prisma.InputJsonValue,
+    },
+  });
 }
 
-export function defaultAgentConfig(): Record<string, unknown> {
+export function defaultAgentConfig(providerIds: Record<string, string> = {}): Record<string, unknown> {
   return {
     schemaVersion: 1,
     locale: "vi-VN",
@@ -116,13 +128,43 @@ export function defaultAgentConfig(): Record<string, unknown> {
       ttsSeconds: 10,
       mcpSeconds: 10,
     },
+    ...(Object.keys(providerIds).length
+      ? {
+          providerChains: ["vad", "asr", "llm", "tts"].map((kind) => ({
+            kind,
+            locale: "vi-VN",
+            providerIds: [providerIds[kind]],
+          })),
+        }
+      : {}),
   };
 }
 
 export function agentSnapshot(
   agentId: string,
   config: Record<string, unknown>,
+  providers: Array<{
+    id: string;
+    kind: ProviderKind;
+    adapter: string;
+    model: string;
+    baseUrl: string | null;
+    secretConfigured: boolean;
+    priority: number;
+    locales: string[];
+  }> = [],
 ): Record<string, unknown> {
+  const snapshots = providers.map((provider) => ({
+    id: provider.id,
+    kind: provider.kind.toLowerCase(),
+    adapter: provider.adapter,
+    model: provider.model,
+    ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+    secretConfigured: provider.secretConfigured,
+    priority: provider.priority,
+    locales: provider.locales,
+  }));
+  const rawChains = Array.isArray(config.providerChains) ? config.providerChains : [];
   return {
     ...config,
     agentId,
@@ -130,16 +172,16 @@ export function agentSnapshot(
     defaultLocale: "vi-VN",
     interactionMode: "auto",
     persona: "Robot AI thân thiện, rõ ràng và ưu tiên tiếng Việt.",
-    providers: [
-      { kind: "vad", adapter: "silero-local", model: "silero-vad" },
-      { kind: "asr", adapter: "sherpa-onnx", model: "zipformer-vi-30m-int8" },
-      {
-        kind: "llm",
-        adapter: "openai-compatible-9router",
-        model: "cx/gpt-5.6-terra",
-        baseUrl: "http://127.0.0.1:20128/v1",
-      },
-      { kind: "tts", adapter: "vieneu-local", model: "vieneu-tts-v3-turbo" },
-    ],
+    providers: snapshots,
+    providerChains: rawChains.map((chain) => {
+      const value = chain as { kind: string; locale: string; providerIds: string[] };
+      return {
+        kind: value.kind,
+        locale: value.locale,
+        providers: value.providerIds
+          .map((id) => snapshots.find((provider) => provider.id === id))
+          .filter(Boolean),
+      };
+    }),
   };
 }

@@ -42,7 +42,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Voice server | Python 3.12 + Starlette/FastAPI + Uvicorn trong một ASGI process. | Chỉ tách standalone WebSocket nếu benchmark connection/frame path yêu cầu. |
 | Manager API | NestJS + Fastify + PostgreSQL + Redis. | Đổi nếu team đã có nền tảng Java/Spring bắt buộc. |
 | Manager Web | Vue 3 + TypeScript + Vite + TanStack Vue Query + Zod. | Giữ visual prototype hiện tại, bổ sung artifact/security/privacy screens. |
-| Device edge | Caddy/Nginx listener 8003 proxy device routes tới manager-api/object store. | Có thể gộp vào manager-api nếu vẫn giữ canonical routes/fixtures. |
+| Device edge | Dev single-node gộp admin + device routes trong manager-api port 8001; production có thể tách Caddy/Nginx listener 8003. | Không tạo business data source hoặc branded alias thứ hai. |
 | Object storage | Local filesystem adapter cho dev; MinIO cho rollout/Range/multi-node. | Không để manager-api buffer artifact lớn trong RAM. |
 | Resource layout | Executable A/B + resource A/B sau size probe; ưu tiên đơn giản/recover cho V1. | Mở ADR resource store 8 MB nếu model/assets vượt slot. |
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
@@ -94,7 +94,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 ### Backend/deployment
 
 1. Có chấp thuận NestJS + Python dual-stack không.
-2. Port 8003 do Caddy/device-edge hay manager-api trực tiếp phục vụ.
+2. Đã chốt dev dùng manager-api trực tiếp ở port 8001; port 8003 chỉ là production ingress tùy chọn.
 3. Dev dùng local filesystem hay MinIO ngay từ đầu.
 4. Single-node V1 đã chốt; model/provider gọi qua loopback và 9Router phải bind `127.0.0.1` hoặc firewall chặn port `20128` khỏi LAN.
 5. V1 single workspace hay cần UI multi-tenant/RBAC hoàn chỉnh.

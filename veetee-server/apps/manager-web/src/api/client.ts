@@ -14,6 +14,7 @@ import {
   tokenResponseSchema,
   wakeProfileSchema,
   type Agent,
+  type Provider,
 } from "./schemas";
 
 const apiBaseUrl = (import.meta.env.VITE_MANAGER_API_URL ?? "http://127.0.0.1:8001").replace(
@@ -181,6 +182,22 @@ export const managerApi = {
   testProvider(id: string) {
     return request(`/api/v1/providers/${encodeURIComponent(id)}/test`, providerSchema, {
       method: "POST",
+    });
+  },
+
+  updateProvider(
+    id: string,
+    input: Partial<
+      Pick<Provider, "adapter" | "model" | "enabled" | "priority" | "locales">
+    > & {
+      baseUrl?: string | null;
+      secretAction?: "keep" | "rotate" | "clear";
+      secret?: string;
+    },
+  ) {
+    return request(`/api/v1/providers/${encodeURIComponent(id)}`, providerSchema, {
+      method: "PATCH",
+      body: JSON.stringify(input),
     });
   },
 

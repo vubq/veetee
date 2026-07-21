@@ -106,6 +106,85 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
 
 
 @pytest.mark.asyncio
+async def test_manager_resolves_ordered_provider_chain_without_exposing_it_to_device() -> None:
+    resolve_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal resolve_calls
+        if request.url.path.endswith("/agent-configs/agent-1"):
+            return httpx.Response(
+                200,
+                json={
+                    "agentId": "agent-1",
+                    "version": 4,
+                    "defaultLocale": "vi-VN",
+                    "providerChains": [
+                        {
+                            "kind": "llm",
+                            "locale": "vi-VN",
+                            "providers": [
+                                {"id": "11111111-1111-4111-8111-111111111111"},
+                                {"id": "22222222-2222-4222-8222-222222222222"},
+                            ],
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/providers/resolve"):
+            resolve_calls += 1
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "kind": "llm",
+                        "adapter": "openai-compatible-primary",
+                        "model": "primary-model",
+                        "baseUrl": "http://127.0.0.1:21001/v1",
+                        "secret": "primary-secret",
+                        "priority": 10,
+                        "locales": ["vi-VN"],
+                    },
+                    {
+                        "id": "22222222-2222-4222-8222-222222222222",
+                        "kind": "llm",
+                        "adapter": "openai-compatible-fallback",
+                        "model": "fallback-model",
+                        "baseUrl": "http://127.0.0.1:21002/v1",
+                        "priority": 20,
+                        "locales": ["vi-VN"],
+                    },
+                ],
+            )
+        return httpx.Response(404)
+
+    settings = Settings(
+        environment="test",
+        manager_api_url="http://manager.test",
+        manager_internal_token="internal-test-token",
+        VEETEE_9ROUTER_API_KEY="settings-fallback-key",  # type: ignore[call-arg]
+    )
+    client = httpx.AsyncClient(
+        base_url="http://manager.test", transport=httpx.MockTransport(handler)
+    )
+    manager = ManagerClient(settings, client=client)
+    device = DeviceContext("device-1", "tenant-1", "agent-1", 4)
+
+    profile = await manager.session_profile(device)
+    cached = await manager.session_profile(device)
+    await client.aclose()
+
+    assert profile is cached
+    assert [endpoint.model for endpoint in profile.llm_chain] == [
+        "primary-model",
+        "fallback-model",
+    ]
+    assert profile.llm_chain[0].api_key == "primary-secret"
+    assert profile.llm_chain[1].api_key == "settings-fallback-key"
+    assert resolve_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_manager_publishes_redacted_conversation_event_batch() -> None:
     captured: dict[str, object] = {}
 

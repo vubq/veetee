@@ -102,6 +102,13 @@ lại khi phiên bản 9Router, quota hoặc upstream model thay đổi. Structu
 được prewarm khi voice-server khởi động; deadline 8 giây là safety ceiling, không
 phải latency target.
 
+Live Manager probe ngày 2026-07-22 đã lấy API key active do chính 9Router quản lý,
+rotate vào encrypted provider secret mà không ghi giá trị ra log/repo, rồi gọi đúng
+`cx/gpt-5.6-terra` qua `/v1/chat/completions`: `healthy`, khoảng 1.20 giây,
+`circuit=closed`. `/v1/models` không cần key trên instance này nhưng inference trả
+`401` nếu thiếu key; vì vậy readiness/test phải dùng runtime secret resolver, không
+dựa vào catalog public.
+
 README/source của 9Router cũng xác nhận `/v1/chat/completions`, `/v1/models`, SSE,
 API key và `REQUIRE_API_KEY`. Source có route `/v1/responses` và disconnect-aware
 stream/AbortController. Tuy nhiên stream thực tế vừa kiểm tra kết thúc bằng terminal
@@ -330,6 +337,12 @@ Tên field có thể map sang `snake_case` ở device contract.
 
 `base_url`, model id, thresholds và fallback chain là configuration version có
 validation; không cho model/LLM tự sửa chúng.
+
+Representation thật trong agent draft dùng `providerChains` với provider UUID thay
+vì nhúng secret. Khi publish, Manager mở rộng UUID thành metadata immutable theo
+thứ tự primary/fallback; voice-server resolve secret qua internal service token.
+Manager Web cho phép rotate/clear secret nhưng không thể đọc lại secret cũ. Với
+single-node hiện tại, endpoint nội bộ và provider URL phải giữ loopback hoặc HTTPS.
 
 ## 7. Benchmark và gate trước khi freeze
 

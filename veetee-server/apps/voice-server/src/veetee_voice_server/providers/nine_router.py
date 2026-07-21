@@ -17,7 +17,12 @@ from veetee_voice_server.providers.contracts import (
 
 
 class NineRouterProviderError(RuntimeError):
-    pass
+    def __init__(
+        self, message: str, *, status_code: int | None = None, retryable: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class NineRouterLlmProvider:
@@ -111,7 +116,10 @@ class NineRouterLlmProvider:
             if response.is_error:
                 detail = (await response.aread())[:500].decode(errors="replace")
                 raise NineRouterProviderError(
-                    f"9router returned HTTP {response.status_code}: {detail}"
+                    f"9router returned HTTP {response.status_code}: {detail}",
+                    status_code=response.status_code,
+                    retryable=response.status_code in {408, 409, 425, 429}
+                    or response.status_code >= 500,
                 )
             async for data in self._sse_data(response):
                 context.checkpoint()
@@ -160,7 +168,10 @@ class NineRouterLlmProvider:
                 body = await response.aread()
                 detail = body[:500].decode(errors="replace")
                 raise NineRouterProviderError(
-                    f"9router returned HTTP {response.status_code}: {detail}"
+                    f"9router returned HTTP {response.status_code}: {detail}",
+                    status_code=response.status_code,
+                    retryable=response.status_code in {408, 409, 425, 429}
+                    or response.status_code >= 500,
                 )
             finish_reason: str | None = None
             async for data in self._sse_data(response):

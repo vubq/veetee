@@ -1,5 +1,28 @@
 import { BadRequestException } from "@nestjs/common";
 
+const providerKinds = ["vad", "asr", "llm", "tts", "realtime", "memory"] as const;
+const requiredCascadeKinds = ["vad", "asr", "llm", "tts"] as const;
+
+export type ProviderKindValue = (typeof providerKinds)[number];
+
+export interface ProviderPolicyBinding {
+  id: string;
+  kind: ProviderKindValue;
+  adapter: string;
+  model: string;
+  baseUrl?: string;
+  secretConfigured: boolean;
+  enabled: boolean;
+  priority: number;
+  locales: string[];
+}
+
+export interface ExpandedProviderChain {
+  kind: ProviderKindValue;
+  locale: string;
+  providers: ProviderPolicyBinding[];
+}
+
 const conversationNumberBounds = {
   firstInputSeconds: [3, 300],
   betweenTurnsSeconds: [3, 600],
@@ -45,5 +68,82 @@ export function validateAgentDraftConfig(config: Record<string, unknown>): void 
     throw new BadRequestException(
       "Agent conversation timeoutGoodbye must contain 1 to 240 characters",
     );
+  }
+}
+
+export function expandProviderChains(
+  config: Record<string, unknown>,
+  availableProviders: ProviderPolicyBinding[],
+  defaultLocale: string,
+  interactionMode: "auto" | "manual" | "realtime",
+): ExpandedProviderChain[] {
+  const rawChains = config.providerChains;
+  if (!Array.isArray(rawChains) || rawChains.length === 0 || rawChains.length > 32) {
+    throw new BadRequestException("Agent providerChains must contain 1 to 32 explicit chains");
+  }
+  const providersById = new Map(availableProviders.map((provider) => [provider.id, provider]));
+  const seenChains = new Set<string>();
+  const expanded = rawChains.map((value, index) => {
+    if (!isRecord(value)) {
+      throw new BadRequestException(`Agent providerChains[${index}] must be an object`);
+    }
+    const kind = value.kind;
+    const locale = value.locale;
+    const providerIds = value.providerIds;
+    if (!providerKinds.includes(kind as ProviderKindValue)) {
+      throw new BadRequestException(`Agent providerChains[${index}].kind is invalid`);
+    }
+    if (typeof locale !== "string" || !isLocaleOrWildcard(locale)) {
+      throw new BadRequestException(`Agent providerChains[${index}].locale is invalid`);
+    }
+    if (!Array.isArray(providerIds) || providerIds.length === 0 || providerIds.length > 4) {
+      throw new BadRequestException(
+        `Agent providerChains[${index}].providerIds must contain 1 to 4 providers`,
+      );
+    }
+    if (new Set(providerIds).size !== providerIds.length) {
+      throw new BadRequestException(`Agent providerChains[${index}] contains duplicate providers`);
+    }
+    const chainKey = `${kind}:${locale}`;
+    if (seenChains.has(chainKey)) {
+      throw new BadRequestException(`Agent provider chain ${chainKey} is duplicated`);
+    }
+    seenChains.add(chainKey);
+    const providers = providerIds.map((providerId) => {
+      if (typeof providerId !== "string") {
+        throw new BadRequestException(`Agent providerChains[${index}] has an invalid provider id`);
+      }
+      const provider = providersById.get(providerId);
+      if (!provider || !provider.enabled) {
+        throw new BadRequestException(`Provider ${providerId} is missing or disabled`);
+      }
+      if (provider.kind !== kind) {
+        throw new BadRequestException(`Provider ${providerId} does not match chain kind ${kind}`);
+      }
+      if (!provider.locales.includes("*") && !provider.locales.includes(locale)) {
+        throw new BadRequestException(`Provider ${providerId} does not support locale ${locale}`);
+      }
+      return provider;
+    });
+    return { kind: kind as ProviderKindValue, locale, providers };
+  });
+
+  const requiredKinds = interactionMode === "realtime" ? (["realtime"] as const) : requiredCascadeKinds;
+  for (const kind of requiredKinds) {
+    if (!expanded.some((chain) => chain.kind === kind && [defaultLocale, "*"].includes(chain.locale))) {
+      throw new BadRequestException(
+        `Agent requires an explicit ${kind} provider chain for ${defaultLocale} or *`,
+      );
+    }
+  }
+  return expanded;
+}
+
+function isLocaleOrWildcard(value: string): boolean {
+  if (value === "*") return true;
+  try {
+    return new Intl.Locale(value).toString() === value;
+  } catch {
+    return false;
   }
 }

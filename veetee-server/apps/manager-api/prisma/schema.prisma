@@ -41,6 +41,12 @@ enum ProviderHealth {
   DEGRADED
 }
 
+enum ProviderCircuitState {
+  CLOSED
+  OPEN
+  HALF_OPEN
+}
+
 enum ArtifactKind {
   RESOURCE_BUNDLE
   MODEL_PACK
@@ -203,14 +209,22 @@ model ProviderBinding {
   secretCiphertext String?
   secretConfigured Boolean        @default(false)
   enabled          Boolean        @default(true)
+  priority         Int            @default(100)
+  locales          String[]       @default(["*"])
   health           ProviderHealth @default(UNKNOWN)
+  healthLatencyMs  Int?
+  healthErrorCode  String?
+  healthCheckedAt  DateTime?
+  circuitState     ProviderCircuitState @default(CLOSED)
+  failureCount     Int            @default(0)
+  circuitOpenedAt  DateTime?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, kind, adapter, model])
-  @@index([tenantId, kind, enabled])
+  @@index([tenantId, kind, enabled, priority])
 }
 
 model RefreshSession {
