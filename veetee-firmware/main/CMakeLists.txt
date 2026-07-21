@@ -5,6 +5,7 @@ set(VEETEE_SRCS
     "board/veetee_board.cpp"
     "display/st7789_display.cpp"
     "input/button.cpp"
+    "mcp/device_mcp.cpp"
     "network/endpoint_url.cpp"
     "network/provisioning_portal.cpp"
     "network/wifi_manager.cpp"

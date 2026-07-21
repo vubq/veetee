@@ -1,0 +1,49 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "mcp",
+  "payload": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "tools": [
+        {
+          "name": "self.get_device_status",
+          "description": "Read the current device state, assistant gate, firmware version and speaker volume.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.audio_speaker.get_volume",
+          "description": "Read the current speaker output volume as a percentage from 0 to 100.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.audio_speaker.set_volume",
+          "description": "Set speaker output volume from 0 to 100 percent.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "volume"
+            ],
+            "properties": {
+              "volume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        }
+      ],
+      "nextCursor": ""
+    }
+  }
+}

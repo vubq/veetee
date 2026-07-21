@@ -285,6 +285,11 @@ bool ParseServerEvent(const char* json, std::size_t length, ServerEvent* event) 
         } else if (valid && std::strcmp(type->valuestring, "system") == 0 &&
                    JsonStringEquals(root, "command", "assistant_sleep")) {
             parsed.kind = ServerEventKind::kAssistantSleep;
+        } else if (valid && std::strcmp(type->valuestring, "mcp") == 0) {
+            const cJSON* payload =
+                cJSON_GetObjectItemCaseSensitive(root, "payload");
+            valid = cJSON_IsObject(payload);
+            parsed.kind = ServerEventKind::kMcp;
         }
     }
 

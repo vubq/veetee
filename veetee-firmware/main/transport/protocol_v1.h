@@ -22,6 +22,7 @@ enum class ServerEventKind : std::uint8_t {
     kTtsStart,
     kTtsStop,
     kAssistantSleep,
+    kMcp,
     kOther,
 };
 

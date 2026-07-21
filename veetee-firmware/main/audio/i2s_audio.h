@@ -29,6 +29,8 @@ public:
     bool QueueOpusPlayback(const std::uint8_t* packet, std::size_t length);
     void EndPlayback();
     void AbortPlayback();
+    bool SetVolumePercent(int volume_percent);
+    [[nodiscard]] int volume_percent() const { return volume_percent_.load(); }
 
 private:
     enum class PlaybackItemKind : std::uint8_t {
@@ -83,6 +85,7 @@ private:
     std::atomic<std::uint32_t> capture_generation_{0};
     std::atomic<bool> playback_accepting_{false};
     std::atomic<std::uint32_t> playback_generation_{0};
+    std::atomic<int> volume_percent_{70};
 };
 
 }  // namespace veetee::audio

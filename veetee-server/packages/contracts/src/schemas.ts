@@ -344,15 +344,58 @@ export const mcpEnvelopeSchema = {
     session_id: sessionId,
     type: { const: "mcp" },
     payload: {
-      type: "object",
-      additionalProperties: false,
-      required: ["jsonrpc", "id", "method", "params"],
-      properties: {
-        jsonrpc: { const: "2.0" },
-        id: { anyOf: [{ type: "string" }, { type: "integer" }] },
-        method: id,
-        params: { type: "object" },
-      },
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["jsonrpc", "id", "method", "params"],
+          properties: {
+            jsonrpc: { const: "2.0" },
+            id: { anyOf: [{ type: "string" }, { type: "integer" }] },
+            method: id,
+            params: { type: "object" },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["jsonrpc", "method"],
+          properties: {
+            jsonrpc: { const: "2.0" },
+            method: id,
+            params: { type: "object" },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["jsonrpc", "id", "result"],
+          properties: {
+            jsonrpc: { const: "2.0" },
+            id: { anyOf: [{ type: "string" }, { type: "integer" }] },
+            result: { type: "object" },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["jsonrpc", "id", "error"],
+          properties: {
+            jsonrpc: { const: "2.0" },
+            id: { anyOf: [{ type: "string" }, { type: "integer" }] },
+            error: {
+              type: "object",
+              additionalProperties: false,
+              required: ["code", "message"],
+              properties: {
+                code: { type: "integer" },
+                message: { type: "string", minLength: 1, maxLength: 512 },
+                data: {},
+              },
+            },
+          },
+        },
+      ],
     },
   },
 } as const;

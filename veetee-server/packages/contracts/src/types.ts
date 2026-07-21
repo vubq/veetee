@@ -142,10 +142,38 @@ export interface JsonRpcRequest<TParams = unknown> {
   params?: TParams;
 }
 
-export interface McpEnvelope<TParams = unknown> {
+export interface JsonRpcNotification<TParams = unknown> {
+  jsonrpc: "2.0";
+  method: string;
+  params?: TParams;
+}
+
+export interface JsonRpcSuccess<TResult = unknown> {
+  jsonrpc: "2.0";
+  id: string | number;
+  result: TResult;
+}
+
+export interface JsonRpcError {
+  jsonrpc: "2.0";
+  id: string | number;
+  error: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+}
+
+export type JsonRpcMessage<TParams = unknown, TResult = unknown> =
+  | JsonRpcRequest<TParams>
+  | JsonRpcNotification<TParams>
+  | JsonRpcSuccess<TResult>
+  | JsonRpcError;
+
+export interface McpEnvelope<TParams = unknown, TResult = unknown> {
   session_id: string;
   type: "mcp";
-  payload: JsonRpcRequest<TParams>;
+  payload: JsonRpcMessage<TParams, TResult>;
 }
 
 export interface ToolDefinition {

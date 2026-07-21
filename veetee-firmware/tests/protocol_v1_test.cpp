@@ -162,6 +162,8 @@ void TestRuntimeEventsAndBinaryAssembly() {
          ServerEventKind::kTtsStop},
         {R"({"session_id":"session-1","type":"system","command":"assistant_sleep"})",
          ServerEventKind::kAssistantSleep},
+        {R"({"session_id":"session-1","type":"mcp","payload":{"jsonrpc":"2.0","id":1,"result":{}}})",
+         ServerEventKind::kMcp},
     };
     for (const auto& fixture : events) {
         ServerEvent event{};

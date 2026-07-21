@@ -1,0 +1,17 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "mcp",
+  "payload": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "true"
+        }
+      ],
+      "isError": false
+    }
+  }
+}

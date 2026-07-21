@@ -1,4 +1,5 @@
 #include <cinttypes>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 
@@ -14,6 +15,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "input/button.h"
+#include "mcp/device_mcp.h"
 #include "network/wifi_manager.h"
 #include "ota/bootstrap_client.h"
 #include "settings/settings_store.h"
@@ -24,9 +26,17 @@ namespace {
 constexpr char kTag[] = "veetee_app";
 constexpr UBaseType_t kEventQueueDepth = 16;
 
+enum class AppMessageKind : std::uint8_t {
+    kStateEvent,
+    kMcpEnvelope,
+};
+
 struct AppMessage {
-    veetee::app::Event event;
+    AppMessageKind kind = AppMessageKind::kStateEvent;
+    veetee::app::Event event = veetee::app::Event::kBootNeedsProvisioning;
     char activation_code[7] = {};
+    char* control_payload = nullptr;
+    std::size_t control_length = 0;
 };
 
 QueueHandle_t g_event_queue = nullptr;
@@ -37,19 +47,25 @@ veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
 veetee::transport::WebSocketTransport g_transport;
+veetee::mcp::DeviceMcp g_mcp;
 
 bool PostMessage(const AppMessage& message) {
     if (g_event_queue == nullptr ||
         xQueueSend(g_event_queue, &message, 0) != pdTRUE) {
-        ESP_LOGW(kTag, "Dropping event %s: application queue full",
-                 veetee::app::ToString(message.event));
+        if (message.kind == AppMessageKind::kMcpEnvelope) {
+            ESP_LOGW(kTag, "Dropping MCP request: application queue full");
+        } else {
+            ESP_LOGW(kTag, "Dropping event %s: application queue full",
+                     veetee::app::ToString(message.event));
+        }
         return false;
     }
     return true;
 }
 
 bool PostEvent(veetee::app::Event event) {
-    return PostMessage(AppMessage{.event = event});
+    return PostMessage(
+        AppMessage{.kind = AppMessageKind::kStateEvent, .event = event});
 }
 
 void OnButtonEvent(veetee::input::ButtonEvent event, void*) {
@@ -130,6 +146,40 @@ bool OnDownlinkAudio(const std::uint8_t* packet, std::size_t length, void*) {
     return g_board.QueueOpusPlayback(packet, length);
 }
 
+bool OnMcpEnvelope(const char* envelope, std::size_t length, void*) {
+    if (envelope == nullptr || length == 0 ||
+        length > veetee::transport::kMaximumControlFrameBytes) {
+        return false;
+    }
+    char* copy = static_cast<char*>(std::malloc(length + 1));
+    if (copy == nullptr) return false;
+    std::memcpy(copy, envelope, length);
+    copy[length] = '\0';
+    const AppMessage message{.kind = AppMessageKind::kMcpEnvelope,
+                             .control_payload = copy,
+                             .control_length = length};
+    if (PostMessage(message)) return true;
+    std::free(copy);
+    return false;
+}
+
+bool ReadDeviceStatus(veetee::mcp::DeviceStatus* status, void*) {
+    if (status == nullptr) return false;
+    status->state = veetee::app::ToString(g_state_machine.state());
+    status->assistant_gate_open = g_state_machine.assistant_gate_open();
+    status->firmware_version = esp_app_get_description()->version;
+    status->volume_percent = g_board.speaker_volume();
+    return true;
+}
+
+bool SetSpeakerVolume(int volume_percent, void*) {
+    return g_board.SetSpeakerVolume(volume_percent);
+}
+
+bool SendMcpResponse(const char* payload, std::size_t length, void*) {
+    return g_transport.SendMcpPayload(payload, length);
+}
+
 bool OnEncodedAudio(const std::uint8_t* packet, std::size_t length, void*) {
     return g_transport.SendAudio(packet, length);
 }
@@ -148,6 +198,13 @@ void LogTransportError(const char* operation, esp_err_t error) {
 void RunApplication(void*) {
     AppMessage message{};
     while (xQueueReceive(g_event_queue, &message, portMAX_DELAY) == pdTRUE) {
+        if (message.kind == AppMessageKind::kMcpEnvelope) {
+            const bool handled = g_mcp.HandleEnvelope(message.control_payload,
+                                                      message.control_length);
+            std::free(message.control_payload);
+            if (!handled) ESP_LOGW(kTag, "MCP request was rejected");
+            continue;
+        }
         const veetee::app::Event event = message.event;
         const veetee::app::TransitionResult result = g_state_machine.Handle(event);
         if (!result.accepted) {
@@ -279,10 +336,16 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,
-                                           &OnDownlinkAudio, nullptr));
+                                           &OnDownlinkAudio, &OnMcpEnvelope,
+                                           nullptr));
     ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, &OnEncodedAudio,
                                        &OnPlaybackFinished, nullptr));
     ESP_ERROR_CHECK(g_board.StartAudio());
+    if (!g_mcp.Initialize(&ReadDeviceStatus, &SetSpeakerVolume,
+                          &SendMcpResponse, nullptr)) {
+        ESP_LOGE(kTag, "Unable to initialize device MCP");
+        abort();
+    }
 
     if (xTaskCreate(&RunApplication, "veetee_app", 6144, nullptr, 6, nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Unable to create application task");

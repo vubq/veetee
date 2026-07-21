@@ -37,13 +37,16 @@ public:
                                void* context);
     using AudioSink = bool (*)(const std::uint8_t* packet, std::size_t length,
                                void* context);
+    using McpSink = bool (*)(const char* envelope, std::size_t length,
+                             void* context);
 
     esp_err_t Initialize(settings::DeviceSettings* settings, EventSink event_sink,
-                         AudioSink audio_sink, void* context);
+                         AudioSink audio_sink, McpSink mcp_sink, void* context);
     esp_err_t Open(WakeSource source);
     esp_err_t Abort(const char* reason, const char* source);
     esp_err_t StopListening(const char* reason);
     bool SendAudio(const std::uint8_t* packet, std::size_t length);
+    bool SendMcpPayload(const char* payload, std::size_t length);
     void Close();
 
 private:
@@ -55,6 +58,8 @@ private:
         kServerEvent,
         kOpusPacket,
         kProtocolError,
+        kMcpEnvelope,
+        kMcpPayload,
         kAbort,
         kStopListening,
     };
@@ -68,6 +73,8 @@ private:
         char source[33] = {};
         std::uint16_t packet_length = 0;
         std::array<std::uint8_t, kMaximumOpusPacketBytes> packet{};
+        char* control_payload = nullptr;
+        std::uint16_t control_length = 0;
     };
 
     struct OutboundAudioFrame {
@@ -85,13 +92,17 @@ private:
     void StartClient(std::uint32_t generation, WakeSource source);
     void HandleSocketConnected(std::uint32_t generation);
     void HandleServerEvent(std::uint32_t generation, const ServerEvent& event);
+    void HandleMcpEnvelope(std::uint32_t generation, const ServerEvent& event,
+                           const char* envelope, std::size_t length);
     void HandleLoss(std::uint32_t generation, const char* reason);
     void HandleData(const esp_websocket_event_data_t& data,
                     std::uint32_t generation);
     void Teardown(bool clean, int close_code = 1000, const char* reason = nullptr);
     bool SendText(const char* text, std::size_t length);
+    bool SendMcpPayloadNow(const char* payload, std::size_t length);
     bool SendBinary(const std::uint8_t* data, std::size_t length);
     bool QueueCommand(const Command& command, TickType_t timeout);
+    static void ReleaseCommandPayload(const Command& command);
     bool NotifyWithRetry(WebSocketTransportEvent event,
                          std::uint32_t generation) const;
     bool NotifyOnce(WebSocketTransportEvent event) const;
@@ -101,6 +112,7 @@ private:
     settings::DeviceSettings* settings_ = nullptr;
     EventSink event_sink_ = nullptr;
     AudioSink audio_sink_ = nullptr;
+    McpSink mcp_sink_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t command_queue_ = nullptr;
     QueueHandle_t outbound_audio_queue_ = nullptr;

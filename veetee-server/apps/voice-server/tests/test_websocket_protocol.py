@@ -25,6 +25,7 @@ from veetee_voice_server.transport.protocol import (
     ProtocolViolationError,
     assistant_sleep_payload,
     llm_payload,
+    mcp_payload,
     parse_client_event,
     parse_device_hello,
     server_hello_payload,
@@ -48,6 +49,7 @@ class FakeWebSocket:
         self.accepted = asyncio.Event()
         self.text_sent = asyncio.Event()
         self.sent_text: list[str] = []
+        self.outgoing_text: asyncio.Queue[str] = asyncio.Queue()
         self.sent_bytes: list[bytes] = []
         self.closed: list[tuple[int, str]] = []
         self.three_audio_frames_sent = asyncio.Event()
@@ -60,6 +62,7 @@ class FakeWebSocket:
 
     async def send_text(self, data: str) -> None:
         self.sent_text.append(data)
+        await self.outgoing_text.put(data)
         self.text_sent.set()
 
     async def send_bytes(self, data: bytes) -> None:
@@ -264,6 +267,102 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
     assert assistant_sleep_payload(fixture_session, "inactivity_timeout") == json.loads(
         fixture("system-assistant-sleep-timeout.json")
     )
+    assert mcp_payload(
+        fixture_session,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"capabilities": {}},
+        },
+    ) == json.loads((FIXTURES.parent / "mcp/initialize.json").read_text(encoding="utf-8"))
+
+
+async def test_session_bootstraps_device_mcp_catalog_after_hello() -> None:
+    settings = Settings(
+        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
+    )
+    websocket = FakeWebSocket()
+    captured: dict[str, Any] = {}
+
+    def engine_factory(*args: Any) -> FakeEngine:
+        captured["tools"] = args[3]
+        return FakeEngine()
+
+    voice_session = VoiceSession(
+        websocket,  # type: ignore[arg-type]
+        settings=settings,
+        profile=SessionProfile.defaults(settings),
+        asr=FakeAsr(),  # type: ignore[arg-type]
+        vad_model=FakeVadModel(),  # type: ignore[arg-type]
+        tts=FakeTts(),  # type: ignore[arg-type]
+        engine_factory=engine_factory,  # type: ignore[arg-type]
+    )
+    await websocket.incoming.put(
+        {"type": "websocket.receive", "text": fixture("device-hello-v1.json")}
+    )
+    task = asyncio.create_task(voice_session.run())
+
+    server_hello = json.loads(await websocket.outgoing_text.get())
+    assert server_hello["type"] == "hello"
+    initialize = json.loads(await websocket.outgoing_text.get())
+    await websocket.incoming.put(
+        {
+            "type": "websocket.receive",
+            "text": json.dumps(
+                mcp_payload(
+                    voice_session.session_id,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": initialize["payload"]["id"],
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {
+                                "name": "veetee-s3-n16r8",
+                                "version": "test",
+                            },
+                        },
+                    },
+                )
+            ),
+        }
+    )
+    tools_list = json.loads(await websocket.outgoing_text.get())
+    await websocket.incoming.put(
+        {
+            "type": "websocket.receive",
+            "text": json.dumps(
+                mcp_payload(
+                    voice_session.session_id,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": tools_list["payload"]["id"],
+                        "result": {
+                            "tools": [
+                                {
+                                    "name": "self.get_device_status",
+                                    "description": "Read device state.",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {},
+                                    },
+                                }
+                            ],
+                            "nextCursor": "",
+                        },
+                    },
+                )
+            ),
+        }
+    )
+    assert voice_session._mcp_bootstrap_task is not None
+    await voice_session._mcp_bootstrap_task
+    assert captured["tools"].list_tools()[0]["name"] == "self.get_device_status"
+
+    await websocket.incoming.put({"type": "websocket.disconnect", "code": 1000})
+    await task
 
 
 async def test_device_auth_header_identifier_is_ascii_and_bounded() -> None:

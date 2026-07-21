@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import soxr  # type: ignore[import-untyped]
+import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from veetee_voice_server.config import Settings
@@ -28,11 +29,13 @@ from veetee_voice_server.conversation.types import (
     WakeSource,
 )
 from veetee_voice_server.manager import SessionProfile
-from veetee_voice_server.providers.contracts import TtsProvider
+from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
+from veetee_voice_server.transport.mcp import DeviceMcpClient, DeviceMcpError
 from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder, OpusError
 from veetee_voice_server.transport.protocol import (
+    MAX_CONTROL_FRAME_BYTES,
     MAX_OPUS_PACKET_BYTES,
     AbortEvent,
     ClientEvent,
@@ -43,12 +46,15 @@ from veetee_voice_server.transport.protocol import (
     assistant_sleep_payload,
     listen_started_payload,
     llm_payload,
+    mcp_payload,
     parse_client_event,
     parse_device_hello,
     server_hello_payload,
     stt_payload,
     tts_payload,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -118,6 +124,10 @@ class WebSocketConversationSink:
     async def send_assistant_sleep(self, reason: str) -> None:
         async with self._lock:
             await self._send_text(assistant_sleep_payload(self._session_id, reason))
+
+    async def send_mcp(self, payload: dict[str, Any]) -> None:
+        async with self._lock:
+            await self._send_text(mcp_payload(self._session_id, payload))
 
     async def send_hello(self) -> None:
         async with self._lock:
@@ -291,10 +301,11 @@ class WebSocketConversationSink:
             await self._websocket.send_bytes(packet)
 
     async def _send_text(self, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_CONTROL_FRAME_BYTES:
+            raise ValueError("control frame exceeds 8 KiB wire limit")
         async with self._wire_lock:
-            await self._websocket.send_text(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-            )
+            await self._websocket.send_text(encoded)
 
     def _discard_tts(self) -> None:
         self._tts_generation = None
@@ -349,7 +360,8 @@ class VoiceSession:
         vad_model: SileroVadModel,
         tts: TtsProvider,
         engine_factory: Callable[
-            [TurnArbiter, WebSocketConversationSink, SessionProfile], ConversationEngine
+            [TurnArbiter, WebSocketConversationSink, SessionProfile, ToolBroker],
+            ConversationEngine,
         ],
     ) -> None:
         self.websocket = websocket
@@ -372,7 +384,8 @@ class VoiceSession:
             min_silence_ms=settings.vad_min_silence_ms,
             max_speech_seconds=settings.max_utterance_seconds,
         )
-        self.engine = engine_factory(self.arbiter, self.sink, profile)
+        self.mcp = DeviceMcpClient(self.sink.send_mcp, session_id=self.session_id)
+        self.engine = engine_factory(self.arbiter, self.sink, profile, self.mcp)
         self.inactivity = InactivityController(
             arbiter=self.arbiter,
             first_input_seconds=profile.policy.first_input_seconds,
@@ -389,6 +402,7 @@ class VoiceSession:
         self._speech_active = False
         self._asr_task: asyncio.Task[None] | None = None
         self._asr_context: OperationContext | None = None
+        self._mcp_bootstrap_task: asyncio.Task[None] | None = None
         self._closed = False
 
     async def run(self) -> None:
@@ -402,12 +416,14 @@ class VoiceSession:
             hello_text = hello_message.get("text")
             if not isinstance(hello_text, str):
                 raise ProtocolViolationError("device hello must be a text frame")
-            parse_device_hello(
+            hello = parse_device_hello(
                 hello_text,
                 expected_sample_rate=self.settings.input_sample_rate,
                 expected_frame_duration=self.settings.input_frame_duration_ms,
             )
             await self.sink.send_hello()
+            if hello.features.mcp:
+                self._mcp_bootstrap_task = asyncio.create_task(self._initialize_mcp())
 
             while True:
                 message = await self.websocket.receive()
@@ -433,6 +449,11 @@ class VoiceSession:
         if self._closed:
             return
         self._closed = True
+        if self._mcp_bootstrap_task is not None:
+            self._mcp_bootstrap_task.cancel()
+            await asyncio.gather(self._mcp_bootstrap_task, return_exceptions=True)
+            self._mcp_bootstrap_task = None
+        await self.mcp.close()
         await self._cancel_asr()
         await self.inactivity.close()
         await self.arbiter.abort("socket_closed")
@@ -461,8 +482,23 @@ class VoiceSession:
             await self._close_assistant(event.reason or "system_sleep")
             return
         if isinstance(event, McpEvent):
-            # MCP dispatch is introduced as its own cancellation-scoped vertical slice.
+            try:
+                await self.mcp.handle_payload(event.payload)
+            except DeviceMcpError as error:
+                raise ProtocolViolationError("invalid MCP payload") from error
             return
+
+    async def _initialize_mcp(self) -> None:
+        try:
+            await self.mcp.initialize()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "device_mcp_bootstrap_failed",
+                session_id=self.session_id,
+                error=type(error).__name__,
+            )
 
     async def _abort_current(self, reason: str) -> None:
         receipt = await self.arbiter.abort(reason)

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "esp_crt_bundle.h"
@@ -31,14 +32,16 @@ void CopyBounded(char* destination, std::size_t capacity, const char* source) {
 
 esp_err_t WebSocketTransport::Initialize(settings::DeviceSettings* settings,
                                          EventSink event_sink,
-                                         AudioSink audio_sink, void* context) {
+                                         AudioSink audio_sink, McpSink mcp_sink,
+                                         void* context) {
     if (settings == nullptr || event_sink == nullptr || audio_sink == nullptr ||
-        task_ != nullptr) {
+        mcp_sink == nullptr || task_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     settings_ = settings;
     event_sink_ = event_sink;
     audio_sink_ = audio_sink;
+    mcp_sink_ = mcp_sink;
     sink_context_ = context;
 
     std::uint8_t mac[6] = {};
@@ -132,6 +135,25 @@ bool WebSocketTransport::SendAudio(const std::uint8_t* packet,
     return xQueueSend(outbound_audio_queue_, &frame, 0) == pdTRUE;
 }
 
+bool WebSocketTransport::SendMcpPayload(const char* payload,
+                                        std::size_t length) {
+    if (payload == nullptr || length == 0 || length > 8000 ||
+        command_queue_ == nullptr) {
+        return false;
+    }
+    char* copy = static_cast<char*>(std::malloc(length + 1));
+    if (copy == nullptr) return false;
+    std::memcpy(copy, payload, length);
+    copy[length] = '\0';
+    Command command{.type = CommandType::kMcpPayload,
+                    .generation = requested_generation_.load(),
+                    .control_payload = copy,
+                    .control_length = static_cast<std::uint16_t>(length)};
+    if (QueueCommand(command, kCommandSendTimeout)) return true;
+    std::free(copy);
+    return false;
+}
+
 void WebSocketTransport::Close() {
     if (task_ == nullptr) return;
     const std::uint32_t previous_generation = requested_generation_.fetch_add(1);
@@ -207,7 +229,10 @@ void WebSocketTransport::TaskLoop() {
 }
 
 void WebSocketTransport::HandleCommand(const Command& command) {
-    if (!IsCurrent(command.generation)) return;
+    if (!IsCurrent(command.generation)) {
+        ReleaseCommandPayload(command);
+        return;
+    }
 
     switch (command.type) {
         case CommandType::kOpen:
@@ -239,6 +264,17 @@ void WebSocketTransport::HandleCommand(const Command& command) {
         case CommandType::kProtocolError:
             HandleLoss(command.generation, "protocol_error");
             break;
+        case CommandType::kMcpEnvelope:
+            HandleMcpEnvelope(command.generation, command.server_event,
+                              command.control_payload,
+                              command.control_length);
+            break;
+        case CommandType::kMcpPayload:
+            if (!ready_ || !SendMcpPayloadNow(command.control_payload,
+                                              command.control_length)) {
+                HandleLoss(command.generation, "mcp_send_failed");
+            }
+            break;
         case CommandType::kAbort: {
             playback_open_ = false;
             std::size_t length = 0;
@@ -263,6 +299,7 @@ void WebSocketTransport::HandleCommand(const Command& command) {
             break;
         }
     }
+    ReleaseCommandPayload(command);
 }
 
 void WebSocketTransport::StartClient(std::uint32_t generation,
@@ -399,6 +436,7 @@ void WebSocketTransport::HandleServerEvent(std::uint32_t generation,
             ready_for_audio_.store(false);
             notification = WebSocketTransportEvent::kAssistantSleep;
             break;
+        case ServerEventKind::kMcp:
         case ServerEventKind::kOther:
             handled = false;
             break;
@@ -407,6 +445,22 @@ void WebSocketTransport::HandleServerEvent(std::uint32_t generation,
     }
     if (handled && !NotifyOnce(notification)) {
         HandleLoss(generation, "application_event_rejected");
+    }
+}
+
+void WebSocketTransport::HandleMcpEnvelope(std::uint32_t generation,
+                                           const ServerEvent& event,
+                                           const char* envelope,
+                                           std::size_t length) {
+    if (!IsCurrent(generation) || client_ == nullptr) return;
+    if (awaiting_hello_ || !ready_ || event.kind != ServerEventKind::kMcp ||
+        std::strcmp(event.session_id, session_id_) != 0 || envelope == nullptr ||
+        length == 0 || mcp_sink_ == nullptr) {
+        HandleLoss(generation, "invalid_mcp_event");
+        return;
+    }
+    if (!mcp_sink_(envelope, length, sink_context_)) {
+        HandleLoss(generation, "mcp_event_rejected");
     }
 }
 
@@ -476,6 +530,30 @@ void WebSocketTransport::HandleData(const esp_websocket_event_data_t& data,
                      kCommandSendTimeout);
         return;
     }
+    if (event.kind == ServerEventKind::kMcp) {
+        char* copy = static_cast<char*>(std::malloc(message_length + 1));
+        if (copy == nullptr) {
+            QueueCommand(Command{.type = CommandType::kProtocolError,
+                                 .generation = generation},
+                         kCommandSendTimeout);
+            return;
+        }
+        std::memcpy(copy, message, message_length);
+        copy[message_length] = '\0';
+        Command command{.type = CommandType::kMcpEnvelope,
+                        .generation = generation,
+                        .server_event = event,
+                        .control_payload = copy,
+                        .control_length =
+                            static_cast<std::uint16_t>(message_length)};
+        if (!QueueCommand(command, kCommandSendTimeout)) {
+            std::free(copy);
+            QueueCommand(Command{.type = CommandType::kProtocolError,
+                                 .generation = generation},
+                         kCommandSendTimeout);
+        }
+        return;
+    }
     Command command{.type = CommandType::kServerEvent,
                     .generation = generation,
                     .server_event = event};
@@ -511,6 +589,7 @@ void WebSocketTransport::Teardown(bool clean, int close_code,
 
 bool WebSocketTransport::SendText(const char* text, std::size_t length) {
     if (client_ == nullptr || text == nullptr || length == 0 ||
+        length > kMaximumControlFrameBytes ||
         length > static_cast<std::size_t>(INT_MAX) ||
         !esp_websocket_client_is_connected(client_)) {
         return false;
@@ -518,6 +597,34 @@ bool WebSocketTransport::SendText(const char* text, std::size_t length) {
     const int sent = esp_websocket_client_send_text(
         client_, text, static_cast<int>(length), kSendTimeout);
     return sent == static_cast<int>(length);
+}
+
+bool WebSocketTransport::SendMcpPayloadNow(const char* payload,
+                                           std::size_t length) {
+    if (payload == nullptr || length == 0 || length > 8000 ||
+        session_id_[0] == '\0') {
+        return false;
+    }
+    char prefix[128] = {};
+    const int prefix_length = std::snprintf(
+        prefix, sizeof(prefix),
+        R"({"session_id":"%s","type":"mcp","payload":)", session_id_);
+    if (prefix_length <= 0 ||
+        static_cast<std::size_t>(prefix_length) >= sizeof(prefix)) {
+        return false;
+    }
+    const std::size_t prefix_bytes = static_cast<std::size_t>(prefix_length);
+    const std::size_t total = prefix_bytes + length + 1;
+    if (total > kMaximumControlFrameBytes) return false;
+    char* envelope = static_cast<char*>(std::malloc(total + 1));
+    if (envelope == nullptr) return false;
+    std::memcpy(envelope, prefix, prefix_bytes);
+    std::memcpy(envelope + prefix_bytes, payload, length);
+    envelope[total - 1] = '}';
+    envelope[total] = '\0';
+    const bool sent = SendText(envelope, total);
+    std::free(envelope);
+    return sent;
 }
 
 bool WebSocketTransport::SendBinary(const std::uint8_t* data,
@@ -538,6 +645,13 @@ bool WebSocketTransport::QueueCommand(const Command& command,
                                       TickType_t timeout) {
     return command_queue_ != nullptr &&
            xQueueSend(command_queue_, &command, timeout) == pdTRUE;
+}
+
+void WebSocketTransport::ReleaseCommandPayload(const Command& command) {
+    if (command.type == CommandType::kMcpEnvelope ||
+        command.type == CommandType::kMcpPayload) {
+        std::free(command.control_payload);
+    }
 }
 
 bool WebSocketTransport::NotifyWithRetry(WebSocketTransportEvent event,

@@ -22,12 +22,12 @@ from veetee_voice_server.manager import (
     ManagerClient,
     SessionProfile,
 )
+from veetee_voice_server.providers.contracts import ToolBroker
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
 from veetee_voice_server.providers.nine_router import NineRouterLlmProvider
 from veetee_voice_server.providers.semantic import JsonPlannerProvider, LocalAdmissionProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel
-from veetee_voice_server.providers.tools import RegistryToolBroker
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
 from veetee_voice_server.transport.session import VoiceSession
 from veetee_voice_server.transport.sink import ConversationSink
@@ -45,7 +45,7 @@ class ReadyResponse(BaseModel):
     components: list[dict[str, object]]
 
 
-def _planner_system_prompt(profile: SessionProfile, tools: RegistryToolBroker) -> str:
+def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     catalog = json.dumps(tools.list_tools(), ensure_ascii=False, separators=(",", ":"))
     return (
         "Return one JSON object. action must be one of respond, "
@@ -85,19 +85,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         arbiter: TurnArbiter,
         sink: ConversationSink,
         profile: SessionProfile,
+        tool_broker: ToolBroker,
     ) -> ConversationEngine:
         asr_llm = llm_for_profile(profile)
         asr_tts = runtime.get("tts")
         if not isinstance(asr_tts, VieNeuTtsProvider):
             raise RuntimeError("voice runtime is not ready")
-        tool_broker = RegistryToolBroker()
-        planner_prompt = _planner_system_prompt(profile, tool_broker)
-
         async def planner_json(
             payload: dict[str, object], context: OperationContext
         ) -> dict[str, Any]:
             return await asr_llm.complete_json(
-                system_prompt=planner_prompt,
+                system_prompt=_planner_system_prompt(profile, tool_broker),
                 user_prompt=str(payload["transcript"]),
                 context=context,
             )

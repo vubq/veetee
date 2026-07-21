@@ -64,6 +64,8 @@ class TtsProvider(Protocol):
 
 
 class ToolBroker(Protocol):
+    def list_tools(self) -> list[dict[str, Any]]: ...
+
     async def call(
         self, name: str, arguments: dict[str, Any], context: OperationContext
     ) -> Any: ...

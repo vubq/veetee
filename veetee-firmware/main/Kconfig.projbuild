@@ -73,6 +73,14 @@ menu "Veetee hardware bring-up"
         bool "Play a short low-volume speaker tone on boot"
         default y
 
+    config VEETEE_DEFAULT_VOLUME_PERCENT
+        int "Default software speaker volume (percent)"
+        range 0 100
+        default 70
+        help
+            Runtime MCP/config may change this value. The firmware always keeps
+            the deterministic safety boundary at 0..100.
+
     config VEETEE_BUTTON_LONG_PRESS_MS
         int "Assistant gate long-press threshold (ms)"
         range 500 4000

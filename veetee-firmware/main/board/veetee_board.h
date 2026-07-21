@@ -28,6 +28,8 @@ public:
     bool QueueOpusPlayback(const std::uint8_t* packet, std::size_t length);
     void EndPlayback();
     void AbortPlayback();
+    bool SetSpeakerVolume(int volume_percent);
+    [[nodiscard]] int speaker_volume() const;
 
 private:
     display::St7789Display display_;

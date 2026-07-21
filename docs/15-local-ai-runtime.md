@@ -111,13 +111,24 @@ persona or locale behavior is compiled into firmware.
 ## Local full-loop validation
 
 The host WebSocket client exercises the real wire path rather than calling
-providers directly:
+providers directly. The MCP commands below use an untracked local WAV containing
+the Vietnamese request to set the volume to 55 percent; replace the path with an
+equivalent test utterance when reproducing the run:
 
 ```bash
 cd veetee-server
 npm run test:voice:local-e2e
 uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
   --abort-on-first-audio
+uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+  --wav /tmp/veetee-mcp-volume.wav \
+  --expect-tool self.audio_speaker.set_volume \
+  --expected-volume 55
+uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+  --wav /tmp/veetee-mcp-volume.wav \
+  --abort-on-tool-call \
+  --expect-tool self.audio_speaker.set_volume \
+  --expected-volume 55
 ```
 
 The 2026-07-21 run passed `Opus uplink -> Silero -> Zipformer -> structured
@@ -135,6 +146,15 @@ its local playback generation before sending abort, so those stale frames do not
 reach the speaker. The paced sender now runs independently from TTS inference,
 allowing synthesis and playback to overlap while keeping a bounded 12-frame
 server queue.
+
+The MCP full-loop run discovered the regular device catalog, mapped the Vietnamese
+request to `self.audio_speaker.set_volume({"volume":55})`, normalized the device
+result for the prose model and spoke back `55%`. The MCP cancellation run withheld
+the device result, sent a button abort while `tools/call` was pending, then injected
+the late result after `listen:start`. Loopback returned to listening in about 0.45
+ms and emitted no stale LLM text, TTS or follow-up tool call. No `tts:stop` is
+expected in this scenario because playback had not started; an abort during active
+playback still follows the `tts:stop` contract above.
 
 Prepare the optional native benchmark pack (about 630 MiB; still ignored by
 Git):

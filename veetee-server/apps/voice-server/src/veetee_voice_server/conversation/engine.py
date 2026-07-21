@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
+
 from veetee_voice_server.conversation.arbiter import StaleTurnError, TurnArbiter
 from veetee_voice_server.conversation.cancellation import (
     OperationContext,
@@ -31,6 +33,8 @@ from veetee_voice_server.providers.contracts import (
     TtsProvider,
 )
 from veetee_voice_server.transport.sink import ConversationSink
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -121,9 +125,20 @@ class ConversationEngine:
         except (TurnCancelledError, StaleTurnError):
             return None
         except OperationDeadlineExceededError as error:
+            logger.warning(
+                "conversation_provider_deadline",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+            )
             await self._emit_if_current_error(context, "provider_deadline", str(error))
             return None
         except Exception as error:
+            logger.warning(
+                "conversation_turn_failed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                error=type(error).__name__,
+            )
             await self._emit_if_current_error(context, "conversation_failed", type(error).__name__)
             return None
         finally:

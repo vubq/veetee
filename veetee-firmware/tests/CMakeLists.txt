@@ -65,3 +65,23 @@ target_compile_options(protocol_v1_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(protocol_v1_test PRIVATE cjson_host)
 
 add_test(NAME protocol_v1_test COMMAND protocol_v1_test)
+
+add_executable(
+    device_mcp_test
+    device_mcp_test.cpp
+    ../main/mcp/device_mcp.cpp
+)
+target_include_directories(
+    device_mcp_test PRIVATE
+    ../main
+    ../managed_components/espressif__cjson/cJSON
+)
+target_compile_definitions(
+    device_mcp_test PRIVATE
+    VEETEE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+target_compile_features(device_mcp_test PRIVATE cxx_std_17)
+target_compile_options(device_mcp_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(device_mcp_test PRIVATE cjson_host)
+
+add_test(NAME device_mcp_test COMMAND device_mcp_test)

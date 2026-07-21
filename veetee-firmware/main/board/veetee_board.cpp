@@ -85,4 +85,12 @@ void VeeteeBoard::AbortPlayback() {
     audio_.AbortPlayback();
 }
 
+bool VeeteeBoard::SetSpeakerVolume(int volume_percent) {
+    return audio_.SetVolumePercent(volume_percent);
+}
+
+int VeeteeBoard::speaker_volume() const {
+    return audio_.volume_percent();
+}
+
 }  // namespace veetee::board

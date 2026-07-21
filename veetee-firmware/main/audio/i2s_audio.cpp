@@ -27,6 +27,12 @@ std::int16_t ToPcm16(std::int32_t sample) {
         std::numeric_limits<std::int16_t>::max()));
 }
 
+std::int32_t ToSpeakerSample(std::int16_t sample, int volume_percent) {
+    const std::int64_t scaled = static_cast<std::int64_t>(sample) *
+                                volume_percent * 65536 / 100;
+    return static_cast<std::int32_t>(scaled);
+}
+
 }  // namespace
 
 esp_err_t I2sAudio::Initialize(EncodedAudioSink encoded_sink,
@@ -39,6 +45,7 @@ esp_err_t I2sAudio::Initialize(EncodedAudioSink encoded_sink,
     encoded_sink_ = encoded_sink;
     playback_finished_sink_ = playback_finished_sink;
     sink_context_ = context;
+    volume_percent_.store(CONFIG_VEETEE_DEFAULT_VOLUME_PERCENT);
 
     i2s_chan_config_t tx_channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     tx_channel.dma_desc_num = 6;
@@ -198,6 +205,13 @@ void I2sAudio::AbortPlayback() {
     }
 }
 
+bool I2sAudio::SetVolumePercent(int volume_percent) {
+    if (volume_percent < 0 || volume_percent > 100) return false;
+    volume_percent_.store(volume_percent);
+    ESP_LOGI(kTag, "Speaker software volume=%d%%", volume_percent);
+    return true;
+}
+
 void I2sAudio::CaptureTaskEntry(void* context) {
     static_cast<I2sAudio*>(context)->RunCapture();
 }
@@ -348,9 +362,10 @@ void I2sAudio::RunPlayback() {
         }
         if (item.generation != playback_generation_.load()) continue;
 
+        const int volume_percent = volume_percent_.load();
         for (std::size_t index = 0; index < playback_pcm_.size(); ++index) {
             speaker_dma_buffer_[index] =
-                static_cast<std::int32_t>(playback_pcm_[index]) * 65536;
+                ToSpeakerSample(playback_pcm_[index], volume_percent);
         }
         size_t bytes_written = 0;
         const esp_err_t write_error = i2s_channel_write(
@@ -373,7 +388,8 @@ void I2sAudio::PlayBootTone() {
                              board::kSpeakerSampleRate;
         const std::int32_t pcm16 =
             static_cast<std::int32_t>(std::sin(phase) * kAmplitude);
-        tone_dma_buffer_[index] = pcm16 * 65536;
+        tone_dma_buffer_[index] = ToSpeakerSample(
+            static_cast<std::int16_t>(pcm16), volume_percent_.load());
     }
     for (int frame = 0; frame < kFrames; ++frame) {
         size_t bytes_written = 0;

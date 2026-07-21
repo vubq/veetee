@@ -188,6 +188,10 @@ def llm_payload(
     )
 
 
+def mcp_payload(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return McpEvent(session_id=session_id, type="mcp", payload=payload).model_dump()
+
+
 def assistant_sleep_payload(session_id: str, reason: str) -> dict[str, Any]:
     return SystemEvent(
         session_id=session_id,
