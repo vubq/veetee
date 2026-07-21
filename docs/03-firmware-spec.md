@@ -143,6 +143,49 @@ AP portal cần có:
 - locale và wake profile;
 - nút test kết nối và reset.
 
+HTTP server task dùng stack 12 KiB trên ESP-IDF 6.0.2. Đây là budget đã đo từ lỗi
+stack overflow trong đường `httpd_resp_send` của iOS captive webview; không hạ về
+default 4 KiB nếu chưa chạy lại hardware portal stress test.
+
+System event task dùng stack 4 KiB. Buffer scan station 32 AP và danh sách RSSI
+phải nằm trong `WifiManager`, không đặt trên stack callback `WIFI_EVENT_SCAN_DONE`.
+ESP-IDF default 2.304 byte đã được đo là overflow ngay sau khi lưu provisioning,
+gây reboot loop và phát lại startup chime liên tục.
+
+AP DHCP phải advertise chính `192.168.4.1` làm DNS. Không advertise trang HTML
+trực tiếp qua DHCP option 114: option này dành cho Captive Portal API chuẩn hóa,
+không phải login UI. Khi chưa triển khai CAPPORT API/TLS đúng chuẩn, firmware dùng
+DNS wildcard và các probe URL riêng cho Apple/Android/Windows/Firefox.
+
+HTTP scan chạy bất đồng bộ một lần khi portal start rồi chỉ trả cache. Không chạy
+full-channel scan định kỳ khi SoftAP đang phục vụ client vì radio channel hopping
+có thể làm captive webview trắng rồi timeout. Trong config mode, Wi-Fi power-save
+phải tắt để SoftAP phản hồi ổn định.
+
+Route `/` trả portal shell. Giống flow đã được kiểm chứng của Xiaozhi, các URL
+connectivity-check trả `302 Found` tới
+`http://192.168.4.1/?_=<monotonic-nonce>`. Cache-busting nonce buộc captive
+WebView mở lại trang cấu hình trong route đã được OS bind với SoftAP, không dùng
+trang trung gian hay phụ thuộc `meta refresh`. Mọi response đặt
+`Connection: close` và timeout gửi/nhận 15 giây.
+
+Chỉ các connectivity-check URL đã biết mới được redirect. Không redirect handler
+404 tổng quát: request phụ như `/favicon.ico` nếu bị điều hướng về `/` có thể làm
+Android captive WebView reload toàn trang, khóa thao tác bằng loading overlay rồi
+tự rời AP. Favicon trả `204 No Content`; URL không biết dùng 404 mặc định.
+
+Nếu người dùng thoát mà chưa lưu, firmware tiếp tục ở config mode. Khi station cuối
+cùng rời SoftAP, firmware đóng các HTTP session còn treo và restart DHCP server để
+xóa lease/captive state của phiên cũ. Lần kết nối lại `Veetee-XXXX` phải nhận IP mới
+và kích hoạt portal như một phiên độc lập; không cần reboot thiết bị và không persist
+dữ liệu form chưa submit.
+
+HTML, CSS và JavaScript phải được phục vụ thành resource riêng, mỗi response dưới
+4 KiB. Hardware trace trên ESP32-S3/ESP-IDF 6 đã xác nhận response liền 9.976 byte
+dừng ở 4.320 byte rồi `send` trả `EAGAIN`, đúng với triệu chứng webview trắng.
+Sau khi persist form thành công, state transition sang station phải chậm tối thiểu
+750 ms để JSON response rời socket trước khi HTTP server và SoftAP bị dừng.
+
 Không lưu password plain text vào log. Profile record có version, bound cố định,
 CRC, reject duplicate SSID và eviction profile ít gần đây nhất khi đủ 5 mạng. NVS
 namespace có version/migration và nút factory reset riêng.
@@ -295,6 +338,10 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
   security epoch floor, nên mất điện hoặc target mới không làm mất resource đang chạy;
 - SHA-256 toàn payload phải khớp trước khi stage; ESP-SR reload chỉ chạy sau delay
   ưu tiên button/wake và khi state machine đang `idle`;
+- WakeNet hot-reload dừng và thu hồi task cũ trước khi destroy model; không gọi
+  `esp_wn_iface_t::clean()` trong lifecycle vì ESP-SR 2.4.7 đã được đo panic trong
+  `model_clean`. PCM queue, model chunk và detector task stack nằm trong PSRAM để
+  Wi-Fi/TLS không làm reload thất bại do phân mảnh RAM nội;
 - activation chuyển qua `pending_health`, health window xác nhận slot mới; load/task
   health fail hoặc boot active fail sẽ reload previous slot và rollback. Nếu cả hai
   model lỗi, firmware tiếp tục button-only thay vì bootloop;
@@ -307,6 +354,10 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
 
 Phần còn thiếu của lát resource là power-loss/corrupt-payload matrix đầy đủ trên
 board thật và UI drift/apply timeline trên Manager Web.
+
+Hardware trace ngày 2026-07-22 đã xác nhận `resource_1` tải, verify, stage, hot-reload
+và qua health window thành `active` trên ESP32-S3 N16R8 mà không panic/reboot trong
+soak ngắn. Kết quả này chưa thay thế matrix mất điện và soak 10 phút của release gate.
 
 Luồng reconcile:
 

@@ -118,10 +118,10 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
     return ESP_OK;
 }
 
-esp_err_t VeeteeBoard::StartAudio() {
+esp_err_t VeeteeBoard::StartAudio(bool play_boot_chime) {
     esp_err_t error = wake_detector_.Start();
     if (error != ESP_OK) return error;
-    return audio_.Start();
+    return audio_.Start(play_boot_chime);
 }
 
 esp_err_t VeeteeBoard::ReloadWakeResource(const char* partition_label) {

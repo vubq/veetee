@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <cstdlib>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "board/board_config.h"
 #include "esp_log.h"
 #include "esp_wn_models.h"
+#include "freertos/idf_additions.h"
 
 namespace veetee::audio {
 namespace {
@@ -136,16 +137,25 @@ esp_err_t WakeDetector::Initialize(const char* partition_label,
                  runtime.cooldown_ms);
     }
 
-    model_chunk_ = static_cast<std::int16_t*>(
-        std::calloc(model_chunk_capacity_, sizeof(std::int16_t)));
-    pcm_queue_ = xQueueCreate(kPcmQueueDepth, sizeof(PcmFrame));
+    model_chunk_ = static_cast<std::int16_t*>(heap_caps_calloc(
+        model_chunk_capacity_, sizeof(std::int16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    pcm_queue_ = xQueueCreateWithCaps(kPcmQueueDepth, sizeof(PcmFrame),
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (model_chunk_ == nullptr || pcm_queue_ == nullptr) {
+        ESP_LOGE(kTag,
+                 "Unable to allocate detector buffers chunk=%p queue=%p internal=%u psram=%u",
+                 model_chunk_, pcm_queue_,
+                 static_cast<unsigned>(
+                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(
+                     heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
         ReleaseProfiles();
         if (pcm_queue_ != nullptr) {
-            vQueueDelete(pcm_queue_);
+            vQueueDeleteWithCaps(pcm_queue_);
             pcm_queue_ = nullptr;
         }
-        std::free(model_chunk_);
+        heap_caps_free(model_chunk_);
         model_chunk_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
@@ -153,7 +163,7 @@ esp_err_t WakeDetector::Initialize(const char* partition_label,
 }
 
 esp_err_t WakeDetector::Start() {
-    if (task_running_.load(std::memory_order_acquire)) {
+    if (task_running_.load(std::memory_order_acquire) || task_ != nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
     if (profile_count_ == 0) return ESP_OK;
@@ -162,8 +172,15 @@ esp_err_t WakeDetector::Start() {
     }
     stop_requested_.store(false, std::memory_order_release);
     task_running_.store(true, std::memory_order_release);
-    if (xTaskCreate(&WakeDetector::TaskEntry, "veetee_wake", 8192, this, 5,
-                    &task_) != pdPASS) {
+    if (xTaskCreateWithCaps(&WakeDetector::TaskEntry, "veetee_wake", 8192,
+                            this, 5, &task_,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(kTag,
+                 "Unable to allocate detector task internal=%u psram=%u",
+                 static_cast<unsigned>(
+                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(
+                     heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
         task_running_.store(false, std::memory_order_release);
         return ESP_ERR_NO_MEM;
     }
@@ -173,6 +190,7 @@ esp_err_t WakeDetector::Start() {
 esp_err_t WakeDetector::Stop() {
     SetRole(DetectorRole::kDisabled);
     stop_requested_.store(true, std::memory_order_release);
+    if (task_ == nullptr) return ESP_OK;
     if (pcm_queue_ != nullptr) {
         xQueueReset(pcm_queue_);
         PcmFrame wake{};
@@ -184,6 +202,13 @@ esp_err_t WakeDetector::Stop() {
         if (xTaskGetTickCount() - started >= timeout) return ESP_ERR_TIMEOUT;
         vTaskDelay(1);
     }
+    const TaskHandle_t stopped_task = task_;
+    while (eTaskGetState(stopped_task) != eSuspended) {
+        if (xTaskGetTickCount() - started >= timeout) return ESP_ERR_TIMEOUT;
+        vTaskDelay(1);
+    }
+    vTaskDeleteWithCaps(stopped_task);
+    task_ = nullptr;
     return ESP_OK;
 }
 
@@ -234,6 +259,9 @@ bool WakeDetector::SetRole(DetectorRole role) {
         role_.exchange(role, std::memory_order_acq_rel);
     if (previous != role) {
         generation_.fetch_add(1, std::memory_order_acq_rel);
+        if (pcm_queue_ != nullptr) {
+            xQueueReset(pcm_queue_);
+        }
         ESP_LOGI(kTag, "Detector role %s -> %s", ToString(previous),
                  ToString(role));
     }
@@ -261,9 +289,6 @@ void WakeDetector::Run() {
             generation_.load(std::memory_order_acquire);
         if (current_generation != active_generation ||
             active_profile == nullptr || active_profile->role != current_role) {
-            if (active_profile != nullptr) {
-                active_profile->interface->clean(active_profile->model);
-            }
             active_generation = current_generation;
             active_profile = FindProfile(current_role);
             buffered_samples = 0;
@@ -312,15 +337,12 @@ void WakeDetector::Run() {
                              event_context_)) {
                 ESP_LOGW(kTag, "Application rejected detector event");
             }
-            active_profile->interface->clean(active_profile->model);
         }
     }
-    if (active_profile != nullptr) {
-        active_profile->interface->clean(active_profile->model);
-    }
-    task_ = nullptr;
     task_running_.store(false, std::memory_order_release);
-    vTaskDelete(nullptr);
+    // Stop() owns deletion so the task stack is reclaimed before hot reload.
+    vTaskSuspend(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 WakeDetector::RuntimeProfile* WakeDetector::FindProfile(DetectorRole role) {
@@ -359,10 +381,10 @@ void WakeDetector::ReleaseProfiles() {
 void WakeDetector::ReleaseRuntime() {
     ReleaseProfiles();
     if (pcm_queue_ != nullptr) {
-        vQueueDelete(pcm_queue_);
+        vQueueDeleteWithCaps(pcm_queue_);
         pcm_queue_ = nullptr;
     }
-    std::free(model_chunk_);
+    heap_caps_free(model_chunk_);
     model_chunk_ = nullptr;
     model_chunk_capacity_ = 0;
 }

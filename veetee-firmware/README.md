@@ -77,12 +77,13 @@ ESP-SR bring-up được bật bởi `CONFIG_VEETEE_ESP_SR_BRINGUP`. Build tạo
 `build/srmodels/srmodels.bin`, kiểm tra không vượt partition và `idf.py flash` ghi
 nó vào `resource_0`. Một I2S reader fan-out frame PCM 20 ms vào queue hữu hạn;
 WakeNet chạy ở task riêng, drop frame cũ khi nghẽn và generation-check khi đổi
-activation/interrupt role. Đây là layout development; resource updater production
-phải stage/verify/activate slot A/B theo signed manifest trước khi hot-reload.
-Board smoke đã xác nhận model load, contract 16 kHz mono/chunk 512, startup chime và
-mic chạy liên tục hơn 45 giây không panic/watchdog. Wake-to-WebSocket vật lý còn
-cần provision Wi-Fi và bind code 6 số để state machine vào `idle`; captive portal
-không bật detector vì wake không được phép bỏ qua activation.
+activation/interrupt role. Detector buffers và task stack dùng PSRAM; hot-reload
+dừng/thu hồi task cũ rồi destroy model thay vì gọi `clean()` không an toàn của
+ESP-SR 2.4.7. Resource updater đã stage/verify/activate slot A/B theo signed manifest
+trước khi hot-reload. Board smoke đã xác nhận model load, contract 16 kHz
+mono/chunk 512, startup chime, microphone, Wi-Fi, activation và resource apply.
+`resource_1` đã qua health window thành `active` và soak ngắn hơn một phút không
+panic/watchdog; soak 10 phút cùng power-loss matrix vẫn là release gate.
 
 Khi chưa có cấu hình, firmware phát AP `Veetee-XXXX` và captive portal tại
 `http://192.168.4.1`. Portal mobile-first scan SSID/RSSI, đánh dấu mạng đã lưu,
@@ -91,7 +92,24 @@ về browser hay ghi log. NVS schema V3 lưu tối đa 5 profile trong record 51
 CRC và tự migrate cặp credential V2. Khi boot, firmware ưu tiên kết hợp
 last-success/MRU với RSSI, vẫn thử mạng ẩn, rescan có delay và chỉ mở AP nếu không
 mạng nào lấy được IP trong timeout 60 giây. Chọn lại mạng đã lưu với password rỗng
-sẽ dùng lại secret cũ. Settings cũng giữ `client_id` UUID bền vững.
+sẽ dùng lại secret cũ. HTTP task dành 12 KiB stack để chịu được iOS captive webview
+trên ESP-IDF 6; 4 KiB default đã được xác nhận gây reboot khi gửi portal. Settings
+cũng giữ `client_id` UUID bền vững. AP quảng bá DNS nội bộ nhưng không dùng DHCP
+option 114 sai mục đích cho trang HTML. Scan chạy nền một lần trước khi client thao
+tác rồi HTTP chỉ đọc cache, tránh SoftAP channel hopping làm trang cấu hình timeout.
+Giống flow captive portal của Xiaozhi, các probe Apple/Android/Windows/Firefox
+nhận `302 Found` tới `http://192.168.4.1/?_=<monotonic-nonce>`. Redirect có
+cache-busting mở thẳng portal trong webview được OS bind với SoftAP, không qua
+trang loading trung gian. Mọi response dùng `Connection: close` và timeout 15 giây.
+Chỉ probe captive đã biết mới redirect; favicon trả `204` và URL lạ giữ 404 mặc
+định để resource phụ không thể reload portal giữa lúc người dùng nhập cấu hình.
+Khi client cuối rời AP mà chưa lưu, firmware đóng captive HTTP session cũ và restart
+DHCP; reconnect sau đó nhận một phiên cấu hình sạch mà không cần reboot ESP32.
+HTML/CSS/JavaScript được tách thành resource
+dưới 4 KiB để tránh lỗi gửi dừng tại 4.320 byte đã đo trên phần cứng. Sau khi lưu,
+firmware giữ AP thêm 750 ms để response hoàn tất trước khi chuyển sang station.
+Wi-Fi scan buffers nằm trong manager thay vì system-event stack; event task dùng
+4 KiB để tránh reboot loop sau `WIFI_EVENT_SCAN_DONE`.
 
 ## Bootstrap và activation hiện tại
 
@@ -118,11 +136,11 @@ slot với HTTP Range resume, SHA-256, CRC-protected NVS journal, safe-boundary 
 reload, health window và rollback. Cancellation giữ active slot cùng checkpoint
 256 KiB gần nhất. Verifier dùng Monocypher 4.0.3 và restricted JCS; payload hash
 dùng PSA Crypto. Reporter task gửi apply state bằng authenticated `PUT`, persist
-sequence/terminal retry trong NVS riêng và coalesce trạng thái trung gian. Phần resource còn lại là chạy đủ
-power-loss/corruption matrix trên phần cứng thật và hiển thị drift/timeline trên web.
-
-Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware
-không đọc password Wi-Fi đã lưu trên máy phát triển.
+sequence/terminal retry trong NVS riêng và coalesce trạng thái trung gian. Hardware
+E2E portal -> Wi-Fi -> bootstrap -> code 6 số -> bind -> activate -> signed resource
+apply đã pass trên thiết bị hiện tại. Phần resource còn lại là chạy đủ
+power-loss/corruption matrix và hiển thị drift/timeline trên web. Voice E2E vật lý
+vẫn chờ voice-server/local AI hoàn chỉnh và bài test nói trực tiếp với thiết bị.
 
 ## WebSocket handshake hiện tại
 

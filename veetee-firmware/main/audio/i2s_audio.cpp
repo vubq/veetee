@@ -148,11 +148,12 @@ esp_err_t I2sAudio::Initialize(EncodedAudioSink encoded_sink,
     return ESP_OK;
 }
 
-esp_err_t I2sAudio::Start() {
+esp_err_t I2sAudio::Start(bool play_boot_chime) {
     if (encoder_ == nullptr || decoder_ == nullptr || playback_queue_ == nullptr ||
         capture_task_ != nullptr || playback_task_ != nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
+    play_boot_chime_ = play_boot_chime;
     if (xTaskCreate(&I2sAudio::CaptureTaskEntry, "veetee_capture", 6144, this, 6,
                     &capture_task_) != pdPASS) {
         return ESP_ERR_NO_MEM;
@@ -320,7 +321,11 @@ void I2sAudio::RunCapture() {
 
 void I2sAudio::RunPlayback() {
 #if CONFIG_VEETEE_BOOT_TONE
-    PlayBootChime();
+    if (play_boot_chime_) {
+        PlayBootChime();
+    } else {
+        ESP_LOGI(kTag, "Startup chime suppressed after abnormal/software reset");
+    }
 #endif
     PlaybackItem item{};
     std::uint32_t decoder_generation = 0;

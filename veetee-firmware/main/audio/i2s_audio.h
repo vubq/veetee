@@ -26,7 +26,7 @@ public:
                          PlaybackFinishedSink playback_finished_sink,
                          void* sink_context,
                          void* pcm_frame_context);
-    esp_err_t Start();
+    esp_err_t Start(bool play_boot_chime);
 
     void SetCaptureEnabled(bool enabled);
     void BeginPlayback();
@@ -94,6 +94,7 @@ private:
     std::atomic<bool> playback_accepting_{false};
     std::atomic<std::uint32_t> playback_generation_{0};
     std::atomic<int> volume_percent_{70};
+    bool play_boot_chime_ = false;
 };
 
 }  // namespace veetee::audio

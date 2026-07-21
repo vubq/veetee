@@ -23,3 +23,4 @@ CONFIG_VEETEE_LCD_SPI_MODE=0
 # Development board plumbing only. Product wake phrase "Hey VeeTee" is
 # delivered later as a benchmarked, signed model-pack resource.
 CONFIG_VEETEE_ESP_SR_BRINGUP=y
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096

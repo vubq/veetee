@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
+#include "lwip/ip_addr.h"
 #include "sdkconfig.h"
 
 namespace veetee::network {
@@ -15,8 +16,8 @@ namespace {
 
 constexpr char kTag[] = "veetee_wifi";
 constexpr std::uint32_t kApAddress = 0x0104A8C0U;  // 192.168.4.1 in network byte order.
-constexpr std::size_t kMaxStationScanResults = 32;
 constexpr std::uint64_t kRetryScanDelayUs = 2500000ULL;
+constexpr std::uint64_t kProvisioningTransitionDelayUs = 750000ULL;
 
 }  // namespace
 
@@ -71,13 +72,20 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
     esp_timer_create_args_t retry_config = timeout_config;
     retry_config.callback = &WifiManager::RetryScan;
     retry_config.name = "veetee_wifi_retry";
-    return esp_timer_create(&retry_config, &retry_timer_);
+    error = esp_timer_create(&retry_config, &retry_timer_);
+    if (error != ESP_OK) return error;
+
+    esp_timer_create_args_t provisioning_config = timeout_config;
+    provisioning_config.callback = &WifiManager::ProvisioningTransition;
+    provisioning_config.name = "wifi_provision";
+    return esp_timer_create(&provisioning_config, &provisioning_timer_);
 }
 
 esp_err_t WifiManager::StartStation() {
     if (settings_ == nullptr || store_ == nullptr || !settings_->HasProvisioning()) {
         return ESP_ERR_INVALID_STATE;
     }
+    provisioning_active_ = false;
     profiles_ = store_->WifiProfiles();
     if (!settings::IsValidWifiProfileRecord(profiles_) || profiles_.count == 0) {
         return ESP_ERR_INVALID_STATE;
@@ -85,6 +93,7 @@ esp_err_t WifiManager::StartStation() {
     portal_.Stop();
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
+    esp_timer_stop(provisioning_timer_);
     station_connected_ = false;
     station_connecting_ = true;
     candidate_in_flight_ = false;
@@ -92,6 +101,7 @@ esp_err_t WifiManager::StartStation() {
     ignore_disconnect_until_scan_ = true;
     candidate_count_ = 0;
     candidate_cursor_ = 0;
+    candidate_reconnect_count_ = 0;
     connecting_ssid_[0] = '\0';
 
     esp_err_t error = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -117,6 +127,7 @@ esp_err_t WifiManager::StartStation() {
 }
 
 esp_err_t WifiManager::StartProvisioning() {
+    provisioning_active_ = false;
     station_connecting_ = false;
     station_connected_ = false;
     candidate_in_flight_ = false;
@@ -124,6 +135,7 @@ esp_err_t WifiManager::StartProvisioning() {
     ignore_disconnect_until_scan_ = true;
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
+    esp_timer_stop(provisioning_timer_);
     portal_.Stop();
     if (wifi_started_) esp_wifi_disconnect();
 
@@ -138,11 +150,20 @@ esp_err_t WifiManager::StartProvisioning() {
     esp_err_t error = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_AP, &config);
     if (error == ESP_OK) error = EnsureWifiStarted();
+    if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (error == ESP_OK) {
+        const esp_err_t dhcp_error = ConfigureCaptivePortalDhcp();
+        if (dhcp_error != ESP_OK) {
+            ESP_LOGW(kTag, "Unable to advertise captive portal through DHCP: %s",
+                     esp_err_to_name(dhcp_error));
+        }
+    }
     if (error == ESP_OK) {
         error = portal_.Start(kApAddress, *settings_, store_->WifiProfiles(),
                               &WifiManager::SaveProvisioning, this);
     }
     if (error == ESP_OK) {
+        provisioning_active_ = true;
         ESP_LOGI(kTag, "Provisioning AP '%s' is open for physical setup", ap_ssid_);
     }
     return error;
@@ -167,6 +188,21 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         manager->ignore_disconnect_until_scan_ = false;
         manager->ConnectNextCandidate();
     } else if (event_base == WIFI_EVENT &&
+               event_id == WIFI_EVENT_AP_STADISCONNECTED &&
+               manager->provisioning_active_) {
+        wifi_sta_list_t stations = {};
+        if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK && stations.num == 0) {
+            manager->portal_.ResetClientSessions();
+            const esp_err_t dhcp_error = manager->ConfigureCaptivePortalDhcp();
+            if (dhcp_error == ESP_OK) {
+                ESP_LOGI(kTag,
+                         "Last setup client left; captive DHCP session reset");
+            } else {
+                ESP_LOGW(kTag, "Unable to reset captive DHCP session: %s",
+                         esp_err_to_name(dhcp_error));
+            }
+        }
+    } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
         const bool was_connected = manager->station_connected_;
         manager->station_connected_ = false;
@@ -188,6 +224,24 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         } else if (manager->station_connecting_ &&
                    manager->candidate_in_flight_ &&
                    !manager->ignore_disconnect_until_scan_) {
+            if (manager->candidate_reconnect_count_ <
+                kMaxCandidateReconnects) {
+                ++manager->candidate_reconnect_count_;
+                const esp_err_t reconnect_error = esp_wifi_connect();
+                if (reconnect_error == ESP_OK ||
+                    reconnect_error == ESP_ERR_WIFI_CONN) {
+                    ESP_LOGI(kTag,
+                             "Retrying saved SSID '%s' attempt=%u/%u",
+                             manager->connecting_ssid_,
+                             static_cast<unsigned>(
+                                 manager->candidate_reconnect_count_),
+                             static_cast<unsigned>(kMaxCandidateReconnects));
+                    return;
+                }
+                ESP_LOGW(kTag, "Unable to retry SSID '%s': %s",
+                         manager->connecting_ssid_,
+                         esp_err_to_name(reconnect_error));
+            }
             manager->candidate_in_flight_ = false;
             manager->ConnectNextCandidate();
         }
@@ -232,6 +286,11 @@ void WifiManager::RetryScan(void* context) {
     }
 }
 
+void WifiManager::ProvisioningTransition(void* context) {
+    static_cast<WifiManager*>(context)->Emit(
+        WifiManagerEvent::kProvisioningSaved);
+}
+
 esp_err_t WifiManager::SaveProvisioning(settings::DeviceSettings* settings,
                                         void* context) {
     auto* manager = static_cast<WifiManager*>(context);
@@ -239,7 +298,15 @@ esp_err_t WifiManager::SaveProvisioning(settings::DeviceSettings* settings,
     const esp_err_t error = manager->store_->SaveProvisioning(settings);
     if (error == ESP_OK) {
         *manager->settings_ = *settings;
-        manager->Emit(WifiManagerEvent::kProvisioningSaved);
+        esp_timer_stop(manager->provisioning_timer_);
+        const esp_err_t timer_error = esp_timer_start_once(
+            manager->provisioning_timer_, kProvisioningTransitionDelayUs);
+        if (timer_error != ESP_OK) {
+            ESP_LOGW(kTag,
+                     "Unable to delay provisioning transition: %s",
+                     esp_err_to_name(timer_error));
+            manager->Emit(WifiManagerEvent::kProvisioningSaved);
+        }
     }
     return error;
 }
@@ -252,6 +319,46 @@ esp_err_t WifiManager::EnsureWifiStarted() {
     if (wifi_started_) return ESP_OK;
     const esp_err_t error = esp_wifi_start();
     if (error == ESP_OK) wifi_started_ = true;
+    return error;
+}
+
+esp_err_t WifiManager::ConfigureCaptivePortalDhcp() {
+    if (ap_netif_ == nullptr) return ESP_ERR_INVALID_STATE;
+
+    esp_netif_ip_info_t ip_info = {};
+    IP4_ADDR(&ip_info.ip, 192, 168, 4, 1);
+    IP4_ADDR(&ip_info.gw, 192, 168, 4, 1);
+    IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+
+    const esp_err_t stop_error = esp_netif_dhcps_stop(ap_netif_);
+    if (stop_error != ESP_OK &&
+        stop_error != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        return stop_error;
+    }
+
+    esp_err_t error = esp_netif_set_ip_info(ap_netif_, &ip_info);
+    std::uint8_t offer_dns = 1;
+    if (error == ESP_OK) {
+        error = esp_netif_dhcps_option(ap_netif_, ESP_NETIF_OP_SET,
+                                   ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns,
+                                   sizeof(offer_dns));
+    }
+    if (error == ESP_OK) {
+        esp_netif_dns_info_t dns = {};
+        dns.ip.type = ESP_IPADDR_TYPE_V4;
+        dns.ip.u_addr.ip4.addr = ip_info.ip.addr;
+        error = esp_netif_set_dns_info(ap_netif_, ESP_NETIF_DNS_MAIN, &dns);
+    }
+
+    const esp_err_t start_error = esp_netif_dhcps_start(ap_netif_);
+    if (error == ESP_OK && start_error != ESP_OK &&
+        start_error != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+        error = start_error;
+    }
+    if (error == ESP_OK) {
+        ESP_LOGI(kTag,
+                 "DHCP advertises captive DNS at 192.168.4.1; probe URLs redirect to the portal");
+    }
     return error;
 }
 
@@ -273,6 +380,7 @@ esp_err_t WifiManager::BeginScan() {
         BuildWifiCandidateOrder(profiles_, nullptr, 0);
     candidate_count_ = order.count;
     candidate_cursor_ = 0;
+    candidate_reconnect_count_ = 0;
     for (std::size_t index = 0; index < order.count; ++index) {
         candidates_[index] = CandidateTarget{
             .profile_index = order.profile_indices[index],
@@ -285,19 +393,23 @@ esp_err_t WifiManager::BeginScan() {
 
 void WifiManager::BuildCandidateQueue() {
     std::uint16_t count = kMaxStationScanResults;
-    std::array<wifi_ap_record_t, kMaxStationScanResults> records{};
-    if (esp_wifi_scan_get_ap_records(&count, records.data()) != ESP_OK) count = 0;
+    if (esp_wifi_scan_get_ap_records(&count, station_scan_records_.data()) !=
+        ESP_OK) {
+        count = 0;
+    }
 
-    std::array<VisibleWifiNetwork, kMaxStationScanResults> visible{};
     for (std::size_t index = 0; index < count; ++index) {
-        std::snprintf(visible[index].ssid, sizeof(visible[index].ssid), "%s",
-                      reinterpret_cast<const char*>(records[index].ssid));
-        visible[index].rssi = records[index].rssi;
+        std::snprintf(visible_networks_[index].ssid,
+                      sizeof(visible_networks_[index].ssid), "%s",
+                      reinterpret_cast<const char*>(
+                          station_scan_records_[index].ssid));
+        visible_networks_[index].rssi = station_scan_records_[index].rssi;
     }
     const WifiCandidateOrder order =
-        BuildWifiCandidateOrder(profiles_, visible.data(), count);
+        BuildWifiCandidateOrder(profiles_, visible_networks_.data(), count);
     candidate_count_ = order.count;
     candidate_cursor_ = 0;
+    candidate_reconnect_count_ = 0;
     for (std::size_t index = 0; index < order.count; ++index) {
         CandidateTarget target{
             .profile_index = order.profile_indices[index],
@@ -306,16 +418,14 @@ void WifiManager::BuildCandidateQueue() {
         const wifi_ap_record_t* strongest = nullptr;
         for (std::size_t record_index = 0; record_index < count; ++record_index) {
             if (std::strcmp(ssid, reinterpret_cast<const char*>(
-                                      records[record_index].ssid)) == 0 &&
+                                      station_scan_records_[record_index].ssid)) == 0 &&
                 (strongest == nullptr ||
-                 records[record_index].rssi > strongest->rssi)) {
-                strongest = &records[record_index];
+                 station_scan_records_[record_index].rssi > strongest->rssi)) {
+                strongest = &station_scan_records_[record_index];
             }
         }
         if (strongest != nullptr) {
-            target.channel = strongest->primary;
-            std::memcpy(target.bssid, strongest->bssid, sizeof(target.bssid));
-            target.bssid_set = true;
+            target.visible = true;
         }
         candidates_[index] = target;
     }
@@ -338,15 +448,8 @@ void WifiManager::ConnectNextCandidate() {
                       sizeof(config.sta.password), "%s", profile.password);
         config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        config.sta.failure_retry_cnt = 1;
-        config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-        config.sta.pmf_cfg.capable = true;
-        config.sta.pmf_cfg.required = false;
-        if (target.bssid_set) {
-            config.sta.channel = target.channel;
-            config.sta.bssid_set = true;
-            std::memcpy(config.sta.bssid, target.bssid, sizeof(target.bssid));
-        }
+        config.sta.failure_retry_cnt = 3;
+        config.sta.listen_interval = 10;
 
         std::snprintf(connecting_ssid_, sizeof(connecting_ssid_), "%s",
                       profile.ssid);
@@ -358,11 +461,13 @@ void WifiManager::ConnectNextCandidate() {
         if (error == ESP_OK) error = esp_wifi_connect();
         if (error == ESP_OK || error == ESP_ERR_WIFI_CONN) {
             candidate_in_flight_ = true;
+            candidate_reconnect_count_ = 0;
             ESP_LOGI(kTag, "Connecting to saved SSID '%s' candidate=%u/%u%s",
                      connecting_ssid_,
                      static_cast<unsigned>(candidate_cursor_),
                      static_cast<unsigned>(candidate_count_),
-                     target.bssid_set ? " (visible AP)" : " (hidden/not visible)");
+                     target.visible ? " (visible AP, roaming enabled)"
+                                    : " (hidden/not visible)");
             return;
         }
         ESP_LOGW(kTag, "Unable to start connection to SSID '%s': %s",
@@ -374,6 +479,7 @@ void WifiManager::ConnectNextCandidate() {
 void WifiManager::ScheduleScanRetry() {
     candidate_count_ = 0;
     candidate_cursor_ = 0;
+    candidate_reconnect_count_ = 0;
     candidate_in_flight_ = false;
     ignore_disconnect_until_scan_ = true;
     esp_timer_stop(retry_timer_);

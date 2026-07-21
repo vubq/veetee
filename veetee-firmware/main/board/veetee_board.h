@@ -27,7 +27,7 @@ public:
                          const char* active_resource_partition,
                          const char* fallback_resource_partition,
                          void* context);
-    esp_err_t StartAudio();
+    esp_err_t StartAudio(bool play_boot_chime);
     esp_err_t ReloadWakeResource(const char* partition_label);
     [[nodiscard]] bool WakeResourceHealthy() const;
     [[nodiscard]] const char* loaded_wake_partition() const {

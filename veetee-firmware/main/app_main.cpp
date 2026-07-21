@@ -640,9 +640,22 @@ void LogPlatformInfo() {
              static_cast<unsigned>(psram_free));
 }
 
+bool ShouldPlayBootChime(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+        case ESP_RST_EXT:
+        case ESP_RST_USB:
+        case ESP_RST_JTAG:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 extern "C" void app_main() {
+    const esp_reset_reason_t reset_reason = esp_reset_reason();
     LogPlatformInfo();
 
     g_event_queue = xQueueCreate(kEventQueueDepth, sizeof(AppMessage));
@@ -684,7 +697,7 @@ extern "C" void app_main() {
         &OnButtonEvent, &OnDetectorEvent, &OnEncodedAudio,
         &OnPlaybackFinished, g_resources.ActivePartitionLabel(),
         g_resources.PreviousPartitionLabel(), nullptr));
-    ESP_ERROR_CHECK(g_board.StartAudio());
+    ESP_ERROR_CHECK(g_board.StartAudio(ShouldPlayBootChime(reset_reason)));
 
     const auto resource_phase = g_resources.phase();
     if (resource_phase ==
