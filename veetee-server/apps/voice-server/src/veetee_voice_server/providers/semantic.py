@@ -93,12 +93,21 @@ class JsonPlannerProvider:
             and isinstance(tool.get("arguments"), dict)
         ):
             tool_call = ToolCall(tool["name"], tool["arguments"])
+        response_required = bool(value.get("response_required", True))
+        if action in {
+            PlanAction.RESPOND,
+            PlanAction.CALL_TOOL_THEN_RESPOND,
+            PlanAction.EXECUTE_PENDING_TOOL,
+        }:
+            response_required = True
+        elif action in {PlanAction.NOOP, PlanAction.CANCEL_PENDING_TOOL}:
+            response_required = False
         return ConversationPlan(
             action=action,
             dialogue_act=dialogue_act,
             locale=str(value.get("locale", locale)),
             intent=str(value.get("intent", "")),
-            response_required=bool(value.get("response_required", True)),
+            response_required=response_required,
             response_text=value.get("response_text")
             if isinstance(value.get("response_text"), str)
             else None,

@@ -86,6 +86,10 @@ VEETEE_TTS_THREADS=6
 VEETEE_TTS_VOICE=Ngọc Linh
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
+VEETEE_LLM_PREWARM=true
+VEETEE_LLM_PREWARM_SECONDS=12
+VEETEE_PLANNER_SECONDS=8
+VEETEE_9ROUTER_MODEL=cx/gpt-5.6-terra
 VEETEE_DEFAULT_PERSONA="You are Veetee, a concise voice assistant. Reply in the user's language using one to three short spoken sentences. Do not use Markdown or expose hidden reasoning."
 ```
 
@@ -138,6 +142,37 @@ the final p95 gate. The remaining latency is dominated by two sequential LLM
 operations (planner then prose), so a later measured optimization should fuse
 planning/tool selection with response streaming or use a proven low-latency
 semantic model without weakening admission.
+
+A clean 9Router upstream can take about 4.3 seconds for its first structured call,
+while the same call is about 1.3 seconds after warmup. Voice-server therefore
+prewarms the configured default LLM during startup and reports it as a required
+readiness component. Prewarm failure is logged without leaking credentials; the
+server stays live for diagnostics but `/health/ready` remains not ready while the
+LLM endpoint is unavailable. A later readiness probe retries the bounded prewarm,
+so a transient startup outage can recover without restarting voice-server.
+
+The local development planner hard deadline is 8 seconds because the Codex-backed
+9Router route can occasionally exceed 4 seconds even after prewarm. This is a
+safety ceiling, not a latency target: the p95 planner target remains much lower,
+and successful responses are forwarded immediately rather than waiting for the
+deadline.
+
+Planner output uses a forced internal structured function with a bounded JSON
+Schema instead of trusting free-form JSON text. This function only returns a
+`ConversationPlan`; it is not an MCP/device action. The policy/parser still
+normalizes cross-field invariants such as `call_tool_then_respond` always requiring
+a spoken response, then the MCP broker independently validates the selected tool
+name and arguments.
+
+For a direct `respond` plan, the same structured call may include a short,
+directly speakable `response_text`; voice-server sends it to TTS without a second
+LLM request. Tool plans deliberately keep the second LLM pass because the spoken
+answer must be grounded in the real MCP result. This hybrid removes one sequential
+provider call from common knowledge/social turns without fabricating tool success.
+Static planner responses, clarification and goodbye text still pass through the
+same Vietnamese sentence chunker as streamed prose. Each sentence receives a
+bounded TTS operation context while the device sees one continuous
+`tts:start`/audio/`tts:stop` lifecycle.
 
 The cancellation run sent abort on the first downlink frame. `tts:stop` and the
 next `listen:start` arrived within about 0.5--2.1 ms on loopback. At most two more

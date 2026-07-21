@@ -146,3 +146,100 @@ async def test_structured_completion_parses_json_object() -> None:
     )
     await client.aclose()
     assert value == {"action": "respond", "intent": "test"}
+
+
+async def test_structured_completion_can_use_forced_tool_arguments() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["temperature"] == 0
+        assert payload["tool_choice"]["function"]["name"] == "submit_plan"
+        assert payload["tools"][0]["function"]["parameters"]["required"] == ["action"]
+        events = [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-plan",
+                                    "function": {
+                                        "name": "submit_plan",
+                                        "arguments": '{"action":',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"function": {"arguments": '"respond"}'}}
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        ]
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b"".join(
+                f"data: {json.dumps(event)}\n\n".encode() for event in events
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    value = await provider.complete_json(
+        system_prompt="Return a plan",
+        user_prompt="Xin chào",
+        context=context(),
+        schema={
+            "type": "object",
+            "required": ["action"],
+            "properties": {"action": {"type": "string"}},
+        },
+        schema_name="submit_plan",
+    )
+    await client.aclose()
+    assert value == {"action": "respond"}
+
+
+async def test_prewarm_requires_a_valid_ready_response() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"ready\\":true}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    await provider.prewarm(context())
+    await client.aclose()
+
+
+async def test_prewarm_rejects_an_invalid_ready_response() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"ready\\":false}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    with pytest.raises(RuntimeError, match="prewarm"):
+        await provider.prewarm(context())
+    await client.aclose()

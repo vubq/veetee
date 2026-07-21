@@ -94,18 +94,20 @@ class FakeTools:
         return {"ok": True}
 
 
-def response_plan() -> ConversationPlan:
+def response_plan(response_text: str | None = None) -> ConversationPlan:
     return ConversationPlan(
         action=PlanAction.RESPOND,
         dialogue_act=DialogueAct.QUESTION,
         locale="vi-VN",
         intent="fixture.question",
         response_required=True,
+        response_text=response_text,
     )
 
 
 def create_engine(
     disposition: AdmissionDisposition = AdmissionDisposition.ACCEPTED,
+    plan: ConversationPlan | None = None,
 ) -> tuple[
     ConversationEngine,
     TurnArbiter,
@@ -117,7 +119,7 @@ def create_engine(
 ]:
     arbiter = TurnArbiter("session-1")
     admission = FakeAdmission(disposition)
-    planner = FakePlanner(response_plan())
+    planner = FakePlanner(plan or response_plan())
     llm = FakeLlm()
     tts = FakeTts()
     sink = MemoryConversationSink()
@@ -154,6 +156,40 @@ async def test_auto_conversation_replies_without_a_second_button_press() -> None
         if output.kind is OutputKind.AUDIO
     )
     assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_planner_response_text_skips_the_second_llm_call() -> None:
+    engine, arbiter, _, planner, llm, tts, sink = create_engine(
+        plan=response_plan("Tôi là Veetee.")
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Bạn là ai?", "vi-VN", confidence=0.99))
+
+    assert planner.calls == 1
+    assert llm.calls == 0
+    assert tts.calls == ["Tôi là Veetee."]
+    assert any(output.kind is OutputKind.AUDIO for output in sink.outputs)
+    assert any(
+        output.kind is OutputKind.TEXT_DELTA
+        and output.payload.get("text") == "Tôi là Veetee."
+        for output in sink.outputs
+    )
+
+
+async def test_planner_response_text_uses_sentence_sized_tts_requests() -> None:
+    engine, arbiter, _, _, llm, tts, sink = create_engine(
+        plan=response_plan("Câu trả lời thứ nhất. Câu trả lời thứ hai.")
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Hãy giải thích", "vi-VN", confidence=0.99))
+
+    assert llm.calls == 0
+    assert tts.calls == ["Câu trả lời thứ nhất.", "Câu trả lời thứ hai."]
+    kinds = [output.kind for output in sink.outputs]
+    assert kinds.count(OutputKind.TTS_START) == 1
+    assert kinds.count(OutputKind.TTS_STOP) == 1
 
 
 @pytest.mark.parametrize(

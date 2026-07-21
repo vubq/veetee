@@ -48,7 +48,7 @@ class SessionProfile:
                 closing_grace_seconds=settings.closing_grace_seconds,
                 total_turn_seconds=30.0,
                 admission_seconds=1.0,
-                planner_seconds=4.0,
+                planner_seconds=settings.planner_seconds,
                 llm_seconds=20.0,
                 tts_seconds=10.0,
                 mcp_seconds=10.0,
@@ -105,7 +105,10 @@ class SessionProfile:
                     conversation.get("admissionSeconds"), 1.0, 0.1, 5.0
                 ),
                 planner_seconds=_bounded_float(
-                    conversation.get("plannerSeconds"), 4.0, 0.5, 15.0
+                    conversation.get("plannerSeconds"),
+                    defaults.policy.planner_seconds,
+                    0.5,
+                    15.0,
                 ),
                 llm_seconds=_bounded_float(
                     conversation.get("llmSeconds"), 20.0, 1.0, 45.0

@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 
 from veetee_voice_server.config import Settings, get_settings
 from veetee_voice_server.conversation.arbiter import TurnArbiter
-from veetee_voice_server.conversation.cancellation import OperationContext
+from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
 from veetee_voice_server.conversation.engine import ConversationEngine
 from veetee_voice_server.logging import configure_logging
 from veetee_voice_server.manager import (
@@ -54,11 +55,78 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "question, command, follow_up, answer, confirmation, denial, correction, "
         "clarification_answer, social, interrupt, end. Include locale, intent, "
         "response_required, response_text and optional tool_call {name, arguments}. "
-        "Set response_text only for clarification or end_session. Only choose a tool "
-        f"action when its exact name exists in this available tool catalog: {catalog}. "
+        "For respond, ask_clarification or end_session, set response_text to one to "
+        "three short directly speakable sentences without Markdown. Omit response_text "
+        "for tool actions because the final response must use the actual tool result. "
+        "Only choose a tool action when its exact name exists in the available tool "
+        f"catalog: {catalog}. "
         "When the catalog is empty, never invent a tool name."
         f"\n\nAgent context:\n{profile.persona}"
     ).strip()
+
+
+def _planner_output_schema(tools: ToolBroker) -> dict[str, object]:
+    tool_names = [
+        item["name"]
+        for item in tools.list_tools()
+        if isinstance(item.get("name"), str)
+    ]
+    properties: dict[str, object] = {
+        "action": {
+            "type": "string",
+            "enum": [
+                "respond",
+                "call_tool_then_respond",
+                "ask_clarification",
+                "execute_pending_tool",
+                "cancel_pending_tool",
+                "end_session",
+                "noop",
+            ],
+        },
+        "dialogue_act": {
+            "type": "string",
+            "enum": [
+                "question",
+                "command",
+                "follow_up",
+                "answer",
+                "confirmation",
+                "denial",
+                "correction",
+                "clarification_answer",
+                "social",
+                "interrupt",
+                "end",
+            ],
+        },
+        "locale": {"type": "string"},
+        "intent": {"type": "string"},
+        "response_required": {"type": "boolean"},
+        "response_text": {"type": "string"},
+    }
+    if tool_names:
+        properties["tool_call"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["name", "arguments"],
+            "properties": {
+                "name": {"type": "string", "enum": tool_names},
+                "arguments": {"type": "object"},
+            },
+        }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "action",
+            "dialogue_act",
+            "locale",
+            "intent",
+            "response_required",
+        ],
+        "properties": properties,
+    }
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -98,6 +166,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 system_prompt=_planner_system_prompt(profile, tool_broker),
                 user_prompt=str(payload["transcript"]),
                 context=context,
+                schema=_planner_output_schema(tool_broker),
+                schema_name="veetee_submit_conversation_plan",
             )
 
         planner = JsonPlannerProvider(planner_json, locale=profile.locale)
@@ -131,12 +201,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 num_threads=resolved_settings.tts_threads,
                 apply_watermark=resolved_settings.tts_apply_watermark,
             )
-            llm_for_profile(SessionProfile.defaults(resolved_settings))
+            default_llm = llm_for_profile(SessionProfile.defaults(resolved_settings))
             runtime.update(asr=asr, vad_model=vad_model, tts=tts)
-            await asyncio.gather(asr.prewarm(), tts.prewarm())
+            llm_prewarm_task: asyncio.Task[bool] | None = None
+            async with asyncio.TaskGroup() as prewarm_group:
+                prewarm_group.create_task(asr.prewarm())
+                prewarm_group.create_task(tts.prewarm())
+                if resolved_settings.llm_prewarm:
+                    llm_prewarm_task = prewarm_group.create_task(
+                        _prewarm_llm(default_llm, resolved_settings.llm_prewarm_seconds)
+                    )
+            llm_prewarmed = (
+                llm_prewarm_task.result() if llm_prewarm_task is not None else True
+            )
             readiness.register(lambda: _healthy("asr"))
             readiness.register(lambda: _healthy("vad"))
             readiness.register(lambda: _healthy("tts"))
+            readiness.register(
+                _LlmReadinessProbe(
+                    default_llm,
+                    resolved_settings.llm_prewarm_seconds,
+                    prewarmed=llm_prewarmed,
+                )
+            )
         manager = ManagerClient(resolved_settings)
         runtime["manager"] = manager
         if resolved_settings.require_device_auth:
@@ -253,6 +340,69 @@ async def _manager_health(manager: ManagerClient) -> ComponentHealth:
     healthy = await manager.health()
     return ComponentHealth(
         "manager-api",
+        healthy=healthy,
+        required=True,
+        detail=None if healthy else "unreachable",
+    )
+
+
+def _llm_context(operation: str, timeout_seconds: float) -> OperationContext:
+    return OperationContext(
+        session_id="voice-server",
+        turn_id=f"voice-server:{operation}",
+        generation=0,
+        token=CancellationToken(),
+        deadline_at=monotonic() + timeout_seconds,
+    )
+
+
+async def _prewarm_llm(provider: NineRouterLlmProvider, timeout_seconds: float) -> bool:
+    try:
+        await provider.prewarm(_llm_context("llm-prewarm", timeout_seconds))
+        logger.info("llm_prewarm_complete")
+        return True
+    except Exception as error:
+        logger.warning("llm_prewarm_failed", error=type(error).__name__)
+        return False
+
+
+class _LlmReadinessProbe:
+    def __init__(
+        self,
+        provider: NineRouterLlmProvider,
+        timeout_seconds: float,
+        *,
+        prewarmed: bool,
+    ) -> None:
+        self._provider = provider
+        self._timeout_seconds = timeout_seconds
+        self._prewarmed = prewarmed
+        self._lock = asyncio.Lock()
+
+    async def __call__(self) -> ComponentHealth:
+        if not self._prewarmed:
+            async with self._lock:
+                if not self._prewarmed:
+                    self._prewarmed = await _prewarm_llm(
+                        self._provider, self._timeout_seconds
+                    )
+            if not self._prewarmed:
+                return ComponentHealth(
+                    "llm", healthy=False, required=True, detail="prewarm_failed"
+                )
+        return await _llm_health(self._provider, self._timeout_seconds)
+
+
+async def _llm_health(
+    provider: NineRouterLlmProvider,
+    timeout_seconds: float,
+) -> ComponentHealth:
+    try:
+        healthy = await provider.health(_llm_context("llm-health", timeout_seconds))
+    except Exception:
+        healthy = False
+    return ComponentHealth(
+        "llm",
         healthy=healthy,
         required=True,
         detail=None if healthy else "unreachable",

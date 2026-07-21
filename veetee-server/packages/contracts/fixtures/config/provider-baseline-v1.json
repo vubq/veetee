@@ -26,7 +26,7 @@
     "provider_id": "openai-compatible-9router",
     "api_style": "chat_completions_or_responses",
     "base_url_env": "VEETEE_9ROUTER_BASE_URL",
-    "model_ref": "cx/gpt-5.4-mini",
+    "model_ref": "cx/gpt-5.6-terra",
     "streaming": true,
     "structured_output": true,
     "tool_calling": true,

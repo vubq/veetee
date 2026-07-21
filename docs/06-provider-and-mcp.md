@@ -80,7 +80,7 @@ registry phải khai báo `streaming=false` để planner không hứa first-res
 ### LLM
 
 - `openai-compatible-9router`: baseline local/dev; instance hiện tại `v0.5.40`,
-  endpoint `http://127.0.0.1:20128/v1`, model smoke-test `cx/gpt-5.4-mini`.
+  endpoint `http://127.0.0.1:20128/v1`, default đã benchmark `cx/gpt-5.6-terra`.
   Endpoint/model/secret reference cấu hình trong Manager. Chỉ enable production sau
   conformance test cho streaming, structured output, tool calling, cancellation,
   concurrency và usage metadata. Voice profile mặc định dùng

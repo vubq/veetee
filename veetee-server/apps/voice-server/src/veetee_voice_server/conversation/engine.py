@@ -107,6 +107,16 @@ class ConversationEngine:
                 ),
                 context.child(self._policy.planner_seconds),
             )
+            logger.info(
+                "conversation_plan_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                action=plan.action.value,
+                dialogue_act=plan.dialogue_act.value,
+                response_required=plan.response_required,
+                has_tool=plan.tool_call is not None,
+                has_response_text=bool(plan.response_text),
+            )
             await self._emit(
                 context,
                 ConversationOutput(
@@ -151,12 +161,19 @@ class ConversationEngine:
             return
         if plan.action is PlanAction.END_SESSION:
             if plan.response_text:
-                await self._speak_once(plan.response_text, plan.locale, context)
+                await self._speak_planned_text(
+                    plan.response_text, plan.locale, context
+                )
             await self._arbiter.close_assistant("semantic_end")
             return
         if plan.action is PlanAction.ASK_CLARIFICATION:
             if plan.response_text:
-                await self._speak_once(plan.response_text, plan.locale, context)
+                await self._speak_planned_text(
+                    plan.response_text, plan.locale, context
+                )
+            return
+        if plan.action is PlanAction.RESPOND and plan.response_text:
+            await self._speak_planned_text(plan.response_text, plan.locale, context)
             return
 
         tool_result: Any | None = None
@@ -227,10 +244,32 @@ class ConversationEngine:
         self, text: str, locale: str, context: OperationContext
     ) -> None:
         speech = _SpeechLifecycle()
+        chunker = SentenceChunker(
+            min_characters=self._policy.sentence_min_characters,
+            abbreviations=self._policy.sentence_abbreviations,
+        )
         try:
-            await self._speak_text(text, locale, context, speech)
+            for sentence in chunker.push(text):
+                await self._speak_text(sentence, locale, context, speech)
+            remainder = chunker.flush()
+            if remainder:
+                await self._speak_text(remainder, locale, context, speech)
         finally:
             await self._finish_speech(context, speech)
+
+    async def _speak_planned_text(
+        self, text: str, locale: str, context: OperationContext
+    ) -> None:
+        await self._emit(
+            context,
+            ConversationOutput(
+                kind=OutputKind.TEXT_DELTA,
+                turn_id=context.turn_id,
+                generation=context.generation,
+                payload={"text": text},
+            ),
+        )
+        await self._speak_once(text, locale, context)
 
     async def _speak_text(
         self,

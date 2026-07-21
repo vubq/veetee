@@ -33,7 +33,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | ASR baseline | Sherpa-ONNX Zipformer Vietnamese 30M INT8 là primary; ChunkFormer-CTC-Large-Vie chỉ re-decode khi confidence/ổn định thấp hoặc policy yêu cầu chất lượng cao. Không chạy cả hai trên mọi utterance. |
 | TTS baseline | VieNeu-TTS v3 Turbo là primary `vi-VN`; phải probe streaming/batch và benchmark trước khi freeze capability. Cloud TTS không tự bật trong privacy profile local-only. |
 | VAD baseline | Silero VAD (`silero-local`) chạy server để speech/endpoint; không coi VAD là noise classifier hay semantic admission. |
-| LLM baseline | 9Router `v0.5.40` local, endpoint `/v1`, model smoke-test `cx/gpt-5.4-mini`; dùng như development/LAN adapter. Production vẫn phải giữ adapter thay thế (official API/self-hosted). ChatGPT Plus/Codex OAuth không được coi là OpenAI Platform API key. |
+| LLM baseline | 9Router `v0.5.40` local, endpoint `/v1`, model dev/LAN `cx/gpt-5.6-terra` sau benchmark trên host; production vẫn phải giữ adapter thay thế (official API/self-hosted). ChatGPT Plus/Codex OAuth không được coi là OpenAI Platform API key. |
 
 ## 2. Mặc định đề xuất để bắt đầu code
 
@@ -79,7 +79,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 3. Ghi exact repository/commit/runtime format/license của Zipformer, ChunkFormer, Silero và VieNeu.
 4. Xác nhận VieNeu streaming hay batch, voice/profile `vi-VN`, sample rate và output format.
 5. Chấp thuận bật ChunkFormer fallback ngay V1 hay chỉ sau benchmark Zipformer.
-6. Model smoke-test `cx/gpt-5.4-mini` đã chọn tạm với `reasoning_effort=none`; còn xác nhận context/chi phí/quota và model fallback nếu 9router có nhiều model. Không dùng credential phiên Codex trực tiếp.
+6. Model dev/LAN `cx/gpt-5.6-terra` dùng `reasoning_effort=none`; còn xác nhận context/chi phí/quota và model fallback trước production. Không dùng credential phiên Codex trực tiếp.
 7. Có cần voiceprint/target-speaker ngay V1 không; mặc định là không.
 8. Transcript có lưu không, retention bao lâu, có consent/opt-out thế nào.
 

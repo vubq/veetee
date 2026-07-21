@@ -51,6 +51,30 @@ async def test_planner_tolerates_unknown_model_dialogue_label() -> None:
     assert plan.dialogue_act is DialogueAct.ANSWER
 
 
+async def test_planner_normalizes_response_required_for_executable_actions() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return {
+            "action": "call_tool_then_respond",
+            "dialogue_act": "command",
+            "locale": "vi-VN",
+            "intent": "dynamic.tool",
+            "response_required": False,
+            "tool_call": {
+                "name": "self.audio_speaker.set_volume",
+                "arguments": {"volume": 55},
+            },
+        }
+
+    planner = JsonPlannerProvider(complete_json)
+    plan = await planner.plan(
+        Transcript("Hãy chỉnh âm lượng", "vi-VN"),
+        AdmissionDecision(AdmissionDisposition.ACCEPTED, 1.0, "test"),
+        context(),
+    )
+    assert plan.action is PlanAction.CALL_TOOL_THEN_RESPOND
+    assert plan.response_required is True
+
+
 async def test_opus_round_trip_20_ms_mono_frame() -> None:
     encoder = OpusEncoder(16_000)
     decoder = OpusDecoder(16_000)

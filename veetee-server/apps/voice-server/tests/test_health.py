@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from veetee_voice_server.app import _planner_system_prompt, create_app
+from veetee_voice_server.app import _LlmReadinessProbe, _planner_system_prompt, create_app
 from veetee_voice_server.config import Settings
 from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.tools import RegistryToolBroker
@@ -66,3 +66,29 @@ async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     prompt = _planner_system_prompt(profile, RegistryToolBroker())
     assert "available tool catalog: []" in prompt
     assert "never invent a tool name" in prompt
+
+
+async def test_llm_readiness_retries_a_failed_startup_prewarm() -> None:
+    class RecoveringLlm:
+        def __init__(self) -> None:
+            self.prewarm_calls = 0
+
+        async def prewarm(self, _: object) -> None:
+            self.prewarm_calls += 1
+            if self.prewarm_calls == 1:
+                raise RuntimeError("temporary failure")
+
+        async def health(self, _: object) -> bool:
+            return True
+
+    provider = RecoveringLlm()
+    probe = _LlmReadinessProbe(provider, 1.0, prewarmed=False)  # type: ignore[arg-type]
+
+    first = await probe()
+    second = await probe()
+
+    assert first == ComponentHealth(
+        "llm", healthy=False, required=True, detail="prewarm_failed"
+    )
+    assert second == ComponentHealth("llm", healthy=True, required=True)
+    assert provider.prewarm_calls == 2

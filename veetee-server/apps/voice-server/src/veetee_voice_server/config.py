@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("VEETEE_9ROUTER_API_KEY", "VEETEE_NINE_ROUTER_API_KEY"),
     )
     nine_router_model: str = Field(
-        default="cx/gpt-5.4-mini",
+        default="cx/gpt-5.6-terra",
         validation_alias=AliasChoices("VEETEE_9ROUTER_MODEL", "VEETEE_NINE_ROUTER_MODEL"),
     )
     nine_router_reasoning_effort: Literal["none", "low", "medium", "high"] = Field(
@@ -49,6 +49,9 @@ class Settings(BaseSettings):
             "VEETEE_9ROUTER_REASONING_EFFORT", "VEETEE_NINE_ROUTER_REASONING_EFFORT"
         ),
     )
+    llm_prewarm: bool = True
+    llm_prewarm_seconds: float = Field(default=12.0, gt=0.1, le=30.0)
+    planner_seconds: float = Field(default=8.0, gt=0.5, le=15.0)
 
     models_root: Path = Path("models")
     asr_threads: int = Field(default=2, ge=1, le=8)

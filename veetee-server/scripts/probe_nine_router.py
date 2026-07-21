@@ -94,7 +94,7 @@ async def probe_cancellation(
 async def main() -> None:
     provider = NineRouterLlmProvider(
         base_url=os.getenv("VEETEE_9ROUTER_BASE_URL", "http://127.0.0.1:20128/v1"),
-        model=os.getenv("VEETEE_9ROUTER_MODEL", "cx/gpt-5.4-mini"),
+        model=os.getenv("VEETEE_9ROUTER_MODEL", "cx/gpt-5.6-terra"),
         api_key=os.getenv("VEETEE_9ROUTER_API_KEY", ""),
         reasoning_effort=os.getenv("VEETEE_9ROUTER_REASONING_EFFORT", "none"),
     )

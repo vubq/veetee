@@ -51,7 +51,7 @@ async function mockManagerApi(page: Page): Promise<void> {
         id: "llm-1",
         kind: "llm",
         adapter: "openai-compatible-9router",
-        model: "cx/gpt-5.4-mini",
+        model: "cx/gpt-5.6-terra",
         baseUrl: "http://127.0.0.1:20128/v1",
         secretConfigured: true,
         enabled: true,
@@ -64,7 +64,7 @@ async function mockManagerApi(page: Page): Promise<void> {
           id: "llm-1",
           kind: "llm",
           adapter: "openai-compatible-9router",
-          model: "cx/gpt-5.4-mini",
+          model: "cx/gpt-5.6-terra",
           baseUrl: "http://127.0.0.1:20128/v1",
           secretConfigured: true,
           enabled: true,
@@ -98,7 +98,7 @@ test("logs in and renders API-backed control room", async ({ page }) => {
   await expect(page.locator(".release-hero")).toContainText("CHƯA CÓ ARTIFACT");
 
   await page.locator('[data-page-link="providers"]').first().click();
-  await expect(page.locator(".provider-table")).toContainText("cx/gpt-5.4-mini");
+  await expect(page.locator(".provider-table")).toContainText("cx/gpt-5.6-terra");
   await page.getByRole("button", { name: "Test" }).click();
   await expect(page.locator(".provider-row").nth(1)).toContainText("healthy");
 });

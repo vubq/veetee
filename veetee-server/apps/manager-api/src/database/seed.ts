@@ -75,7 +75,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
     [
       ProviderKind.LLM,
       "openai-compatible-9router",
-      "cx/gpt-5.4-mini",
+      "cx/gpt-5.6-terra",
       "http://127.0.0.1:20128/v1",
       false,
     ],
@@ -110,7 +110,7 @@ export function defaultAgentConfig(): Record<string, unknown> {
       closingGraceSeconds: 5,
       totalTurnSeconds: 30,
       admissionSeconds: 1,
-      plannerSeconds: 4,
+      plannerSeconds: 8,
       llmSeconds: 20,
       ttsSeconds: 10,
       mcpSeconds: 10,
@@ -135,7 +135,7 @@ export function agentSnapshot(
       {
         kind: "llm",
         adapter: "openai-compatible-9router",
-        model: "cx/gpt-5.4-mini",
+        model: "cx/gpt-5.6-terra",
         baseUrl: "http://127.0.0.1:20128/v1",
       },
       { kind: "tts", adapter: "vieneu-local", model: "vieneu-tts-v3-turbo" },

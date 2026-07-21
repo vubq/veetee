@@ -51,8 +51,23 @@ class NineRouterLlmProvider:
         )
         return response.is_success
 
+    async def prewarm(self, context: OperationContext) -> None:
+        result = await self.complete_json(
+            system_prompt='Return only a JSON object with {"ready":true}.',
+            user_prompt="Warm the configured model for a latency-sensitive voice session.",
+            context=context,
+        )
+        if result.get("ready") is not True:
+            raise NineRouterProviderError("9router prewarm returned an invalid response")
+
     async def complete_json(
-        self, *, system_prompt: str, user_prompt: str, context: OperationContext
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        context: OperationContext,
+        schema: Mapping[str, Any] | None = None,
+        schema_name: str = "veetee_return_json",
     ) -> dict[str, Any]:
         """Stream a structured call so planners do not wait for the full HTTP body."""
         context.checkpoint()
@@ -63,10 +78,29 @@ class NineRouterLlmProvider:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
             "reasoning_effort": self._reasoning_effort,
+            "temperature": 0,
         }
+        if schema is None:
+            payload["response_format"] = {"type": "json_object"}
+        else:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": schema_name,
+                        "description": "Return the requested structured object as arguments.",
+                        "parameters": dict(schema),
+                    },
+                }
+            ]
+            payload["tool_choice"] = {
+                "type": "function",
+                "function": {"name": schema_name},
+            }
         content_parts: list[str] = []
+        argument_parts: list[str] = []
+        collecting_arguments = False
         async with self._client.stream(
             "POST",
             f"{self._base_url}/chat/completions",
@@ -89,13 +123,17 @@ class NineRouterLlmProvider:
                     raise NineRouterProviderError(
                         "Invalid JSON in 9router structured SSE event"
                     ) from error
-                content_parts.extend(
-                    parsed.text
-                    for parsed in self._events_from_payload(event)
-                    if isinstance(parsed, LlmTextDelta)
-                )
+                for parsed_event in self._events_from_payload(event):
+                    if isinstance(parsed_event, LlmTextDelta):
+                        content_parts.append(parsed_event.text)
+                    elif isinstance(parsed_event, LlmToolCallFragment):
+                        if parsed_event.name is not None:
+                            collecting_arguments = parsed_event.name == schema_name
+                        if collecting_arguments and parsed_event.arguments_fragment:
+                            argument_parts.append(parsed_event.arguments_fragment)
+        raw_value = "".join(argument_parts or content_parts)
         try:
-            parsed = json.loads("".join(content_parts))
+            parsed = json.loads(raw_value)
         except json.JSONDecodeError as error:
             raise NineRouterProviderError(
                 "9router structured response was not valid JSON"
