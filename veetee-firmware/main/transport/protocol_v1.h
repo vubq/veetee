@@ -7,6 +7,7 @@ namespace veetee::transport {
 
 constexpr std::size_t kMaximumControlFrameBytes = 8192;
 constexpr std::size_t kMaximumSessionIdBytes = 64;
+constexpr std::size_t kMaximumOpusPacketBytes = 1500;
 
 enum class WakeSource : std::uint8_t {
     kButton,
@@ -15,6 +16,12 @@ enum class WakeSource : std::uint8_t {
 
 enum class ServerEventKind : std::uint8_t {
     kHello,
+    kListenStart,
+    kStt,
+    kLlm,
+    kTtsStart,
+    kTtsStop,
+    kAssistantSleep,
     kOther,
 };
 
@@ -39,6 +46,26 @@ public:
 
 private:
     char buffer_[kMaximumControlFrameBytes + 1] = {};
+    std::size_t received_ = 0;
+    std::size_t frame_length_ = 0;
+    std::size_t frame_offset_ = 0;
+    bool active_ = false;
+    bool awaiting_continuation_ = false;
+};
+
+class BinaryFrameAssembler {
+public:
+    AssembleResult Append(std::uint8_t opcode, bool fin,
+                          std::size_t payload_length,
+                          std::size_t payload_offset,
+                          const char* data, std::size_t data_length,
+                          const std::uint8_t** packet,
+                          std::size_t* packet_length);
+    void Reset();
+    [[nodiscard]] bool active() const { return active_; }
+
+private:
+    std::uint8_t buffer_[kMaximumOpusPacketBytes] = {};
     std::size_t received_ = 0;
     std::size_t frame_length_ = 0;
     std::size_t frame_offset_ = 0;

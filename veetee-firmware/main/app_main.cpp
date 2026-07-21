@@ -106,9 +106,36 @@ bool OnTransportEvent(
         case veetee::transport::WebSocketTransportEvent::kReady:
             return PostEvent(veetee::app::Event::kTransportConnected);
         case veetee::transport::WebSocketTransportEvent::kLost:
+            g_board.AbortPlayback();
             return PostEvent(veetee::app::Event::kTransportLost);
+        case veetee::transport::WebSocketTransportEvent::kListenStarted:
+            return PostEvent(veetee::app::Event::kAdmissionRejected);
+        case veetee::transport::WebSocketTransportEvent::kSttFinal:
+            return PostEvent(veetee::app::Event::kVadFinal);
+        case veetee::transport::WebSocketTransportEvent::kLlmStarted:
+            return PostEvent(veetee::app::Event::kAdmissionAccepted);
+        case veetee::transport::WebSocketTransportEvent::kTtsStarted:
+            g_board.BeginPlayback();
+            return PostEvent(veetee::app::Event::kTtsStarted);
+        case veetee::transport::WebSocketTransportEvent::kTtsStopped:
+            g_board.EndPlayback();
+            return true;
+        case veetee::transport::WebSocketTransportEvent::kAssistantSleep:
+            return PostEvent(veetee::app::Event::kAssistantSleepRequested);
     }
     return false;
+}
+
+bool OnDownlinkAudio(const std::uint8_t* packet, std::size_t length, void*) {
+    return g_board.QueueOpusPlayback(packet, length);
+}
+
+bool OnEncodedAudio(const std::uint8_t* packet, std::size_t length, void*) {
+    return g_transport.SendAudio(packet, length);
+}
+
+bool OnPlaybackFinished(void*) {
+    return PostEvent(veetee::app::Event::kTtsStopped);
 }
 
 void LogTransportError(const char* operation, esp_err_t error) {
@@ -251,9 +278,11 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
-    ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent, nullptr));
-    ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, nullptr));
-    ESP_ERROR_CHECK(g_board.StartDiagnostics());
+    ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,
+                                           &OnDownlinkAudio, nullptr));
+    ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, &OnEncodedAudio,
+                                       &OnPlaybackFinished, nullptr));
+    ESP_ERROR_CHECK(g_board.StartAudio());
 
     if (xTaskCreate(&RunApplication, "veetee_app", 6144, nullptr, 6, nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Unable to create application task");

@@ -35,13 +35,34 @@ export interface ListenEvent {
   mode?: InteractionMode;
   source?: WakeSource;
   text?: string;
+  reason?: string;
 }
 
 export interface AbortEvent {
   session_id: string;
   type: "abort";
   reason: string;
-  source?: "button" | "interrupt_profile" | "server";
+  source?: "button" | "wake_word" | "interrupt_profile" | "server";
+}
+
+export interface SttEvent {
+  session_id: string;
+  type: "stt";
+  text: string;
+}
+
+export interface TtsEvent {
+  session_id: string;
+  type: "tts";
+  state: "start" | "sentence_start" | "stop";
+  text?: string;
+}
+
+export interface LlmEvent {
+  session_id: string;
+  type: "llm";
+  emotion: string;
+  text?: string;
 }
 
 export interface SystemEvent {
@@ -58,6 +79,9 @@ export type WebSocketControlEvent =
   | ServerHello
   | ListenEvent
   | AbortEvent
+  | SttEvent
+  | TtsEvent
+  | LlmEvent
   | SystemEvent;
 
 export type AdmissionDisposition =

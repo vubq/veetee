@@ -121,13 +121,22 @@ async def test_stream_preserves_tool_call_fragments_for_the_tool_broker() -> Non
 
 async def test_structured_completion_parses_json_object() -> None:
     async def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
+        events = [
+            {"choices": [{"delta": {"content": '{"action":'}}]},
+            {"choices": [{"delta": {"content": '"respond",'}}]},
+            {"choices": [{"delta": {"content": '"intent":'}}]},
+            {
                 "choices": [
-                    {"message": {"content": '{"action":"respond","intent":"test"}'}}
+                    {"delta": {"content": '"test"}'}, "finish_reason": "stop"}
                 ]
             },
+        ]
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b"".join(
+                f"data: {json.dumps(event)}\n\n".encode() for event in events
+            ),
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))

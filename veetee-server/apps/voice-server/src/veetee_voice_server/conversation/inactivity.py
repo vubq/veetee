@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from time import monotonic
 
 from veetee_voice_server.conversation.arbiter import ConversationState, TurnArbiter
 from veetee_voice_server.conversation.types import WakeSource
@@ -28,6 +29,8 @@ class InactivityController:
         self._goodbye = goodbye
         self._lock = asyncio.Lock()
         self._timer: asyncio.Task[None] | None = None
+        self._deadline_at: float | None = None
+        self._deadline_reason: str | None = None
 
     async def assistant_opened(self, source: WakeSource) -> None:
         await self._cancel_timer()
@@ -36,6 +39,16 @@ class InactivityController:
 
     async def valid_user_activity(self) -> None:
         await self._cancel_timer()
+        self._deadline_at = None
+        self._deadline_reason = None
+
+    async def candidate_started(self) -> None:
+        """Pause timeout evaluation without treating raw speech as valid activity."""
+        await self._cancel_timer()
+
+    async def candidate_rejected(self) -> None:
+        if self._arbiter.snapshot.state is ConversationState.LISTENING:
+            await self._resume_deadline()
 
     async def turn_completed(self) -> None:
         if self._arbiter.snapshot.state is ConversationState.LISTENING:
@@ -46,14 +59,34 @@ class InactivityController:
         await self._arbiter.open_assistant(source)
         await self._arm(self._first_input_seconds, "first_input_timeout")
 
+    async def assistant_closed(self, reason: str) -> None:
+        await self._cancel_timer()
+        self._deadline_at = None
+        self._deadline_reason = None
+        await self._arbiter.close_assistant(reason)
+
     async def close(self) -> None:
         await self._cancel_timer()
+        self._deadline_at = None
+        self._deadline_reason = None
         await self._arbiter.close_assistant("controller_closed")
 
     async def _arm(self, delay: float, reason: str) -> None:
         if delay <= 0:
             raise ValueError("inactivity delay must be positive")
         await self._cancel_timer()
+        self._deadline_at = monotonic() + delay
+        self._deadline_reason = reason
+        async with self._lock:
+            self._timer = asyncio.create_task(self._run(delay, reason))
+
+    async def _resume_deadline(self) -> None:
+        deadline = self._deadline_at
+        reason = self._deadline_reason
+        if deadline is None or reason is None:
+            return
+        await self._cancel_timer()
+        delay = max(0.0, deadline - monotonic())
         async with self._lock:
             self._timer = asyncio.create_task(self._run(delay, reason))
 
@@ -62,6 +95,8 @@ class InactivityController:
             await asyncio.sleep(delay)
             if self._arbiter.snapshot.state is not ConversationState.LISTENING:
                 return
+            self._deadline_at = None
+            self._deadline_reason = None
             await self._arbiter.begin_closing()
             await self._goodbye(reason)
             await asyncio.sleep(self._closing_grace_seconds)

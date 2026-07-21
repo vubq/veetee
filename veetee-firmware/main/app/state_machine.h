@@ -41,6 +41,7 @@ enum class Event : std::uint8_t {
     kAdmissionRejected,
     kTtsStarted,
     kTtsStopped,
+    kAssistantSleepRequested,
     kInactivityTimeout,
     kGoodbyeComplete,
     kAbortComplete,

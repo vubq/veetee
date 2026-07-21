@@ -55,3 +55,28 @@ async def test_wake_during_closing_cancels_goodbye_close() -> None:
     assert arbiter.snapshot.state is ConversationState.LISTENING
     goodbye_release.set()
     await controller.close()
+
+
+async def test_rejected_candidate_resumes_original_timeout_deadline() -> None:
+    arbiter = TurnArbiter("session-1")
+    goodbye = asyncio.Event()
+
+    async def on_goodbye(_: str) -> None:
+        goodbye.set()
+
+    controller = InactivityController(
+        arbiter=arbiter,
+        first_input_seconds=0.03,
+        between_turns_seconds=1,
+        closing_grace_seconds=0.01,
+        goodbye=on_goodbye,
+    )
+    await controller.assistant_opened(WakeSource.BUTTON)
+    await asyncio.sleep(0.015)
+    await controller.candidate_started()
+    await asyncio.sleep(0.025)
+    assert not goodbye.is_set()
+
+    await controller.candidate_rejected()
+    await asyncio.wait_for(goodbye.wait(), timeout=0.02)
+    await controller.close()

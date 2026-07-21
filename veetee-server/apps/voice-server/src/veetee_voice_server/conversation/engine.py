@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from veetee_voice_server.conversation.arbiter import StaleTurnError, TurnArbiter
@@ -32,6 +33,11 @@ from veetee_voice_server.providers.contracts import (
 from veetee_voice_server.transport.sink import ConversationSink
 
 
+@dataclass(slots=True)
+class _SpeechLifecycle:
+    started: bool = False
+
+
 class ConversationEngine:
     def __init__(
         self,
@@ -56,7 +62,9 @@ class ConversationEngine:
         self._policy = policy or ConversationPolicy()
         self._system_prompt = system_prompt
 
-    async def handle_transcript(self, transcript: Transcript) -> None:
+    async def handle_transcript(
+        self, transcript: Transcript
+    ) -> AdmissionDisposition | None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
         try:
             decision = await await_operation(
@@ -83,11 +91,11 @@ class ConversationEngine:
                 AdmissionDisposition.UNCLEAR,
             }:
                 await self._arbiter.complete_turn(context)
-                return
+                return decision.disposition
             if decision.disposition is AdmissionDisposition.INTERRUPT:
                 receipt = await self._arbiter.abort("semantic_interrupt")
                 await self._arbiter.finish_cancellation(receipt)
-                return
+                return decision.disposition
 
             plan = await await_operation(
                 self._planner.plan(
@@ -109,12 +117,15 @@ class ConversationEngine:
                 ),
             )
             await self._execute_plan(transcript, plan, context)
+            return decision.disposition
         except (TurnCancelledError, StaleTurnError):
-            return
+            return None
         except OperationDeadlineExceededError as error:
             await self._emit_if_current_error(context, "provider_deadline", str(error))
+            return None
         except Exception as error:
             await self._emit_if_current_error(context, "conversation_failed", type(error).__name__)
+            return None
         finally:
             await self._arbiter.complete_turn(context)
 
@@ -125,12 +136,12 @@ class ConversationEngine:
             return
         if plan.action is PlanAction.END_SESSION:
             if plan.response_text:
-                await self._speak_text(plan.response_text, plan.locale, context)
+                await self._speak_once(plan.response_text, plan.locale, context)
             await self._arbiter.close_assistant("semantic_end")
             return
         if plan.action is PlanAction.ASK_CLARIFICATION:
             if plan.response_text:
-                await self._speak_text(plan.response_text, plan.locale, context)
+                await self._speak_once(plan.response_text, plan.locale, context)
             return
 
         tool_result: Any | None = None
@@ -163,37 +174,71 @@ class ConversationEngine:
 
     async def _stream_response(self, request: LlmRequest, context: OperationContext) -> None:
         llm_context = context.child(self._policy.llm_seconds)
+        speech = _SpeechLifecycle()
         chunker = SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
             abbreviations=self._policy.sentence_abbreviations,
         )
-        async for event in iterate_operation(self._llm.stream(request, llm_context), llm_context):
-            if not isinstance(event, LlmTextDelta):
-                # Planner-owned tool calls are handled before this prose stream in MVP.
-                continue
-            await self._emit(
-                context,
-                ConversationOutput(
-                    kind=OutputKind.TEXT_DELTA,
-                    turn_id=context.turn_id,
-                    generation=context.generation,
-                    payload={"text": event.text},
-                ),
-            )
-            for sentence in chunker.push(event.text):
-                await self._speak_text(sentence, request.plan.locale, context)
+        try:
+            async for event in iterate_operation(
+                self._llm.stream(request, llm_context), llm_context
+            ):
+                if not isinstance(event, LlmTextDelta):
+                    # Planner-owned tool calls are handled before this prose stream in MVP.
+                    continue
+                await self._emit(
+                    context,
+                    ConversationOutput(
+                        kind=OutputKind.TEXT_DELTA,
+                        turn_id=context.turn_id,
+                        generation=context.generation,
+                        payload={"text": event.text},
+                    ),
+                )
+                for sentence in chunker.push(event.text):
+                    await self._speak_text(
+                        sentence, request.plan.locale, context, speech
+                    )
 
-        remainder = chunker.flush()
-        if remainder:
-            await self._speak_text(remainder, request.plan.locale, context)
+            remainder = chunker.flush()
+            if remainder:
+                await self._speak_text(
+                    remainder, request.plan.locale, context, speech
+                )
+        finally:
+            await self._finish_speech(context, speech)
 
-    async def _speak_text(self, text: str, locale: str, context: OperationContext) -> None:
-        if self._arbiter.snapshot.state.value == "thinking":
-            await self._arbiter.mark_speaking(context)
+    async def _speak_once(
+        self, text: str, locale: str, context: OperationContext
+    ) -> None:
+        speech = _SpeechLifecycle()
+        try:
+            await self._speak_text(text, locale, context, speech)
+        finally:
+            await self._finish_speech(context, speech)
+
+    async def _speak_text(
+        self,
+        text: str,
+        locale: str,
+        context: OperationContext,
+        speech: _SpeechLifecycle,
+    ) -> None:
         tts_context = context.child(self._policy.tts_seconds)
         async for audio in iterate_operation(
             self._tts.synthesize(text, locale, tts_context), tts_context
         ):
+            if not speech.started:
+                await self._arbiter.mark_speaking(context)
+                await self._emit(
+                    context,
+                    ConversationOutput(
+                        kind=OutputKind.TTS_START,
+                        turn_id=context.turn_id,
+                        generation=context.generation,
+                    ),
+                )
+                speech.started = True
             await self._emit(
                 context,
                 ConversationOutput(
@@ -204,6 +249,20 @@ class ConversationEngine:
                     audio=audio,
                 ),
             )
+
+    async def _finish_speech(
+        self, context: OperationContext, speech: _SpeechLifecycle
+    ) -> None:
+        if not speech.started or not self._arbiter.is_current(context):
+            return
+        await self._emit(
+            context,
+            ConversationOutput(
+                kind=OutputKind.TTS_STOP,
+                turn_id=context.turn_id,
+                generation=context.generation,
+            ),
+        )
 
     async def _emit(self, context: OperationContext, output: ConversationOutput) -> None:
         self._arbiter.require_current(context)

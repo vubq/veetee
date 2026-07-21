@@ -54,33 +54,52 @@ class NineRouterLlmProvider:
     async def complete_json(
         self, *, system_prompt: str, user_prompt: str, context: OperationContext
     ) -> dict[str, Any]:
-        """Run a short structured call for admission/planning without streaming prose."""
+        """Stream a structured call so planners do not wait for the full HTTP body."""
         context.checkpoint()
-        response = await self._client.post(
+        payload = {
+            "model": self._model,
+            "stream": True,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "reasoning_effort": self._reasoning_effort,
+        }
+        content_parts: list[str] = []
+        async with self._client.stream(
+            "POST",
             f"{self._base_url}/chat/completions",
             headers=self._headers(),
-            json={
-                "model": self._model,
-                "stream": False,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "reasoning_effort": self._reasoning_effort,
-            },
+            json=payload,
             timeout=context.remaining_seconds,
-        )
-        if response.is_error:
-            detail = (await response.aread())[:500].decode(errors="replace")
-            raise NineRouterProviderError(f"9router returned HTTP {response.status_code}: {detail}")
-        body = response.json()
-        content = body["choices"][0]["message"]["content"]
-        if isinstance(content, list):
-            content = "".join(
-                str(item.get("text", "")) for item in content if isinstance(item, Mapping)
-            )
-        parsed = json.loads(str(content))
+        ) as response:
+            if response.is_error:
+                detail = (await response.aread())[:500].decode(errors="replace")
+                raise NineRouterProviderError(
+                    f"9router returned HTTP {response.status_code}: {detail}"
+                )
+            async for data in self._sse_data(response):
+                context.checkpoint()
+                if data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as error:
+                    raise NineRouterProviderError(
+                        "Invalid JSON in 9router structured SSE event"
+                    ) from error
+                content_parts.extend(
+                    parsed.text
+                    for parsed in self._events_from_payload(event)
+                    if isinstance(parsed, LlmTextDelta)
+                )
+        try:
+            parsed = json.loads("".join(content_parts))
+        except json.JSONDecodeError as error:
+            raise NineRouterProviderError(
+                "9router structured response was not valid JSON"
+            ) from error
         if not isinstance(parsed, dict):
             raise NineRouterProviderError("9router structured response was not an object")
         context.checkpoint()

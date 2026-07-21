@@ -40,7 +40,7 @@ class SessionProfile:
             agent_id=None,
             config_version=0,
             locale=settings.default_locale,
-            persona="",
+            persona=settings.default_persona,
             goodbye_text=settings.goodbye_text,
             policy=ConversationPolicy(
                 first_input_seconds=settings.first_input_seconds,

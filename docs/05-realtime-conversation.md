@@ -166,6 +166,9 @@ Quy tắc:
 - Khi `abort`, tăng generation counter; frame/result cũ bị drop dù provider không cancel kịp.
 - Tool call phải có timeout riêng và không được giữ audio sender.
 - `tts.stop` chỉ phát sau khi audio queue drain hoặc khi explicit abort.
+- Server prebuffer tối đa ba frame 60 ms; sau lúc client gửi abort có thể còn hai
+  frame đã nằm trên wire, nhưng playback generation local phải drop chúng và đưa
+  loa về im lặng trong budget 250 ms mà không đóng session.
 
 `TurnArbiter` chỉ quản lý lifecycle/cancellation. Nó không quyết định một âm thanh có phải câu hỏi hay không; việc đó thuộc `ConversationGate`/semantic planner.
 
@@ -245,6 +248,17 @@ Timeout không gọi LLM chỉ để tạo câu tạm biệt. Server lấy local
 Timeout các provider và timeout không có user activity là hai loại khác nhau; không được dùng một timer duy nhất cho cả hai.
 
 Chỉ user activity hợp lệ mới reset inactivity timer. Raw energy, VAD false positive, input bị admission reject hoặc self-echo không được giữ session sống mãi. Một clarification hợp lệ được reset timer tối đa theo `maxClarificationAttempts`; sau đó hệ thống quay lại listening hoặc kết thúc lịch sự theo policy.
+
+VAD session giữ pre-roll PCM có giới hạn để không cắt phụ âm đầu khi detector đổi
+từ silence sang speech. Baseline là 320 ms qua `VEETEE_VAD_PRE_ROLL_MS`; đây là
+audio boundary policy có safe range, không phải rule semantic theo tiếng ồn cụ thể.
+Khi finalize utterance, VAD buffer được reset trước lượt tiếp theo để audio cũ không
+rò sang ASR request mới.
+
+Trong V1 chưa AEC, firmware ngừng uplink capture khi đã chuyển khỏi `LISTENING`.
+Button vẫn có thể abort ngay cả lúc server đang chạy ASR nhưng firmware chưa nhận
+transcript: click ở `LISTENING` được hiểu là cancel pending turn rồi quay lại nghe,
+không đóng assistant gate. Long press mới là thao tác tắt gate.
 
 ## 7. Barge-in và AEC
 

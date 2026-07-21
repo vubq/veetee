@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -139,12 +140,68 @@ void TestFragmentAssembly() {
            "oversized control frame is rejected");
 }
 
+void TestRuntimeEventsAndBinaryAssembly() {
+    using namespace veetee::transport;
+    constexpr char kSession[] = "session-1";
+    struct EventFixture {
+        const char* json;
+        ServerEventKind kind;
+    };
+    constexpr EventFixture events[] = {
+        {R"({"session_id":"session-1","type":"listen","state":"start"})",
+         ServerEventKind::kListenStart},
+        {R"({"session_id":"session-1","type":"stt","text":"xin chao"})",
+         ServerEventKind::kStt},
+        {R"({"session_id":"session-1","type":"llm","emotion":"thinking"})",
+         ServerEventKind::kLlm},
+        {R"({"session_id":"session-1","type":"llm","emotion":"neutral","text":"xin"})",
+         ServerEventKind::kOther},
+        {R"({"session_id":"session-1","type":"tts","state":"start"})",
+         ServerEventKind::kTtsStart},
+        {R"({"session_id":"session-1","type":"tts","state":"stop"})",
+         ServerEventKind::kTtsStop},
+        {R"({"session_id":"session-1","type":"system","command":"assistant_sleep"})",
+         ServerEventKind::kAssistantSleep},
+    };
+    for (const auto& fixture : events) {
+        ServerEvent event{};
+        Expect(ParseServerEvent(fixture.json, std::strlen(fixture.json), &event),
+               "runtime server event parses");
+        Expect(event.kind == fixture.kind, "runtime server event kind");
+        Expect(std::string(event.session_id) == kSession,
+               "runtime server event session");
+    }
+
+    BinaryFrameAssembler assembler;
+    const std::uint8_t* packet = nullptr;
+    std::size_t packet_length = 0;
+    const std::string opus = "bounded-opus-packet";
+    Expect(assembler.Append(0x2, true, opus.size(), 0, opus.data(), 5,
+                            &packet, &packet_length) ==
+               AssembleResult::kIncomplete,
+           "first binary TCP chunk is incomplete");
+    Expect(assembler.Append(0x2, true, opus.size(), 5, opus.data() + 5,
+                            opus.size() - 5, &packet, &packet_length) ==
+               AssembleResult::kComplete,
+           "second binary TCP chunk completes packet");
+    Expect(packet_length == opus.size() &&
+               std::memcmp(packet, opus.data(), opus.size()) == 0,
+           "assembled binary packet is exact");
+
+    std::string oversized(kMaximumOpusPacketBytes + 1, 'x');
+    Expect(assembler.Append(0x2, true, oversized.size(), 0, oversized.data(),
+                            oversized.size(), &packet, &packet_length) ==
+               AssembleResult::kError,
+           "oversized Opus packet is rejected");
+}
+
 }  // namespace
 
 int main() {
     TestContractBuilders();
     TestServerHelloParser();
     TestFragmentAssembly();
+    TestRuntimeEventsAndBinaryAssembly();
     std::cout << "protocol_v1_test: passed\n";
     return 0;
 }

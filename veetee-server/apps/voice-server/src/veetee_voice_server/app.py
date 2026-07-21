@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -44,6 +45,22 @@ class ReadyResponse(BaseModel):
     components: list[dict[str, object]]
 
 
+def _planner_system_prompt(profile: SessionProfile, tools: RegistryToolBroker) -> str:
+    catalog = json.dumps(tools.list_tools(), ensure_ascii=False, separators=(",", ":"))
+    return (
+        "Return one JSON object. action must be one of respond, "
+        "call_tool_then_respond, ask_clarification, execute_pending_tool, "
+        "cancel_pending_tool, end_session, noop. dialogue_act must be one of "
+        "question, command, follow_up, answer, confirmation, denial, correction, "
+        "clarification_answer, social, interrupt, end. Include locale, intent, "
+        "response_required, response_text and optional tool_call {name, arguments}. "
+        "Set response_text only for clarification or end_session. Only choose a tool "
+        f"action when its exact name exists in this available tool catalog: {catalog}. "
+        "When the catalog is empty, never invent a tool name."
+        f"\n\nAgent context:\n{profile.persona}"
+    ).strip()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings)
@@ -73,21 +90,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         asr_tts = runtime.get("tts")
         if not isinstance(asr_tts, VieNeuTtsProvider):
             raise RuntimeError("voice runtime is not ready")
+        tool_broker = RegistryToolBroker()
+        planner_prompt = _planner_system_prompt(profile, tool_broker)
 
         async def planner_json(
             payload: dict[str, object], context: OperationContext
         ) -> dict[str, Any]:
             return await asr_llm.complete_json(
-                system_prompt=(
-                    f"{profile.persona}\n\n"
-                    "Return one JSON object. action must be one of respond, "
-                    "call_tool_then_respond, ask_clarification, execute_pending_tool, "
-                    "cancel_pending_tool, end_session, noop. dialogue_act must be one of "
-                    "question, command, follow_up, answer, confirmation, denial, correction, "
-                    "clarification_answer, social, interrupt, end. Include locale, intent, "
-                    "response_required, response_text and optional tool_call {name, arguments}. "
-                    "Set response_text only for clarification or end_session."
-                ).strip(),
+                system_prompt=planner_prompt,
                 user_prompt=str(payload["transcript"]),
                 context=context,
             )
@@ -99,7 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             planner=planner,
             llm=asr_llm,
             tts=asr_tts,
-            tools=RegistryToolBroker(),
+            tools=tool_broker,
             sink=sink,
             policy=profile.policy,
             system_prompt=profile.persona or None,

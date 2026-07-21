@@ -89,7 +89,9 @@ class OutputKind(StrEnum):
     ADMISSION = "admission"
     PLAN = "plan"
     TEXT_DELTA = "text_delta"
+    TTS_START = "tts_start"
     AUDIO = "audio"
+    TTS_STOP = "tts_stop"
     CONTROL = "control"
     ERROR = "error"
 

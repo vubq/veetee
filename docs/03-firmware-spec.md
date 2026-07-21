@@ -269,7 +269,17 @@ Partition strategy ưu tiên của V1 là executable A/B và resource A/B vì đ
 - Speaker decode: 24 kHz, mono.
 - Compatibility frame: Opus 60 ms.
 - Low-latency profile sau khi có fixture: 20 ms hoặc 40 ms, vẫn dùng field `frame_duration` trong hello.
-- Queue mọi frame có deadline; drop có metric thay vì block vô hạn.
+- Chỉ một capture task được đọc I2S RX. Diagnostics dùng cùng task; không tạo một
+  reader thứ hai tranh DMA với production capture.
+- Capture PCM -> Opus chỉ mở ở `LISTENING`. Trước khi AEC pass, capture hội thoại
+  dừng trong `evaluating/thinking/speaking`; button/local interrupt detector vẫn là
+  đường abort ưu tiên.
+- Uplink queue bounded và ưu tiên control: khi đầy, drop frame mic cũ nhất để giữ
+  realtime. Downlink queue overflow làm session fail rõ ràng thay vì phát stream đã
+  mất packet.
+- `tts:start`, binary Opus và `tts:stop` phải được xử lý theo đúng thứ tự. Firmware
+  chỉ báo `tts stopped` cho state machine sau khi playback queue drain, không phải
+  ngay khi nhận JSON `tts:stop`.
 - `abort` phải idempotent và hoàn tất trong mục tiêu <100 ms ở local device.
 - Khi local abort, firmware đặt `accept_tts_audio=false`, clear decoder/playback queue và chỉ nhận binary TTS lại sau `tts:start` của generation mới. Raw Opus V1 không mang `turn_id`, nên quy tắc này là bắt buộc để frame cũ đang nằm trong socket không phát lại.
 

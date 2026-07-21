@@ -144,6 +144,15 @@ async def test_auto_conversation_replies_without_a_second_button_press() -> None
     assert llm.calls == 1
     assert tts.calls
     assert any(output.kind is OutputKind.AUDIO for output in sink.outputs)
+    assert [output.kind for output in sink.outputs].count(OutputKind.TTS_START) == 1
+    assert [output.kind for output in sink.outputs].count(OutputKind.TTS_STOP) == 1
+    assert next(
+        index for index, output in enumerate(sink.outputs)
+        if output.kind is OutputKind.TTS_START
+    ) < next(
+        index for index, output in enumerate(sink.outputs)
+        if output.kind is OutputKind.AUDIO
+    )
     assert arbiter.snapshot.state is ConversationState.LISTENING
 
 
@@ -186,4 +195,8 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
 
     assert tts.calls == []
     assert not any(output.kind is OutputKind.AUDIO for output in sink.outputs)
+    assert not any(
+        output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP}
+        for output in sink.outputs
+    )
     assert arbiter.snapshot.state is ConversationState.LISTENING

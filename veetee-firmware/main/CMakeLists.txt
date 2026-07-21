@@ -31,6 +31,7 @@ idf_component_register(
         esp_psram
         esp_timer
         esp_wifi
+        esp_audio_codec
         esp_websocket_client
         mbedtls
         nvs_flash

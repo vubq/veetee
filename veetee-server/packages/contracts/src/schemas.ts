@@ -462,6 +462,38 @@ export const webSocketEventSchema = {
     {
       ...sessionEvent,
       additionalProperties: false,
+      required: ["session_id", "type", "text"],
+      properties: {
+        session_id: sessionId,
+        type: { const: "stt" },
+        text: { type: "string" },
+      },
+    },
+    {
+      ...sessionEvent,
+      additionalProperties: false,
+      required: ["session_id", "type", "state"],
+      properties: {
+        session_id: sessionId,
+        type: { const: "tts" },
+        state: { enum: ["start", "sentence_start", "stop"] },
+        text: { type: "string" },
+      },
+    },
+    {
+      ...sessionEvent,
+      additionalProperties: false,
+      required: ["session_id", "type", "emotion"],
+      properties: {
+        session_id: sessionId,
+        type: { const: "llm" },
+        emotion: id,
+        text: { type: "string" },
+      },
+    },
+    {
+      ...sessionEvent,
+      additionalProperties: false,
       required: ["session_id", "type"],
       properties: {
         session_id: sessionId,

@@ -51,12 +51,13 @@ class Settings(BaseSettings):
     )
 
     models_root: Path = Path("models")
-    asr_threads: int = Field(default=4, ge=1, le=8)
-    tts_threads: int = Field(default=4, ge=1, le=8)
+    asr_threads: int = Field(default=2, ge=1, le=8)
+    tts_threads: int = Field(default=6, ge=1, le=8)
     tts_voice: str = "Ngọc Linh"
     tts_output_sample_rate: int = Field(default=24_000, ge=16_000, le=48_000)
     tts_apply_watermark: bool = True
     default_locale: str = "vi-VN"
+    default_persona: str = ""
     websocket_path: str = "/xiaozhi/v1/"
     input_sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
     input_frame_duration_ms: Literal[20, 40, 60] = 60
@@ -67,6 +68,7 @@ class Settings(BaseSettings):
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     vad_release_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     vad_min_silence_ms: int = Field(default=400, ge=80, le=2_000)
+    vad_pre_roll_ms: int = Field(default=320, ge=0, le=1_000)
     max_utterance_seconds: float = Field(default=20.0, gt=0.1, le=60.0)
     first_input_seconds: float = Field(default=15.0, gt=0.1, le=300.0)
     between_turns_seconds: float = Field(default=30.0, gt=0.1, le=600.0)

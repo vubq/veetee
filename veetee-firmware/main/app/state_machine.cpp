@@ -89,7 +89,8 @@ TransitionResult StateMachine::Handle(Event event) {
                 assistant_gate_open_ = true;
                 state_ = State::kConnecting;
                 accepted = true;
-            } else if (state_ == State::kEvaluating || state_ == State::kThinking ||
+            } else if (state_ == State::kListening ||
+                       state_ == State::kEvaluating || state_ == State::kThinking ||
                        state_ == State::kSpeaking || state_ == State::kClosing) {
                 BeginAbort();
                 accepted = true;
@@ -115,7 +116,11 @@ TransitionResult StateMachine::Handle(Event event) {
                 assistant_gate_open_ = true;
                 state_ = State::kConnecting;
                 accepted = true;
-            } else if (state_ == State::kClosing) {
+            } else if (state_ == State::kListening ||
+                       state_ == State::kEvaluating ||
+                       state_ == State::kThinking ||
+                       state_ == State::kSpeaking ||
+                       state_ == State::kClosing) {
                 assistant_gate_open_ = true;
                 BeginAbort();
                 accepted = true;
@@ -166,14 +171,15 @@ TransitionResult StateMachine::Handle(Event event) {
             break;
 
         case Event::kAdmissionRejected:
-            if (state_ == State::kEvaluating) {
+            if (state_ == State::kEvaluating || state_ == State::kThinking) {
                 state_ = State::kListening;
                 accepted = true;
             }
             break;
 
         case Event::kTtsStarted:
-            if (state_ == State::kThinking) {
+            if (state_ == State::kListening || state_ == State::kEvaluating ||
+                state_ == State::kThinking) {
                 state_ = State::kSpeaking;
                 accepted = true;
             }
@@ -182,6 +188,28 @@ TransitionResult StateMachine::Handle(Event event) {
         case Event::kTtsStopped:
             if (state_ == State::kSpeaking) {
                 state_ = assistant_gate_open_ ? State::kListening : State::kIdle;
+                accepted = true;
+            } else if (state_ == State::kClosing) {
+                assistant_gate_open_ = false;
+                state_ = State::kIdle;
+                accepted = true;
+            }
+            break;
+
+        case Event::kAssistantSleepRequested:
+            if (state_ == State::kSpeaking) {
+                assistant_gate_open_ = false;
+                state_ = State::kClosing;
+                accepted = true;
+            } else if (state_ == State::kListening ||
+                       state_ == State::kEvaluating ||
+                       state_ == State::kThinking ||
+                       state_ == State::kClosing) {
+                if (state_ == State::kEvaluating || state_ == State::kThinking) {
+                    ++cancellation_generation_;
+                }
+                assistant_gate_open_ = false;
+                state_ = State::kIdle;
                 accepted = true;
             }
             break;
@@ -268,6 +296,7 @@ const char* ToString(Event event) {
         case Event::kAdmissionRejected: return "admission_rejected";
         case Event::kTtsStarted: return "tts_started";
         case Event::kTtsStopped: return "tts_stopped";
+        case Event::kAssistantSleepRequested: return "assistant_sleep_requested";
         case Event::kInactivityTimeout: return "inactivity_timeout";
         case Event::kGoodbyeComplete: return "goodbye_complete";
         case Event::kAbortComplete: return "abort_complete";

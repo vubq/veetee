@@ -68,7 +68,11 @@ export const fixtureSchemaIds = {
   "ws/listen-start-button-auto.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/listen-start-manual.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/listen-start-wake-auto.json": "https://schemas.veetee.local/ws/control-event-v1.json",
+  "ws/llm-thinking.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/server-hello-v1.json": "https://schemas.veetee.local/ws/control-event-v1.json",
+  "ws/stt-final-vietnamese.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/system-assistant-sleep-timeout.json": "https://schemas.veetee.local/ws/control-event-v1.json",
   "ws/system-config-changed.json": "https://schemas.veetee.local/ws/control-event-v1.json",
+  "ws/tts-start.json": "https://schemas.veetee.local/ws/control-event-v1.json",
+  "ws/tts-stop.json": "https://schemas.veetee.local/ws/control-event-v1.json",
 } as const satisfies Record<string, SchemaId>;

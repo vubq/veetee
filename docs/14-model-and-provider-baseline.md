@@ -76,6 +76,13 @@ Tài liệu/repository chính thức của project:
 | `POST /v1/responses` | `200`, `status=completed`, output/usage hợp lệ |
 | Model capability | `cx/gpt-5.4-mini` báo `tools=true`, `reasoning=true`, `contextWindow=400000` |
 
+Probe bằng chính `NineRouterLlmProvider` trên loopback sau khi chuyển structured
+output sang SSE cho kết quả warm smoke: health khoảng 9--11 ms, JSON planner khoảng
+1.25 s, prose stream khoảng 1.23--1.50 s và adapter cancellation khoảng 0.01--0.03
+ms. `/v1/models` chỉ là catalog: `cx/gpt-5.3-codex-spark` xuất hiện nhưng upstream
+ChatGPT account hiện trả `400 not supported`, nên Manager health phải probe từng
+binding thực tế thay vì coi model list là bằng chứng model dùng được.
+
 README/source của 9Router cũng xác nhận `/v1/chat/completions`, `/v1/models`, SSE,
 API key và `REQUIRE_API_KEY`. Source có route `/v1/responses` và disconnect-aware
 stream/AbortController. Tuy nhiên stream thực tế vừa kiểm tra kết thúc bằng terminal
@@ -241,8 +248,9 @@ không giả định “Turbo” tự động có streaming. Adapter phải có 
 sample-rate/format rõ ràng.
 
 Đã benchmark trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB; chưa có
-CUDA toolkit): VieNeu ONNX INT8 có first audio khoảng 430--560 ms và RTF khoảng
-0.99--1.21 khi chạy 4 threads; Zipformer INT8 có RTF khoảng 0.018--0.030. VieNeu
+CUDA toolkit): median ba lượt có watermark cho VieNeu ONNX INT8 đạt first audio
+khoảng 304--347 ms và RTF 0.745--0.803 ở 6 threads; Zipformer INT8 decode 1.55
+giây audio trong 31--37 ms ở 2 threads. VieNeu
 native C++ CPU đạt RTF khoảng 0.75 cho batch hoàn chỉnh nhưng C ABI hiện chưa có
 stream callback/cancellation. Vì vậy ONNX streaming vẫn là primary V1; native chỉ
 là benchmark/opt-in worker cho tới khi bổ sung API streaming tương đương. Chi tiết

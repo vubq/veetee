@@ -77,6 +77,26 @@ class McpEvent(StrictModel):
 ClientEvent = ListenEvent | AbortEvent | SystemEvent | McpEvent
 
 
+class SttEvent(StrictModel):
+    session_id: SessionId
+    type: Literal["stt"] = "stt"
+    text: str
+
+
+class TtsEvent(StrictModel):
+    session_id: SessionId
+    type: Literal["tts"] = "tts"
+    state: Literal["start", "sentence_start", "stop"]
+    text: str | None = None
+
+
+class LlmEvent(StrictModel):
+    session_id: SessionId
+    type: Literal["llm"] = "llm"
+    emotion: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    text: str | None = None
+
+
 def parse_device_hello(
     raw: str,
     *,
@@ -132,6 +152,49 @@ def server_hello_payload(
             "frame_duration": frame_duration,
         },
     }
+
+
+def listen_started_payload(
+    session_id: str, *, source: Literal["button", "wake_word"] | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "session_id": session_id,
+        "type": "listen",
+        "state": "start",
+    }
+    if source is not None:
+        payload["source"] = source
+    return ListenEvent.model_validate(payload).model_dump(exclude_none=True)
+
+
+def stt_payload(session_id: str, text: str) -> dict[str, Any]:
+    return SttEvent(session_id=session_id, text=text).model_dump(exclude_none=True)
+
+
+def tts_payload(
+    session_id: str,
+    state: Literal["start", "sentence_start", "stop"],
+    *,
+    text: str | None = None,
+) -> dict[str, Any]:
+    return TtsEvent(session_id=session_id, state=state, text=text).model_dump(exclude_none=True)
+
+
+def llm_payload(
+    session_id: str, emotion: str, *, text: str | None = None
+) -> dict[str, Any]:
+    return LlmEvent(session_id=session_id, emotion=emotion, text=text).model_dump(
+        exclude_none=True
+    )
+
+
+def assistant_sleep_payload(session_id: str, reason: str) -> dict[str, Any]:
+    return SystemEvent(
+        session_id=session_id,
+        type="system",
+        command="assistant_sleep",
+        reason=reason,
+    ).model_dump(exclude_none=True)
 
 
 def _json_object(raw: str) -> dict[str, Any]:

@@ -22,9 +22,9 @@ uses them.
 | Stage | Runtime | Profile | Why |
 | --- | --- | --- | --- |
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
-| ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 4 threads | very low RTF and suitable for final/streaming decode |
+| ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 4 threads, streaming codec | first audio is available before the utterance finishes and cancellation can stop the stream |
+| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 6 threads, streaming codec | first audio is available before the utterance finishes and cancellation can stop the stream |
 | TTS benchmark option | VieNeu-TTS.cpp native CPU | llama.cpp native SIMD + ONNX MOSS codec | faster complete synthesis on this host, but the current C ABI is batch-only |
 
 The default TTS remains the ONNX path even though the native benchmark is faster
@@ -43,7 +43,7 @@ not a single run as an absolute promise.
 
 | Model | Audio | Warm decode | RTF | Output |
 | --- | ---: | ---: | ---: | --- |
-| Zipformer Vietnamese 30M INT8 | 1.55 s | about 81 ms | 0.018--0.030 | `ÂM LƯỢNG TV GIẢM` |
+| Zipformer Vietnamese 30M INT8 | 1.55 s | 31--37 ms at 2 threads | 0.020--0.024 | `ÂM LƯỢNG TV GIẢM` |
 
 This is comfortably below the V1 ASR-final latency budget. Keep the recognizer
 resident and do not load ChunkFormer on the normal path.
@@ -52,7 +52,7 @@ resident and do not load ChunkFormer on the normal path.
 
 | Backend | Threads | First audio | Complete synthesis | Audio | RTF |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| VieNeu ONNX INT8 | 4 | 430--560 ms | about 3.0--3.7 s | 2.8--3.3 s | about 0.99--1.21 |
+| VieNeu ONNX INT8 | 6 | 304--347 ms | 2.28--2.44 s | 3.20--3.28 s | 0.745--0.803 |
 | VieNeu native C++ CPU | 4 | batch-only | 2.22 s | 2.96 s | 0.75 |
 
 The native run used a 630 MiB model pack and peaked at about 959 MiB RSS. A
@@ -61,22 +61,32 @@ production must keep the engine resident. The native profile currently exposes
 `vieneu_synthesize_v3()` only, so it cannot meet the same first-audio and
 user-stop guarantees as the ONNX streaming profile.
 
-### Thread sweep for ONNX TTS
+### Thread sweep for local speech
 
-On this CPU, 1, 2, 4, 6 and 8 threads all landed near RTF 1.0. Four threads is
-the selected default because it leaves headroom for VAD, ASR, WebSocket and the
-LLM adapter. `VEETEE_TTS_THREADS` can be changed for a measured deployment; do
-not assume that maxing logical threads improves latency under concurrent sessions.
+The 2026-07-21 median sweep used three warmed runs with the TTS watermark enabled:
+
+| Threads | ASR decode | TTS first audio | TTS RTF |
+| ---: | ---: | ---: | ---: |
+| 2 | 36.66 ms | 388.71 ms | 0.725 |
+| 4 | 64.22 ms | 358.04 ms | 0.815 |
+| 6 | 97.10 ms | 304.06 ms | 0.745 |
+
+The selected single-session profile uses two ASR threads and six TTS threads.
+They are separate controls because the fastest setting is not the same for both
+models. For concurrent sessions, benchmark again and lower TTS to four or two
+threads per worker before increasing process count; do not assume that maxing
+logical threads improves aggregate latency.
 
 ## Runtime controls
 
 ```env
 VEETEE_MODELS_ROOT=models
-VEETEE_ASR_THREADS=4
-VEETEE_TTS_THREADS=4
+VEETEE_ASR_THREADS=2
+VEETEE_TTS_THREADS=6
 VEETEE_TTS_VOICE=Ngọc Linh
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
+VEETEE_DEFAULT_PERSONA="You are Veetee, a concise voice assistant. Reply in the user's language using one to three short spoken sentences. Do not use Markdown or expose hidden reasoning."
 ```
 
 Prepare the default stack:
@@ -86,6 +96,45 @@ cd veetee-server
 npm run models:prepare
 npm run models:benchmark
 ```
+
+The benchmark accepts separate controls, for example:
+
+```bash
+uv run --project apps/voice-server python scripts/benchmark_local_ai.py \
+  --asr-threads 2 --tts-threads 6 --watermark --runs 3
+```
+
+`VEETEE_DEFAULT_PERSONA` is only the configurable fallback when Manager auth is
+disabled or no agent config exists. A published agent persona replaces it; no
+persona or locale behavior is compiled into firmware.
+
+## Local full-loop validation
+
+The host WebSocket client exercises the real wire path rather than calling
+providers directly:
+
+```bash
+cd veetee-server
+npm run test:voice:local-e2e
+uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+  --abort-on-first-audio
+```
+
+The 2026-07-21 run passed `Opus uplink -> Silero -> Zipformer -> structured
+planner -> 9Router prose -> VieNeu -> paced Opus downlink`. First downlink audio
+arrived about 2.6--3.4 s after the final test upload; this is a smoke result, not
+the final p95 gate. The remaining latency is dominated by two sequential LLM
+operations (planner then prose), so a later measured optimization should fuse
+planning/tool selection with response streaming or use a proven low-latency
+semantic model without weakening admission.
+
+The cancellation run sent abort on the first downlink frame. `tts:stop` and the
+next `listen:start` arrived within about 0.5--2.1 ms on loopback. At most two more
+frames from the three-frame prebuffer were already on the wire; firmware closes
+its local playback generation before sending abort, so those stale frames do not
+reach the speaker. The paced sender now runs independently from TTS inference,
+allowing synthesis and playback to overlap while keeping a bounded 12-frame
+server queue.
 
 Prepare the optional native benchmark pack (about 630 MiB; still ignored by
 Git):

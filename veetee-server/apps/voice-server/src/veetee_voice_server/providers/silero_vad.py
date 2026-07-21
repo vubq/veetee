@@ -124,3 +124,12 @@ class SileroVadSession:
 
             results.append(VadFrameResult(probability, started, ended, is_speech))
         return results
+
+    def reset(self) -> None:
+        self._pending.clear()
+        self._state.fill(0)
+        self._context.fill(0)
+        self._speech_active = False
+        self._last_speech = False
+        self._silence_ms = 0
+        self._speech_ms = 0

@@ -3,8 +3,10 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from veetee_voice_server.app import create_app
+from veetee_voice_server.app import _planner_system_prompt, create_app
 from veetee_voice_server.config import Settings
+from veetee_voice_server.manager import SessionProfile
+from veetee_voice_server.providers.tools import RegistryToolBroker
 from veetee_voice_server.readiness import ComponentHealth
 
 pytestmark = pytest.mark.asyncio
@@ -47,3 +49,12 @@ async def test_empty_registry_is_ready_during_phase_zero() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready", "components": []}
+
+
+async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
+    profile = SessionProfile.defaults(
+        Settings(environment="test", require_device_auth=False)
+    )
+    prompt = _planner_system_prompt(profile, RegistryToolBroker())
+    assert "available tool catalog: []" in prompt
+    assert "never invent a tool name" in prompt

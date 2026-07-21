@@ -41,6 +41,16 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
     assert profile.llm_reasoning_effort == "low"
 
 
+def test_session_profile_uses_configurable_local_persona_fallback() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        default_persona="Configured local persona",
+    )
+    profile = SessionProfile.defaults(settings)
+    assert profile.persona == "Configured local persona"
+
+
 @pytest.mark.asyncio
 async def test_manager_authenticates_device_and_caches_immutable_config() -> None:
     config_calls = 0

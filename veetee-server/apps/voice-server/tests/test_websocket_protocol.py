@@ -11,15 +11,27 @@ import pytest
 
 from veetee_voice_server.app import _valid_device_header
 from veetee_voice_server.config import Settings
-from veetee_voice_server.conversation.types import AudioChunk, Transcript
+from veetee_voice_server.conversation.arbiter import ConversationState
+from veetee_voice_server.conversation.types import (
+    AudioChunk,
+    ConversationOutput,
+    OutputKind,
+    Transcript,
+    WakeSource,
+)
 from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.transport.protocol import (
+    AbortEvent,
     ProtocolViolationError,
+    assistant_sleep_payload,
+    llm_payload,
     parse_client_event,
     parse_device_hello,
     server_hello_payload,
+    stt_payload,
+    tts_payload,
 )
-from veetee_voice_server.transport.session import VoiceSession
+from veetee_voice_server.transport.session import VoiceSession, WebSocketConversationSink
 
 pytestmark = pytest.mark.asyncio
 
@@ -38,6 +50,7 @@ class FakeWebSocket:
         self.sent_text: list[str] = []
         self.sent_bytes: list[bytes] = []
         self.closed: list[tuple[int, str]] = []
+        self.three_audio_frames_sent = asyncio.Event()
 
     async def accept(self) -> None:
         self.accepted.set()
@@ -51,6 +64,8 @@ class FakeWebSocket:
 
     async def send_bytes(self, data: bytes) -> None:
         self.sent_bytes.append(data)
+        if len(self.sent_bytes) >= 3:
+            self.three_audio_frames_sent.set()
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         self.closed.append((code, reason))
@@ -237,6 +252,19 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
         "frame_duration": 60,
     }
 
+    fixture_session = "01J00000000000000000000000"
+    assert stt_payload(fixture_session, "Xin chào Veetee") == json.loads(
+        fixture("stt-final-vietnamese.json")
+    )
+    assert llm_payload(fixture_session, "thinking") == json.loads(
+        fixture("llm-thinking.json")
+    )
+    assert tts_payload(fixture_session, "start") == json.loads(fixture("tts-start.json"))
+    assert tts_payload(fixture_session, "stop") == json.loads(fixture("tts-stop.json"))
+    assert assistant_sleep_payload(fixture_session, "inactivity_timeout") == json.loads(
+        fixture("system-assistant-sleep-timeout.json")
+    )
+
 
 async def test_device_auth_header_identifier_is_ascii_and_bounded() -> None:
     assert _valid_device_header("aa:bb:cc:dd:ee:ff")
@@ -244,3 +272,97 @@ async def test_device_auth_header_identifier_is_ascii_and_bounded() -> None:
     assert not _valid_device_header(None)
     assert not _valid_device_header(" id-with-space ")
     assert not _valid_device_header("thiết-bị")
+
+
+async def test_websocket_sink_wraps_audio_in_one_tts_lifecycle() -> None:
+    websocket = FakeWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-1",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+    )
+    try:
+        await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+        await sink.emit(
+            ConversationOutput(
+                OutputKind.AUDIO,
+                "turn-1",
+                2,
+                audio=AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 2_880),
+            )
+        )
+        await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+    finally:
+        sink.close()
+
+    controls = [json.loads(item) for item in websocket.sent_text]
+    assert controls == [
+        {"session_id": "session-1", "type": "tts", "state": "start"},
+        {"session_id": "session-1", "type": "tts", "state": "stop"},
+    ]
+    assert len(websocket.sent_bytes) == 2
+
+
+async def test_cancelled_generation_stops_paced_audio_before_late_frames() -> None:
+    websocket = FakeWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-1",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    audio_task = asyncio.create_task(
+        sink.emit(
+            ConversationOutput(
+                OutputKind.AUDIO,
+                "turn-1",
+                2,
+                audio=AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 14_400),
+            )
+        )
+    )
+    await websocket.three_audio_frames_sent.wait()
+    sink.mark_cancelled(3)
+    await sink.cancel_tts(3)
+    await audio_task
+    await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+    sink.close()
+
+    assert len(websocket.sent_bytes) == 3
+    assert json.loads(websocket.sent_text[-1]) == {
+        "session_id": "session-1",
+        "type": "tts",
+        "state": "stop",
+    }
+
+
+async def test_abort_while_asr_is_pending_keeps_assistant_listening() -> None:
+    settings = Settings(
+        environment="test", require_device_auth=False, hello_timeout_seconds=0.2
+    )
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    await voice_session.inactivity.assistant_opened(WakeSource.BUTTON)
+
+    pending = asyncio.Event()
+    asr_task = asyncio.create_task(pending.wait())
+    voice_session._asr_task = asr_task
+    await voice_session._handle_control(
+        AbortEvent(
+            session_id=voice_session.session_id,
+            type="abort",
+            reason="button_interrupt",
+            source="button",
+        )
+    )
+
+    assert asr_task.cancelled()
+    assert voice_session.arbiter.snapshot.state is ConversationState.LISTENING
+    assert json.loads(websocket.sent_text[-1]) == {
+        "session_id": voice_session.session_id,
+        "type": "listen",
+        "state": "start",
+    }
+    await voice_session.close()

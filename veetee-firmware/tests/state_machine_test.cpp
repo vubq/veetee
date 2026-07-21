@@ -72,6 +72,17 @@ void TestAbortInvalidatesTheCurrentGeneration() {
     Expect(machine, Event::kAbortComplete, State::kListening);
 }
 
+void TestButtonCanCancelPendingAsrWhileFirmwareStillListens() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    const std::uint32_t generation = machine.cancellation_generation();
+    Expect(machine, Event::kButtonShortPress, State::kAborting);
+    assert(machine.cancellation_generation() == generation + 1);
+    Expect(machine, Event::kAbortComplete, State::kListening);
+}
+
 void TestAdmissionRejectReturnsToListening() {
     StateMachine machine;
     ReachIdle(machine);
@@ -100,6 +111,17 @@ void TestWakeCancelsClosingGrace() {
     Expect(machine, Event::kAbortComplete, State::kListening);
 }
 
+void TestAssistantSleepWaitsForGoodbyePlaybackDrain() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    Expect(machine, Event::kTtsStarted, State::kSpeaking);
+    Expect(machine, Event::kAssistantSleepRequested, State::kClosing);
+    Expect(machine, Event::kTtsStopped, State::kIdle);
+    assert(!machine.assistant_gate_open());
+}
+
 }  // namespace
 
 int main() {
@@ -107,9 +129,11 @@ int main() {
     TestAutoConversationDoesNotNeedSecondButtonPress();
     TestWakeAndButtonShareTheSamePath();
     TestAbortInvalidatesTheCurrentGeneration();
+    TestButtonCanCancelPendingAsrWhileFirmwareStillListens();
     TestAdmissionRejectReturnsToListening();
     TestLongPressClosesTheAssistantGate();
     TestWakeCancelsClosingGrace();
+    TestAssistantSleepWaitsForGoodbyePlaybackDrain();
     std::cout << "state_machine_test: passed\n";
     return 0;
 }

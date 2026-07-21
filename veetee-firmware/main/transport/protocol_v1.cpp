@@ -12,6 +12,7 @@ namespace {
 
 constexpr std::uint8_t kContinuationOpcode = 0x0;
 constexpr std::uint8_t kTextOpcode = 0x1;
+constexpr std::uint8_t kBinaryOpcode = 0x2;
 
 constexpr char kDeviceHello[] =
     R"({"type":"hello","version":1,"features":{"mcp":true,"aec":false,"glyph_push":false},"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}})";
@@ -145,6 +146,91 @@ void TextFrameAssembler::Reset() {
     buffer_[0] = '\0';
 }
 
+AssembleResult BinaryFrameAssembler::Append(
+    std::uint8_t opcode, bool fin, std::size_t payload_length,
+    std::size_t payload_offset, const char* data, std::size_t data_length,
+    const std::uint8_t** packet, std::size_t* packet_length) {
+    if (packet == nullptr || packet_length == nullptr ||
+        (data == nullptr && data_length != 0) ||
+        (opcode != kBinaryOpcode && opcode != kContinuationOpcode)) {
+        Reset();
+        return AssembleResult::kError;
+    }
+    *packet = nullptr;
+    *packet_length = 0;
+
+    const std::size_t normalized_payload_length =
+        payload_length == 0 ? data_length : payload_length;
+    if (normalized_payload_length == 0 ||
+        normalized_payload_length > kMaximumOpusPacketBytes ||
+        normalized_payload_length < data_length ||
+        payload_offset > normalized_payload_length ||
+        data_length > normalized_payload_length - payload_offset) {
+        Reset();
+        return AssembleResult::kError;
+    }
+
+    if (payload_offset == 0) {
+        if (opcode == kBinaryOpcode) {
+            if (active_) {
+                Reset();
+                return AssembleResult::kError;
+            }
+            active_ = true;
+            received_ = 0;
+            awaiting_continuation_ = false;
+        } else if (!active_ || !awaiting_continuation_) {
+            Reset();
+            return AssembleResult::kError;
+        }
+        frame_length_ = normalized_payload_length;
+        frame_offset_ = 0;
+    } else if (!active_ || payload_offset != frame_offset_ ||
+               normalized_payload_length != frame_length_) {
+        Reset();
+        return AssembleResult::kError;
+    }
+
+    if (!active_ || received_ > kMaximumOpusPacketBytes ||
+        data_length > kMaximumOpusPacketBytes - received_) {
+        Reset();
+        return AssembleResult::kError;
+    }
+    if (data_length != 0) {
+        std::memcpy(buffer_ + received_, data, data_length);
+    }
+    received_ += data_length;
+    frame_offset_ += data_length;
+
+    if (frame_offset_ < frame_length_) return AssembleResult::kIncomplete;
+    if (frame_offset_ != frame_length_) {
+        Reset();
+        return AssembleResult::kError;
+    }
+    if (!fin) {
+        awaiting_continuation_ = true;
+        frame_length_ = 0;
+        frame_offset_ = 0;
+        return AssembleResult::kIncomplete;
+    }
+
+    *packet = buffer_;
+    *packet_length = received_;
+    active_ = false;
+    awaiting_continuation_ = false;
+    frame_length_ = 0;
+    frame_offset_ = 0;
+    return AssembleResult::kComplete;
+}
+
+void BinaryFrameAssembler::Reset() {
+    received_ = 0;
+    frame_length_ = 0;
+    frame_offset_ = 0;
+    active_ = false;
+    awaiting_continuation_ = false;
+}
+
 const char* DeviceHelloJson() {
     return kDeviceHello;
 }
@@ -175,6 +261,31 @@ bool ParseServerEvent(const char* json, std::size_t length, ServerEvent* event) 
     } else if (valid) {
         valid = CopySessionId(root, parsed.session_id, sizeof(parsed.session_id));
         parsed.kind = ServerEventKind::kOther;
+        if (valid && std::strcmp(type->valuestring, "listen") == 0 &&
+            JsonStringEquals(root, "state", "start")) {
+            parsed.kind = ServerEventKind::kListenStart;
+        } else if (valid && std::strcmp(type->valuestring, "stt") == 0) {
+            const cJSON* text = cJSON_GetObjectItemCaseSensitive(root, "text");
+            valid = cJSON_IsString(text) && text->valuestring != nullptr;
+            parsed.kind = ServerEventKind::kStt;
+        } else if (valid && std::strcmp(type->valuestring, "llm") == 0) {
+            const cJSON* emotion = cJSON_GetObjectItemCaseSensitive(root, "emotion");
+            valid = cJSON_IsString(emotion) && emotion->valuestring != nullptr;
+            // Text deltas are high-volume UI metadata; only the thinking edge
+            // belongs on the bounded application state queue.
+            parsed.kind = valid && std::strcmp(emotion->valuestring, "thinking") == 0
+                              ? ServerEventKind::kLlm
+                              : ServerEventKind::kOther;
+        } else if (valid && std::strcmp(type->valuestring, "tts") == 0) {
+            if (JsonStringEquals(root, "state", "start")) {
+                parsed.kind = ServerEventKind::kTtsStart;
+            } else if (JsonStringEquals(root, "state", "stop")) {
+                parsed.kind = ServerEventKind::kTtsStop;
+            }
+        } else if (valid && std::strcmp(type->valuestring, "system") == 0 &&
+                   JsonStringEquals(root, "command", "assistant_sleep")) {
+            parsed.kind = ServerEventKind::kAssistantSleep;
+        }
     }
 
     cJSON_Delete(root);

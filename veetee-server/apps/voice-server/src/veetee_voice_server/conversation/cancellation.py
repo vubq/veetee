@@ -101,6 +101,10 @@ async def await_operation[T](awaitable: Awaitable[T], context: OperationContext)
         operation.cancel()
         operation.add_done_callback(_consume_task_result)
         raise OperationDeadlineExceededError(f"Deadline exceeded for {context.turn_id}")
+    except asyncio.CancelledError:
+        operation.cancel()
+        operation.add_done_callback(_consume_task_result)
+        raise
     finally:
         cancellation.cancel()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,7 @@ from veetee_voice_server.conversation.cancellation import (
 from veetee_voice_server.conversation.engine import ConversationEngine
 from veetee_voice_server.conversation.inactivity import InactivityController
 from veetee_voice_server.conversation.types import (
+    AdmissionDisposition,
     ConversationOutput,
     OutputKind,
     Transcript,
@@ -38,10 +40,23 @@ from veetee_voice_server.transport.protocol import (
     McpEvent,
     ProtocolViolationError,
     SystemEvent,
+    assistant_sleep_payload,
+    listen_started_payload,
+    llm_payload,
     parse_client_event,
     parse_device_hello,
     server_hello_payload,
+    stt_payload,
+    tts_payload,
 )
+
+
+@dataclass(slots=True)
+class _PacedAudioStream:
+    generation: int
+    queue: asyncio.Queue[bytes | None]
+    cancelled: asyncio.Event
+    task: asyncio.Task[None] | None = None
 
 
 class WebSocketConversationSink:
@@ -59,37 +74,50 @@ class WebSocketConversationSink:
         self._frame_duration_ms = frame_duration_ms
         self._encoder = OpusEncoder(output_sample_rate)
         self._lock = asyncio.Lock()
+        self._wire_lock = asyncio.Lock()
         self._cancel_generation = 0
+        self._tts_generation: int | None = None
+        self._audio_stream: _PacedAudioStream | None = None
+        self._pending_pcm = bytearray()
+        self._prebuffer_frames = 3
+        self._queue_frames = 12
 
     async def emit(self, output: ConversationOutput) -> None:
+        if output.kind is OutputKind.TTS_START:
+            await self._start_tts(output.generation)
+            return
+        if output.kind is OutputKind.AUDIO and output.audio is not None:
+            await self._send_audio(output)
+            return
+        if output.kind is OutputKind.TTS_STOP:
+            await self._stop_tts(output.generation, flush=True)
+            return
         async with self._lock:
-            if output.kind.value == "audio" and output.audio is not None:
-                if output.generation < self._cancel_generation:
-                    return
-                pcm = output.audio.data
-                if output.audio.sample_rate != self._output_sample_rate:
-                    pcm = await asyncio.to_thread(
-                        self._resample_pcm, pcm, output.audio.sample_rate, self._output_sample_rate
-                    )
-                frame_samples = self._output_sample_rate * self._frame_duration_ms // 1000
-                for offset in range(0, len(pcm), frame_samples * 2):
-                    frame = pcm[offset : offset + frame_samples * 2]
-                    if len(frame) < frame_samples * 2:
-                        frame += b"\0" * (frame_samples * 2 - len(frame))
-                    await self._websocket.send_bytes(
-                        self._encoder.encode(frame, frame_samples=frame_samples)
-                    )
+            if output.generation < self._cancel_generation:
                 return
-            await self._websocket.send_text(
-                json.dumps(self._json_output(output), ensure_ascii=False, separators=(",", ":"))
-            )
+            payload = self._json_output(output)
+            if payload is not None:
+                await self._send_text(payload)
 
     async def send_control(self, payload: dict[str, Any]) -> None:
         async with self._lock:
-            payload = {"session_id": self._session_id, **payload}
-            await self._websocket.send_text(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            await self._send_text({"session_id": self._session_id, **payload})
+
+    async def send_stt(self, transcript: Transcript) -> None:
+        async with self._lock:
+            await self._send_text(stt_payload(self._session_id, transcript.text))
+
+    async def send_listening(self, source: WakeSource | None = None) -> None:
+        async with self._lock:
+            await self._send_text(
+                listen_started_payload(
+                    self._session_id, source=source.value if source is not None else None
+                )
             )
+
+    async def send_assistant_sleep(self, reason: str) -> None:
+        async with self._lock:
+            await self._send_text(assistant_sleep_payload(self._session_id, reason))
 
     async def send_hello(self) -> None:
         async with self._lock:
@@ -98,12 +126,180 @@ class WebSocketConversationSink:
                 sample_rate=self._output_sample_rate,
                 frame_duration=self._frame_duration_ms,
             )
+            await self._send_text(payload)
+
+    def mark_cancelled(self, generation: int) -> None:
+        self._cancel_generation = max(self._cancel_generation, generation)
+
+    async def cancel_tts(self, generation: int) -> None:
+        self.mark_cancelled(generation)
+        async with self._lock:
+            stream = self._detach_tts()
+        await self._cancel_stream(stream)
+        if stream is not None:
+            await self._send_text(tts_payload(self._session_id, "stop"))
+
+    async def _start_tts(self, generation: int) -> None:
+        async with self._lock:
+            if generation < self._cancel_generation:
+                return
+            previous = self._detach_tts()
+        await self._cancel_stream(previous)
+        if previous is not None:
+            await self._send_text(tts_payload(self._session_id, "stop"))
+        async with self._lock:
+            if generation < self._cancel_generation:
+                return
+            stream = _PacedAudioStream(
+                generation=generation,
+                queue=asyncio.Queue(maxsize=self._queue_frames),
+                cancelled=asyncio.Event(),
+            )
+            self._tts_generation = generation
+            self._audio_stream = stream
+            await self._send_text(tts_payload(self._session_id, "start"))
+            stream.task = asyncio.create_task(self._run_paced_audio(stream))
+
+    async def _send_audio(self, output: ConversationOutput) -> None:
+        if output.audio is None or output.audio.encoding != "pcm_s16le":
+            return
+        pcm = output.audio.data
+        if output.audio.sample_rate != self._output_sample_rate:
+            pcm = await asyncio.to_thread(
+                self._resample_pcm,
+                pcm,
+                output.audio.sample_rate,
+                self._output_sample_rate,
+            )
+        async with self._lock:
+            stream = self._audio_stream
+            if (
+                stream is None
+                or stream.generation != output.generation
+                or output.generation < self._cancel_generation
+            ):
+                return
+            self._pending_pcm.extend(pcm)
+            packets = self._encode_ready_frames()
+        for packet in packets:
+            if not await self._enqueue_audio(stream, packet):
+                return
+
+    async def _stop_tts(self, generation: int, *, flush: bool) -> None:
+        async with self._lock:
+            stream = self._audio_stream
+            if stream is None or stream.generation != generation:
+                return
+            final_packet = self._encode_final_frame() if flush else None
+        if final_packet is not None and not await self._enqueue_audio(stream, final_packet):
+            return
+        if not await self._enqueue_audio(stream, None):
+            return
+        if stream.task is not None:
+            await asyncio.gather(stream.task, return_exceptions=True)
+        async with self._lock:
+            if (
+                self._audio_stream is not stream
+                or generation < self._cancel_generation
+                or stream.cancelled.is_set()
+            ):
+                return
+            await self._send_text(tts_payload(self._session_id, "stop"))
+            self._discard_tts()
+
+    def _encode_ready_frames(self) -> list[bytes]:
+        frame_samples = self._output_sample_rate * self._frame_duration_ms // 1000
+        frame_bytes = frame_samples * 2
+        packets: list[bytes] = []
+        while len(self._pending_pcm) >= frame_bytes:
+            frame = bytes(self._pending_pcm[:frame_bytes])
+            del self._pending_pcm[:frame_bytes]
+            packets.append(self._encoder.encode(frame, frame_samples=frame_samples))
+        return packets
+
+    def _encode_final_frame(self) -> bytes | None:
+        if not self._pending_pcm:
+            return None
+        frame_samples = self._output_sample_rate * self._frame_duration_ms // 1000
+        frame_bytes = frame_samples * 2
+        frame = bytes(self._pending_pcm)
+        self._pending_pcm.clear()
+        frame += b"\0" * (frame_bytes - len(frame))
+        return self._encoder.encode(frame, frame_samples=frame_samples)
+
+    async def _enqueue_audio(
+        self, stream: _PacedAudioStream, packet: bytes | None
+    ) -> bool:
+        if stream.cancelled.is_set():
+            return False
+        put_task = asyncio.create_task(stream.queue.put(packet))
+        cancelled = asyncio.create_task(stream.cancelled.wait())
+        done, _ = await asyncio.wait(
+            {put_task, cancelled}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if cancelled in done:
+            put_task.cancel()
+            await asyncio.gather(put_task, return_exceptions=True)
+            return False
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+        return True
+
+    async def _run_paced_audio(self, stream: _PacedAudioStream) -> None:
+        loop = asyncio.get_running_loop()
+        sequence = 0
+        next_packet_at = 0.0
+        while not stream.cancelled.is_set():
+            packet = await stream.queue.get()
+            if packet is None:
+                return
+            if sequence >= self._prebuffer_frames:
+                delay = next_packet_at - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                next_packet_at = max(next_packet_at, loop.time()) + (
+                    self._frame_duration_ms / 1000
+                )
+            elif sequence == self._prebuffer_frames - 1:
+                next_packet_at = loop.time() + self._frame_duration_ms / 1000
+            if (
+                stream.cancelled.is_set()
+                or stream.generation < self._cancel_generation
+                or self._audio_stream is not stream
+            ):
+                return
+            await self._send_bytes(packet)
+            sequence += 1
+
+    async def _cancel_stream(self, stream: _PacedAudioStream | None) -> None:
+        if stream is None:
+            return
+        stream.cancelled.set()
+        if stream.task is not None and not stream.task.done():
+            stream.task.cancel()
+            await asyncio.gather(stream.task, return_exceptions=True)
+
+    def _detach_tts(self) -> _PacedAudioStream | None:
+        stream = self._audio_stream
+        if stream is not None:
+            stream.cancelled.set()
+        self._discard_tts()
+        return stream
+
+    async def _send_bytes(self, packet: bytes) -> None:
+        async with self._wire_lock:
+            await self._websocket.send_bytes(packet)
+
+    async def _send_text(self, payload: dict[str, Any]) -> None:
+        async with self._wire_lock:
             await self._websocket.send_text(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             )
 
-    def mark_cancelled(self, generation: int) -> None:
-        self._cancel_generation = max(self._cancel_generation, generation)
+    def _discard_tts(self) -> None:
+        self._tts_generation = None
+        self._audio_stream = None
+        self._pending_pcm.clear()
 
     @staticmethod
     def _resample_pcm(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
@@ -113,16 +309,30 @@ class WebSocketConversationSink:
         converted = soxr.resample(samples, source_rate, target_rate, quality="HQ")
         return bytes((np.clip(converted, -1.0, 1.0) * 32767.0).astype("<i2").tobytes())
 
-    def _json_output(self, output: ConversationOutput) -> dict[str, Any]:
-        payload = {
-            "session_id": self._session_id,
-            "type": output.kind.value,
-            "generation": output.generation,
-            **output.payload,
-        }
-        if output.turn_id is not None:
-            payload["turn_id"] = output.turn_id
-        return payload
+    def _json_output(self, output: ConversationOutput) -> dict[str, Any] | None:
+        if output.kind is OutputKind.ADMISSION:
+            disposition = output.payload.get("disposition")
+            if disposition in {
+                AdmissionDisposition.NON_ACTIONABLE.value,
+                AdmissionDisposition.NOT_ADDRESSED.value,
+                AdmissionDisposition.UNCLEAR.value,
+                AdmissionDisposition.INTERRUPT.value,
+            }:
+                return listen_started_payload(self._session_id)
+            return llm_payload(self._session_id, "thinking")
+        if output.kind is OutputKind.TEXT_DELTA:
+            return llm_payload(
+                self._session_id,
+                "neutral",
+                text=str(output.payload.get("text", "")),
+            )
+        if output.kind is OutputKind.ERROR:
+            return llm_payload(
+                self._session_id,
+                "sad",
+                text=str(output.payload.get("code", "conversation_failed")),
+            )
+        return None
 
     def close(self) -> None:
         self._encoder.close()
@@ -172,7 +382,13 @@ class VoiceSession:
         )
         self._decoder = OpusDecoder(settings.input_sample_rate)
         self._speech = bytearray()
+        self._pre_roll = bytearray()
+        self._pre_roll_bytes = (
+            settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
+        )
+        self._speech_active = False
         self._asr_task: asyncio.Task[None] | None = None
+        self._asr_context: OperationContext | None = None
         self._closed = False
 
     async def run(self) -> None:
@@ -217,9 +433,7 @@ class VoiceSession:
         if self._closed:
             return
         self._closed = True
-        if self._asr_task and not self._asr_task.done():
-            self._asr_task.cancel()
-            await asyncio.gather(self._asr_task, return_exceptions=True)
+        await self._cancel_asr()
         await self.inactivity.close()
         await self.arbiter.abort("socket_closed")
         self._decoder.close()
@@ -232,35 +446,42 @@ class VoiceSession:
                 await self.inactivity.wake_during_closing(source)
             else:
                 await self.inactivity.assistant_opened(source)
-            await self.sink.send_control(
-                {"type": "listen", "state": "start", "source": source.value}
-            )
+            await self._cancel_asr()
+            self._reset_input()
+            await self.sink.cancel_tts(self.arbiter.snapshot.generation)
+            await self.sink.send_listening(source)
             return
         if isinstance(event, ListenEvent) and event.state == "stop":
-            await self._abort_or_close(event.reason or "listen_stop")
+            await self._close_assistant(event.reason or "listen_stop")
             return
         if isinstance(event, AbortEvent):
-            await self._abort_or_close(event.reason)
+            await self._abort_current(event.reason)
             return
         if isinstance(event, SystemEvent):
-            await self._abort_or_close(event.reason or "system_sleep")
+            await self._close_assistant(event.reason or "system_sleep")
             return
         if isinstance(event, McpEvent):
             # MCP dispatch is introduced as its own cancellation-scoped vertical slice.
             return
 
-    async def _abort_or_close(self, reason: str) -> None:
-        state = self.arbiter.snapshot.state
-        if state in {
-            ConversationState.THINKING,
-            ConversationState.SPEAKING,
-            ConversationState.CANCELLING,
-        }:
-            receipt = await self.arbiter.abort(reason)
-            self.sink.mark_cancelled(receipt.generation)
-            await self.arbiter.finish_cancellation(receipt)
-        else:
-            await self.arbiter.close_assistant(reason)
+    async def _abort_current(self, reason: str) -> None:
+        receipt = await self.arbiter.abort(reason)
+        self.sink.mark_cancelled(receipt.generation)
+        await self._cancel_asr()
+        self._reset_input()
+        await self.sink.cancel_tts(receipt.generation)
+        await self.arbiter.finish_cancellation(receipt)
+        if self.arbiter.snapshot.state is ConversationState.LISTENING:
+            await self.sink.send_listening()
+            await self.inactivity.turn_completed()
+
+    async def _close_assistant(self, reason: str) -> None:
+        await self.inactivity.assistant_closed(reason)
+        snapshot = self.arbiter.snapshot
+        self.sink.mark_cancelled(snapshot.generation)
+        await self._cancel_asr()
+        self._reset_input()
+        await self.sink.cancel_tts(snapshot.generation)
 
     async def _handle_audio(self, packet: bytes) -> None:
         if len(packet) > MAX_OPUS_PACKET_BYTES:
@@ -271,21 +492,26 @@ class VoiceSession:
             raise ProtocolViolationError("invalid Opus packet") from error
         if not pcm:
             return
-        state = self.arbiter.snapshot.state
-        if state is ConversationState.STANDBY:
+        if self.arbiter.snapshot.state is not ConversationState.LISTENING:
             return
-        if state is ConversationState.SPEAKING:
-            results = self.vad.process(pcm)
-            if any(item.speech_started for item in results):
-                await self._abort_or_close("voice_interrupt")
-                await self.inactivity.assistant_opened(WakeSource.WAKE_WORD)
+        if self._asr_task is not None and not self._asr_task.done():
             return
-        self._speech.extend(pcm)
         results = self.vad.process(pcm)
-        if any(item.speech_started for item in results) and state is ConversationState.THINKING:
-            await self._abort_or_close("voice_interrupt")
-            await self.inactivity.assistant_opened(WakeSource.WAKE_WORD)
-        if any(item.speech_ended for item in results):
+        started = any(item.speech_started for item in results)
+        ended = any(item.speech_ended for item in results)
+
+        if self._speech_active:
+            self._speech.extend(pcm)
+        else:
+            self._pre_roll.extend(pcm)
+            if len(self._pre_roll) > self._pre_roll_bytes:
+                del self._pre_roll[: len(self._pre_roll) - self._pre_roll_bytes]
+            if started:
+                self._speech.extend(self._pre_roll or pcm)
+                self._pre_roll.clear()
+                self._speech_active = True
+        if ended and self._speech_active:
+            await self.inactivity.candidate_started()
             self._start_asr()
 
     def _start_asr(self) -> None:
@@ -293,6 +519,9 @@ class VoiceSession:
             return
         audio = bytes(self._speech)
         self._speech.clear()
+        self._pre_roll.clear()
+        self._speech_active = False
+        self.vad.reset()
         if not audio:
             return
         self._asr_task = asyncio.create_task(self._transcribe(audio))
@@ -305,6 +534,7 @@ class VoiceSession:
             CancellationToken(),
             monotonic() + self.settings.asr_seconds,
         )
+        self._asr_context = context
         try:
             transcript = await self.asr.transcribe_pcm(
                 pcm,
@@ -312,20 +542,54 @@ class VoiceSession:
                 locale=self.profile.locale,
                 context=context,
             )
-            if transcript.text:
-                await self.inactivity.valid_user_activity()
-            await self.engine.handle_transcript(
-                Transcript(
-                    transcript.text, transcript.locale, transcript.confidence, transcript.stability
-                )
+            if not transcript.text:
+                await self.inactivity.candidate_rejected()
+                return
+            normalized = Transcript(
+                transcript.text,
+                transcript.locale,
+                transcript.confidence,
+                transcript.stability,
             )
-            await self.inactivity.turn_completed()
+            await self.sink.send_stt(normalized)
+            disposition = await self.engine.handle_transcript(normalized)
+            if disposition in {
+                AdmissionDisposition.ACCEPTED,
+                AdmissionDisposition.INTERRUPT,
+                AdmissionDisposition.END,
+            }:
+                await self.inactivity.valid_user_activity()
+                await self.inactivity.turn_completed()
+            elif disposition in {
+                AdmissionDisposition.NON_ACTIONABLE,
+                AdmissionDisposition.NOT_ADDRESSED,
+                AdmissionDisposition.UNCLEAR,
+            }:
+                await self.inactivity.candidate_rejected()
+            state = self.arbiter.snapshot.state
+            if state is ConversationState.LISTENING and disposition not in {
+                AdmissionDisposition.NON_ACTIONABLE,
+                AdmissionDisposition.NOT_ADDRESSED,
+                AdmissionDisposition.UNCLEAR,
+                AdmissionDisposition.INTERRUPT,
+            }:
+                await self.sink.send_listening()
+            elif state is ConversationState.STANDBY:
+                await self.sink.send_assistant_sleep("semantic_end")
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            await self.inactivity.candidate_rejected()
             await self.sink.send_control(
-                {"type": "error", "code": "asr_failed", "detail": type(error).__name__}
+                {"type": "llm", "emotion": "sad", "text": type(error).__name__}
             )
+            if self.arbiter.snapshot.state is ConversationState.LISTENING:
+                await self.sink.send_listening()
+        finally:
+            if self._asr_task is asyncio.current_task():
+                self._asr_task = None
+            if self._asr_context is context:
+                self._asr_context = None
 
     async def _goodbye(self, reason: str) -> None:
         token = CancellationToken()
@@ -336,19 +600,56 @@ class VoiceSession:
             token,
             monotonic() + self.profile.policy.closing_grace_seconds,
         )
-        async for audio in iterate_operation(
-            self.tts.synthesize(self.profile.goodbye_text, self.profile.locale, context),
-            context,
-        ):
-            await self.sink.emit(
-                ConversationOutput(
-                    kind=OutputKind.AUDIO,
-                    turn_id=None,
-                    generation=context.generation,
-                    payload={"system": "goodbye", "reason": reason},
-                    audio=audio,
+        started = False
+        try:
+            async for audio in iterate_operation(
+                self.tts.synthesize(
+                    self.profile.goodbye_text, self.profile.locale, context
+                ),
+                context,
+            ):
+                if not started:
+                    await self.sink.emit(
+                        ConversationOutput(
+                            kind=OutputKind.TTS_START,
+                            turn_id=None,
+                            generation=context.generation,
+                        )
+                    )
+                    started = True
+                await self.sink.emit(
+                    ConversationOutput(
+                        kind=OutputKind.AUDIO,
+                        turn_id=None,
+                        generation=context.generation,
+                        payload={"system": "goodbye", "reason": reason},
+                        audio=audio,
+                    )
                 )
-            )
-        await self.sink.send_control(
-            {"type": "system", "command": "assistant_sleep", "reason": reason}
-        )
+        finally:
+            if started:
+                await self.sink.emit(
+                    ConversationOutput(
+                        kind=OutputKind.TTS_STOP,
+                        turn_id=None,
+                        generation=context.generation,
+                    )
+                )
+        await self.sink.send_assistant_sleep(reason)
+
+    async def _cancel_asr(self) -> None:
+        task = self._asr_task
+        self._asr_task = None
+        context = self._asr_context
+        self._asr_context = None
+        if context is not None:
+            context.token.cancel("asr_cancelled")
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    def _reset_input(self) -> None:
+        self._speech.clear()
+        self._pre_roll.clear()
+        self._speech_active = False
+        self.vad.reset()
