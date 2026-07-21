@@ -89,9 +89,7 @@ class FakeTools:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def call(
-        self, name: str, arguments: dict[str, Any], context: OperationContext
-    ) -> Any:
+    async def call(self, name: str, arguments: dict[str, Any], context: OperationContext) -> Any:
         self.calls.append((name, arguments))
         return {"ok": True}
 

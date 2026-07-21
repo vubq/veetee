@@ -51,6 +51,41 @@ class NineRouterLlmProvider:
         )
         return response.is_success
 
+    async def complete_json(
+        self, *, system_prompt: str, user_prompt: str, context: OperationContext
+    ) -> dict[str, Any]:
+        """Run a short structured call for admission/planning without streaming prose."""
+        context.checkpoint()
+        response = await self._client.post(
+            f"{self._base_url}/chat/completions",
+            headers=self._headers(),
+            json={
+                "model": self._model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "reasoning_effort": self._reasoning_effort,
+            },
+            timeout=context.remaining_seconds,
+        )
+        if response.is_error:
+            detail = (await response.aread())[:500].decode(errors="replace")
+            raise NineRouterProviderError(f"9router returned HTTP {response.status_code}: {detail}")
+        body = response.json()
+        content = body["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(
+                str(item.get("text", "")) for item in content if isinstance(item, Mapping)
+            )
+        parsed = json.loads(str(content))
+        if not isinstance(parsed, dict):
+            raise NineRouterProviderError("9router structured response was not an object")
+        context.checkpoint()
+        return parsed
+
     async def stream(
         self, request: LlmRequest, context: OperationContext
     ) -> AsyncIterator[LlmEvent]:

@@ -58,9 +58,7 @@ class ConversationEngine:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
         try:
             decision = await await_operation(
-                self._admission.evaluate(
-                    transcript, context.child(self._policy.admission_seconds)
-                ),
+                self._admission.evaluate(transcript, context.child(self._policy.admission_seconds)),
                 context.child(self._policy.admission_seconds),
             )
             await self._emit(
@@ -181,9 +179,7 @@ class ConversationEngine:
         if remainder:
             await self._speak_text(remainder, request.plan.locale, context)
 
-    async def _speak_text(
-        self, text: str, locale: str, context: OperationContext
-    ) -> None:
+    async def _speak_text(self, text: str, locale: str, context: OperationContext) -> None:
         if self._arbiter.snapshot.state.value == "thinking":
             await self._arbiter.mark_speaking(context)
         tts_context = context.child(self._policy.tts_seconds)

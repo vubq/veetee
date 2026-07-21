@@ -23,6 +23,9 @@ class ReadinessRegistry:
     def register(self, check: ReadinessCheck) -> None:
         self._checks.append(check)
 
+    def clear(self) -> None:
+        self._checks.clear()
+
     async def snapshot(self) -> tuple[bool, list[ComponentHealth]]:
         components = [await check() for check in self._checks]
         ready = all(item.healthy for item in components if item.required)

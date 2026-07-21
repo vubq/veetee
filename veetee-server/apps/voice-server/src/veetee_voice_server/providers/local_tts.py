@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -97,18 +98,27 @@ class VieNeuTtsProvider:
             onnx_dir = self._model_dir / "onnx_int8"
             codec_dir = self._model_dir / "codec"
             if not onnx_dir.is_dir() or not codec_dir.is_dir():
-                raise FileNotFoundError(
-                    "VieNeu model is incomplete; run npm run models:prepare"
-                )
-            from vieneu import Vieneu  # type: ignore[import-untyped]
+                raise FileNotFoundError("VieNeu model is incomplete; run npm run models:prepare")
+            # Instantiate the lite engine directly so every codec graph is read
+            # from the pinned local model directory. The upstream Vieneu facade
+            # currently does not forward ``codec_dir`` to its ONNX constructor
+            # and otherwise performs Hugging Face HEAD requests on startup.
+            import vieneu  # type: ignore[import-untyped]
+            from vieneu._v3_turbo_engine.onnx_runtime_lite import (  # type: ignore[import-untyped]
+                OnnxV3LiteEngine,
+            )
 
-            self._engine = Vieneu(
-                backbone_repo=str(self._model_dir),
-                backend="onnx",
-                precision="int8",
-                onnx_dir=str(onnx_dir),
-                codec_dir=str(codec_dir),
-                threads=self._num_threads,
+            assert vieneu.__file__ is not None
+            voices_path = Path(vieneu.__file__).parent / "assets" / "voices_v3_turbo.json"
+            voices = json.loads(voices_path.read_text(encoding="utf-8"))
+            self._engine = _LocalStreamingV3Engine(
+                OnnxV3LiteEngine(
+                    checkpoint_path=str(self._model_dir),
+                    onnx_dir=str(onnx_dir),
+                    codec_dir=str(codec_dir),
+                    threads=self._num_threads,
+                ),
+                voices,
             )
             available = {voice_id for _, voice_id in self._engine.list_preset_voices()}
             if self._voice not in available:
@@ -131,3 +141,46 @@ class VieNeuTtsProvider:
             return b""
         clipped = np.clip(samples, -1.0, 1.0)
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
+
+
+class _LocalStreamingV3Engine:
+    def __init__(self, engine: Any, voices: dict[str, Any]) -> None:
+        self._engine = engine
+        self._voices = voices.get("presets", {})
+        self._watermarker: Any | None = None
+        try:
+            import perth  # type: ignore[import-untyped]
+
+            self._watermarker = perth.PerthImplicitWatermarker()
+        except (ImportError, AttributeError):
+            pass
+
+    def list_preset_voices(self) -> list[tuple[str, str]]:
+        return [(name, name) for name in self._voices]
+
+    def infer_stream(
+        self, text: str, *, voice: str, apply_watermark: bool
+    ) -> Iterator[np.ndarray[Any, Any]]:
+        from vieneu_utils.phonemize_text import (  # type: ignore[import-untyped]
+            normalize_to_chunks_v3,
+            phonemize_text_with_emotions,
+        )
+
+        preset = self._voices[voice]
+        speaker_emb = np.asarray(preset["speaker_emb"], dtype=np.float32)
+        ref_codes = np.asarray(preset["codes"], dtype=np.int64)
+        style = str(preset.get("style", "tu_nhien"))
+        for chunk in normalize_to_chunks_v3(text, max_chars=256):
+            phonemes = phonemize_text_with_emotions(chunk)
+            for audio in self._engine.infer_stream(
+                phonemes=phonemes,
+                speaker_emb=speaker_emb,
+                ref_codes=ref_codes,
+                style=style,
+                use_ref_codes=True,
+            ):
+                if audio is None or len(audio) == 0:
+                    continue
+                if apply_watermark and self._watermarker is not None:
+                    audio = self._watermarker.apply(audio, 48_000)
+                yield np.asarray(audio, dtype=np.float32)

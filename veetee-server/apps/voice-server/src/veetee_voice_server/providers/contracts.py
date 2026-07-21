@@ -53,9 +53,7 @@ class PlannerProvider(Protocol):
 
 
 class LlmProvider(Protocol):
-    def stream(
-        self, request: LlmRequest, context: OperationContext
-    ) -> AsyncIterator[LlmEvent]: ...
+    def stream(self, request: LlmRequest, context: OperationContext) -> AsyncIterator[LlmEvent]: ...
 
 
 class TtsProvider(Protocol):

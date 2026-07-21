@@ -107,7 +107,10 @@ nâng lên `low` theo agent policy khi request cần suy luận thêm. Reasoning
 
 ### 2.2.3 API key và network policy
 
-Ảnh cấu hình cho thấy `Require API key` đang tắt. Probe socket cho thấy process đang
+Ảnh cấu hình ban đầu cho thấy `Require API key` tắt, nhưng smoke test mới nhất đã
+trả `401 Missing API key` cho Chat Completions trong khi `/v1/models` vẫn public.
+Voice-server đã pass full-loop test khi dùng key active lấy từ secret store local;
+key không được in ra log hay ghi vào repo. Probe socket trước đó cho thấy process
 listen trên `0.0.0.0:20128`, dù UI hiển thị endpoint local. Đây là policy bắt buộc:
 
 1. Nếu voice-server và 9Router cùng máy: đổi 9Router bind về `127.0.0.1` nếu có thể;

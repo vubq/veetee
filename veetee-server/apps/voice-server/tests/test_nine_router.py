@@ -114,8 +114,26 @@ async def test_stream_preserves_tool_call_fragments_for_the_tool_broker() -> Non
     events = [event async for event in provider.stream(request(), context())]  # type: ignore[arg-type]
     await client.aclose()
 
-    assert events[0] == LlmToolCallFragment(
-        "call-1", "self.audio_speaker.set_volume", '{"volume":'
-    )
+    assert events[0] == LlmToolCallFragment("call-1", "self.audio_speaker.set_volume", '{"volume":')
     assert events[1] == LlmToolCallFragment(None, None, "55}")
     assert events[-1] == LlmStreamDone("tool_calls")
+
+
+async def test_structured_completion_parses_json_object() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": '{"action":"respond","intent":"test"}'}}
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    value = await provider.complete_json(
+        system_prompt="Return JSON", user_prompt="Xin chào", context=context()
+    )
+    await client.aclose()
+    assert value == {"action": "respond", "intent": "test"}
