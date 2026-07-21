@@ -5,6 +5,7 @@
 
 #include "esp_err.h"
 #include "nvs.h"
+#include "settings/wifi_profile_record.h"
 
 namespace veetee::settings {
 
@@ -32,8 +33,11 @@ public:
     ~SettingsStore();
 
     esp_err_t Initialize(DeviceSettings* settings);
-    esp_err_t SaveProvisioning(const DeviceSettings& settings);
+    esp_err_t SaveProvisioning(DeviceSettings* settings);
     esp_err_t ClearWifiCredentials(DeviceSettings* settings);
+    [[nodiscard]] WifiProfileRecord WifiProfiles() const;
+    esp_err_t MarkWifiProfileSuccessful(const char* ssid,
+                                        DeviceSettings* settings);
     esp_err_t SavePendingActivation(const char* code, const char* challenge,
                                     DeviceSettings* settings);
     esp_err_t SaveDeviceActivation(const char* device_id, const char* token,
@@ -50,8 +54,11 @@ private:
                          const char* fallback = "");
     esp_err_t LoadActivation(DeviceSettings* settings);
     esp_err_t EnsureClientId(DeviceSettings* settings);
+    esp_err_t LoadWifiProfiles(DeviceSettings* settings);
+    void ApplyActiveWifi(DeviceSettings* settings) const;
 
     nvs_handle_t handle_ = 0;
+    WifiProfileRecord wifi_profiles_{};
 };
 
 }  // namespace veetee::settings

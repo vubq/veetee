@@ -116,22 +116,36 @@ State transition phải chỉ đi qua một state machine; callback Wi-Fi/WebSoc
 
 ### Boot path
 
-1. Đọc NVS credentials và `wifi_config_version`.
-2. Không có credentials: bật AP `Veetee-XXXX`, captive portal `/wifi`.
-3. Có credentials: thử station trong 60 giây.
-4. Timeout hoặc auth failure liên tiếp: stop station, bật AP.
-5. Save credentials atomically; restart station; chỉ khi DHCP thành công mới chạy activation.
-6. Khi user giữ BOOT 5 giây trong `idle`, reset credentials có xác nhận âm thanh/hình ảnh rồi quay lại AP.
+1. Đọc NVS schema V3 và record CRC chứa tối đa 5 Wi-Fi profile; firmware V2 được
+   migrate atomically từ `wifi_ssid`/`wifi_pass` mà không làm mất activation.
+2. Không có profile hợp lệ: bật AP `Veetee-XXXX`, captive portal tại
+   `http://192.168.4.1`.
+3. Có profile: scan AP gần đó, ghép theo SSID và xếp candidate bằng cả
+   last-success/MRU lẫn RSSI. Mạng thấy được được thử trước; profile mạng ẩn hoặc
+   tạm thời không xuất hiện vẫn được thử sau theo MRU.
+4. Mỗi candidate chỉ có retry hữu hạn. Khi hết danh sách, firmware rescan có delay
+   2.5 giây trong timeout chung 60 giây để tránh reconnect storm.
+5. Chỉ khi DHCP thành công mới đánh dấu profile là last-success, tăng success
+   counter và chạy activation/bootstrap. Khi mất mạng lúc đang online, firmware
+   scan/xếp lại toàn bộ danh sách thay vì kẹt ở SSID cũ.
+6. Nếu tất cả profile đều thất bại hoặc hết timeout: stop station rồi mới bật AP.
+7. Save profile/config atomically; password rỗng của SSID đã biết nghĩa là dùng lại
+   password đang lưu. Password rỗng của mạng mới chỉ hợp lệ cho mạng open.
+8. Khi user giữ BOOT 5 giây trong `idle`, xóa toàn bộ profile Wi-Fi và bootstrap
+   override, có xác nhận âm thanh/hình ảnh rồi quay lại AP.
 
 AP portal cần có:
 
 - scan SSID + RSSI;
+- đánh dấu mạng đã lưu nhưng không bao giờ trả password về browser;
 - password và optional hidden SSID;
 - server/OTA URL override trong chế độ dev;
 - locale và wake profile;
 - nút test kết nối và reset.
 
-Không lưu password plain text vào log. NVS namespace có version/migration và nút factory reset riêng.
+Không lưu password plain text vào log. Profile record có version, bound cố định,
+CRC, reject duplicate SSID và eviction profile ít gần đây nhất khi đủ 5 mạng. NVS
+namespace có version/migration và nút factory reset riêng.
 
 ## 5. Bootstrap và activation 6 số
 

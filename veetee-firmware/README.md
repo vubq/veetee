@@ -85,10 +85,13 @@ cần provision Wi-Fi và bind code 6 số để state machine vào `idle`; capt
 không bật detector vì wake không được phép bỏ qua activation.
 
 Khi chưa có cấu hình, firmware phát AP `Veetee-XXXX` và captive portal tại
-`http://192.168.4.1`. Portal scan SSID, nhận Wi-Fi, bootstrap URL LAN, locale và
-wake profile ID; password không được ghi log. Nếu station không lấy được IP trong
-60 giây, firmware tự quay lại portal. Settings có schema version trong NVS và
-`client_id` UUID bền vững.
+`http://192.168.4.1`. Portal mobile-first scan SSID/RSSI, đánh dấu mạng đã lưu,
+nhận Wi-Fi, bootstrap URL LAN, locale và wake profile ID; password không được trả
+về browser hay ghi log. NVS schema V3 lưu tối đa 5 profile trong record 512 byte có
+CRC và tự migrate cặp credential V2. Khi boot, firmware ưu tiên kết hợp
+last-success/MRU với RSSI, vẫn thử mạng ẩn, rescan có delay và chỉ mở AP nếu không
+mạng nào lấy được IP trong timeout 60 giây. Chọn lại mạng đã lưu với password rỗng
+sẽ dùng lại secret cũ. Settings cũng giữ `client_id` UUID bền vững.
 
 ## Bootstrap và activation hiện tại
 
@@ -98,8 +101,9 @@ wake profile ID; password không được ghi log. Nếu station không lấy đ
   sang host ngoài bootstrap trust.
 - URL provisioning chỉ chấp nhận HTTP(S) có host hợp lệ, không userinfo, query hay
   fragment. WebSocket URL trả về chỉ chấp nhận `ws://` hoặc `wss://` cùng policy.
-- Code 6 số và challenge được lưu trong một activation record NVS v2 có version +
-  CRC. Khi activate thành công, cùng record được thay atomically bằng device ID,
+- Code 6 số và challenge được lưu trong activation record có version + CRC, độc
+  lập với Wi-Fi profile record của NVS schema V3. Khi activate thành công, cùng
+  activation record được thay atomically bằng device ID,
   scoped token, WebSocket URL và config version.
 - Ticket pending được refresh ngay sau reboot và mỗi 30 giây; ticket hết TTL được
   server thay bằng code mới thay vì firmware poll challenge cũ vô hạn.

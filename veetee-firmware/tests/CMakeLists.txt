@@ -47,6 +47,29 @@ target_compile_options(activation_record_test PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME activation_record_test COMMAND activation_record_test)
 
+add_executable(
+    wifi_profile_record_test
+    wifi_profile_record_test.cpp
+    ../main/settings/wifi_profile_record.cpp
+)
+target_include_directories(wifi_profile_record_test PRIVATE ../main)
+target_compile_features(wifi_profile_record_test PRIVATE cxx_std_17)
+target_compile_options(wifi_profile_record_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME wifi_profile_record_test COMMAND wifi_profile_record_test)
+
+add_executable(
+    wifi_candidate_order_test
+    wifi_candidate_order_test.cpp
+    ../main/network/wifi_candidate_order.cpp
+    ../main/settings/wifi_profile_record.cpp
+)
+target_include_directories(wifi_candidate_order_test PRIVATE ../main)
+target_compile_features(wifi_candidate_order_test PRIVATE cxx_std_17)
+target_compile_options(wifi_candidate_order_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME wifi_candidate_order_test COMMAND wifi_candidate_order_test)
+
 add_library(
     cjson_host STATIC
     ../managed_components/espressif__cjson/cJSON/cJSON.c

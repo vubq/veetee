@@ -10,14 +10,18 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "settings/activation_record.h"
+#include "settings/wifi_profile_record.h"
 
 namespace veetee::settings {
 namespace {
 
 constexpr char kTag[] = "veetee_settings";
 constexpr char kNamespace[] = "veetee";
-constexpr std::uint32_t kSchemaVersion = 2;
+constexpr std::uint32_t kSchemaVersion = 3;
 constexpr char kActivationRecordKey[] = "activation";
+constexpr char kWifiProfileRecordKey[] = "wifi_profiles";
+constexpr char kLegacyWifiSsidKey[] = "wifi_ssid";
+constexpr char kLegacyWifiPasswordKey[] = "wifi_pass";
 
 void CopyString(char* destination, std::size_t capacity, const char* source) {
     if (capacity == 0) {
@@ -100,10 +104,7 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
 
     std::uint32_t schema_version = 0;
     error = nvs_get_u32(handle_, "schema", &schema_version);
-    if (error == ESP_ERR_NVS_NOT_FOUND) {
-        schema_version = kSchemaVersion;
-        error = nvs_set_u32(handle_, "schema", schema_version);
-    }
+    if (error == ESP_ERR_NVS_NOT_FOUND) error = ESP_OK;
     if (error != ESP_OK) {
         return error;
     }
@@ -111,16 +112,7 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
         ESP_LOGE(kTag, "Unsupported NVS schema version: %" PRIu32, schema_version);
         return ESP_ERR_INVALID_VERSION;
     }
-    if (schema_version < kSchemaVersion) {
-        // V2 adds one CRC-protected activation record; V1 network keys stay intact.
-        error = nvs_set_u32(handle_, "schema", kSchemaVersion);
-        if (error != ESP_OK) {
-            return error;
-        }
-    }
-
-    if ((error = LoadString("wifi_ssid", settings->ssid, sizeof(settings->ssid))) != ESP_OK ||
-        (error = LoadString("wifi_pass", settings->password, sizeof(settings->password))) != ESP_OK ||
+    if ((error = LoadWifiProfiles(settings)) != ESP_OK ||
         (error = LoadString("bootstrap", settings->bootstrap_url,
                             sizeof(settings->bootstrap_url),
                             CONFIG_VEETEE_DEFAULT_BOOTSTRAP_URL)) != ESP_OK ||
@@ -132,6 +124,12 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
                             sizeof(settings->client_id))) != ESP_OK ||
         (error = LoadActivation(settings)) != ESP_OK ||
         (error = EnsureClientId(settings)) != ESP_OK) {
+        return error;
+    }
+
+    // V3 replaces the single legacy credential pair with one CRC-protected,
+    // bounded MRU profile record. Activation V2 and all other keys stay intact.
+    if ((error = nvs_set_u32(handle_, "schema", kSchemaVersion)) != ESP_OK) {
         return error;
     }
 
@@ -148,20 +146,36 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
     return error;
 }
 
-esp_err_t SettingsStore::SaveProvisioning(const DeviceSettings& settings) {
-    if (handle_ == 0 || settings.ssid[0] == '\0' || settings.bootstrap_url[0] == '\0') {
+esp_err_t SettingsStore::SaveProvisioning(DeviceSettings* settings) {
+    if (handle_ == 0 || settings == nullptr || settings->ssid[0] == '\0' ||
+        settings->bootstrap_url[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t error = nvs_set_str(handle_, "wifi_ssid", settings.ssid);
-    if (error == ESP_OK) error = nvs_set_str(handle_, "wifi_pass", settings.password);
-    if (error == ESP_OK) error = nvs_set_str(handle_, "bootstrap", settings.bootstrap_url);
-    if (error == ESP_OK) error = nvs_set_str(handle_, "locale", settings.locale);
-    if (error == ESP_OK) error = nvs_set_str(handle_, "wake_profile", settings.wake_profile);
+    WifiProfileRecord updated = wifi_profiles_;
+    if (!UpsertWifiProfile(&updated, settings->ssid, settings->password)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const WifiProfile* selected = FindWifiProfile(updated, settings->ssid);
+    if (selected == nullptr) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t error = nvs_set_blob(handle_, kWifiProfileRecordKey, &updated,
+                                   sizeof(updated));
+    if (error == ESP_OK) {
+        error = nvs_set_str(handle_, "bootstrap", settings->bootstrap_url);
+    }
+    if (error == ESP_OK) error = nvs_set_str(handle_, "locale", settings->locale);
+    if (error == ESP_OK) {
+        error = nvs_set_str(handle_, "wake_profile", settings->wake_profile);
+    }
+    if (error == ESP_OK) error = nvs_set_u32(handle_, "schema", kSchemaVersion);
     if (error == ESP_OK) error = nvs_commit(handle_);
     if (error == ESP_OK) {
+        wifi_profiles_ = updated;
+        CopyString(settings->password, sizeof(settings->password),
+                   selected->password);
         ESP_LOGI(kTag, "Provisioning saved for SSID '%s' and bootstrap host (password redacted)",
-                 settings.ssid);
+                 settings->ssid);
     }
     return error;
 }
@@ -170,17 +184,45 @@ esp_err_t SettingsStore::ClearWifiCredentials(DeviceSettings* settings) {
     if (handle_ == 0 || settings == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t error = nvs_erase_key(handle_, "wifi_ssid");
+    esp_err_t error = nvs_erase_key(handle_, kWifiProfileRecordKey);
     if (error == ESP_ERR_NVS_NOT_FOUND) error = ESP_OK;
-    esp_err_t next = nvs_erase_key(handle_, "wifi_pass");
+    esp_err_t next = nvs_erase_key(handle_, kLegacyWifiSsidKey);
+    if (next != ESP_OK && next != ESP_ERR_NVS_NOT_FOUND) error = next;
+    next = nvs_erase_key(handle_, kLegacyWifiPasswordKey);
     if (next != ESP_OK && next != ESP_ERR_NVS_NOT_FOUND) error = next;
     next = nvs_erase_key(handle_, "bootstrap");
     if (next != ESP_OK && next != ESP_ERR_NVS_NOT_FOUND) error = next;
     if (error == ESP_OK) error = nvs_commit(handle_);
     if (error == ESP_OK) {
+        wifi_profiles_ = WifiProfileRecord{};
+        SealWifiProfileRecord(&wifi_profiles_);
         settings->ssid[0] = '\0';
         settings->password[0] = '\0';
         settings->bootstrap_url[0] = '\0';
+    }
+    return error;
+}
+
+WifiProfileRecord SettingsStore::WifiProfiles() const {
+    return wifi_profiles_;
+}
+
+esp_err_t SettingsStore::MarkWifiProfileSuccessful(const char* ssid,
+                                                   DeviceSettings* settings) {
+    if (handle_ == 0 || ssid == nullptr || settings == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    WifiProfileRecord updated = wifi_profiles_;
+    if (!veetee::settings::MarkWifiProfileSuccessful(&updated, ssid)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t error = nvs_set_blob(handle_, kWifiProfileRecordKey, &updated,
+                                   sizeof(updated));
+    if (error == ESP_OK) error = nvs_commit(handle_);
+    if (error == ESP_OK) {
+        wifi_profiles_ = updated;
+        ApplyActiveWifi(settings);
+        ESP_LOGI(kTag, "SSID '%s' promoted to last-successful profile", ssid);
     }
     return error;
 }
@@ -295,6 +337,79 @@ esp_err_t SettingsStore::LoadString(const char* key, char* destination,
         ESP_LOGE(kTag, "NVS value '%s' exceeds firmware bound", key);
     }
     return error;
+}
+
+esp_err_t SettingsStore::LoadWifiProfiles(DeviceSettings* settings) {
+    WifiProfileRecord loaded{};
+    std::size_t length = sizeof(loaded);
+    esp_err_t error = nvs_get_blob(handle_, kWifiProfileRecordKey, &loaded,
+                                   &length);
+    bool loaded_valid = false;
+    if (error == ESP_OK) {
+        loaded_valid = length == sizeof(loaded) && IsValidWifiProfileRecord(loaded);
+        if (!loaded_valid) {
+            ESP_LOGE(kTag,
+                     "Wi-Fi profile record failed version/CRC validation; clearing credentials");
+            error = nvs_erase_key(handle_, kWifiProfileRecordKey);
+            if (error != ESP_OK && error != ESP_ERR_NVS_NOT_FOUND) return error;
+        }
+    } else if (error != ESP_ERR_NVS_NOT_FOUND) {
+        return error;
+    }
+
+    if (loaded_valid) {
+        wifi_profiles_ = loaded;
+    } else {
+        wifi_profiles_ = WifiProfileRecord{};
+        char legacy_ssid[sizeof(settings->ssid)] = {};
+        char legacy_password[sizeof(settings->password)] = {};
+        std::size_t ssid_length = sizeof(legacy_ssid);
+        error = nvs_get_str(handle_, kLegacyWifiSsidKey, legacy_ssid,
+                            &ssid_length);
+        if (error == ESP_ERR_NVS_NOT_FOUND) {
+            error = ESP_OK;
+        } else if (error != ESP_OK) {
+            return error;
+        }
+        if (legacy_ssid[0] != '\0') {
+            std::size_t password_length = sizeof(legacy_password);
+            const esp_err_t password_error = nvs_get_str(
+                handle_, kLegacyWifiPasswordKey, legacy_password,
+                &password_length);
+            if (password_error != ESP_OK &&
+                password_error != ESP_ERR_NVS_NOT_FOUND) {
+                return password_error;
+            }
+            if (!UpsertWifiProfile(&wifi_profiles_, legacy_ssid,
+                                   legacy_password)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            error = nvs_set_blob(handle_, kWifiProfileRecordKey,
+                                 &wifi_profiles_, sizeof(wifi_profiles_));
+            if (error != ESP_OK) return error;
+            ESP_LOGI(kTag, "Migrated legacy Wi-Fi credential into V3 profile store");
+        } else {
+            SealWifiProfileRecord(&wifi_profiles_);
+        }
+    }
+
+    // Removal and the new blob are committed together by Initialize().
+    error = nvs_erase_key(handle_, kLegacyWifiSsidKey);
+    if (error != ESP_OK && error != ESP_ERR_NVS_NOT_FOUND) return error;
+    error = nvs_erase_key(handle_, kLegacyWifiPasswordKey);
+    if (error != ESP_OK && error != ESP_ERR_NVS_NOT_FOUND) return error;
+    ApplyActiveWifi(settings);
+    return ESP_OK;
+}
+
+void SettingsStore::ApplyActiveWifi(DeviceSettings* settings) const {
+    settings->ssid[0] = '\0';
+    settings->password[0] = '\0';
+    if (wifi_profiles_.count == 0) return;
+    CopyString(settings->ssid, sizeof(settings->ssid),
+               wifi_profiles_.profiles[0].ssid);
+    CopyString(settings->password, sizeof(settings->password),
+               wifi_profiles_.profiles[0].password);
 }
 
 esp_err_t SettingsStore::LoadActivation(DeviceSettings* settings) {
