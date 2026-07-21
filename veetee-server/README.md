@@ -56,6 +56,11 @@ Compatibility aliases `/xiaozhi/v1/` và `/xiaozhi/ota/` được giữ trong ga
 
 Manager API cũng publish desired config, wake profiles và signed resource bundles; device-edge expose canonical device routes, firmware tự pull/verify/apply theo manifest. Artifact download không đi qua voice WebSocket. Dev có thể proxy port 8003 bằng Caddy/Nginx; không tạo database/config source thứ hai.
 
+Device report resource apply state qua authenticated
+`PUT /veetee/devices/:id/reported-state` hoặc alias `/xiaozhi/...`. Sequence cao hơn
+advance atomically, cùng sequence là retry không mutate và sequence thấp hơn trả
+`409`; contract nằm ở `packages/contracts/fixtures/devices/reported-state-v1.json`.
+
 V1 là single-node deployment: voice-server, manager, 9Router, VAD/ASR/TTS workers
 chạy trên cùng máy. Port `20128` chỉ dành cho voice-server nội bộ; không cho ESP32
 hoặc LAN gọi trực tiếp.

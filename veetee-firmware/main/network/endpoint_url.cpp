@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 
 namespace veetee::network {
@@ -109,6 +110,33 @@ bool IsHttpEndpointUrl(const char* value) {
 
 bool IsWebSocketEndpointUrl(const char* value) {
     return IsValidEndpointUrl(value, "ws://", "wss://");
+}
+
+bool BuildHttpOriginEndpoint(const char* source_url, const char* endpoint_path,
+                             char* output, std::size_t output_size) {
+    if (!IsHttpEndpointUrl(source_url) || endpoint_path == nullptr ||
+        endpoint_path[0] != '/' || output == nullptr || output_size == 0) {
+        return false;
+    }
+    for (const char* cursor = endpoint_path; *cursor != '\0'; ++cursor) {
+        const unsigned char character = static_cast<unsigned char>(*cursor);
+        if (*cursor == '?' || *cursor == '#' || *cursor == '\\' ||
+            std::iscntrl(character) != 0 || std::isspace(character) != 0) {
+            return false;
+        }
+    }
+    const char* scheme = std::strstr(source_url, "://");
+    if (scheme == nullptr) return false;
+    const char* authority = scheme + 3;
+    const char* path = std::strchr(authority, '/');
+    const std::size_t origin_length =
+        path == nullptr ? std::strlen(source_url)
+                        : static_cast<std::size_t>(path - source_url);
+    const int written = std::snprintf(output, output_size, "%.*s%s",
+                                      static_cast<int>(origin_length), source_url,
+                                      endpoint_path);
+    return written > 0 && static_cast<std::size_t>(written) < output_size &&
+           IsHttpEndpointUrl(output);
 }
 
 }  // namespace veetee::network

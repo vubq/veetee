@@ -451,6 +451,111 @@ export const otaBootstrapSchema = {
   },
 } as const;
 
+export const deviceReportedStateSchema = {
+  $id: "https://schemas.veetee.local/devices/reported-state-v1.json",
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "bootId", "state"],
+  properties: {
+    version: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+    bootId: { type: "string", format: "uuid" },
+    state: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schemaVersion", "firmware", "resource"],
+      properties: {
+        schemaVersion: { const: 1 },
+        firmware: {
+          type: "object",
+          additionalProperties: false,
+          required: ["version"],
+          properties: {
+            version: {
+              type: "string",
+              minLength: 1,
+              maxLength: 32,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+            },
+          },
+        },
+        resource: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "phase",
+            "currentVersion",
+            "desiredVersion",
+            "activeSlot",
+            "targetSlot",
+            "expectedBytes",
+            "downloadedBytes",
+            "securityEpoch",
+          ],
+          properties: {
+            phase: {
+              enum: [
+                "checking",
+                "downloading",
+                "verifying",
+                "staged",
+                "applying",
+                "active",
+                "failed",
+                "rolled_back",
+              ],
+            },
+            currentVersion: {
+              type: "string",
+              minLength: 1,
+              maxLength: 32,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+            },
+            desiredVersion: {
+              type: "string",
+              minLength: 1,
+              maxLength: 32,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+            },
+            activeSlot: { type: "integer", minimum: 0, maximum: 1 },
+            targetSlot: { type: "integer", minimum: 0, maximum: 1 },
+            expectedBytes: {
+              type: "integer",
+              minimum: 0,
+              maximum: 16_777_216,
+            },
+            downloadedBytes: {
+              type: "integer",
+              minimum: 0,
+              maximum: 16_777_216,
+            },
+            securityEpoch: {
+              type: "integer",
+              minimum: 0,
+              maximum: 2_147_483_647,
+            },
+            errorCode: {
+              type: "string",
+              minLength: 1,
+              maxLength: 32,
+              pattern: "^[a-z0-9][a-z0-9._-]*$",
+            },
+          },
+          allOf: [
+            {
+              if: { properties: { phase: { enum: ["failed", "rolled_back"] } } },
+              then: { properties: { errorCode: true }, required: ["errorCode"] },
+              else: {
+                properties: { errorCode: true },
+                not: { required: ["errorCode"] },
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+} as const;
+
 const sessionEvent = {
   type: "object",
   required: ["session_id", "type"],
@@ -582,5 +687,6 @@ export const schemas = [
   providerBaselineSchema,
   mcpEnvelopeSchema,
   otaBootstrapSchema,
+  deviceReportedStateSchema,
   webSocketEventSchema,
 ] as const;

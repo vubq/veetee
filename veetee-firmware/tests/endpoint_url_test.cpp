@@ -17,6 +17,7 @@ void Expect(bool condition, const char* description) {
 int main() {
     using veetee::network::IsHttpEndpointUrl;
     using veetee::network::IsWebSocketEndpointUrl;
+    using veetee::network::BuildHttpOriginEndpoint;
 
     Expect(IsHttpEndpointUrl("http://192.168.1.20:8001/veetee/ota/"),
            "LAN bootstrap URL");
@@ -42,6 +43,23 @@ int main() {
            "query rejected");
     Expect(!IsWebSocketEndpointUrl("ws://2001:db8::1/veetee/v1/"),
            "unbracketed IPv6 rejected");
+
+    char endpoint[257] = {};
+    Expect(BuildHttpOriginEndpoint(
+               "http://192.168.1.20:8001/veetee/ota/",
+               "/veetee/devices/device-1/reported-state", endpoint,
+               sizeof(endpoint)),
+           "reported-state endpoint derived from bootstrap origin");
+    Expect(std::string(endpoint) ==
+               "http://192.168.1.20:8001/veetee/devices/device-1/reported-state",
+           "bootstrap path is not retained");
+    Expect(!BuildHttpOriginEndpoint("http://192.168.1.20:8001/veetee/ota/",
+                                    "relative", endpoint, sizeof(endpoint)),
+           "relative endpoint rejected");
+    Expect(!BuildHttpOriginEndpoint("http://192.168.1.20:8001/veetee/ota/",
+                                    "/veetee/report?secret=yes", endpoint,
+                                    sizeof(endpoint)),
+           "endpoint query rejected");
 
     std::cout << "endpoint URL tests passed\n";
     return 0;

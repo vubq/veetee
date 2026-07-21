@@ -56,6 +56,7 @@ export const fixtureSchemaIds = {
   "artifacts/signed-resource-manifest-vector-v1.json": "https://schemas.veetee.local/artifacts/signed-manifest-vector-v1.json",
   "config/agent-conversation-policy-v1.json": "https://schemas.veetee.local/config/agent-conversation-policy-v1.json",
   "config/provider-baseline-v1.json": "https://schemas.veetee.local/config/provider-baseline-v1.json",
+  "devices/reported-state-v1.json": "https://schemas.veetee.local/devices/reported-state-v1.json",
   "mcp/initialize.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/initialize-result.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/tools-call-error.json": "https://schemas.veetee.local/mcp/envelope-v1.json",

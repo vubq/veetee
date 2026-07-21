@@ -254,6 +254,7 @@ Mỗi release chạy fixture hai chiều:
 | config/resource manifest signature | yes | yes | verify before stage |
 | config_changed invalidation | yes | yes | pull later, no binary over WS |
 | resource A/B rollback | yes | yes | active slot remains usable |
+| resource reported-state retry | yes | yes | equal version idempotent, lower version `409` |
 | MCP pagination | yes | yes | all tools discovered |
 | MCP user-only | yes | yes | hidden by default |
 | OTA activation | yes | yes | bind then activate |
@@ -265,10 +266,14 @@ Contract changes require a fixture update, changelog entry và compatibility run
 
 - Device-facing WebSocket/bootstrap/config/artifact JSON dùng `snake_case` để gần contract Xiaozhi và giảm mapping trên firmware.
 - Manager REST/OpenAPI có thể dùng `camelCase`; DTO boundary phải map rõ sang device contract.
-- Canonical native routes: `/veetee/v1/`, `/veetee/ota/`, `/veetee/config/v1/devices/:deviceId`, `/veetee/artifacts/manifests/:manifestId`, `/veetee/artifacts/:artifactId/content`.
+- Canonical native routes: `/veetee/v1/`, `/veetee/ota/`, `/veetee/config/v1/devices/:deviceId`, `/veetee/artifacts/manifests/:manifestId`, `/veetee/artifacts/:artifactId/content`, `/veetee/devices/:deviceId/reported-state`.
 - Compatibility aliases: `/xiaozhi/v1/`, `/xiaozhi/ota/`. Alias chỉ nằm ở gateway/transport layer.
 - Bootstrap resource field canonical là `resources.manifest_url`; WebSocket invalidation dùng `config_version` và `resource_version`.
 - Manifest/content GET gửi `Authorization: Bearer ...` và `Device-Id`; content
   support một range `bytes=N-`, trả `206`, exact `Content-Length`,
   `Content-Range` và `Accept-Ranges: bytes`. Redirect và compressed transfer bị từ chối.
+- Reported-state dùng authenticated `PUT`; alias tương thích là
+  `/xiaozhi/devices/:deviceId/reported-state`. Body V1 dùng Manager REST camelCase
+  theo fixture `devices/reported-state-v1.json`; firmware không gửi token, URL
+  manifest hoặc transcript trong state.
 - `audio_params.sample_rate` trong device hello là uplink mic rate; trong server hello là downlink TTS rate. Implementation không được coi hai giá trị này là cùng một hướng audio.

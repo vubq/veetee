@@ -69,6 +69,87 @@ async function main() {
     headers: { ...deviceHeaders, ...authorization },
     body: "{}",
   });
+  const reportBase = {
+    bootId: "95eff5a6-3dcf-4cb4-a6d9-e31cd6d82f63",
+    state: {
+      schemaVersion: 1,
+      firmware: { version: "0.2.0" },
+      resource: {
+        phase: "checking",
+        currentVersion: "factory-bringup",
+        desiredVersion: activeBootstrap.resources.version,
+        activeSlot: 0,
+        targetSlot: 1,
+        expectedBytes: 0,
+        downloadedBytes: 0,
+        securityEpoch: 1,
+      },
+    },
+  };
+  const reported = await jsonRequest(
+    `${managerUrl}/veetee/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    {
+      method: "PUT",
+      headers: { ...authorization, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...reportBase, version: 1 }),
+    },
+  );
+  const equalRetry = await jsonRequest(
+    `${managerUrl}/xiaozhi/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    {
+      method: "PUT",
+      headers: { ...authorization, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...reportBase,
+        version: 1,
+        state: {
+          ...reportBase.state,
+          resource: { ...reportBase.state.resource, phase: "verifying" },
+        },
+      }),
+    },
+  );
+  if (
+    reported.reportedState.state.resource.phase !== "checking" ||
+    equalRetry.reportedState.state.resource.phase !== "checking"
+  ) {
+    throw new Error("Equal reported-state retry mutated stored state");
+  }
+  const activeReport = await jsonRequest(
+    `${managerUrl}/xiaozhi/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    {
+      method: "PUT",
+      headers: { ...authorization, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...reportBase,
+        version: 2,
+        state: {
+          ...reportBase.state,
+          resource: {
+            ...reportBase.state.resource,
+            phase: "active",
+            currentVersion: activeBootstrap.resources.version,
+            activeSlot: 1,
+            targetSlot: 1,
+          },
+        },
+      }),
+    },
+  );
+  if (activeReport.reportedState.version !== 2) {
+    throw new Error("Reported-state sequence did not advance");
+  }
+  const staleReport = await fetch(
+    `${managerUrl}/veetee/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    {
+      method: "PUT",
+      headers: { ...authorization, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...reportBase, version: 1 }),
+    },
+  );
+  if (staleReport.status !== 409) {
+    throw new Error(`Stale reported state returned ${staleReport.status}`);
+  }
   const manifestResponse = await fetch(activeBootstrap.resources.manifest_url, {
     headers: authorization,
   });
@@ -116,6 +197,8 @@ async function main() {
       fullStatus: contentResponse.status,
       rangeStatus: rangeResponse.status,
       invalidRangeStatus: invalidRange.status,
+      reportedStateVersion: activeReport.reportedState.version,
+      staleReportStatus: staleReport.status,
     })}\n`,
   );
 }

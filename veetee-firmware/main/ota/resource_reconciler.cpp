@@ -203,6 +203,10 @@ settings::ResourceRecordPhase ResourceReconciler::phase() const {
     return RecordSnapshot().phase;
 }
 
+settings::ResourceRecord ResourceReconciler::Snapshot() const {
+    return RecordSnapshot();
+}
+
 esp_err_t ResourceReconciler::ActivateStaged() {
     if (state_mutex_ == nullptr) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(state_mutex_, portMAX_DELAY);
@@ -322,6 +326,8 @@ void ResourceReconciler::Reconcile(const Target& target) {
         return;
     }
 
+    Emit(ResourceReconcileEvent::kDownloading, target, manifest.version, "ok");
+
     const esp_err_t download_error =
         DownloadPayload(target, manifest, target_slot, resume_bytes);
     if (download_error != ESP_OK) {
@@ -335,6 +341,7 @@ void ResourceReconciler::Reconcile(const Target& target) {
         }
         return;
     }
+    Emit(ResourceReconcileEvent::kVerifying, target, manifest.version, "ok");
     const esp_err_t stage_error = StageDownload(target);
     if (stage_error != ESP_OK) {
         EmitWithRetry(ResourceReconcileEvent::kPayloadRejected, target,
@@ -663,6 +670,10 @@ esp_err_t ResourceReconciler::SaveDownloadProgress(
     const esp_err_t error = valid ? resource_state_.Save(record)
                                   : ESP_ERR_INVALID_STATE;
     xSemaphoreGive(state_mutex_);
+    if (error == ESP_OK) {
+        Emit(ResourceReconcileEvent::kDownloading, target,
+             target.desired_version, "ok");
+    }
     return error;
 }
 
@@ -837,6 +848,17 @@ bool ResourceReconciler::Emit(ResourceReconcileEvent event,
                   bundle_version == nullptr ? "" : bundle_version);
     std::snprintf(notification.error_code, sizeof(notification.error_code), "%s",
                   error_code == nullptr ? "unknown" : error_code);
+    const settings::ResourceRecord record = RecordSnapshot();
+    std::snprintf(notification.current_version,
+                  sizeof(notification.current_version), "%s",
+                  record.active_version);
+    notification.expected_bytes = record.expected_bytes;
+    notification.downloaded_bytes = record.downloaded_bytes;
+    notification.security_epoch =
+        record.desired_security_epoch != 0 ? record.desired_security_epoch
+                                           : record.active_security_epoch;
+    notification.active_slot = record.active_slot;
+    notification.target_slot = record.target_slot;
     return sink_(notification, sink_context_);
 }
 

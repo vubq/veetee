@@ -19,6 +19,8 @@
 namespace veetee::ota {
 
 enum class ResourceReconcileEvent : std::uint8_t {
+    kDownloading,
+    kVerifying,
     kAlreadyActive,
     kPayloadStaged,
     kManifestRejected,
@@ -31,7 +33,11 @@ struct ResourceReconcileNotification {
     char desired_version[33] = {};
     char bundle_version[33] = {};
     char error_code[33] = {};
-    std::uint32_t payload_bytes = 0;
+    char current_version[33] = {};
+    std::uint32_t expected_bytes = 0;
+    std::uint32_t downloaded_bytes = 0;
+    std::uint32_t security_epoch = 0;
+    std::uint8_t active_slot = 0;
     std::uint8_t target_slot = 0;
 };
 
@@ -48,6 +54,7 @@ public:
     [[nodiscard]] const char* PreviousPartitionLabel() const;
     [[nodiscard]] const char* StagedPartitionLabel() const;
     [[nodiscard]] settings::ResourceRecordPhase phase() const;
+    [[nodiscard]] settings::ResourceRecord Snapshot() const;
     esp_err_t ActivateStaged();
     esp_err_t ConfirmActive();
     esp_err_t Rollback();

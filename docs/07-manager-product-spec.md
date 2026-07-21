@@ -116,7 +116,7 @@ Device-facing artifact/config endpoints không nằm trên voice hot path:
 GET  /veetee/config/v1/devices/:deviceId
 GET  /veetee/artifacts/manifests/:manifestId
 GET  /veetee/artifacts/:artifactId/content
-POST /veetee/devices/:deviceId/reported-state
+PUT  /veetee/devices/:deviceId/reported-state
 ```
 
 Internal endpoint dùng service token/mTLS, không expose ra internet.

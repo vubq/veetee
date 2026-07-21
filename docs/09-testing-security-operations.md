@@ -15,6 +15,7 @@
 - Restricted JCS canonicalization, detached Ed25519 vector, duplicate/NUL/trailing
   JSON rejection và trusted-key/security-epoch downgrade.
 - Apply journal and power-loss recovery parser.
+- Reported-state sequence/CRC, durable terminal retry và latest-state coalescing.
 
 ### Firmware hardware tests
 
@@ -63,6 +64,7 @@ E2E-16 Zipformer stable -> không khởi chạy ChunkFormer
 E2E-17 VieNeu batch/stream capability được phản ánh đúng, abort không phát audio stale
 E2E-18 9router abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
 E2E-19 "Hey VeeTee" corpus -> FAR/FRR/latency gate; `Hi ESP` bring-up không được tính là product pass
+E2E-20 reported-state equal retry -> no mutation; lower sequence -> 409; native/Xiaozhi aliases equivalent
 ```
 
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.

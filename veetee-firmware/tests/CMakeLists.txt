@@ -141,3 +141,26 @@ target_compile_features(resource_record_test PRIVATE cxx_std_17)
 target_compile_options(resource_record_test PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME resource_record_test COMMAND resource_record_test)
+
+add_executable(
+    reported_state_record_test
+    reported_state_record_test.cpp
+    ../main/settings/reported_state_record.cpp
+)
+target_include_directories(reported_state_record_test PRIVATE ../main)
+target_compile_features(reported_state_record_test PRIVATE cxx_std_17)
+target_compile_options(reported_state_record_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME reported_state_record_test COMMAND reported_state_record_test)
+
+add_executable(
+    reported_state_outbox_test
+    reported_state_outbox_test.cpp
+    ../main/settings/reported_state_record.cpp
+    ../main/telemetry/reported_state_outbox.cpp
+)
+target_include_directories(reported_state_outbox_test PRIVATE ../main)
+target_compile_features(reported_state_outbox_test PRIVATE cxx_std_17)
+target_compile_options(reported_state_outbox_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME reported_state_outbox_test COMMAND reported_state_outbox_test)

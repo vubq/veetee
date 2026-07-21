@@ -2,6 +2,11 @@
 
 Thứ tự dưới đây được tối ưu để AI có thể code từng lát dọc, luôn có artifact chạy được. Không bắt đầu bằng việc port toàn bộ Xiaozhi.
 
+Trạng thái implementation ngày 2026-07-21: nền Phase 0-3 đã có source/build/test và
+hardware bring-up; resource A/B signed rollout cùng reported-state end-to-end đã
+hoàn thành ở mức code. Blank-flash AP -> Wi-Fi -> bind -> voice E2E trên board và
+toàn bộ Phase 4-6 vẫn là các gate chính chưa hoàn tất.
+
 ## Phase 0 - Freeze contract và board (1-2 ngày)
 
 ### Việc cần làm

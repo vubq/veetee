@@ -2,6 +2,36 @@ export type Locale = string;
 export type InteractionMode = "auto" | "manual" | "realtime";
 export type WakeSource = "button" | "wake_word";
 
+export type ReportedResourcePhase =
+  | "checking"
+  | "downloading"
+  | "verifying"
+  | "staged"
+  | "applying"
+  | "active"
+  | "failed"
+  | "rolled_back";
+
+export interface DeviceReportedStateV1 {
+  version: number;
+  bootId: string;
+  state: {
+    schemaVersion: 1;
+    firmware: { version: string };
+    resource: {
+      phase: ReportedResourcePhase;
+      currentVersion: string;
+      desiredVersion: string;
+      activeSlot: 0 | 1;
+      targetSlot: 0 | 1;
+      expectedBytes: number;
+      downloadedBytes: number;
+      securityEpoch: number;
+      errorCode?: string;
+    };
+  };
+}
+
 export interface AudioParameters {
   format: "opus";
   sample_rate: number;

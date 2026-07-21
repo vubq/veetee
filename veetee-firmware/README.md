@@ -114,8 +114,10 @@ detached Ed25519. Sau đó firmware stream raw ESP-SR payload vào inactive reso
 slot với HTTP Range resume, SHA-256, CRC-protected NVS journal, safe-boundary hot
 reload, health window và rollback. Cancellation giữ active slot cùng checkpoint
 256 KiB gần nhất. Verifier dùng Monocypher 4.0.3 và restricted JCS; payload hash
-dùng PSA Crypto. Phần resource còn lại là POST reported/apply state và chạy đủ
-power-loss/corruption matrix trên phần cứng thật.
+dùng PSA Crypto. Reporter task gửi apply state bằng authenticated `PUT`, persist
+sequence/terminal retry trong NVS riêng, coalesce trạng thái trung gian và giữ alias
+`/xiaozhi/devices/:id/reported-state`. Phần resource còn lại là chạy đủ
+power-loss/corruption matrix trên phần cứng thật và hiển thị drift/timeline trên web.
 
 Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware
 không đọc password Wi-Fi đã lưu trên máy phát triển.

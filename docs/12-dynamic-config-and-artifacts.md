@@ -295,7 +295,44 @@ checking -> downloading -> verifying -> staged -> applying -> active
                                             └-> failed/rolled_back
 ```
 
-Report phải có current/desired version, error code, bytes downloaded, duration, boot id và trace id; không gửi secret hoặc signed URL đầy đủ vào log.
+Firmware V1 gửi:
+
+```http
+PUT /veetee/devices/:deviceId/reported-state
+Authorization: Bearer <device-token>
+Device-Id: <hardware-id>
+Content-Type: application/json
+```
+
+```json
+{
+  "version": 12,
+  "bootId": "95eff5a6-3dcf-4cb4-a6d9-e31cd6d82f63",
+  "state": {
+    "schemaVersion": 1,
+    "firmware": {"version": "0.2.0"},
+    "resource": {
+      "phase": "downloading",
+      "currentVersion": "factory-bringup",
+      "desiredVersion": "1.0.0",
+      "activeSlot": 0,
+      "targetSlot": 1,
+      "expectedBytes": 125943,
+      "downloadedBytes": 65536,
+      "securityEpoch": 1
+    }
+  }
+}
+```
+
+`errorCode` chỉ xuất hiện ở `failed/rolled_back`. Version lớn hơn atomically thay
+state; cùng version là retry idempotent và không mutate; version thấp hơn trả `409`.
+Sequence được firmware persist trước khi gửi. Terminal state đang chờ được persist
+để retry qua reboot; intermediate state latest-wins để không làm nghẽn main/audio.
+Endpoint lấy từ bootstrap origin nên đổi IP/tunnel/domain không cần rebuild firmware.
+V1 chưa đưa duration/trace vào snapshot; hai field này sẽ thuộc apply-event timeline
+khi Manager có rollout/event model riêng. Không gửi secret, transcript hoặc signed
+URL đầy đủ vào body/log.
 
 ## 9. Firmware storage cho ESP32-S3 N16R8
 
@@ -397,7 +434,8 @@ Device-facing endpoints:
 GET  /veetee/config/v1/devices/:deviceId
 GET  /veetee/artifacts/manifests/:manifestId
 GET  /veetee/artifacts/:artifactId/content
-POST /veetee/devices/:deviceId/reported-state
+PUT  /veetee/devices/:deviceId/reported-state
+PUT  /xiaozhi/devices/:deviceId/reported-state
 ```
 
 Upload đi thẳng vào private MinIO/local object store bằng short-lived signed upload URL; Manager API không giữ file lớn trong RAM. Worker validate magic/size/hash/schema/license, build bundle và ký release.

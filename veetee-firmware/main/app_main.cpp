@@ -1,4 +1,5 @@
 #include <cinttypes>
+#include <cctype>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,7 @@
 #include "ota/bootstrap_client.h"
 #include "ota/resource_reconciler.h"
 #include "settings/settings_store.h"
+#include "telemetry/reported_state_reporter.h"
 #include "transport/websocket_transport.h"
 
 namespace {
@@ -55,6 +57,7 @@ veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
 veetee::ota::ResourceReconciler g_resources;
+veetee::telemetry::ReportedStateReporter g_reporter;
 veetee::transport::WebSocketTransport g_transport;
 veetee::mcp::DeviceMcp g_mcp;
 esp_timer_handle_t g_resource_apply_timer = nullptr;
@@ -97,6 +100,82 @@ bool SamePartition(const char* left, const char* right) {
     return left != nullptr && right != nullptr && std::strcmp(left, right) == 0;
 }
 
+void CopyErrorCode(char* destination, std::size_t capacity,
+                   const char* source) {
+    if (destination == nullptr || capacity == 0) return;
+    std::size_t output = 0;
+    for (const char* cursor = source == nullptr ? "unknown" : source;
+         *cursor != '\0' && output + 1 < capacity; ++cursor) {
+        const unsigned char character = static_cast<unsigned char>(*cursor);
+        if (std::isalnum(character) != 0) {
+            destination[output++] = static_cast<char>(std::tolower(character));
+        } else if (*cursor == '.' || *cursor == '_' || *cursor == '-') {
+            destination[output++] = *cursor;
+        } else {
+            destination[output++] = '_';
+        }
+    }
+    destination[output] = '\0';
+}
+
+bool ScheduleResourceReport(
+    veetee::settings::ReportedResourcePhase phase,
+    const veetee::settings::ResourceRecord& current,
+    const char* desired_override = nullptr, const char* error_code = nullptr,
+    const veetee::settings::ResourceRecord* operation = nullptr) {
+    const auto& source = operation == nullptr ? current : *operation;
+    veetee::settings::ReportedResourceState report{};
+    report.phase = phase;
+    report.active_slot = current.active_slot;
+    report.target_slot = phase == veetee::settings::ReportedResourcePhase::kActive
+                             ? current.active_slot
+                             : source.target_slot;
+    report.expected_bytes = source.expected_bytes;
+    report.downloaded_bytes = source.downloaded_bytes;
+    report.security_epoch = source.desired_security_epoch != 0
+                                ? source.desired_security_epoch
+                                : current.active_security_epoch;
+    std::snprintf(report.current_version, sizeof(report.current_version), "%s",
+                  current.active_version);
+    const char* desired = desired_override != nullptr && desired_override[0] != '\0'
+                              ? desired_override
+                              : source.desired_version[0] != '\0'
+                                    ? source.desired_version
+                                    : current.active_version;
+    std::snprintf(report.desired_version, sizeof(report.desired_version), "%s",
+                  desired);
+    if (phase == veetee::settings::ReportedResourcePhase::kFailed ||
+        phase == veetee::settings::ReportedResourcePhase::kRolledBack) {
+        CopyErrorCode(report.error_code, sizeof(report.error_code), error_code);
+    }
+    const bool queued = g_reporter.Schedule(report);
+    if (!queued) {
+        ESP_LOGW(kTag, "Unable to queue resource report phase=%s",
+                 veetee::settings::ReportedResourcePhaseName(phase));
+    }
+    return queued;
+}
+
+bool ScheduleResourceNotificationReport(
+    veetee::settings::ReportedResourcePhase phase,
+    const veetee::ota::ResourceReconcileNotification& notification,
+    const char* error_code = nullptr) {
+    veetee::settings::ResourceRecord current = g_resources.Snapshot();
+    veetee::settings::ResourceRecord operation = current;
+    operation.active_slot = notification.active_slot;
+    operation.target_slot = notification.target_slot;
+    operation.expected_bytes = notification.expected_bytes;
+    operation.downloaded_bytes = notification.downloaded_bytes;
+    operation.desired_security_epoch = notification.security_epoch;
+    if (notification.current_version[0] != '\0') {
+        std::snprintf(current.active_version, sizeof(current.active_version), "%s",
+                      notification.current_version);
+    }
+    return ScheduleResourceReport(phase, current,
+                                  notification.desired_version, error_code,
+                                  &operation);
+}
+
 void ScheduleResourceApply() {
     if (!g_resource_apply_pending || g_resource_apply_timer == nullptr) return;
     esp_timer_stop(g_resource_apply_timer);
@@ -110,6 +189,7 @@ void ScheduleResourceApply() {
 
 void RollbackWakeResource(const char* fallback_partition,
                           const char* reason) {
+    const veetee::settings::ResourceRecord attempted = g_resources.Snapshot();
     if (fallback_partition != nullptr) {
         const esp_err_t reload_error =
             g_board.ReloadWakeResource(fallback_partition);
@@ -126,6 +206,12 @@ void RollbackWakeResource(const char* fallback_partition,
     } else {
         ESP_LOGW(kTag, "Resource rolled back reason=%s active=%s", reason,
                  g_resources.ActivePartitionLabel());
+        const char* desired = attempted.desired_version[0] != '\0'
+                                  ? attempted.desired_version
+                                  : attempted.active_version;
+        ScheduleResourceReport(
+            veetee::settings::ReportedResourcePhase::kRolledBack,
+            g_resources.Snapshot(), desired, reason, &attempted);
     }
 }
 
@@ -142,6 +228,9 @@ void ApplyStagedWakeResource() {
     }
 
     ESP_LOGI(kTag, "Applying staged wake resource partition=%s", staged_partition);
+    ScheduleResourceReport(
+        veetee::settings::ReportedResourcePhase::kApplying,
+        g_resources.Snapshot());
     esp_err_t error = g_board.ReloadWakeResource(staged_partition);
     if (error != ESP_OK) {
         ESP_LOGE(kTag, "Staged wake resource load failed: %s",
@@ -177,10 +266,15 @@ void CheckActiveWakeResourceHealth() {
     const char* active_partition = g_resources.ActivePartitionLabel();
     if (g_board.WakeResourceHealthy() &&
         SamePartition(g_board.loaded_wake_partition(), active_partition)) {
+        const veetee::settings::ResourceRecord activated = g_resources.Snapshot();
         const esp_err_t error = g_resources.ConfirmActive();
         if (error == ESP_OK) {
             ESP_LOGI(kTag, "Resource health confirmed active=%s",
                      active_partition);
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kActive,
+                g_resources.Snapshot(), activated.active_version, nullptr,
+                &activated);
             return;
         }
         ESP_LOGE(kTag, "Unable to confirm resource health: %s",
@@ -254,8 +348,18 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
             message.event = veetee::app::Event::kActivationComplete;
             break;
         case veetee::ota::BootstrapEvent::kResourceDesired:
-            return g_resources.Schedule(notification.resource_version,
-                                        notification.resource_manifest_url);
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kChecking,
+                g_resources.Snapshot(), notification.resource_version);
+            if (g_resources.Schedule(notification.resource_version,
+                                     notification.resource_manifest_url)) {
+                return true;
+            }
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kFailed,
+                g_resources.Snapshot(), notification.resource_version,
+                "schedule_rejected");
+            return true;
     }
     return PostMessage(message);
 }
@@ -369,18 +473,34 @@ void RunApplication(void*) {
         if (message.kind == AppMessageKind::kResourceReconcile) {
             const auto& notification = message.resource_notification;
             if (notification.event ==
+                veetee::ota::ResourceReconcileEvent::kDownloading) {
+                ScheduleResourceNotificationReport(
+                    veetee::settings::ReportedResourcePhase::kDownloading,
+                    notification);
+            } else if (notification.event ==
+                       veetee::ota::ResourceReconcileEvent::kVerifying) {
+                ScheduleResourceNotificationReport(
+                    veetee::settings::ReportedResourcePhase::kVerifying,
+                    notification);
+            } else if (notification.event ==
                 veetee::ota::ResourceReconcileEvent::kPayloadStaged) {
                 ESP_LOGI(kTag,
                          "Resource payload staged desired=%s bundle=%s; apply pending",
                          notification.desired_version,
                          notification.bundle_version);
                 g_resource_apply_pending = true;
+                ScheduleResourceNotificationReport(
+                    veetee::settings::ReportedResourcePhase::kStaged,
+                    notification);
                 ScheduleResourceApply();
             } else if (notification.event ==
                        veetee::ota::ResourceReconcileEvent::kAlreadyActive) {
                 ESP_LOGI(kTag, "Resource already active desired=%s",
                          notification.desired_version);
                 g_resource_apply_pending = false;
+                ScheduleResourceNotificationReport(
+                    veetee::settings::ReportedResourcePhase::kActive,
+                    notification);
             } else {
                 ESP_LOGW(kTag,
                          "Resource reconcile failed desired=%s error=%s stage=%s",
@@ -390,6 +510,9 @@ void RunApplication(void*) {
                              : notification.event == veetee::ota::ResourceReconcileEvent::kPayloadRejected
                                    ? "payload"
                                    : "transport");
+                ScheduleResourceNotificationReport(
+                    veetee::settings::ReportedResourcePhase::kFailed,
+                    notification, notification.error_code);
             }
             continue;
         }
@@ -456,6 +579,9 @@ void RunApplication(void*) {
                 ESP_LOGE(kTag, "Unable to render standby screen: %s",
                          esp_err_to_name(error));
             }
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kActive,
+                g_resources.Snapshot());
         } else if (result.to == veetee::app::State::kConnecting) {
             const veetee::transport::WakeSource source =
                 event == veetee::app::Event::kActivationWakeDetected
@@ -548,6 +674,7 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_resources.Initialize(&g_settings,
                                            &OnResourceReconcileEvent, nullptr));
+    ESP_ERROR_CHECK(g_reporter.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,

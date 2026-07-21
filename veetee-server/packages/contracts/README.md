@@ -12,6 +12,9 @@ không nằm trong fixture; `base_url_env` chỉ là tên biến môi trường 
 
 `fixtures/artifacts/resource-manifest-v1.json` và `fixtures/artifacts/device-capability-v1.json` mô tả signed resource bundle, runtime ABI, flash/PSRAM budget và desired/reported compatibility.
 
+`fixtures/devices/reported-state-v1.json` khóa body firmware gửi sau từng phase
+resource apply, gồm monotonic version, boot ID, firmware và bounded resource state.
+
 Artifact fixture dùng một chữ ký development có thể verify để cùng một document
 chạy qua Node contract test và firmware host test. Vector riêng tại
 `fixtures/artifacts/signed-resource-manifest-vector-v1.json` khóa RFC 8785 JCS,

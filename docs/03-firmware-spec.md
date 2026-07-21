@@ -278,10 +278,16 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
   ưu tiên button/wake và khi state machine đang `idle`;
 - activation chuyển qua `pending_health`, health window xác nhận slot mới; load/task
   health fail hoặc boot active fail sẽ reload previous slot và rollback. Nếu cả hai
-  model lỗi, firmware tiếp tục button-only thay vì bootloop.
+  model lỗi, firmware tiếp tục button-only thay vì bootloop;
+- reporter task riêng gửi `checking/downloading/verifying/staged/applying/active`
+  hoặc `failed/rolled_back` tới Manager API. Intermediate state được coalesce theo
+  latest-wins; terminal state đi FIFO và terminal đang retry được giữ trong NVS;
+- reported-state sequence tăng đơn điệu, lưu bằng record V1 + CRC độc lập với
+  resource recovery journal. Mất HTTP response retry cùng version nên server xử lý
+  idempotent; reboot không tái sử dụng version cũ.
 
-Phần còn thiếu của lát resource là firmware POST desired/reported/apply result về
-Manager API và power-loss/corrupt-payload matrix đầy đủ trên board thật.
+Phần còn thiếu của lát resource là power-loss/corrupt-payload matrix đầy đủ trên
+board thật và UI drift/apply timeline trên Manager Web.
 
 Luồng reconcile:
 
