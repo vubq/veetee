@@ -447,7 +447,7 @@ async def send_mcp_error(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="ws://127.0.0.1:8000/xiaozhi/v1/")
+    parser.add_argument("--url", default="ws://127.0.0.1:8000/veetee/v1/")
     parser.add_argument(
         "--wav",
         type=Path,

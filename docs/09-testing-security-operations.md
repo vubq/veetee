@@ -64,7 +64,7 @@ E2E-16 Zipformer stable -> không khởi chạy ChunkFormer
 E2E-17 VieNeu batch/stream capability được phản ánh đúng, abort không phát audio stale
 E2E-18 9router abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
 E2E-19 "Hey VeeTee" corpus -> FAR/FRR/latency gate; `Hi ESP` bring-up không được tính là product pass
-E2E-20 reported-state equal retry -> no mutation; lower sequence -> 409; native/Xiaozhi aliases equivalent
+E2E-20 reported-state equal retry -> no mutation; lower sequence -> 409; canonical Veetee route only
 ```
 
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.
@@ -169,7 +169,7 @@ Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, 
 
 ## 6. Release gates
 
-- Contract tests pass cả native và Xiaozhi compatibility path.
+- Contract tests pass canonical Veetee routes và các wire fixtures tương thích; runtime không publish namespace của source tham chiếu.
 - Migration up/down strategy được review và backup restore test.
 - Không có secret trong Git/traces/build artifacts.
 - Firmware build reproducible, artifact có SHA-256/signature/SBOM.

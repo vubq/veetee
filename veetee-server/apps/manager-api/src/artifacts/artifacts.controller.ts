@@ -27,7 +27,7 @@ export class ArtifactsController {
     private readonly artifacts: ArtifactFilesService,
   ) {}
 
-  @Get(["veetee/artifacts/manifests/:id", "xiaozhi/artifacts/manifests/:id"])
+  @Get("veetee/artifacts/manifests/:id")
   async manifest(
     @Param("id") id: string,
     @Headers() headers: RequestHeaders,
@@ -37,7 +37,7 @@ export class ArtifactsController {
     this.send(reply, await this.artifacts.openManifest(id));
   }
 
-  @Get(["veetee/artifacts/:id/content", "xiaozhi/artifacts/:id/content"])
+  @Get("veetee/artifacts/:id/content")
   async content(
     @Param("id") id: string,
     @Headers() headers: RequestHeaders,

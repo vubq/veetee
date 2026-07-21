@@ -51,6 +51,14 @@ async def test_empty_registry_is_ready_during_phase_zero() -> None:
     assert response.json() == {"status": "ready", "components": []}
 
 
+async def test_default_websocket_route_uses_only_the_veetee_namespace() -> None:
+    app = create_app(Settings(environment="test", _env_file=None))  # type: ignore[call-arg]
+    paths = {route.path for route in app.routes}
+
+    assert "/veetee/v1/" in paths
+    assert "/xiaozhi/v1/" not in paths
+
+
 async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     profile = SessionProfile.defaults(
         Settings(environment="test", require_device_auth=False)

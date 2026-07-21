@@ -52,12 +52,12 @@ prototypes/
 | Manager Web | 8081 | `http://192.168.1.20:8081` |
 | 9Router (internal) | 20128 | `http://127.0.0.1:20128/v1` |
 
-Compatibility aliases `/xiaozhi/v1/` và `/xiaozhi/ota/` được giữ trong gateway/route layer, không lan vào domain logic.
+Runtime chỉ publish canonical namespace `/veetee/...`. Wire semantics tương thích được khóa bằng schema/fixture; nếu cần thử một client tham chiếu cũ thì dùng rewrite tạm ở reverse proxy development, không thêm branded route vào source sản phẩm.
 
 Manager API cũng publish desired config, wake profiles và signed resource bundles; device-edge expose canonical device routes, firmware tự pull/verify/apply theo manifest. Artifact download không đi qua voice WebSocket. Dev có thể proxy port 8003 bằng Caddy/Nginx; không tạo database/config source thứ hai.
 
 Device report resource apply state qua authenticated
-`PUT /veetee/devices/:id/reported-state` hoặc alias `/xiaozhi/...`. Sequence cao hơn
+`PUT /veetee/devices/:id/reported-state`. Sequence cao hơn
 advance atomically, cùng sequence là retry không mutate và sequence thấp hơn trả
 `409`; contract nằm ở `packages/contracts/fixtures/devices/reported-state-v1.json`.
 
@@ -67,7 +67,7 @@ hoặc LAN gọi trực tiếp.
 
 ## Voice WebSocket hiện tại
 
-- Route native `/veetee/v1/` và compatibility `/xiaozhi/v1/` yêu cầu
+- Route `/veetee/v1/` yêu cầu
   `Protocol-Version`, hardware `Device-Id`, `Client-Id` và Bearer token khi device
   auth bật.
 - Server chờ và validate exact device hello trước khi trả server hello; timeout mặc

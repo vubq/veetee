@@ -162,10 +162,7 @@ export class DevicesController {
 
   @Public()
   @UseGuards(DeviceAuthGuard)
-  @Put([
-    "veetee/devices/:id/reported-state",
-    "xiaozhi/devices/:id/reported-state",
-  ])
+  @Put("veetee/devices/:id/reported-state")
   async report(@Param("id") id: string, @Body() input: ReportedStateDto): Promise<DeviceRecord> {
     if (input.state.resource.downloadedBytes > input.state.resource.expectedBytes) {
       throw new BadRequestException("Reported downloadedBytes exceeds expectedBytes");

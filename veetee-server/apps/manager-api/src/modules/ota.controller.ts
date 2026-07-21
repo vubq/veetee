@@ -36,7 +36,7 @@ interface BootstrapResponse {
 export class OtaController {
   constructor(private readonly store: ControlPlaneStore) {}
 
-  @Post(["veetee/ota", "xiaozhi/ota"])
+  @Post("veetee/ota")
   @HttpCode(HttpStatus.OK)
   async bootstrap(
     @Headers() headers: RequestHeaders,
@@ -106,7 +106,7 @@ export class OtaController {
     return response;
   }
 
-  @Post(["veetee/ota/activate", "xiaozhi/ota/activate"])
+  @Post("veetee/ota/activate")
   @HttpCode(HttpStatus.OK)
   async activate(
     @Headers() headers: RequestHeaders,
@@ -214,7 +214,7 @@ export class OtaController {
   }
 
   private voiceUrl(): string {
-    const value = process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/xiaozhi/v1/";
+    const value = process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/veetee/v1/";
     const url = new URL(value);
     if (!(["ws:", "wss:"] as string[]).includes(url.protocol)) {
       throw new Error("VEETEE_VOICE_WS_URL must use ws:// or wss://");

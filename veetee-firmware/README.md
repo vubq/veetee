@@ -8,7 +8,7 @@ Source repo firmware của robot Veetee, mục tiêu đầu tiên là ESP32-S3 N
 - Một board factory `veetee-s3-n16r8`.
 - Wi-Fi station + AP captive portal fallback.
 - OTA/bootstrap, activation code 6 số và signed A/B OTA.
-- WebSocket Xiaozhi-compatible V1, Opus, auto conversation, assistant gate, wake/abort và optional manual/PTT compatibility.
+- WebSocket V1 theo wire contract đã kiểm chứng, Opus, auto conversation, assistant gate, wake/abort và optional manual/PTT compatibility.
 - Hai cách wake: button và ESP-SR activation wake word; interrupt profile chạy khi AI đang xử lý và best-effort khi đang phát tiếng tới khi AEC gate pass.
 - Session timeout/closing grace nhận từ signed agent config; firmware tự recover nếu server treo.
 - Signed resource bundle cho wake/model/assets dùng inactive slot, verify rồi activate; executable/runtime vẫn chỉ qua A/B firmware OTA.
@@ -92,8 +92,7 @@ wake profile ID; password không được ghi log. Nếu station không lấy đ
 
 ## Bootstrap và activation hiện tại
 
-- Sau khi nhận IP, firmware POST system report tới bootstrap URL đã provision;
-  route native `/veetee/ota/` và alias `/xiaozhi/ota/` do server cung cấp.
+- Sau khi nhận IP, firmware POST system report tới bootstrap URL `/veetee/ota/` đã provision.
 - Request gửi hardware/client/model/firmware/locale headers; token và challenge
   không được ghi log. HTTP(S) redirect bị từ chối để credential không bị chuyển
   sang host ngoài bootstrap trust.
@@ -115,8 +114,7 @@ slot với HTTP Range resume, SHA-256, CRC-protected NVS journal, safe-boundary 
 reload, health window và rollback. Cancellation giữ active slot cùng checkpoint
 256 KiB gần nhất. Verifier dùng Monocypher 4.0.3 và restricted JCS; payload hash
 dùng PSA Crypto. Reporter task gửi apply state bằng authenticated `PUT`, persist
-sequence/terminal retry trong NVS riêng, coalesce trạng thái trung gian và giữ alias
-`/xiaozhi/devices/:id/reported-state`. Phần resource còn lại là chạy đủ
+sequence/terminal retry trong NVS riêng và coalesce trạng thái trung gian. Phần resource còn lại là chạy đủ
 power-loss/corruption matrix trên phần cứng thật và hiển thị drift/timeline trên web.
 
 Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware

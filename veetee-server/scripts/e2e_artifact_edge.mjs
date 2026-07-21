@@ -95,7 +95,7 @@ async function main() {
     },
   );
   const equalRetry = await jsonRequest(
-    `${managerUrl}/xiaozhi/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    `${managerUrl}/veetee/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
     {
       method: "PUT",
       headers: { ...authorization, "Content-Type": "application/json" },
@@ -116,7 +116,7 @@ async function main() {
     throw new Error("Equal reported-state retry mutated stored state");
   }
   const activeReport = await jsonRequest(
-    `${managerUrl}/xiaozhi/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
+    `${managerUrl}/veetee/devices/${encodeURIComponent(activation.device_id)}/reported-state`,
     {
       method: "PUT",
       headers: { ...authorization, "Content-Type": "application/json" },

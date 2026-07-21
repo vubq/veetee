@@ -19,7 +19,8 @@ This workspace contains the Veetee blueprint, source scaffolds, contract fixture
 ## Hard rules
 
 - Do not edit either directory under `references/`.
-- Keep WebSocket/OTA/MCP compatibility unless a versioned contract change is explicit.
+- Keep WebSocket/OTA/MCP wire compatibility unless a versioned contract change is explicit.
+- Ship only canonical `/veetee/...` product routes. Reference-client migration belongs in an optional external gateway rewrite, not a branded route in Veetee source.
 - Keep manager-api off the frame-by-frame audio path.
 - Keep `listen.mode=auto` as the default experience: VAD finalizes speech and AI responds without a second button press. Manual/PTT is compatibility-only.
 - Treat button wake and activation wake word as two inputs to the same conversation flow. Button/interrupt profile must share one abort/cancellation path.

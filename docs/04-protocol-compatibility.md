@@ -1,6 +1,6 @@
 # Protocol compatibility contract
 
-Mục tiêu của `veetee` là giữ các field và semantics mà firmware Xiaozhi đã triển khai, đồng thời tách contract thành fixture có version. Compatibility mode dùng path `/xiaozhi/...`; native mode dùng `/veetee/...` nhưng body/headers giống nhau.
+Mục tiêu của `veetee` là giữ các field và semantics đã được kiểm chứng từ firmware Xiaozhi, đồng thời tách contract thành fixture có version. Sản phẩm chỉ publish namespace `/veetee/...`; compatibility được giữ ở cấp frame, field, header và behavior chứ không mang route/thương hiệu của source tham chiếu vào runtime.
 
 ## 1. WebSocket handshake
 
@@ -196,8 +196,8 @@ MQTT giữ hello/control; UDP giữ audio packet encrypted. Packet wire giữ 16
 
 Hai endpoint logic:
 
-- `POST /xiaozhi/ota/` (alias `/veetee/ota/`) - report system info, nhận config/activation/firmware.
-- `POST /xiaozhi/ota/activate` (alias `/veetee/ota/activate`) - hoàn tất activation.
+- `POST /veetee/ota/` - report system info, nhận config/activation/firmware.
+- `POST /veetee/ota/activate` - hoàn tất activation.
 
 Bootstrap nhận `Device-Id`, optional-compatible `Client-Id`, model, firmware và locale.
 Khi chưa bind, `activation` có code 6 số, challenge, TTL; retry cùng hardware trong
@@ -267,13 +267,13 @@ Contract changes require a fixture update, changelog entry và compatibility run
 - Device-facing WebSocket/bootstrap/config/artifact JSON dùng `snake_case` để gần contract Xiaozhi và giảm mapping trên firmware.
 - Manager REST/OpenAPI có thể dùng `camelCase`; DTO boundary phải map rõ sang device contract.
 - Canonical native routes: `/veetee/v1/`, `/veetee/ota/`, `/veetee/config/v1/devices/:deviceId`, `/veetee/artifacts/manifests/:manifestId`, `/veetee/artifacts/:artifactId/content`, `/veetee/devices/:deviceId/reported-state`.
-- Compatibility aliases: `/xiaozhi/v1/`, `/xiaozhi/ota/`. Alias chỉ nằm ở gateway/transport layer.
+- Veetee không ship route mang namespace của source tham chiếu. Khi cần kiểm tra một client cũ không cấu hình được URL, dùng rewrite tạm ở reverse proxy development; rewrite đó không phải public contract hay domain logic của Veetee.
 - Bootstrap resource field canonical là `resources.manifest_url`; WebSocket invalidation dùng `config_version` và `resource_version`.
 - Manifest/content GET gửi `Authorization: Bearer ...` và `Device-Id`; content
   support một range `bytes=N-`, trả `206`, exact `Content-Length`,
   `Content-Range` và `Accept-Ranges: bytes`. Redirect và compressed transfer bị từ chối.
-- Reported-state dùng authenticated `PUT`; alias tương thích là
-  `/xiaozhi/devices/:deviceId/reported-state`. Body V1 dùng Manager REST camelCase
+- Reported-state dùng authenticated `PUT` tại
+  `/veetee/devices/:deviceId/reported-state`. Body V1 dùng Manager REST camelCase
   theo fixture `devices/reported-state-v1.json`; firmware không gửi token, URL
   manifest hoặc transcript trong state.
 - `audio_params.sample_rate` trong device hello là uplink mic rate; trong server hello là downlink TTS rate. Implementation không được coi hai giá trị này là cùng một hướng audio.

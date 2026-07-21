@@ -435,7 +435,6 @@ GET  /veetee/config/v1/devices/:deviceId
 GET  /veetee/artifacts/manifests/:manifestId
 GET  /veetee/artifacts/:artifactId/content
 PUT  /veetee/devices/:deviceId/reported-state
-PUT  /xiaozhi/devices/:deviceId/reported-state
 ```
 
 Upload đi thẳng vào private MinIO/local object store bằng short-lived signed upload URL; Manager API không giữ file lớn trong RAM. Worker validate magic/size/hash/schema/license, build bundle và ký release.

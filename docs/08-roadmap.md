@@ -24,7 +24,7 @@ toàn bộ Phase 4-6 vẫn là các gate chính chưa hoàn tất.
 - Probe 9router: base URL/auth, Chat Completions hay Responses, SSE, structured
   output, tool calling, cancellation, usage và concurrency. Không dùng token phiên
   Codex trực tiếp làm app credential.
-- Chốt canonical naming/routes, resource ABI, ESP-SR model-pack format và partition budget sau size probe.
+- Chốt canonical `/veetee/...` routes, không ship branded reference alias; freeze resource ABI, ESP-SR model-pack format và partition budget sau size probe.
 - Crypto spike JCS + detached Ed25519 đã pass trên host và ESP-IDF bằng
   Monocypher 4.0.3; giữ signed test vector chạy chung ở Node và firmware.
 

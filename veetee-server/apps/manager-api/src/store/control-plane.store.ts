@@ -738,7 +738,7 @@ export class ControlPlaneStore {
       deviceId: device.id,
       agentId: device.agentId,
       token,
-      websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/xiaozhi/v1/",
+      websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/veetee/v1/",
       configVersion: device.agent?.publishedVersion ?? 0,
     };
   }

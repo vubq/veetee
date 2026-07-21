@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { PATH_METADATA } from "@nestjs/common/constants";
 import type { FastifyReply } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +19,7 @@ afterEach(() => {
 });
 
 describe("OtaController", () => {
-  it("returns a Xiaozhi-compatible unbound bootstrap response", async () => {
+  it("returns a wire-compatible Veetee unbound bootstrap response", async () => {
     const store = {
       bootstrapDevice: vi.fn().mockResolvedValue({
         state: "unbound",
@@ -42,6 +43,15 @@ describe("OtaController", () => {
       "28:84:85:50:9d:1c",
       undefined,
       "0.1.0",
+    );
+  });
+
+  it("exposes only canonical Veetee bootstrap routes", () => {
+    expect(Reflect.getMetadata(PATH_METADATA, OtaController.prototype.bootstrap)).toBe(
+      "veetee/ota",
+    );
+    expect(Reflect.getMetadata(PATH_METADATA, OtaController.prototype.activate)).toBe(
+      "veetee/ota/activate",
     );
   });
 

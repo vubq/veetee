@@ -19,7 +19,8 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Admission | Audio đi qua quality/admission gate trước planner/LLM/MCP; không hard-code rule theo quạt/TV/nguồn âm thanh. |
 | Timeout | Inactivity timer, provider deadlines và absolute session ceiling là các timer độc lập. |
 | Transport | Native V1 dùng WebSocket; MQTT+UDP chỉ bật bằng transport policy explicit hoặc compatibility profile. |
-| Device contract | Device-facing JSON/bootstrap dùng `snake_case`; canonical route nằm dưới `/veetee/...`, alias Xiaozhi ở gateway. |
+| Product namespace | Firmware, server, API và Web chỉ publish tên/route Veetee. Source Xiaozhi là tham chiếu read-only; không đưa namespace `/xiaozhi/...` vào runtime. |
+| Device contract | Device-facing JSON/bootstrap dùng `snake_case`; mọi canonical route nằm dưới `/veetee/...`. Giữ wire semantics bằng schema/fixture, không bằng branded route alias. |
 | MCP | JSON-RPC 2.0, pagination, schema/range validation, tool safety class và cancellation scope theo turn. |
 | Artifact | Immutable desired/reported state; firmware tự pull, verify, stage inactive slot, apply ở boundary và rollback khi health fail. |
 | Manifest crypto | Resource manifest V1 dùng restricted RFC 8785 JCS + detached Ed25519, verify bằng Monocypher 4.0.3. Development public key chỉ dùng fixture/bring-up; production dùng trust root và private signer riêng ngoài repo. |
@@ -119,7 +120,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 Không giao task implementation lớn nếu chưa có các artifact sau:
 
 - Board README đã freeze pin map và ảnh wiring.
-- Contract JSON Schema + fixtures canonical và compatibility alias.
+- Contract JSON Schema + wire fixtures canonical; runtime route chỉ dùng namespace Veetee.
 - Provider baseline fixture `fixtures/config/provider-baseline-v1.json` và capability/conformance report của từng model.
 - Conversation policy fixture không còn `maxProviderSeconds`/source-specific heuristic.
 - ESP-SR model-pack fixture và capability fixture.

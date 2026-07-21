@@ -105,7 +105,7 @@ Do not silently decide an item listed under "Bắt buộc xác nhận trước P
 ## Compatibility rules
 
 - Keep WebSocket hello, JSON event semantics, binary Opus framing, OTA/bootstrap and MCP envelope compatible with `../../docs/04-protocol-compatibility.md`.
-- Keep `/xiaozhi/...` as a route alias when compatibility is required; keep native domain logic named Veetee.
+- Ship only `/veetee/...` product routes. Preserve reference wire semantics in contracts and fixtures; if an external legacy client must be tested, use an optional gateway rewrite outside Veetee domain code.
 - Add or update fixtures in `../../veetee-server/packages/contracts/fixtures/` for contract changes.
 - Require a version/migration for NVS, database, provider config or public API schema changes.
 - Never edit `../../references/xiaozhi-esp32` or `../../references/xiaozhi-esp32-server`.

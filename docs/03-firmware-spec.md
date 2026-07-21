@@ -132,7 +132,7 @@ Không lưu password plain text vào log. NVS namespace có version/migration v�
 
 ### Request
 
-`POST /veetee/ota/` (giữ path alias `/xiaozhi/ota/` khi compatibility mode) với:
+`POST /veetee/ota/` với:
 
 - `Device-Id`: MAC chuẩn hóa;
 - `Client-Id`: UUID bền vững;

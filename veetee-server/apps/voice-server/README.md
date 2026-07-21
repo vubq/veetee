@@ -2,7 +2,7 @@
 
 Hot path WebSocket/Opus và conversation engines. App này không phụ thuộc manager API cho mỗi audio frame; config được tải theo immutable snapshot/version.
 
-Vertical slice hiện chạy thật tại `/xiaozhi/v1/` và native alias `/veetee/v1/`:
+Vertical slice hiện chạy thật tại `/veetee/v1/`:
 
 ```text
 Opus -> Silero VAD -> Zipformer Vietnamese INT8 -> local admission

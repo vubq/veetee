@@ -64,14 +64,11 @@ describe("DevicesController reported state", () => {
     );
   });
 
-  it("keeps native and Xiaozhi-compatible route aliases", () => {
+  it("exposes only the canonical Veetee reported-state route", () => {
     const paths = Reflect.getMetadata(
       PATH_METADATA,
       DevicesController.prototype.report,
-    ) as string[];
-    expect(paths).toEqual([
-      "veetee/devices/:id/reported-state",
-      "xiaozhi/devices/:id/reported-state",
-    ]);
+    ) as string;
+    expect(paths).toBe("veetee/devices/:id/reported-state");
   });
 });
