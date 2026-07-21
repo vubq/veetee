@@ -217,7 +217,7 @@ Manifest là nguồn chuẩn cho compatibility và integrity:
 }
 ```
 
-Signature bao phủ RFC 8785 JCS canonical manifest không gồm `signature.value`. Payload hash bao phủ toàn bộ binary. Member hashes giúp validate/index và debug, không thay thế bundle hash. `signature.value` dùng Base64; `key_id` và `security_epoch` phục vụ rotation/anti-downgrade. Algorithm V1 mục tiêu là detached Ed25519, nhưng phải pass crypto spike trên ESP-IDF trước khi freeze; nếu không, ADR chuyển sang primitive được IDF hỗ trợ ổn định.
+Signature bao phủ RFC 8785 JCS canonical manifest không gồm `signature.value`. Payload hash bao phủ toàn bộ binary. Member hashes giúp validate/index và debug, không thay thế bundle hash. `signature.value` dùng Base64; `key_id` và `security_epoch` phục vụ rotation/anti-downgrade. Algorithm V1 đã freeze là detached Ed25519 sau khi crypto spike pass trên ESP-IDF bằng Monocypher 4.0.3. Firmware dùng restricted JCS profile: integer-only trong khoảng biểu diễn chính xác, ASCII property name và UTF-8 string value; duplicate key, NUL/`\u0000`, float, invalid UTF-8 và trailing content đều bị reject. Hạn chế này là contract V1 và phải được signer/contract fixture giữ đồng nhất.
 
 ## 7. Device capability contract
 
@@ -314,6 +314,12 @@ Nếu app thực tế lớn hơn, ưu tiên giữ executable A/B. Nếu resource
 
 ## 10. Apply transaction và rollback
 
+Trạng thái source hiện tại mới hoàn tất bước 1 và phần manifest của bước 2/4:
+bootstrap phát desired target, firmware fetch bounded manifest rồi verify strict
+schema/compatibility/runtime/signature. Payload download, SHA-256 streaming,
+inactive-slot write, journal, activation, health check và rollback chưa được coi là
+đã triển khai cho tới khi lát kế tiếp pass host test và power-loss test trên board.
+
 Device áp dụng config/resource theo transaction:
 
 1. Fetch manifest/snapshot với device token.
@@ -384,7 +390,8 @@ Upload đi thẳng vào private MinIO/local object store bằng short-lived sign
 
 ## 12. Security và supply chain
 
-- SHA-256 cho integrity; target V1 là JCS + detached Ed25519 sau crypto spike, có fallback ADR nếu ESP-IDF không đáp ứng.
+- SHA-256 cho payload integrity; manifest V1 dùng restricted JCS + detached
+  Ed25519, verify bằng Monocypher 4.0.3 đã vendored và giữ nguyên license/provenance.
 - Public verification key/rotation metadata nằm trong firmware trust store; private signing key nằm ngoài database, ưu tiên HSM/Vault/offline signer.
 - Device token scoped theo device và chỉ đọc artifact được rollout cho chính nó.
 - Artifact URL có TTL; URL scheme/host phải qua allowlist/bootstrap trust.

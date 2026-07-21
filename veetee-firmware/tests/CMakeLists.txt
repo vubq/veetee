@@ -96,3 +96,37 @@ target_compile_options(device_mcp_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(device_mcp_test PRIVATE cjson_host)
 
 add_test(NAME device_mcp_test COMMAND device_mcp_test)
+
+add_library(
+    monocypher_host STATIC
+    ../components/monocypher/monocypher.c
+    ../components/monocypher/monocypher-ed25519.c
+)
+target_include_directories(
+    monocypher_host PUBLIC
+    ../components/monocypher/include
+)
+target_compile_options(monocypher_host PRIVATE -w)
+
+add_executable(
+    resource_manifest_test
+    resource_manifest_test.cpp
+    ../main/network/endpoint_url.cpp
+    ../main/ota/resource_manifest.cpp
+    ../main/security/signed_json.cpp
+)
+target_include_directories(
+    resource_manifest_test PRIVATE
+    ../main
+    ../managed_components/espressif__cjson/cJSON
+    ../components/monocypher/include
+)
+target_compile_definitions(
+    resource_manifest_test PRIVATE
+    VEETEE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+target_compile_features(resource_manifest_test PRIVATE cxx_std_17)
+target_compile_options(resource_manifest_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(resource_manifest_test PRIVATE cjson_host monocypher_host)
+
+add_test(NAME resource_manifest_test COMMAND resource_manifest_test)

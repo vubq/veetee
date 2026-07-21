@@ -41,6 +41,7 @@ blob-report/
 
 # ESP-IDF generated state
 build/
+/veetee-firmware/build-host*/
 sdkconfig
 sdkconfig.old
 managed_components/

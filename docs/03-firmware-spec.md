@@ -255,6 +255,25 @@ Firmware giữ:
 - inactive/active resource slot pointer;
 - apply journal có CRC để recover khi mất điện.
 
+### Trạng thái triển khai resource reconcile
+
+Firmware hiện đã hoàn tất lát đầu của đường reconcile:
+
+- authenticated bootstrap parse và validate `config.url`/ETag cùng
+  `resources.version`/`manifest_url`;
+- resource task riêng kéo manifest tối đa 32 KiB bằng Bearer device token, không
+  follow redirect và ưu tiên cấp phát response buffer từ PSRAM;
+- verifier kiểm tra strict schema V1, target/flash/PSRAM/slot, firmware SemVer,
+  resource ABI, runtime member được firmware hỗ trợ, SHA-256 metadata,
+  `security_epoch`, trusted `key_id` và detached Ed25519 signature;
+- generation cancellation làm target mới nhất thắng và callback chỉ post kết quả
+  về application queue.
+
+Lát này dừng sau `manifest verified`; chưa download payload hoặc đổi active slot.
+Range/resume, streaming SHA-256, inactive partition write, apply journal, atomic
+activation, health window, rollback và desired/reported report thuộc lát kế tiếp.
+Do đó log `download/apply pending` là trạng thái chủ đích, không phải đã apply.
+
 Luồng reconcile:
 
 1. Nhận optional `config_changed` invalidation hoặc kiểm tra bootstrap định kỳ.

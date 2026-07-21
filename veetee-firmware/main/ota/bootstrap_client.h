@@ -16,11 +16,14 @@ namespace veetee::ota {
 enum class BootstrapEvent : std::uint8_t {
     kActivationCodeAvailable,
     kActivationComplete,
+    kResourceDesired,
 };
 
 struct BootstrapNotification {
     BootstrapEvent event;
     char activation_code[7] = {};
+    char resource_version[33] = {};
+    char resource_manifest_url[257] = {};
 };
 
 class BootstrapClient {
@@ -41,6 +44,12 @@ private:
         char activation_challenge[129] = {};
         char websocket_url[257] = {};
         std::uint32_t config_version = 0;
+        bool has_config = false;
+        char config_etag[65] = {};
+        char config_url[257] = {};
+        bool has_resources = false;
+        char resource_version[33] = {};
+        char resource_manifest_url[257] = {};
     };
 
     struct ActivationPayload {
@@ -68,8 +77,10 @@ private:
     esp_err_t ParseBootstrap(BootstrapPayload* payload) const;
     esp_err_t ParseActivation(ActivationPayload* payload) const;
     bool Emit(BootstrapEvent event, const char* activation_code,
+              const BootstrapPayload* payload,
               std::uint32_t generation) const;
     bool EmitWithRetry(BootstrapEvent event, const char* activation_code,
+                       const BootstrapPayload* payload,
                        std::uint32_t generation) const;
     bool Delay(std::uint32_t generation, std::uint32_t milliseconds) const;
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;

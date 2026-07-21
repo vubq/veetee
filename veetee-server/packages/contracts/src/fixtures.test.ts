@@ -91,4 +91,33 @@ describe("contract fixtures", () => {
       ),
     ).toBe(true);
   });
+
+  it("verifies the complete development resource manifest", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(fixtureRoot, "artifacts/resource-manifest-v1.json"), "utf8"),
+    ) as {
+      signature: {
+        algorithm: string;
+        key_id: string;
+        security_epoch: number;
+        value: string;
+      };
+    } & Record<string, unknown>;
+    const signature = manifest.signature.value;
+    delete (manifest.signature as Partial<typeof manifest.signature>).value;
+    const canonicalPayload = canonicalize(manifest);
+    expect(canonicalPayload).toBeTypeOf("string");
+
+    const publicKey = createPublicKey({
+      key: Buffer.from(
+        "MCowBQYDK2VwAyEAUGjfpuNfZXAtWuLuDurXUbIS2qbg6VU1caybY79ckG8=",
+        "base64",
+      ),
+      format: "der",
+      type: "spki",
+    });
+    expect(
+      verify(null, Buffer.from(canonicalPayload ?? "", "utf8"), publicKey, Buffer.from(signature, "base64")),
+    ).toBe(true);
+  });
 });

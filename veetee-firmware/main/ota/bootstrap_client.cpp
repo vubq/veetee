@@ -162,7 +162,7 @@ void BootstrapClient::Run(std::uint32_t generation) {
 
     if (snapshot.HasPendingActivation()) {
         if (!EmitWithRetry(BootstrapEvent::kActivationCodeAvailable,
-                           snapshot.activation_code, generation)) {
+                           snapshot.activation_code, nullptr, generation)) {
             return;
         }
     }
@@ -176,8 +176,13 @@ void BootstrapClient::Run(std::uint32_t generation) {
                 error = store_->SaveBoundBootstrap(payload.websocket_url,
                                                    payload.config_version, settings_);
                 if (error == ESP_OK) {
+                    if (payload.has_resources &&
+                        !EmitWithRetry(BootstrapEvent::kResourceDesired, nullptr,
+                                       &payload, generation)) {
+                        return;
+                    }
                     EmitWithRetry(BootstrapEvent::kActivationComplete, nullptr,
-                                  generation);
+                                  nullptr, generation);
                     return;
                 }
             }
@@ -196,7 +201,8 @@ void BootstrapClient::Run(std::uint32_t generation) {
                             snapshot = *settings_;
                             if (!EmitWithRetry(
                                     BootstrapEvent::kActivationCodeAvailable,
-                                    snapshot.activation_code, generation)) {
+                                    snapshot.activation_code, nullptr,
+                                    generation)) {
                                 return;
                             }
                             refresh_activation_ticket = false;
@@ -224,7 +230,7 @@ void BootstrapClient::Run(std::uint32_t generation) {
                     payload.config_version, settings_);
                 if (error == ESP_OK) {
                     EmitWithRetry(BootstrapEvent::kActivationComplete, nullptr,
-                                  generation);
+                                  nullptr, generation);
                     return;
                 }
             } else if (error == ESP_ERR_TIMEOUT) {
@@ -245,7 +251,8 @@ void BootstrapClient::Run(std::uint32_t generation) {
                 if (error == ESP_OK) {
                     snapshot = *settings_;
                     if (!EmitWithRetry(BootstrapEvent::kActivationCodeAvailable,
-                                       snapshot.activation_code, generation)) {
+                                       snapshot.activation_code, nullptr,
+                                       generation)) {
                         return;
                     }
                     refresh_activation_ticket = false;
@@ -425,7 +432,23 @@ esp_err_t BootstrapClient::ParseBootstrap(BootstrapPayload* payload) const {
     }
     const cJSON* config = cJSON_GetObjectItemCaseSensitive(root, "config");
     if (valid && cJSON_IsObject(config)) {
-        valid = CopyJsonU32(config, "version", &payload->config_version);
+        payload->has_config = true;
+        valid = CopyJsonU32(config, "version", &payload->config_version) &&
+                CopyJsonString(config, "etag", payload->config_etag,
+                               sizeof(payload->config_etag)) &&
+                CopyJsonString(config, "url", payload->config_url,
+                               sizeof(payload->config_url)) &&
+                network::IsHttpEndpointUrl(payload->config_url);
+    }
+    const cJSON* resources = cJSON_GetObjectItemCaseSensitive(root, "resources");
+    if (valid && cJSON_IsObject(resources)) {
+        payload->has_resources = true;
+        valid = CopyJsonString(resources, "version", payload->resource_version,
+                               sizeof(payload->resource_version)) &&
+                CopyJsonString(resources, "manifest_url",
+                               payload->resource_manifest_url,
+                               sizeof(payload->resource_manifest_url)) &&
+                network::IsHttpEndpointUrl(payload->resource_manifest_url);
     }
     cJSON_Delete(root);
     return valid ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
@@ -451,6 +474,7 @@ esp_err_t BootstrapClient::ParseActivation(ActivationPayload* payload) const {
 }
 
 bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
+                           const BootstrapPayload* payload,
                            std::uint32_t generation) const {
     if (!IsCurrent(generation) || sink_ == nullptr) return false;
     BootstrapNotification notification{.event = event};
@@ -458,14 +482,24 @@ bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
         std::snprintf(notification.activation_code,
                       sizeof(notification.activation_code), "%s", activation_code);
     }
+    if (event == BootstrapEvent::kResourceDesired && payload != nullptr &&
+        payload->has_resources) {
+        std::snprintf(notification.resource_version,
+                      sizeof(notification.resource_version), "%s",
+                      payload->resource_version);
+        std::snprintf(notification.resource_manifest_url,
+                      sizeof(notification.resource_manifest_url), "%s",
+                      payload->resource_manifest_url);
+    }
     return sink_(notification, sink_context_);
 }
 
 bool BootstrapClient::EmitWithRetry(BootstrapEvent event,
                                     const char* activation_code,
+                                    const BootstrapPayload* payload,
                                     std::uint32_t generation) const {
     while (IsCurrent(generation)) {
-        if (Emit(event, activation_code, generation)) return true;
+        if (Emit(event, activation_code, payload, generation)) return true;
         if (!Delay(generation, kNotificationRetryMs)) return false;
     }
     return false;

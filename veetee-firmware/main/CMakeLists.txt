@@ -12,6 +12,9 @@ set(VEETEE_SRCS
     "network/provisioning_portal.cpp"
     "network/wifi_manager.cpp"
     "ota/bootstrap_client.cpp"
+    "ota/resource_manifest.cpp"
+    "ota/resource_reconciler.cpp"
+    "security/signed_json.cpp"
     "settings/activation_record.cpp"
     "settings/settings_store.cpp"
     "transport/protocol_v1.cpp"
@@ -38,6 +41,7 @@ idf_component_register(
         esp-sr
         esp_websocket_client
         mbedtls
+        monocypher
         nvs_flash
 )
 

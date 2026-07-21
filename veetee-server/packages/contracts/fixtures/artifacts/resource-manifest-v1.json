@@ -51,8 +51,8 @@
   "created_at": "2026-07-21T12:00:00Z",
   "signature": {
     "algorithm": "ed25519",
-    "key_id": "veetee-release-2026-01",
+    "key_id": "veetee-dev-release-2026-01",
     "security_epoch": 1,
-    "value": "fixture-signature"
+    "value": "ELseYPRN3GIyl9GFr7ZPwIMDdZY/DUqZ1lj7tWk3XoMMu7qDwtMxMsaexo2sILjNQr3ZXCuOhtBW1zBqQCiiCA=="
   }
 }

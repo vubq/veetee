@@ -130,4 +130,32 @@ menu "Veetee hardware bring-up"
         default 1200
         depends on VEETEE_ESP_SR_BRINGUP
 
+    config VEETEE_FIRMWARE_COMPAT_VERSION
+        string "Semantic firmware compatibility version"
+        default "0.2.0"
+        help
+            SemVer used only for signed config/resource compatibility checks.
+            Git revision remains the diagnostic app version.
+
+    config VEETEE_RESOURCE_SIGNING_KEY_ID
+        string "Trusted resource signing key ID"
+        default "veetee-dev-release-2026-01"
+        help
+            Development key ID matching the public test fixture. Production
+            builds must override this value through their release sdkconfig.
+
+    config VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX
+        string "Trusted Ed25519 resource public key (32-byte hex)"
+        default "5068dfa6e35f65702d5ae2ee0eead751b212daa6e0e9553571ac9b63bf5c906f"
+        help
+            Public verification key only; no private signing key is stored in
+            firmware or source. Production builds must use a separate key.
+
+    config VEETEE_MIN_RESOURCE_SECURITY_EPOCH
+        int "Minimum accepted resource security epoch"
+        range 1 2147483647
+        default 1
+        help
+            Rejects manifests signed before a revoked key/security epoch.
+
 endmenu

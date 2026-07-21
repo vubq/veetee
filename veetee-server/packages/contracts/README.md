@@ -12,7 +12,8 @@ không nằm trong fixture; `base_url_env` chỉ là tên biến môi trường 
 
 `fixtures/artifacts/resource-manifest-v1.json` và `fixtures/artifacts/device-capability-v1.json` mô tả signed resource bundle, runtime ABI, flash/PSRAM budget và desired/reported compatibility.
 
-Artifact shape fixture vẫn dùng placeholder signature. Vector riêng tại
+Artifact fixture dùng một chữ ký development có thể verify để cùng một document
+chạy qua Node contract test và firmware host test. Vector riêng tại
 `fixtures/artifacts/signed-resource-manifest-vector-v1.json` khóa RFC 8785 JCS,
-Ed25519, canonical payload, public test key và chữ ký có thể verify; không chứa
-private key hoặc production key.
+Ed25519 và canonical payload độc lập. Repository chỉ chứa public test key, không
+chứa private key hoặc production key.

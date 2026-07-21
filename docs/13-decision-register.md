@@ -22,6 +22,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Device contract | Device-facing JSON/bootstrap dùng `snake_case`; canonical route nằm dưới `/veetee/...`, alias Xiaozhi ở gateway. |
 | MCP | JSON-RPC 2.0, pagination, schema/range validation, tool safety class và cancellation scope theo turn. |
 | Artifact | Immutable desired/reported state; firmware tự pull, verify, stage inactive slot, apply ở boundary và rollback khi health fail. |
+| Manifest crypto | Resource manifest V1 dùng restricted RFC 8785 JCS + detached Ed25519, verify bằng Monocypher 4.0.3. Development public key chỉ dùng fixture/bring-up; production dùng trust root và private signer riêng ngoài repo. |
 | Dynamic code | Resource bundle chỉ chứa data/model/assets; không chứa native executable/operator tùy ý. |
 | Pairing | Code 6 số là one-time handle, có TTL/attempt limit/CSPRNG/atomic consume; challenge là random nonce, không dùng MAC. |
 | Domain | Không yêu cầu mua domain; dev chạy bằng LAN IP, release có thể dùng local CA/SPKI pinning hoặc tunnel/domain sau. |
@@ -43,7 +44,6 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Device edge | Caddy/Nginx listener 8003 proxy device routes tới manager-api/object store. | Có thể gộp vào manager-api nếu vẫn giữ canonical routes/fixtures. |
 | Object storage | Local filesystem adapter cho dev; MinIO cho rollout/Range/multi-node. | Không để manager-api buffer artifact lớn trong RAM. |
 | Resource layout | Executable A/B + resource A/B sau size probe; ưu tiên đơn giản/recover cho V1. | Mở ADR resource store 8 MB nếu model/assets vượt slot. |
-| Manifest signature | RFC 8785 JCS + detached Ed25519 là target; crypto spike trên ESP-IDF là gate. | Nếu spike fail, ADR chuyển sang primitive hỗ trợ ổn định hơn. |
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
 | ASR | Zipformer Vietnamese 30M INT8 primary; ChunkFormer-CTC-Large-Vie fallback có điều kiện. | Có thể tạm Zipformer-only trong bring-up nếu server chưa đủ tài nguyên. |
 | LLM | `openai-compatible-9router` cho dev/LAN; adapter giữ tương thích Chat Completions/Responses, SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu 9router không đạt contract hoặc không phù hợp quyền sử dụng. |
@@ -110,10 +110,9 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 ### Security/legal
 
 1. License code mới đã chốt MIT; mọi code port/derive từ Xiaozhi hoặc dependency khác phải giữ NOTICE/copyright tương ứng.
-2. Crypto spike chấp thuận JCS + Ed25519 target và fallback ADR.
-3. Secure Boot/Flash Encryption bật ở production release hay chỉ sau pilot.
-4. Remote MCP endpoint nào được allowlist; policy SSRF/egress.
-5. Provider terms/license có cho phép lưu transcript, model output và TTS audio không.
+2. Secure Boot/Flash Encryption bật ở production release hay chỉ sau pilot.
+3. Remote MCP endpoint nào được allowlist; policy SSRF/egress.
+4. Provider terms/license có cho phép lưu transcript, model output và TTS audio không.
 
 ## 4. Gate trước khi giao AI code
 

@@ -20,7 +20,8 @@ Thứ tự dưới đây được tối ưu để AI có thể code từng lát 
   output, tool calling, cancellation, usage và concurrency. Không dùng token phiên
   Codex trực tiếp làm app credential.
 - Chốt canonical naming/routes, resource ABI, ESP-SR model-pack format và partition budget sau size probe.
-- Chạy crypto spike cho JCS + detached signature và tạo signed test vector thật.
+- Crypto spike JCS + detached Ed25519 đã pass trên host và ESP-IDF bằng
+  Monocypher 4.0.3; giữ signed test vector chạy chung ở Node và firmware.
 
 ### Đầu ra
 

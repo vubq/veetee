@@ -18,6 +18,7 @@
 #include "mcp/device_mcp.h"
 #include "network/wifi_manager.h"
 #include "ota/bootstrap_client.h"
+#include "ota/resource_reconciler.h"
 #include "settings/settings_store.h"
 #include "transport/websocket_transport.h"
 
@@ -29,6 +30,7 @@ constexpr UBaseType_t kEventQueueDepth = 16;
 enum class AppMessageKind : std::uint8_t {
     kStateEvent,
     kMcpEnvelope,
+    kResourceReconcile,
 };
 
 struct AppMessage {
@@ -37,6 +39,7 @@ struct AppMessage {
     char activation_code[7] = {};
     char* control_payload = nullptr;
     std::size_t control_length = 0;
+    veetee::ota::ResourceReconcileNotification resource_notification{};
 };
 
 QueueHandle_t g_event_queue = nullptr;
@@ -46,6 +49,7 @@ veetee::settings::SettingsStore g_settings_store;
 veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
+veetee::ota::ResourceReconciler g_resources;
 veetee::transport::WebSocketTransport g_transport;
 veetee::mcp::DeviceMcp g_mcp;
 
@@ -54,6 +58,8 @@ bool PostMessage(const AppMessage& message) {
         xQueueSend(g_event_queue, &message, 0) != pdTRUE) {
         if (message.kind == AppMessageKind::kMcpEnvelope) {
             ESP_LOGW(kTag, "Dropping MCP request: application queue full");
+        } else if (message.kind == AppMessageKind::kResourceReconcile) {
+            ESP_LOGW(kTag, "Dropping resource reconcile result: application queue full");
         } else {
             ESP_LOGW(kTag, "Dropping event %s: application queue full",
                      veetee::app::ToString(message.event));
@@ -126,7 +132,18 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
         case veetee::ota::BootstrapEvent::kActivationComplete:
             message.event = veetee::app::Event::kActivationComplete;
             break;
+        case veetee::ota::BootstrapEvent::kResourceDesired:
+            return g_resources.Schedule(notification.resource_version,
+                                        notification.resource_manifest_url);
     }
+    return PostMessage(message);
+}
+
+bool OnResourceReconcileEvent(
+    const veetee::ota::ResourceReconcileNotification& notification, void*) {
+    AppMessage message{};
+    message.kind = AppMessageKind::kResourceReconcile;
+    message.resource_notification = notification;
     return PostMessage(message);
 }
 
@@ -220,6 +237,24 @@ void RunApplication(void*) {
             if (!handled) ESP_LOGW(kTag, "MCP request was rejected");
             continue;
         }
+        if (message.kind == AppMessageKind::kResourceReconcile) {
+            const auto& notification = message.resource_notification;
+            if (notification.event ==
+                veetee::ota::ResourceReconcileEvent::kManifestVerified) {
+                ESP_LOGI(kTag,
+                         "Resource manifest verified desired=%s bundle=%s; download/apply pending",
+                         notification.desired_version,
+                         notification.bundle_version);
+            } else {
+                ESP_LOGW(kTag,
+                         "Resource reconcile failed desired=%s error=%s stage=%s",
+                         notification.desired_version, notification.error_code,
+                         notification.event == veetee::ota::ResourceReconcileEvent::kManifestRejected
+                             ? "verify"
+                             : "transport");
+            }
+            continue;
+        }
         const veetee::app::Event event = message.event;
         const veetee::app::TransitionResult result = g_state_machine.Handle(event);
         if (!result.accepted) {
@@ -238,6 +273,7 @@ void RunApplication(void*) {
         if (result.to == veetee::app::State::kWifiConfiguring) {
             g_transport.Close();
             g_bootstrap.Cancel();
+            g_resources.Cancel();
             if (event == veetee::app::Event::kEnterWifiConfig) {
                 const esp_err_t reset_error = g_wifi.ResetProvisioning();
                 if (reset_error != ESP_OK) {
@@ -255,6 +291,7 @@ void RunApplication(void*) {
         } else if (result.to == veetee::app::State::kNetworkConnecting) {
             g_transport.Close();
             g_bootstrap.Cancel();
+            g_resources.Cancel();
             const esp_err_t error = g_wifi.StartStation();
             if (error != ESP_OK) {
                 ESP_LOGE(kTag, "Unable to start station: %s; opening setup portal",
@@ -348,6 +385,8 @@ extern "C" void app_main() {
 
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
+    ESP_ERROR_CHECK(g_resources.Initialize(&g_settings,
+                                           &OnResourceReconcileEvent, nullptr));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,

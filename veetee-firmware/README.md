@@ -107,6 +107,15 @@ wake profile ID; password không được ghi log. Nếu station không lấy đ
 - Mã được vẽ bằng renderer số local, không chứa câu semantic hard-code. Sau bind,
   màn hình xóa code và chuyển sang trạng thái standby.
 
+Authenticated bootstrap cũng nhận optional config/resource desired state. Firmware
+đã có task bounded để pull manifest tối đa 32 KiB, từ chối redirect, verify strict
+schema/board/flash/PSRAM/slot/SemVer/resource ABI/runtime, security epoch và
+detached Ed25519 trước khi báo `manifest verified`. Verifier dùng Monocypher 4.0.3
+và restricted JCS integer-only; fixture Node/host dùng chung development public
+key. Đây chưa phải resource updater hoàn chỉnh: payload Range/resume, streaming
+SHA-256, inactive-slot write, journal, atomic activation, health check và rollback
+là milestone kế tiếp.
+
 Hardware E2E từ portal tới bind vẫn cần nhập Wi-Fi thật trên điện thoại; firmware
 không đọc password Wi-Fi đã lưu trên máy phát triển.
 

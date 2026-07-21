@@ -12,6 +12,8 @@
 - OTA manifest/version/signature parser.
 - Config snapshot schema/ETag/desired-reported reconciliation.
 - Resource manifest/member hash/ABI/capability/partition budget validation.
+- Restricted JCS canonicalization, detached Ed25519 vector, duplicate/NUL/trailing
+  JSON rejection và trusted-key/security-epoch downgrade.
 - Apply journal and power-loss recovery parser.
 
 ### Firmware hardware tests
@@ -76,6 +78,12 @@ Admission test corpus phải đa dạng về môi trường, speaker, media play
 - Validate URL scheme/host cho OTA và MCP user-only action.
 - Signed firmware; anti-rollback policy theo release channel.
 - Signed config/resource manifest; SHA-256 payload và signature theo JCS + detached algorithm đã freeze.
+- Firmware V1 verify detached Ed25519 bằng vendored Monocypher 4.0.3. Public key
+  development trong source chỉ dùng fixture/LAN bring-up; production release phải
+  build với trust root/key ID khác và private signer luôn nằm ngoài repository.
+- Firmware dùng restricted RFC 8785 profile phù hợp manifest V1: JSON number phải
+  là integer biểu diễn chính xác trong IEEE-754, property name ASCII, value string
+  UTF-8 hợp lệ; duplicate key, NUL/`\u0000`, float và trailing content bị từ chối.
 - Resource bundle chỉ chứa data/model/assets; executable/runtime change phải qua signed firmware OTA.
 - Không overwrite active resource slot trước khi inactive slot verify và health check xong.
 - Capability, size, ABI và minimum firmware được kiểm tra cả API-side lẫn firmware-side.
