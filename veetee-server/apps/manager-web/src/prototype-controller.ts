@@ -23,6 +23,12 @@ interface PrototypeCallbacks {
   pair(code: string, name: string, agentId?: string): Promise<void>;
   testProvider(providerId: string): Promise<void>;
   publishAgent(input: AgentDraftInput): Promise<void>;
+  callTool(
+    deviceId: string,
+    name: string,
+    argumentsValue: Record<string, unknown>,
+    confirmed: boolean,
+  ): Promise<Record<string, unknown>>;
   logout(): Promise<void>;
 }
 
@@ -38,6 +44,8 @@ export interface ManagerViewData {
   agents: Agent[];
   providers: Provider[];
   tools: McpTool[];
+  activeDeviceId: string | undefined;
+  toolsLive: boolean;
   apiHost: string;
   ready: boolean;
 }
@@ -50,6 +58,10 @@ interface RenderSignatures {
 }
 
 const renderSignatures = new WeakMap<HTMLElement, RenderSignatures>();
+const toolCatalogs = new WeakMap<
+  HTMLElement,
+  { tools: McpTool[]; activeDeviceId: string | undefined; live: boolean }
+>();
 
 function query<T extends Element>(root: ParentNode, selector: string): T | null {
   return root.querySelector<T>(selector);
@@ -97,7 +109,7 @@ function renderDevices(root: HTMLElement, devices: Device[], agents: Agent[]): v
               <div class="device-screen ${screenClass(device.status)}"><span>${device.status === "online" ? "◉" : device.status === "idle" ? "◌" : "×"}</span><div class="face"><i></i><i></i></div><small>${escapeHtml(device.status)}</small></div>
               <div class="device-copy"><div><span class="status-pill ${statusClass(device.status)}"><i></i> ${escapeHtml(device.status)}</span><b>${escapeHtml(device.name)}</b><small>${escapeHtml(device.hardwareId)}</small></div>
               <dl><div><dt>Firmware</dt><dd>${escapeHtml(device.firmwareVersion ?? "—")}</dd></div><div><dt>Agent</dt><dd>${escapeHtml(device.agentId ? agentsById.get(device.agentId) ?? "Không rõ" : "Chưa gán")}</dd></div><div><dt>Cấu hình</dt><dd>${drift ? `Drift ${device.reportedState.version}→${device.desiredState.version}` : `v${device.reportedState.version}`}</dd></div></dl>
-              <button class="button button-ghost" type="button">Mở thiết bị →</button></div></article>`;
+              <button class="button button-ghost" data-page-link="mcp" type="button">Mở thiết bị →</button></div></article>`;
           })
           .join("")
       : '<article class="panel empty-state"><b>Chưa có thiết bị</b><small>Bật robot để nhận mã ghép 6 số, sau đó ghép tại đây.</small></article>';
@@ -129,7 +141,11 @@ function renderAgents(root: HTMLElement, agents: Agent[]): void {
     return;
   }
   const conversation = conversationConfig(agent);
+  const firstInput = Number(conversation.firstInputSeconds ?? 15);
   const betweenTurns = Number(conversation.betweenTurnsSeconds ?? 30);
+  const closingGrace = Number(conversation.closingGraceSeconds ?? 5);
+  const maxSession = Number(conversation.maxSessionSeconds ?? 600);
+  const timeoutGoodbye = String(conversation.timeoutGoodbye ?? "Tạm biệt, hẹn gặp lại.");
   poster.innerHTML = `<span class="poster-tag">PUBLISHED · V${agent.publishedVersion}</span><div class="poster-face"><i></i><i></i><b>⌣</b></div><h2>${escapeHtml(agent.name)}</h2><p>${escapeHtml(agent.persona)}</p><div class="poster-meta"><span>${escapeHtml(agent.defaultLocale)}</span><span>${escapeHtml(agent.interactionMode)}</span><span>version ${agent.publishedVersion}</span></div>`;
   panel.dataset.agentId = agent.id;
   panel.innerHTML = `<div class="tabs"><button class="active">Hành vi</button><button>Providers</button><button>Ngôn ngữ</button><button>Tools</button></div>
@@ -137,7 +153,10 @@ function renderAgents(root: HTMLElement, agents: Agent[]): void {
     <label>System prompt<textarea data-agent-field="persona">${escapeHtml(agent.persona)}</textarea></label>
     <div class="two-cols"><label>Locale mặc định<select data-agent-field="locale"><option value="vi-VN" ${agent.defaultLocale === "vi-VN" ? "selected" : ""}>Tiếng Việt (vi-VN)</option><option value="en-US" ${agent.defaultLocale === "en-US" ? "selected" : ""}>English (en-US)</option></select></label>
     <label>Chế độ hội thoại<select data-agent-field="mode"><option value="auto" ${agent.interactionMode === "auto" ? "selected" : ""}>Cascade realtime · auto</option><option value="realtime" ${agent.interactionMode === "realtime" ? "selected" : ""}>End-to-end realtime · auto</option><option value="manual" ${agent.interactionMode === "manual" ? "selected" : ""}>Manual/PTT compatibility</option></select></label></div>
-    <div class="two-cols"><label>Không có lượt mới<select data-agent-field="timeout"><option value="30" ${betweenTurns === 30 ? "selected" : ""}>30 giây → chào và ngủ</option><option value="60" ${betweenTurns === 60 ? "selected" : ""}>60 giây → chào và ngủ</option></select></label><label>Input admission<select disabled><option>Semantic + quality gate</option></select></label></div>
+    <div class="two-cols"><label>Chờ câu đầu (giây)<input data-agent-field="first-input" type="number" min="3" max="300" value="${firstInput}"></label><label>Giữa các lượt (giây)<input data-agent-field="between-turns" type="number" min="3" max="600" value="${betweenTurns}"></label></div>
+    <div class="two-cols"><label>Closing grace (giây)<input data-agent-field="closing-grace" type="number" min="0.5" max="60" step="0.5" value="${closingGrace}"></label><label>Giới hạn phiên (giây)<input data-agent-field="max-session" type="number" min="10" max="3600" value="${maxSession}"></label></div>
+    <label>Lời chào khi hết thời gian<input data-agent-field="timeout-goodbye" maxlength="240" value="${escapeHtml(timeoutGoodbye)}"></label>
+    <div class="two-cols"><label>Input admission<select disabled><option>Semantic + quality gate</option></select></label><label>TurnArbiter<select disabled><option>Generation cancellation</option></select></label></div>
     <div class="publish-bar"><div><span class="unsaved-dot"></span><p><b>Lưu draft và publish immutable version</b><small>Thiết bị đang dùng version ${agent.publishedVersion}</small></p></div><button class="button button-primary publish-agent" type="button">Publish version ${agent.version + 1}</button></div>`;
 
   const select = query<HTMLSelectElement>(root, "#pairModal select");
@@ -163,19 +182,87 @@ function renderProviders(root: HTMLElement, providers: Provider[]): void {
   }
 }
 
-function renderTools(root: HTMLElement, tools: McpTool[]): void {
-  const list = query<HTMLElement>(root, ".tool-list");
+function schemaProperties(tool: McpTool): Record<string, Record<string, unknown>> {
+  const properties = tool.inputSchema.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return {};
+  return Object.fromEntries(
+    Object.entries(properties).filter(
+      (entry): entry is [string, Record<string, unknown>] =>
+        Boolean(entry[1]) && typeof entry[1] === "object" && !Array.isArray(entry[1]),
+    ),
+  );
+}
+
+function renderToolArgument(
+  name: string,
+  schema: Record<string, unknown>,
+  required: boolean,
+): string {
+  const label = escapeHtml(schema.title ?? name);
+  const description = schema.description
+    ? `<small>${escapeHtml(schema.description)}</small>`
+    : "";
+  const requiredAttribute = required ? " required" : "";
+  const values = Array.isArray(schema.enum) ? schema.enum : [];
+  if (values.length) {
+    return `<label>${label}${description}<select data-tool-argument="${escapeHtml(name)}"${requiredAttribute}>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>`;
+  }
+  if (schema.type === "boolean") {
+    return `<label class="tool-checkbox"><input data-tool-argument="${escapeHtml(name)}" data-argument-kind="boolean" type="checkbox"> ${label}${description}</label>`;
+  }
+  if (schema.type === "integer" || schema.type === "number") {
+    const step = schema.type === "integer" ? "1" : "any";
+    const minimum = typeof schema.minimum === "number" ? ` min="${schema.minimum}"` : "";
+    const maximum = typeof schema.maximum === "number" ? ` max="${schema.maximum}"` : "";
+    return `<label>${label}${description}<input data-tool-argument="${escapeHtml(name)}" data-argument-kind="number" type="number" step="${step}"${minimum}${maximum}${requiredAttribute}></label>`;
+  }
+  if (schema.type === "string") {
+    return `<label>${label}${description}<input data-tool-argument="${escapeHtml(name)}" type="text"${requiredAttribute}></label>`;
+  }
+  return `<label>${label}${description}<textarea data-tool-argument="${escapeHtml(name)}" data-argument-kind="json"${requiredAttribute}>{}</textarea></label>`;
+}
+
+function renderToolDetail(
+  root: HTMLElement,
+  tool: McpTool | undefined,
+  activeDeviceId: string | undefined,
+  live: boolean,
+): void {
   const detail = query<HTMLElement>(root, ".tool-detail");
-  if (!list || !detail) return;
+  if (!detail) return;
+  if (!tool) {
+    detail.innerHTML = '<div class="empty-state"><b>Chưa có MCP tool.</b></div>';
+    return;
+  }
+  const required = new Set(
+    Array.isArray(tool.inputSchema.required)
+      ? tool.inputSchema.required.filter((item): item is string => typeof item === "string")
+      : [],
+  );
+  const inputs = Object.entries(schemaProperties(tool))
+    .map(([name, schema]) => renderToolArgument(name, schema, required.has(name)))
+    .join("");
+  const confirmation = tool.requiresConfirmation
+    ? '<label class="tool-checkbox confirmation"><input data-tool-confirmed type="checkbox" required> Tôi xác nhận thực thi thao tác này trên thiết bị.</label>'
+    : "";
+  detail.innerHTML = `<span class="status-pill ${live ? "" : "neutral"}"><i></i> ${live ? "Live device catalog" : "Baseline capability"}</span><h2>${escapeHtml(tool.name)}</h2><p>${escapeHtml(tool.description)}</p><div class="tool-policy"><span>${escapeHtml(tool.audience === "regular" ? "AI-callable" : "User-only")}</span><span>${escapeHtml(tool.safetyClass)}</span></div><form class="tool-call-form" data-tool-name="${escapeHtml(tool.name)}" data-device-id="${escapeHtml(activeDeviceId ?? "")}">${inputs || '<small class="audit-note">Tool này không cần tham số.</small>'}${confirmation}<button class="button button-primary run-device-tool" type="button" ${!activeDeviceId || !live ? "disabled" : ""}>${activeDeviceId && live ? "Chạy trên thiết bị" : "Thiết bị chưa có phiên voice active"}</button></form><div class="schema-block"><span>INPUT SCHEMA</span><pre>${escapeHtml(JSON.stringify(tool.inputSchema, null, 2))}</pre></div><small class="audit-note">Mọi tool call đều được kiểm tra catalog live, confirmation policy và ghi audit.</small>`;
+}
+
+function renderTools(
+  root: HTMLElement,
+  tools: McpTool[],
+  activeDeviceId: string | undefined,
+  live: boolean,
+): void {
+  const list = query<HTMLElement>(root, ".tool-list");
+  if (!list) return;
+  toolCatalogs.set(root, { tools, activeDeviceId, live });
   list.innerHTML = tools
     .map(
-      (tool, index) => `<button class="tool-item ${index === 0 ? "active" : ""}" type="button"><span class="tool-type ${tool.audience === "regular" ? "safe" : "user"}">${tool.audience === "regular" ? "AI" : "USER"}</span><div><b>${escapeHtml(tool.name)}</b><small>${escapeHtml(tool.description)}</small></div><i>→</i></button>`,
+      (tool, index) => `<button class="tool-item ${index === 0 ? "active" : ""}" data-tool-name="${escapeHtml(tool.name)}" type="button"><span class="tool-type ${tool.audience === "regular" ? "safe" : "user"}">${tool.audience === "regular" ? "AI" : "USER"}</span><div><b>${escapeHtml(tool.name)}</b><small>${escapeHtml(tool.description)}</small></div><i>→</i></button>`,
     )
     .join("");
-  const tool = tools[0];
-  detail.innerHTML = tool
-    ? `<span class="status-pill"><i></i> ${tool.audience === "regular" ? "AI-callable" : "User-only"}</span><h2>${escapeHtml(tool.name)}</h2><p>${escapeHtml(tool.description)}</p><div class="schema-block"><span>INPUT SCHEMA</span><pre>${escapeHtml(JSON.stringify(tool.inputSchema, null, 2))}</pre></div><button class="button button-primary" type="button">Chạy thử trên thiết bị</button><small class="audit-note">Mọi tool call đều được ghi audit.</small>`
-    : '<div class="empty-state"><b>Chưa có MCP tool.</b></div>';
+  renderToolDetail(root, tools[0], activeDeviceId, live);
 }
 
 function renderOverview(root: HTMLElement, data: ManagerViewData): void {
@@ -265,7 +352,11 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
   const devicesSignature = JSON.stringify([data.devices, data.agents.map((agent) => [agent.id, agent.name])]);
   const agentsSignature = JSON.stringify(data.agents);
   const providersSignature = JSON.stringify(data.providers);
-  const toolsSignature = JSON.stringify(data.tools);
+  const toolsSignature = JSON.stringify([
+    data.tools,
+    data.activeDeviceId,
+    data.toolsLive,
+  ]);
   if (signatures.devices !== devicesSignature) {
     renderDevices(root, data.devices, data.agents);
     signatures.devices = devicesSignature;
@@ -279,7 +370,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
     signatures.providers = providersSignature;
   }
   if (signatures.tools !== toolsSignature) {
-    renderTools(root, data.tools);
+    renderTools(root, data.tools, data.activeDeviceId, data.toolsLive);
     signatures.tools = toolsSignature;
   }
   renderSignatures.set(root, signatures);
@@ -371,6 +462,65 @@ export function initializePrototype(
     if (target.closest("[data-open-pair]")) return openPairing();
     if (target.closest("[data-close-modal]")) return closePairing();
     if (target === query(root, "#pairModal")) return closePairing();
+    const toolItem = target.closest<HTMLButtonElement>(".tool-item[data-tool-name]");
+    if (toolItem?.dataset.toolName) {
+      const catalog = toolCatalogs.get(root);
+      const tool = catalog?.tools.find((item) => item.name === toolItem.dataset.toolName);
+      queryAll(root, ".tool-item").forEach((item) => item.classList.remove("active"));
+      toolItem.classList.add("active");
+      renderToolDetail(root, tool, catalog?.activeDeviceId, catalog?.live ?? false);
+      return;
+    }
+    const runTool = target.closest<HTMLButtonElement>(".run-device-tool");
+    if (runTool) {
+      const form = runTool.closest<HTMLFormElement>(".tool-call-form");
+      const deviceId = form?.dataset.deviceId;
+      const toolName = form?.dataset.toolName;
+      if (!form || !deviceId || !toolName || !form.reportValidity()) return;
+      const argumentsValue: Record<string, unknown> = {};
+      try {
+        queryAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+          form,
+          "[data-tool-argument]",
+        ).forEach((input) => {
+          const name = input.dataset.toolArgument;
+          if (!name) return;
+          const kind = input.dataset.argumentKind;
+          if (kind === "boolean" && input instanceof HTMLInputElement) {
+            argumentsValue[name] = input.checked;
+          } else if (kind === "number") {
+            if (input.value !== "") argumentsValue[name] = Number(input.value);
+          } else if (kind === "json") {
+            if (input.value !== "") argumentsValue[name] = JSON.parse(input.value);
+          } else if (input.value !== "") {
+            argumentsValue[name] = input.value;
+          }
+        });
+      } catch {
+        return toast("Tham số JSON không hợp lệ.");
+      }
+      const confirmed =
+        query<HTMLInputElement>(form, "[data-tool-confirmed]")?.checked ?? false;
+      runTool.disabled = true;
+      const previous = runTool.textContent;
+      runTool.textContent = "Đang thực thi…";
+      try {
+        const result = await callbacks.callTool(
+          deviceId,
+          toolName,
+          argumentsValue,
+          confirmed,
+        );
+        const summary = JSON.stringify(result);
+        toast(`MCP thành công · ${summary.slice(0, 180)}`);
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "MCP call thất bại.");
+      } finally {
+        runTool.disabled = false;
+        runTool.textContent = previous;
+      }
+      return;
+    }
     const testButton = target.closest<HTMLButtonElement>(".test-provider");
     if (testButton?.dataset.providerId) {
       testButton.disabled = true;
@@ -395,8 +545,23 @@ export function initializePrototype(
       const persona = query<HTMLTextAreaElement>(panel, '[data-agent-field="persona"]')?.value.trim() ?? "";
       const defaultLocale = query<HTMLSelectElement>(panel, '[data-agent-field="locale"]')?.value ?? "vi-VN";
       const interactionMode = (query<HTMLSelectElement>(panel, '[data-agent-field="mode"]')?.value ?? "auto") as Agent["interactionMode"];
-      const betweenTurnsSeconds = Number(query<HTMLSelectElement>(panel, '[data-agent-field="timeout"]')?.value ?? 30);
+      const firstInputSeconds = Number(
+        query<HTMLInputElement>(panel, '[data-agent-field="first-input"]')?.value ?? 15,
+      );
+      const betweenTurnsSeconds = Number(
+        query<HTMLInputElement>(panel, '[data-agent-field="between-turns"]')?.value ?? 30,
+      );
+      const closingGraceSeconds = Number(
+        query<HTMLInputElement>(panel, '[data-agent-field="closing-grace"]')?.value ?? 5,
+      );
+      const maxSessionSeconds = Number(
+        query<HTMLInputElement>(panel, '[data-agent-field="max-session"]')?.value ?? 600,
+      );
+      const timeoutGoodbye =
+        query<HTMLInputElement>(panel, '[data-agent-field="timeout-goodbye"]')?.value.trim() ??
+        "";
       if (!name || !persona) return toast("Tên và system prompt không được để trống.");
+      if (!timeoutGoodbye) return toast("Lời chào khi timeout không được để trống.");
       try {
         await callbacks.publishAgent({
           id,
@@ -404,7 +569,15 @@ export function initializePrototype(
           persona,
           defaultLocale,
           interactionMode,
-          draftConfig: { conversation: { betweenTurnsSeconds } },
+          draftConfig: {
+            conversation: {
+              firstInputSeconds,
+              betweenTurnsSeconds,
+              closingGraceSeconds,
+              maxSessionSeconds,
+              timeoutGoodbye,
+            },
+          },
         });
         toast("Đã publish immutable agent config mới.");
       } catch (error) {

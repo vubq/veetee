@@ -135,13 +135,18 @@ uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
   --expected-volume 55
 ```
 
-The 2026-07-21 run passed `Opus uplink -> Silero -> Zipformer -> structured
-planner -> 9Router prose -> VieNeu -> paced Opus downlink`. First downlink audio
-arrived about 2.6--3.4 s after the final test upload; this is a smoke result, not
-the final p95 gate. The remaining latency is dominated by two sequential LLM
-operations (planner then prose), so a later measured optimization should fuse
-planning/tool selection with response streaming or use a proven low-latency
-semantic model without weakening admission.
+The 2026-07-22 run passed `Opus uplink -> Silero -> Zipformer -> fused semantic
+admission/plan -> 9Router -> VieNeu -> paced Opus downlink`. The fused structured
+call returns admission, dialogue act and plan together. Direct short responses go
+straight to TTS without a second model call; MCP turns keep a second prose pass so
+the spoken result is grounded in the actual tool response. First downlink audio in
+the current smoke runs arrived about 4.0--6.5 s after final upload depending on the
+tool path and 9Router latency; this is not the final p95 gate.
+
+The same run verified semantic no-response for incidental speech, first-audio
+button abort, abort while MCP was pending with a late result, first-input goodbye,
+and interrupt during goodbye. No stale MCP/text/TTS output was observed after
+generation cancellation.
 
 A clean 9Router upstream can take about 4.3 seconds for its first structured call,
 while the same call is about 1.3 seconds after warmup. Voice-server therefore
@@ -157,12 +162,11 @@ safety ceiling, not a latency target: the p95 planner target remains much lower,
 and successful responses are forwarded immediately rather than waiting for the
 deadline.
 
-Planner output uses a forced internal structured function with a bounded JSON
-Schema instead of trusting free-form JSON text. This function only returns a
-`ConversationPlan`; it is not an MCP/device action. The policy/parser still
-normalizes cross-field invariants such as `call_tool_then_respond` always requiring
-a spoken response, then the MCP broker independently validates the selected tool
-name and arguments.
+Semantic output uses a forced internal structured function with a bounded JSON
+Schema instead of trusting free-form JSON text. This function returns admission,
+dialogue act and `ConversationPlan`; it is not an MCP/device action. The
+policy/parser normalizes cross-field invariants, then the MCP broker independently
+validates the selected live tool name, schema, safety class and arguments.
 
 For a direct `respond` plan, the same structured call may include a short,
 directly speakable `response_text`; voice-server sends it to TTS without a second

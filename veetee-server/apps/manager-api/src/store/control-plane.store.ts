@@ -17,6 +17,7 @@ import {
 
 import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
+import { validateAgentDraftConfig } from "../config/agent-config.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
@@ -417,6 +418,7 @@ export class ControlPlaneStore {
   }
 
   async createAgent(input: AgentInput, context: MutationContext): Promise<AgentRecord> {
+    validateAgentDraftConfig(input.draftConfig ?? {});
     return this.prisma.$transaction(async (transaction) => {
       const agent = await transaction.agent.create({
         data: {
@@ -449,6 +451,7 @@ export class ControlPlaneStore {
     input: AgentPatch,
     context: MutationContext,
   ): Promise<AgentRecord> {
+    if (input.draftConfig !== undefined) validateAgentDraftConfig(input.draftConfig);
     return this.prisma.$transaction(async (transaction) => {
       const agent = await transaction.agent.findFirst({
         where: { id, tenantId: context.principal.tenantId },
@@ -493,6 +496,7 @@ export class ControlPlaneStore {
         where: { id, tenantId: context.principal.tenantId },
       });
       if (!agent) throw new NotFoundException("Agent not found");
+      validateAgentDraftConfig(agent.draftConfig as Record<string, unknown>);
       const providers = await transaction.providerBinding.findMany({
         where: { tenantId: context.principal.tenantId, enabled: true },
       });

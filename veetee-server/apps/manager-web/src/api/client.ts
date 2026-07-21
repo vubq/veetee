@@ -133,6 +133,11 @@ export const managerApi = {
   agents: () => request("/api/v1/agents", z.array(agentSchema)),
   providers: () => request("/api/v1/providers", z.array(providerSchema)),
   mcpTools: () => request("/api/v1/mcp/tools", z.array(mcpToolSchema)),
+  deviceMcpTools: (deviceId: string) =>
+    request(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools`,
+      z.array(mcpToolSchema),
+    ),
 
   async logout(): Promise<void> {
     const response = await rawRequest("/api/v1/auth/logout", { method: "POST" });
@@ -164,5 +169,25 @@ export const managerApi = {
     return request(`/api/v1/providers/${encodeURIComponent(id)}/test`, providerSchema, {
       method: "POST",
     });
+  },
+
+  callDeviceTool(
+    deviceId: string,
+    name: string,
+    argumentsValue: Record<string, unknown>,
+    confirmed: boolean,
+  ) {
+    return request(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools/${encodeURIComponent(name)}/call`,
+      z.record(z.string(), z.unknown()),
+      {
+        method: "POST",
+        body: JSON.stringify({
+          arguments: argumentsValue,
+          confirmed,
+          timeoutSeconds: 10,
+        }),
+      },
+    );
   },
 };

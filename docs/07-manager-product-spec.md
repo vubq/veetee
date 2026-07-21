@@ -4,6 +4,14 @@
 
 `manager-api` là control plane. Nó không relay audio và không được nằm trong đường nóng của phiên thoại. `manager-web` là console cho owner/operator, không phải UI trò chuyện chính của robot.
 
+Baseline triển khai ngày 2026-07-22 đã có auth/tenant guard, pairing 6 số,
+agent/provider config và immutable publish, desired/reported state, artifact edge,
+live device MCP proxy có confirmation/audit, cùng Manager Web responsive giữ nguyên
+prototype đã duyệt. Conversation timeout được validate ở Manager và clamp lại ở
+voice-server; extension field được bảo toàn khi UI cập nhật draft. Realtime event
+ingestion và catalog/rollout wake-artifact vẫn là các phần tiếp theo, không được giả
+lập thành trạng thái production.
+
 ## 2. Data model lõi
 
 Các bảng/aggregate nên bắt đầu nhỏ hơn Xiaozhi nhưng giữ đường mở rộng:

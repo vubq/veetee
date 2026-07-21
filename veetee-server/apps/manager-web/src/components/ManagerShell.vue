@@ -26,7 +26,15 @@ const health = useQuery({ queryKey: ["health"], queryFn: managerApi.health, retr
 const devices = useQuery({ queryKey: ["devices"], queryFn: managerApi.devices });
 const agents = useQuery({ queryKey: ["agents"], queryFn: managerApi.agents });
 const providers = useQuery({ queryKey: ["providers"], queryFn: managerApi.providers });
-const tools = useQuery({ queryKey: ["mcp-tools"], queryFn: managerApi.mcpTools });
+const baselineTools = useQuery({ queryKey: ["mcp-tools"], queryFn: managerApi.mcpTools });
+const activeDeviceId = computed(() => devices.data.value?.[0]?.id ?? "");
+const deviceTools = useQuery({
+  queryKey: computed(() => ["device-mcp-tools", activeDeviceId.value]),
+  queryFn: () => managerApi.deviceMcpTools(activeDeviceId.value),
+  enabled: computed(() => Boolean(activeDeviceId.value)),
+  retry: false,
+});
+const tools = computed(() => deviceTools.data.value ?? baselineTools.data.value ?? []);
 
 const apiHost = computed(() => {
   try {
@@ -52,6 +60,8 @@ async function testProvider(providerId: string): Promise<void> {
 
 async function publishAgent(input: AgentDraftInput): Promise<void> {
   const current = agents.data.value?.find((agent) => agent.id === input.id);
+  const currentConversation = current?.draftConfig.conversation;
+  const nextConversation = input.draftConfig.conversation;
   await managerApi.updateAgent(input.id, {
     name: input.name,
     defaultLocale: input.defaultLocale,
@@ -60,10 +70,25 @@ async function publishAgent(input: AgentDraftInput): Promise<void> {
     draftConfig: {
       ...(current?.draftConfig ?? {}),
       ...input.draftConfig,
+      conversation: {
+        ...(currentConversation && typeof currentConversation === "object"
+          ? currentConversation
+          : {}),
+        ...(nextConversation && typeof nextConversation === "object" ? nextConversation : {}),
+      },
     },
   });
   await managerApi.publishAgent(input.id);
   await refresh("agents");
+}
+
+async function callTool(
+  deviceId: string,
+  name: string,
+  argumentsValue: Record<string, unknown>,
+  confirmed: boolean,
+): Promise<Record<string, unknown>> {
+  return managerApi.callDeviceTool(deviceId, name, argumentsValue, confirmed);
 }
 
 onMounted(async () => {
@@ -73,6 +98,7 @@ onMounted(async () => {
     pair,
     testProvider,
     publishAgent,
+    callTool,
     logout: () => auth.logout(),
   });
 });
@@ -84,7 +110,9 @@ watchEffect(() => {
     devices: devices.data.value ?? [],
     agents: agents.data.value ?? [],
     providers: providers.data.value ?? [],
-    tools: tools.data.value ?? [],
+    tools: tools.value,
+    activeDeviceId: activeDeviceId.value || undefined,
+    toolsLive: Boolean(deviceTools.data.value),
     apiHost: apiHost.value,
     ready: health.data.value?.status === "ready",
   });

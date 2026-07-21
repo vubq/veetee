@@ -61,6 +61,10 @@ export const mcpToolSchema = z.object({
   description: z.string(),
   inputSchema: jsonObject,
   audience: z.enum(["regular", "user"]),
+  safetyClass: z
+    .enum(["read_only", "reversible", "disruptive", "destructive"])
+    .default("read_only"),
+  requiresConfirmation: z.boolean().default(false),
 });
 
 export const healthSchema = z.object({
