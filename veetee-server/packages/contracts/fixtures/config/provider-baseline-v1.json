@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "locale": "vi-VN",
+  "vad": {
+    "provider_id": "silero-local",
+    "model_ref": "silero_vad",
+    "runtime": "server_cpu",
+    "endpointing": true
+  },
+  "asr": {
+    "primary": {
+      "provider_id": "sherpa-onnx-zipformer-vi",
+      "model_ref": "zipformer-vi-30m-int8",
+      "streaming": true,
+      "quality_gate": "confidence_and_stability"
+    },
+    "fallback": {
+      "provider_id": "chunkformer-ctc-vie",
+      "model_ref": "chunkformer-ctc-large-vie",
+      "streaming": false,
+      "trigger": "low_confidence_or_unstable",
+      "same_turn_deadline": true
+    }
+  },
+  "llm": {
+    "provider_id": "openai-compatible-9router",
+    "api_style": "chat_completions_or_responses",
+    "base_url_env": "VEETEE_9ROUTER_BASE_URL",
+    "model_ref": "cx/gpt-5.4-mini",
+    "streaming": true,
+    "structured_output": true,
+    "tool_calling": true,
+    "reasoning_effort": "none",
+    "auth_mode": "app_token_reference"
+  },
+  "tts": {
+    "provider_id": "vieneu-local",
+    "model_ref": "vieneu-tts-v3-turbo",
+    "streaming": "probe_then_enable",
+    "audio_format": "pcm_s16le",
+    "locale": "vi-VN"
+  },
+  "privacy": {
+    "raw_audio_storage": false,
+    "external_provider_fallback": false
+  }
+}

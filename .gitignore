@@ -1,0 +1,57 @@
+# Local secrets and runtime data
+.env
+.env.*
+!.env.example
+data/
+tmp/
+logs/
+*.log
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Read-only upstream sources are local study material, not part of Veetee
+/references/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Node/Vue
+node_modules/
+dist/
+.vite/
+coverage/
+.nuxt/
+.next/
+
+# ESP-IDF generated state
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+*.elf
+*.map
+*.bin
+*.uf2
+flash_args
+
+# Local tooling and temporary agent state
+.codex/
+.cache/
+*.swp
+*~
+
+# Local editor/OS files
+.vscode/
+.idea/
+.DS_Store

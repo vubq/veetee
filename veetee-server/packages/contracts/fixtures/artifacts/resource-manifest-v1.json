@@ -1,0 +1,58 @@
+{
+  "manifest_version": 1,
+  "bundle_id": "01JRESOURCE0000000000000000",
+  "kind": "resource_bundle",
+  "version": "1.4.0",
+  "channel": "stable",
+  "target": {
+    "board": "veetee-s3-n16r8",
+    "chip": "esp32s3",
+    "flash_bytes": 16777216,
+    "psram_bytes": 8388608
+  },
+  "compatibility": {
+    "min_firmware": "0.2.0",
+    "max_firmware_exclusive": "0.3.0",
+    "resource_abi": 1
+  },
+  "payload": {
+    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCE/resource.bin",
+    "size": 1835008,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_type": "application/vnd.veetee.resource-pack"
+  },
+  "apply": {
+    "mode": "when_standby",
+    "requires_reboot": false,
+    "rollback_allowed": true
+  },
+  "members": [
+    {
+      "name": "speech/esp-sr-vi-home",
+      "kind": "model_pack",
+      "runtime": "esp-sr",
+      "runtime_abi": 1,
+      "format_version": 1,
+      "sample_rate": 16000,
+      "detectors": [
+        {
+          "id": "wakenet:veetee_vi",
+          "role": "activation"
+        },
+        {
+          "id": "multinet:interrupt_stop",
+          "role": "interrupt"
+        }
+      ],
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "bytes": 482304
+    }
+  ],
+  "created_at": "2026-07-21T12:00:00Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "veetee-release-2026-01",
+    "security_epoch": 1,
+    "value": "fixture-signature"
+  }
+}

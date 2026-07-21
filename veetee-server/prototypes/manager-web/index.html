@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Veetee Manager — Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#overview" data-page-link="overview" aria-label="Veetee overview">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+        <span><b>veetee</b><small>robot operations</small></span>
+      </a>
+
+      <nav class="primary-nav" aria-label="Điều hướng chính">
+        <button class="nav-item active" data-page-link="overview"><span class="nav-icon">⌁</span><span>Tổng quan</span></button>
+        <button class="nav-item" data-page-link="devices"><span class="nav-icon">◫</span><span>Thiết bị</span><b class="nav-count">3</b></button>
+        <button class="nav-item" data-page-link="agents"><span class="nav-icon">✦</span><span>Trợ lý AI</span></button>
+        <button class="nav-item" data-page-link="providers"><span class="nav-icon">⌘</span><span>Providers</span></button>
+        <button class="nav-item" data-page-link="lab"><span class="nav-icon">≋</span><span>Realtime Lab</span><i class="live-dot"></i></button>
+        <button class="nav-item" data-page-link="mcp"><span class="nav-icon">⌗</span><span>MCP tools</span></button>
+        <button class="nav-item" data-page-link="ota"><span class="nav-icon">↥</span><span>OTA &amp; releases</span></button>
+      </nav>
+
+      <div class="sidebar-note">
+        <span class="eyebrow">LAN PROFILE</span>
+        <strong>192.168.1.20</strong>
+        <span>Không cần domain</span>
+        <div class="mini-health"><i></i> 4 dịch vụ đang chạy</div>
+      </div>
+
+      <button class="profile-card" type="button">
+        <span class="avatar">VQ</span>
+        <span><b>Vũ Quang</b><small>Workspace owner</small></span>
+        <span>•••</span>
+      </button>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <span class="mobile-brand">veetee</span>
+          <p class="breadcrumb"><span>Veetee lab</span><i>/</i><b id="pageCrumb">Tổng quan</b></p>
+        </div>
+        <div class="topbar-actions">
+          <button class="search-trigger" id="commandTrigger" type="button"><span>⌕</span><span>Tìm nhanh</span><kbd>⌘ K</kbd></button>
+          <button class="icon-button" type="button" aria-label="Thông báo">●<span class="notification-dot"></span></button>
+          <button class="button button-primary" type="button" data-open-pair><span>＋</span> Ghép thiết bị</button>
+        </div>
+      </header>
+
+      <section class="page active" data-page="overview">
+        <div class="page-heading reveal">
+          <div><span class="eyebrow">CONTROL ROOM / 09:42</span><h1>Chào buổi sáng.<br><em>Veetee đang nghe tốt.</em></h1></div>
+          <div class="heading-meta"><span>Phiên bản cấu hình</span><b>agent.vi.12</b><small>Cập nhật 8 phút trước</small></div>
+        </div>
+
+        <div class="hero-grid">
+          <article class="voice-card reveal delay-1">
+            <div class="card-topline"><div><span class="status-pill"><i></i> Realtime healthy</span><h2>Voice loop</h2></div><button class="round-action" data-page-link="lab" aria-label="Mở realtime lab">↗</button></div>
+            <div class="wave-stage" aria-label="Mô phỏng waveform">
+              <div class="orb"><span>vi</span><small>VN</small></div>
+              <div class="wave" id="overviewWave"></div>
+            </div>
+            <div class="latency-row">
+              <div><span>First audio</span><b>842<small>ms</small></b><em>↓ 12%</em></div>
+              <div><span>Ngắt lời</span><b>118<small>ms</small></b><em>mục tiêu đạt</em></div>
+              <div><span>Phiên hôm nay</span><b>37</b><em>04 đang mở</em></div>
+            </div>
+          </article>
+
+          <article class="fleet-card reveal delay-2">
+            <div class="card-topline"><div><span class="eyebrow">FLEET</span><h2>Thiết bị</h2></div><span class="big-number">03</span></div>
+            <div class="device-mini online"><span class="device-glyph">V1</span><div><b>Veetee Lab 01</b><small>ESP32-S3 · -52 dBm</small></div><span>online</span></div>
+            <div class="device-mini"><span class="device-glyph warm">V2</span><div><b>Veetee Desk</b><small>ESP32-S3 · 0.1.3</small></div><span>idle</span></div>
+            <div class="device-mini offline"><span class="device-glyph gray">V3</span><div><b>Proto Audio</b><small>Thấy lần cuối 2 giờ</small></div><span>offline</span></div>
+            <button class="text-link" data-page-link="devices">Xem toàn bộ thiết bị <b>→</b></button>
+          </article>
+        </div>
+
+        <div class="metric-strip reveal delay-2">
+          <div><span class="metric-symbol coral">A</span><p><small>ASR tiếng Việt</small><b>96.2%</b><em>Whisper local</em></p></div>
+          <div><span class="metric-symbol blue">T</span><p><small>TTS provider</small><b>Azure vi-VN</b><em>p95 486 ms</em></p></div>
+          <div><span class="metric-symbol lime">M</span><p><small>MCP tools</small><b>12 ready</b><em>2 user-only</em></p></div>
+          <div><span class="metric-symbol ink">O</span><p><small>OTA channel</small><b>Stable</b><em>0.1.3 latest</em></p></div>
+        </div>
+
+        <div class="lower-grid">
+          <article class="panel reveal delay-3">
+            <div class="panel-heading"><div><span class="eyebrow">LIVE TRACE</span><h3>Luồng hội thoại gần nhất</h3></div><span class="trace-id">TURN 00842</span></div>
+            <div class="timeline">
+              <div class="timeline-item done"><span>00</span><i></i><div><b>Assistant đã bật</b><small>Thiết bị nghe ở mode auto</small></div><em>0 ms</em></div>
+              <div class="timeline-item done"><span>01</span><i></i><div><b>Input accepted</b><small>Đủ tin cậy và hướng tới robot</small></div><em>188 ms</em></div>
+              <div class="timeline-item done"><span>02</span><i></i><div><b>ASR final</b><small>“Thời tiết Hà Nội hôm nay?”</small></div><em>312 ms</em></div>
+              <div class="timeline-item done"><span>03</span><i></i><div><b>Tool: get_weather</b><small>Hoàn tất, cache hit</small></div><em>94 ms</em></div>
+              <div class="timeline-item active"><span>04</span><i></i><div><b>TTS streaming</b><small>Azure · vi-VN-HoaiMyNeural</small></div><em>436 ms</em></div>
+            </div>
+          </article>
+
+          <article class="panel provider-health reveal delay-3">
+            <div class="panel-heading"><div><span class="eyebrow">PROVIDERS</span><h3>Sức khỏe hệ thống</h3></div><button class="icon-button tiny">↻</button></div>
+            <div class="health-ring"><div><b>99.3</b><span>%</span><small>7 ngày</small></div></div>
+            <div class="health-list"><span><i class="ok"></i> ASR <b>84 ms</b></span><span><i class="ok"></i> LLM <b>302 ms</b></span><span><i class="warn"></i> TTS <b>486 ms</b></span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="page" data-page="devices">
+        <div class="section-title"><div><span class="eyebrow">FLEET / 03 DEVICES</span><h1>Thiết bị</h1><p>Ghép nối, theo dõi và điều khiển robot trong workspace.</p></div><button class="button button-primary" data-open-pair>＋ Ghép bằng mã 6 số</button></div>
+        <div class="toolbar"><label class="table-search">⌕ <input placeholder="Tìm theo tên hoặc MAC"></label><div class="chips"><button class="chip active">Tất cả</button><button class="chip">Online</button><button class="chip">Cần cập nhật</button></div></div>
+        <div class="device-grid">
+          <article class="device-card selected"><div class="device-screen"><span>◉</span><div class="face"><i></i><i></i></div><small>đang nghe</small></div><div class="device-copy"><div><span class="status-pill"><i></i> online</span><b>Veetee Lab 01</b><small>AA:BB:CC:DD:EE:01</small></div><dl><div><dt>Wi-Fi</dt><dd>-52 dBm</dd></div><div><dt>Firmware</dt><dd>0.1.3</dd></div><div><dt>Agent</dt><dd>Veetee Việt</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
+          <article class="device-card"><div class="device-screen clay"><span>◌</span><div class="face"><i></i><i></i></div><small>idle</small></div><div class="device-copy"><div><span class="status-pill neutral"><i></i> idle</span><b>Veetee Desk</b><small>AA:BB:CC:DD:EE:02</small></div><dl><div><dt>Wi-Fi</dt><dd>-68 dBm</dd></div><div><dt>Firmware</dt><dd>0.1.3</dd></div><div><dt>Agent</dt><dd>Veetee Việt</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
+          <article class="device-card muted"><div class="device-screen smoke"><span>×</span><div class="face"><i></i><i></i></div><small>offline</small></div><div class="device-copy"><div><span class="status-pill off"><i></i> offline</span><b>Proto Audio</b><small>AA:BB:CC:DD:EE:03</small></div><dl><div><dt>Thấy lần cuối</dt><dd>2 giờ</dd></div><div><dt>Firmware</dt><dd>0.1.2</dd></div><div><dt>Agent</dt><dd>Chưa gán</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
+        </div>
+      </section>
+
+      <section class="page" data-page="agents">
+        <div class="section-title"><div><span class="eyebrow">PERSONALITY &amp; POLICY</span><h1>Trợ lý AI</h1><p>Phiên bản hóa persona, locale, provider chain và quyền dùng tools.</p></div><button class="button button-primary">＋ Tạo trợ lý</button></div>
+        <div class="agent-layout">
+          <article class="agent-poster"><span class="poster-tag">PUBLISHED · V12</span><div class="poster-face"><i></i><i></i><b>⌣</b></div><h2>Veetee Việt</h2><p>Thân thiện, súc tích và có chút tò mò. Luôn trả lời tiếng Việt trước.</p><div class="poster-meta"><span>vi-VN</span><span>cascade</span><span>12 tools</span></div></article>
+          <article class="config-panel"><div class="tabs"><button class="active">Hành vi</button><button>Providers</button><button>Ngôn ngữ</button><button>Tools</button></div><label>Tên trợ lý<input value="Veetee Việt"></label><label>System prompt<textarea>Em là Veetee, một robot AI thân thiện. Trả lời tự nhiên, rõ ràng và ưu tiên tiếng Việt...</textarea></label><div class="two-cols"><label>Locale mặc định<select><option>Tiếng Việt (vi-VN)</option></select></label><label>Chế độ hội thoại<select><option>Cascade realtime · auto</option><option>End-to-end realtime · auto</option><option>Manual/PTT compatibility</option></select></label></div><div class="two-cols"><label>Không có lượt mới<select><option>30 giây → chào và ngủ</option><option>60 giây → chào và ngủ</option></select></label><label>Input admission<select><option>Semantic + quality gate</option><option>Strict target speaker</option></select></label></div><div class="publish-bar"><div><span class="unsaved-dot"></span><p><b>Có 3 thay đổi chưa publish</b><small>Thiết bị đang dùng version 12</small></p></div><button class="button button-primary">Publish version 13</button></div></article>
+        </div>
+      </section>
+
+      <section class="page" data-page="providers">
+        <div class="section-title"><div><span class="eyebrow">MODEL ROUTING</span><h1>Provider hub</h1><p>Một nơi để kết nối, đo latency và thiết kế fallback cho từng locale.</p></div><button class="button button-primary">＋ Thêm credential</button></div>
+        <div class="provider-summary"><div><small>Đang hoạt động</small><b>6 / 7</b><span class="bar"><i style="width:86%"></i></span></div><div><small>Median latency</small><b>284 ms</b><em>↓ 8% tuần này</em></div><div><small>Locale coverage</small><b>vi-VN + en-US</b><em>2 profile published</em></div></div>
+        <div class="provider-table">
+          <div class="provider-row table-head"><span>Provider</span><span>Loại</span><span>Locale / model</span><span>p95</span><span>Health</span><span></span></div>
+          <div class="provider-row"><span><i class="provider-logo azure">AZ</i><b>Azure Neural</b></span><span>TTS</span><span>vi-VN-HoaiMy</span><span>486 ms</span><span class="health-text ok-text">Healthy</span><button class="test-provider">Test</button></div>
+          <div class="provider-row"><span><i class="provider-logo whisper">W</i><b>Whisper local</b></span><span>ASR</span><span>large-v3 · vi</span><span>312 ms</span><span class="health-text ok-text">Healthy</span><button class="test-provider">Test</button></div>
+          <div class="provider-row"><span><i class="provider-logo openai">O</i><b>OpenAI compatible</b></span><span>LLM</span><span>gpt-4.1-mini</span><span>664 ms</span><span class="health-text ok-text">Healthy</span><button class="test-provider">Test</button></div>
+          <div class="provider-row"><span><i class="provider-logo local">VT</i><b>Local VITS</b></span><span>TTS</span><span>vi-VN fallback</span><span>1.2 s</span><span class="health-text warn-text">Degraded</span><button class="test-provider">Test</button></div>
+        </div>
+      </section>
+
+      <section class="page" data-page="lab">
+        <div class="section-title"><div><span class="eyebrow">REALTIME LAB</span><h1>Nghe toàn bộ một lượt nói.</h1><p>Quan sát frame, ASR, model, tool và TTS trên cùng timeline.</p></div><div class="lab-actions"><span class="lab-state" id="labState"><i></i> Sẵn sàng</span><button class="button button-primary" id="labToggle">Bắt đầu phiên thử</button></div></div>
+        <div class="lab-grid">
+          <article class="lab-console"><div class="console-top"><div><span>DEVICE</span><b>Veetee Lab 01</b></div><div><span>AGENT</span><b>Veetee Việt · v12</b></div><div><span>ENGINE</span><b>Cascade · auto</b></div></div><div class="console-visual"><div class="big-orb" id="labOrb"><span>V</span><i></i></div><div class="lab-wave" id="labWave"></div><p id="labPrompt">Nhấn “Bắt đầu phiên thử” để bật assistant; VAD sẽ tự kết thúc lượt nói.</p></div><div class="console-controls"><button class="control-button">🎙 Tắt mic</button><button class="control-button danger" id="interruptButton">■ Ngắt AI</button><button class="control-button">⌁ Raw events</button></div></article>
+          <article class="event-stream"><div class="panel-heading"><div><span class="eyebrow">EVENT STREAM</span><h3>Timeline</h3></div><button class="icon-button tiny">•••</button></div><div id="eventLog" class="event-log"><div class="empty-event"><span>⌁</span><b>Chưa có phiên đang chạy</b><small>Event sẽ xuất hiện theo thời gian thực.</small></div></div></article>
+        </div>
+      </section>
+
+      <section class="page" data-page="mcp">
+        <div class="section-title"><div><span class="eyebrow">DEVICE CAPABILITIES</span><h1>MCP tools</h1><p>Khám phá capability và kiểm soát công cụ mà model được phép gọi.</p></div><button class="button button-primary">↻ Đồng bộ tools</button></div>
+        <div class="mcp-layout"><div class="tool-list"><button class="tool-item active"><span class="tool-type safe">AI</span><div><b>self.get_device_status</b><small>Đọc trạng thái pin, mạng, màn hình</small></div><i>→</i></button><button class="tool-item"><span class="tool-type safe">AI</span><div><b>self.audio_speaker.set_volume</b><small>Đặt âm lượng 0–100</small></div><i>→</i></button><button class="tool-item"><span class="tool-type safe">AI</span><div><b>self.screen.set_brightness</b><small>Điều chỉnh độ sáng màn hình</small></div><i>→</i></button><button class="tool-item"><span class="tool-type user">USER</span><div><b>self.reboot</b><small>Khởi động lại thiết bị</small></div><i>→</i></button></div><article class="tool-detail"><span class="status-pill"><i></i> AI-callable</span><h2>self.get_device_status</h2><p>Trả về trạng thái hiện tại của robot, bao gồm speaker, screen, network và chip.</p><div class="schema-block"><span>INPUT SCHEMA</span><pre>{
+  "type": "object",
+  "properties": {}
+}</pre></div><button class="button button-primary">Chạy thử trên Lab 01</button><small class="audit-note">Mọi tool call đều được ghi audit.</small></article></div>
+      </section>
+
+      <section class="page" data-page="ota">
+        <div class="section-title"><div><span class="eyebrow">FIRMWARE DELIVERY</span><h1>OTA &amp; releases</h1><p>Đưa firmware tới robot theo canary, theo dõi và rollback an toàn.</p></div><button class="button button-primary">↥ Upload artifact</button></div>
+        <article class="release-hero"><div><span class="status-pill"><i></i> STABLE</span><h2>Firmware 0.1.3</h2><p>WebSocket reconnect, âm lượng mượt hơn và sửa font tiếng Việt.</p><div class="release-meta"><span><small>Build</small><b>2026.07.21-03</b></span><span><small>Target</small><b>veetee-s3-n16r8</b></span><span><small>SHA-256</small><b>8f2a…c91d</b></span></div></div><div class="rollout-ring"><b>67%</b><span>2 / 3 thiết bị</span><small>rollout</small></div></article>
+        <div class="release-list"><div class="release-row"><span class="release-version">0.1.3</span><div><b>Stable channel</b><small>2 thiết bị thành công · 1 offline</small></div><span class="release-date">21/07/2026</span><button>Chi tiết →</button></div><div class="release-row"><span class="release-version old">0.1.2</span><div><b>Previous stable</b><small>Có thể rollback</small></div><span class="release-date">09/07/2026</span><button>Chi tiết →</button></div></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="pairModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+      <button class="modal-close" type="button" data-close-modal aria-label="Đóng">×</button>
+      <span class="modal-kicker">PAIR A NEW ROBOT</span>
+      <h2 id="pairTitle">Nhập mã đang hiện<br>trên màn hình Veetee.</h2>
+      <p>Mã gồm 6 số, có hiệu lực trong 10 phút và chỉ dùng một lần.</p>
+      <div class="code-inputs" id="codeInputs">
+        <input inputmode="numeric" maxlength="1" aria-label="Số thứ 1"><input inputmode="numeric" maxlength="1" aria-label="Số thứ 2"><input inputmode="numeric" maxlength="1" aria-label="Số thứ 3"><span></span><input inputmode="numeric" maxlength="1" aria-label="Số thứ 4"><input inputmode="numeric" maxlength="1" aria-label="Số thứ 5"><input inputmode="numeric" maxlength="1" aria-label="Số thứ 6">
+      </div>
+      <label>Gán cho trợ lý<select><option>Veetee Việt · v12</option><option>Chưa gán trợ lý</option></select></label>
+      <button class="button button-primary modal-submit" id="pairSubmit" disabled>Ghép thiết bị</button>
+      <small>Thiết bị và máy tính phải truy cập được cùng server LAN.</small>
+    </div>
+  </div>
+
+  <div class="command-palette" id="commandPalette" hidden>
+    <div class="command-box"><div class="command-input">⌕ <input id="commandInput" placeholder="Đi tới trang hoặc chạy tác vụ..."><kbd>ESC</kbd></div><p>Đi nhanh</p><button data-command-page="devices"><span>◫</span> Mở Thiết bị <kbd>G D</kbd></button><button data-command-page="providers"><span>⌘</span> Mở Provider hub <kbd>G P</kbd></button><button data-command-page="lab"><span>≋</span> Mở Realtime Lab <kbd>G L</kbd></button><button data-command-pair><span>＋</span> Ghép thiết bị mới <kbd>N</kbd></button></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

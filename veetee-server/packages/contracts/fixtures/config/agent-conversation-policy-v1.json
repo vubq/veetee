@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "default_locale": "vi-VN",
+  "interaction_mode": "auto",
+  "conversation_engine": "cascade",
+  "wake": {
+    "activation_detector_profile_id": "wake-vi-home-v4",
+    "interrupt_detector_profile_id": "interrupt-vi-home-v2"
+  },
+  "input_admission": {
+    "policy": "balanced",
+    "on_unclear": "ask_once",
+    "target_speaker": "optional",
+    "max_clarification_attempts": 1
+  },
+  "timeouts": {
+    "first_input_seconds": 15,
+    "between_turns_seconds": 30,
+    "closing_grace_seconds": 5,
+    "max_utterance_seconds": 20,
+    "max_session_seconds": 600,
+    "admission_seconds": 1,
+    "asr_seconds": 8,
+    "planner_seconds": 3,
+    "llm_first_token_seconds": 5,
+    "tts_first_audio_seconds": 5,
+    "mcp_seconds": 10,
+    "total_turn_seconds": 30
+  },
+  "mcp": {
+    "enabled": true,
+    "require_confirmation_for_user_tools": true
+  }
+}

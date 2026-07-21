@@ -1,0 +1,16 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "mcp",
+  "payload": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "self.audio_speaker.set_volume",
+      "arguments": {
+        "volume": 55
+      }
+    }
+  }
+}
+

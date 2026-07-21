@@ -1,0 +1,16 @@
+{
+  "board": "veetee-s3-n16r8",
+  "firmware_version": "0.2.0",
+  "resource_abi": 1,
+  "runtimes": {
+    "esp-sr": [1],
+    "lvgl-assets": [1]
+  },
+  "free_resource_slot_bytes": 3932160,
+  "psram_bytes": 8388608,
+  "hot_reload": [
+    "model_pack",
+    "display_assets",
+    "audio_assets"
+  ]
+}

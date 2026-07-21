@@ -1,0 +1,7 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "system",
+  "command": "config_changed",
+  "config_version": 13,
+  "resource_version": "1.4.0"
+}

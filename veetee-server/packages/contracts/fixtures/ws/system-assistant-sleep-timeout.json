@@ -1,0 +1,6 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "system",
+  "command": "assistant_sleep",
+  "reason": "inactivity_timeout"
+}

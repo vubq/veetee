@@ -1,0 +1,5 @@
+interface:
+  display_name: "Veetee Development"
+  short_description: "Build and evolve the Veetee AI robot platform"
+  default_prompt: "Use $veetee-development to implement the next Veetee milestone from the project specifications."
+
