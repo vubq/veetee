@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     manager_api_url: HttpUrl = HttpUrl("http://127.0.0.1:8001")
     manager_internal_token: str = Field(default="", repr=False)
     manager_request_seconds: float = Field(default=3.0, gt=0.1, le=15.0)
+    telemetry_queue_capacity: int = Field(default=256, ge=32, le=2_048)
+    telemetry_batch_size: int = Field(default=32, ge=1, le=64)
+    telemetry_flush_seconds: float = Field(default=0.25, ge=0.05, le=5.0)
+    telemetry_shutdown_seconds: float = Field(default=1.0, ge=0.1, le=5.0)
     require_device_auth: bool = True
 
     nine_router_base_url: HttpUrl = Field(

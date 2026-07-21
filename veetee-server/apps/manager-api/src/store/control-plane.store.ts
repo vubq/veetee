@@ -57,6 +57,28 @@ export interface ProviderRecord {
   health: "unknown" | "healthy" | "degraded";
 }
 
+export interface ConversationEventInput {
+  eventId: string;
+  sessionId: string;
+  turnId?: string;
+  generation: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export interface ConversationEventRecord {
+  id: string;
+  deviceId: string;
+  agentId?: string;
+  sessionId: string;
+  turnId?: string;
+  generation: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+  occurredAt: string;
+}
+
 export type DeviceBootstrapResult =
   | {
       state: "unbound";
@@ -313,6 +335,67 @@ export class ControlPlaneStore {
       orderBy: { pairedAt: "desc" },
     });
     return devices.map((device) => this.toDeviceRecord(device));
+  }
+
+  async ingestConversationEvents(
+    deviceId: string,
+    events: ConversationEventInput[],
+  ): Promise<{ accepted: number }> {
+    const device = await this.prisma.device.findUnique({
+      where: { id: deviceId },
+      select: { id: true, tenantId: true, agentId: true },
+    });
+    if (!device) throw new NotFoundException("Device not found");
+    const retentionUntil = new Date(
+      Date.now() + this.conversationRetentionDays() * 24 * 60 * 60 * 1_000,
+    );
+    const result = await this.prisma.conversationEvent.createMany({
+      data: events.map((event) => ({
+        id: event.eventId,
+        tenantId: device.tenantId,
+        deviceId: device.id,
+        ...(device.agentId ? { agentId: device.agentId } : {}),
+        sessionId: event.sessionId,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+        generation: event.generation,
+        eventType: event.eventType,
+        payload: event.payload as Prisma.InputJsonValue,
+        occurredAt: new Date(event.occurredAt),
+        retentionUntil,
+      })),
+      skipDuplicates: true,
+    });
+    await this.prisma.conversationEvent.deleteMany({
+      where: { retentionUntil: { lt: new Date() } },
+    });
+    return { accepted: result.count };
+  }
+
+  async listConversationEvents(
+    tenantId: string,
+    deviceId: string | undefined,
+    limit: number,
+  ): Promise<ConversationEventRecord[]> {
+    const events = await this.prisma.conversationEvent.findMany({
+      where: {
+        tenantId,
+        ...(deviceId ? { deviceId } : {}),
+        retentionUntil: { gt: new Date() },
+      },
+      orderBy: { occurredAt: "desc" },
+      take: limit,
+    });
+    return events.reverse().map((event) => ({
+      id: event.id,
+      deviceId: event.deviceId,
+      ...(event.agentId ? { agentId: event.agentId } : {}),
+      sessionId: event.sessionId,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      generation: event.generation,
+      eventType: event.eventType,
+      payload: event.payload as Record<string, unknown>,
+      occurredAt: event.occurredAt.toISOString(),
+    }));
   }
 
   async device(tenantId: string, id: string): Promise<DeviceRecord> {
@@ -759,5 +842,15 @@ export class ControlPlaneStore {
     if (url.protocol !== "https:" && !(url.protocol === "http:" && localHost)) {
       throw new BadRequestException("Provider URL must use HTTPS or loopback HTTP");
     }
+  }
+
+  private conversationRetentionDays(): number {
+    const value = Number(process.env.VEETEE_CONVERSATION_EVENT_RETENTION_DAYS ?? 7);
+    if (!Number.isInteger(value) || value < 1 || value > 30) {
+      throw new Error(
+        "VEETEE_CONVERSATION_EVENT_RETENTION_DAYS must be an integer from 1 to 30",
+      );
+    }
+    return value;
   }
 }

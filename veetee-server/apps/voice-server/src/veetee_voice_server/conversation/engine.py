@@ -133,6 +133,8 @@ class ConversationEngine:
                         "action": plan.action.value,
                         "dialogue_act": plan.dialogue_act.value,
                         "intent": plan.intent,
+                        "locale": plan.locale,
+                        "tool_name": plan.tool_call.name if plan.tool_call is not None else None,
                     },
                 ),
             )

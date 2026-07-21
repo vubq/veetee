@@ -151,6 +151,10 @@ conversation.turn
 
 Không dùng transcript làm span name/label vì cardinality và privacy.
 
+Conversation timeline vận hành mặc định chỉ lưu metadata đã redact; event UUID
+idempotent, retention 7 ngày (configurable 1-30), payload được bound ở producer và
+không tạo event theo từng audio frame/token delta.
+
 ## 5. LAN deployment không domain
 
 Docker Compose binding gợi ý:

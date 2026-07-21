@@ -7,9 +7,9 @@ hardware bring-up; blank-flash AP -> Wi-Fi -> bind, resource A/B signed rollout 
 reported-state đã chạy trên board. Phase 4 cascade local đã pass host wire E2E cho
 Silero -> Zipformer -> semantic gate/9Router -> VieNeu -> Opus, cancellation,
 inactivity và semantic reject. Phase 6 MCP đã pass firmware/voice/Manager end-to-end
-trên host. Phase 5 có auth, pairing, agent/provider config, desired/reported state và
-Manager Web theo prototype với live MCP; phần artifact/wake rollout UI và realtime
-event ingestion vẫn là lát dọc phần mềm chính còn lại. Custom `Hey VeeTee`, AEC và
+trên host. Phase 5 có auth, pairing, agent/provider config, desired/reported state,
+Manager Web theo prototype với live MCP và Realtime Lab dùng event metadata thật;
+phần artifact/wake rollout UI vẫn là lát dọc phần mềm chính còn lại. Custom `Hey VeeTee`, AEC và
 soak phần cứng vẫn phải qua benchmark trên thiết bị thật.
 
 ## Phase 0 - Freeze contract và board (1-2 ngày)
@@ -155,6 +155,11 @@ Sai password, server down, code hết hạn và bind trùng đều có UX/alert 
 ### Gate
 
 User role không thấy secret/tool privileged; audit mutation có request id. Publish config/resource không đồng nghĩa đã apply; canary/reconcile/apply error phải hiển thị.
+
+Realtime event ingestion đã đạt gate host: service-authenticated batch, UUID
+idempotency, tenant scope derive từ device, retention 1-30 ngày, queue voice-server
+không chặn và UI không còn phát event mô phỏng. First-audio hiện tính từ metadata
+`stt.final -> tts.start`; abort-to-silence chính xác vẫn chờ playback ACK/hardware.
 
 ## Phase 6 - MCP + device tools (3-5 ngày)
 

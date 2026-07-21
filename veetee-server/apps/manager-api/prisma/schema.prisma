@@ -48,12 +48,13 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships     Membership[]
-  agents          Agent[]
-  devices         Device[]
-  providers       ProviderBinding[]
-  auditEvents     AuditEvent[]
-  refreshSessions RefreshSession[]
+  memberships        Membership[]
+  agents             Agent[]
+  devices            Device[]
+  providers          ProviderBinding[]
+  auditEvents        AuditEvent[]
+  conversationEvents ConversationEvent[]
+  refreshSessions    RefreshSession[]
 }
 
 model User {
@@ -132,10 +133,11 @@ model Device {
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
 
-  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  agent         Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  desiredState  DeviceDesiredState?
-  reportedState DeviceReportedState?
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  agent              Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  desiredState       DeviceDesiredState?
+  reportedState      DeviceReportedState?
+  conversationEvents ConversationEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, agentId])
@@ -214,4 +216,27 @@ model AuditEvent {
 
   @@index([tenantId, createdAt])
   @@index([targetType, targetId])
+}
+
+model ConversationEvent {
+  id             String   @id @default(uuid())
+  tenantId       String
+  deviceId       String
+  agentId        String?
+  sessionId      String
+  turnId         String?
+  generation     Int
+  eventType      String
+  payload        Json     @default("{}")
+  occurredAt     DateTime
+  retentionUntil DateTime
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, occurredAt])
+  @@index([deviceId, occurredAt])
+  @@index([sessionId, occurredAt])
+  @@index([retentionUntil])
 }

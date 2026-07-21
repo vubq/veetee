@@ -34,6 +34,13 @@ const deviceTools = useQuery({
   enabled: computed(() => Boolean(activeDeviceId.value)),
   retry: false,
 });
+const conversationEvents = useQuery({
+  queryKey: computed(() => ["conversation-events", activeDeviceId.value]),
+  queryFn: () => managerApi.conversationEvents(activeDeviceId.value),
+  enabled: computed(() => Boolean(activeDeviceId.value)),
+  refetchInterval: 1_500,
+  retry: false,
+});
 const tools = computed(() => deviceTools.data.value ?? baselineTools.data.value ?? []);
 
 const apiHost = computed(() => {
@@ -111,6 +118,7 @@ watchEffect(() => {
     agents: agents.data.value ?? [],
     providers: providers.data.value ?? [],
     tools: tools.value,
+    conversationEvents: conversationEvents.data.value ?? [],
     activeDeviceId: activeDeviceId.value || undefined,
     toolsLive: Boolean(deviceTools.data.value),
     apiHost: apiHost.value,

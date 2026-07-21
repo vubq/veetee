@@ -32,6 +32,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await redis.client.connect();
     await redis.client.flushdb();
     await prisma.auditEvent.deleteMany();
+    await prisma.conversationEvent.deleteMany();
     await prisma.refreshSession.deleteMany();
     await prisma.deviceReportedState.deleteMany();
     await prisma.deviceDesiredState.deleteMany();
@@ -139,6 +140,48 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       agentId: agent.id,
       interactionMode: "auto",
     });
+
+    const eventId = "98bdb294-4dd1-42ce-87fa-79f414c22c59";
+    const conversationEvent = {
+      eventId,
+      sessionId: "session_integration_01",
+      turnId: "session_integration_01:1",
+      generation: 2,
+      eventType: "admission",
+      payload: { disposition: "accepted", confidence: 0.94 },
+      occurredAt: "2026-07-22T04:15:00.000Z",
+    };
+    await expect(
+      store.ingestConversationEvents(device.id, [conversationEvent]),
+    ).resolves.toEqual({ accepted: 1 });
+    await expect(
+      store.ingestConversationEvents(device.id, [conversationEvent]),
+    ).resolves.toEqual({ accepted: 0 });
+    await expect(store.listConversationEvents(principal.tenantId, device.id, 10)).resolves.toEqual([
+      expect.objectContaining({
+        id: eventId,
+        deviceId: device.id,
+        agentId: agent.id,
+        sessionId: conversationEvent.sessionId,
+        eventType: "admission",
+      }),
+    ]);
+
+    await prisma.conversationEvent.update({
+      where: { id: eventId },
+      data: { retentionUntil: new Date(Date.now() - 1_000) },
+    });
+    await expect(store.listConversationEvents(principal.tenantId, device.id, 10)).resolves.toEqual(
+      [],
+    );
+    await store.ingestConversationEvents(device.id, [
+      {
+        ...conversationEvent,
+        eventId: "57a85bd1-b0cb-4353-982d-185001579021",
+        eventType: "assistant.sleep",
+      },
+    ]);
+    await expect(prisma.conversationEvent.findUnique({ where: { id: eventId } })).resolves.toBeNull();
   });
 
   it("atomically rotates a refresh token", async () => {

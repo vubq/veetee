@@ -32,6 +32,7 @@ from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
+from veetee_voice_server.telemetry import ConversationTelemetry, NullConversationTelemetry
 from veetee_voice_server.transport.mcp import DeviceMcpClient, DeviceMcpError
 from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder, OpusError
 from veetee_voice_server.transport.protocol import (
@@ -71,11 +72,13 @@ class WebSocketConversationSink:
         websocket: WebSocket,
         *,
         session_id: str,
+        telemetry: ConversationTelemetry | None = None,
         output_sample_rate: int = 24_000,
         frame_duration_ms: int = 60,
     ) -> None:
         self._websocket = websocket
         self._session_id = session_id
+        self._telemetry = telemetry or NullConversationTelemetry()
         self._output_sample_rate = output_sample_rate
         self._frame_duration_ms = frame_duration_ms
         self._encoder = OpusEncoder(output_sample_rate)
@@ -89,6 +92,26 @@ class WebSocketConversationSink:
         self._queue_frames = 12
 
     async def emit(self, output: ConversationOutput) -> None:
+        if output.generation < self._cancel_generation:
+            return
+        event_type = {
+            OutputKind.TTS_START: "tts.start",
+            OutputKind.TTS_STOP: "tts.stop",
+        }.get(output.kind, output.kind.value)
+        if output.kind in {
+            OutputKind.ADMISSION,
+            OutputKind.PLAN,
+            OutputKind.TTS_START,
+            OutputKind.TTS_STOP,
+            OutputKind.ERROR,
+        }:
+            self._telemetry.record(
+                self._session_id,
+                event_type,
+                generation=output.generation,
+                turn_id=output.turn_id,
+                payload=output.payload,
+            )
         if output.kind is OutputKind.TTS_START:
             await self._start_tts(output.generation)
             return
@@ -109,11 +132,30 @@ class WebSocketConversationSink:
         async with self._lock:
             await self._send_text({"session_id": self._session_id, **payload})
 
-    async def send_stt(self, transcript: Transcript) -> None:
+    async def send_stt(self, transcript: Transcript, *, generation: int = 0) -> None:
+        self._telemetry.record(
+            self._session_id,
+            "stt.final",
+            generation=max(generation, self._cancel_generation),
+            payload={
+                "locale": transcript.locale,
+                "character_count": len(transcript.text),
+                "confidence": transcript.confidence,
+                "stability": transcript.stability,
+            },
+        )
         async with self._lock:
             await self._send_text(stt_payload(self._session_id, transcript.text))
 
-    async def send_listening(self, source: WakeSource | None = None) -> None:
+    async def send_listening(
+        self, source: WakeSource | None = None, *, generation: int = 0
+    ) -> None:
+        self._telemetry.record(
+            self._session_id,
+            "listen.start",
+            generation=max(generation, self._cancel_generation),
+            payload={"source": source.value if source is not None else "turn_continuation"},
+        )
         async with self._lock:
             await self._send_text(
                 listen_started_payload(
@@ -121,7 +163,13 @@ class WebSocketConversationSink:
                 )
             )
 
-    async def send_assistant_sleep(self, reason: str) -> None:
+    async def send_assistant_sleep(self, reason: str, *, generation: int = 0) -> None:
+        self._telemetry.record(
+            self._session_id,
+            "assistant.sleep",
+            generation=max(generation, self._cancel_generation),
+            payload={"reason": reason},
+        )
         async with self._lock:
             await self._send_text(assistant_sleep_payload(self._session_id, reason))
 
@@ -357,6 +405,7 @@ class VoiceSession:
             [TurnArbiter, WebSocketConversationSink, SessionProfile, ToolBroker],
             ConversationEngine,
         ],
+        telemetry: ConversationTelemetry | None = None,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
@@ -366,6 +415,7 @@ class VoiceSession:
         self.sink = WebSocketConversationSink(
             websocket,
             session_id=self.session_id,
+            telemetry=telemetry,
             output_sample_rate=settings.wire_sample_rate,
             frame_duration_ms=settings.wire_frame_duration_ms,
         )
@@ -398,6 +448,7 @@ class VoiceSession:
         self._mcp_bootstrap_task: asyncio.Task[None] | None = None
         self.mcp_ready = asyncio.Event()
         self._closed = False
+        self._telemetry = telemetry or NullConversationTelemetry()
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -451,6 +502,7 @@ class VoiceSession:
         await self.arbiter.abort("socket_closed")
         self._decoder.close()
         self.sink.close()
+        await self._telemetry.close()
 
     async def _handle_control(self, event: ClientEvent) -> None:
         if isinstance(event, ListenEvent) and event.state in {"start", "detect"}:
@@ -462,7 +514,9 @@ class VoiceSession:
             await self._cancel_asr()
             self._reset_input()
             await self.sink.cancel_tts(self.arbiter.snapshot.generation)
-            await self.sink.send_listening(source)
+            await self.sink.send_listening(
+                source, generation=self.arbiter.snapshot.generation
+            )
             return
         if isinstance(event, ListenEvent) and event.state == "stop":
             await self._close_assistant(event.reason or "listen_stop")
@@ -496,6 +550,12 @@ class VoiceSession:
     async def _abort_current(self, reason: str) -> None:
         was_closing = self.arbiter.snapshot.state is ConversationState.CLOSING
         receipt = await self.arbiter.abort(reason)
+        self._telemetry.record(
+            self.session_id,
+            "abort",
+            generation=receipt.generation,
+            payload={"reason": reason},
+        )
         self.sink.mark_cancelled(receipt.generation)
         await self._cancel_asr()
         self._reset_input()
@@ -504,7 +564,7 @@ class VoiceSession:
             await self.inactivity.interrupt_closing()
         await self.arbiter.finish_cancellation(receipt)
         if self.arbiter.snapshot.state is ConversationState.LISTENING:
-            await self.sink.send_listening()
+            await self.sink.send_listening(generation=self.arbiter.snapshot.generation)
             await self.inactivity.turn_completed()
 
     async def _close_assistant(self, reason: str) -> None:
@@ -583,7 +643,9 @@ class VoiceSession:
                 transcript.confidence,
                 transcript.stability,
             )
-            await self.sink.send_stt(normalized)
+            await self.sink.send_stt(
+                normalized, generation=self.arbiter.snapshot.generation
+            )
             disposition = await self.engine.handle_transcript(normalized)
             if disposition in {
                 AdmissionDisposition.ACCEPTED,
@@ -605,18 +667,30 @@ class VoiceSession:
                 AdmissionDisposition.UNCLEAR,
                 AdmissionDisposition.INTERRUPT,
             }:
-                await self.sink.send_listening()
+                await self.sink.send_listening(generation=self.arbiter.snapshot.generation)
             elif state is ConversationState.STANDBY:
-                await self.sink.send_assistant_sleep("semantic_end")
+                await self.sink.send_assistant_sleep(
+                    "semantic_end", generation=self.arbiter.snapshot.generation
+                )
         except asyncio.CancelledError:
             raise
         except Exception as error:
             await self.inactivity.candidate_rejected()
+            self._telemetry.record(
+                self.session_id,
+                "error",
+                generation=self.arbiter.snapshot.generation,
+                payload={
+                    "code": "transcription_or_turn_failed",
+                    "stage": "asr_turn",
+                    "error_type": type(error).__name__,
+                },
+            )
             await self.sink.send_control(
                 {"type": "llm", "emotion": "sad", "text": type(error).__name__}
             )
             if self.arbiter.snapshot.state is ConversationState.LISTENING:
-                await self.sink.send_listening()
+                await self.sink.send_listening(generation=self.arbiter.snapshot.generation)
         finally:
             if self._asr_task is asyncio.current_task():
                 self._asr_task = None
@@ -665,7 +739,9 @@ class VoiceSession:
                         generation=context.generation,
                     )
                 )
-        await self.sink.send_assistant_sleep(reason)
+        await self.sink.send_assistant_sleep(
+            reason, generation=self.arbiter.snapshot.generation
+        )
 
     async def _cancel_asr(self) -> None:
         task = self._asr_task

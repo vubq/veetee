@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   agentSchema,
   apiErrorSchema,
+  conversationEventSchema,
   deviceSchema,
   healthSchema,
   mcpToolSchema,
@@ -137,6 +138,11 @@ export const managerApi = {
     request(
       `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools`,
       z.array(mcpToolSchema),
+    ),
+  conversationEvents: (deviceId: string, limit = 100) =>
+    request(
+      `/api/v1/conversation-events?deviceId=${encodeURIComponent(deviceId)}&limit=${limit}`,
+      z.array(conversationEventSchema),
     ),
 
   async logout(): Promise<void> {

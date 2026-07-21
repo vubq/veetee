@@ -1,4 +1,11 @@
-import type { Agent, Device, McpTool, Principal, Provider } from "./api/schemas";
+import type {
+  Agent,
+  ConversationEvent,
+  Device,
+  McpTool,
+  Principal,
+  Provider,
+} from "./api/schemas";
 
 const pageNames: Record<string, string> = {
   overview: "Tổng quan",
@@ -44,6 +51,7 @@ export interface ManagerViewData {
   agents: Agent[];
   providers: Provider[];
   tools: McpTool[];
+  conversationEvents: ConversationEvent[];
   activeDeviceId: string | undefined;
   toolsLive: boolean;
   apiHost: string;
@@ -277,18 +285,6 @@ function renderOverview(root: HTMLElement, data: ManagerViewData): void {
   if (metrics) {
     metrics.innerHTML = `<div><span class="metric-symbol coral">A</span><p><small>ASR tiếng Việt</small><b>${escapeHtml(asr?.model ?? "Chưa cấu hình")}</b><em>${escapeHtml(asr?.adapter ?? "provider registry")}</em></p></div><div><span class="metric-symbol blue">T</span><p><small>TTS local</small><b>${escapeHtml(tts?.model ?? "Chưa cấu hình")}</b><em>${escapeHtml(tts?.health ?? "unknown")}</em></p></div><div><span class="metric-symbol lime">M</span><p><small>MCP tools</small><b>${data.tools.length} ready</b><em>${data.tools.filter((tool) => tool.audience === "user").length} user-only</em></p></div><div><span class="metric-symbol ink">C</span><p><small>Config drift</small><b>${data.devices.filter((device) => device.desiredState.version !== device.reportedState.version).length} device</b><em>desired vs reported</em></p></div>`;
   }
-  const voiceStatus = query<HTMLElement>(root, ".voice-card .status-pill");
-  if (voiceStatus) voiceStatus.innerHTML = "<i></i> Voice telemetry pending";
-  const latency = query<HTMLElement>(root, ".voice-card .latency-row");
-  if (latency) {
-    latency.innerHTML = '<div><span>First audio</span><b>—</b><em>chờ phiên thật</em></div><div><span>Ngắt lời</span><b>—</b><em>chưa đo hardware</em></div><div><span>Phiên hôm nay</span><b>0</b><em>event ingestion chưa bật</em></div>';
-  }
-  const traceId = query<HTMLElement>(root, ".trace-id");
-  const timeline = query<HTMLElement>(root, ".timeline");
-  if (traceId) traceId.textContent = "NO LIVE TURN";
-  if (timeline) {
-    timeline.innerHTML = '<div class="empty-state"><b>Chưa có conversation event thật.</b><small>Realtime Lab sẽ hiển thị admission, ASR, MCP, cancellation và TTS khi event ingestion được bật.</small></div>';
-  }
   const healthyProviders = data.providers.filter((provider) => provider.health === "healthy").length;
   const providerPercent = data.providers.length
     ? Math.round((healthyProviders / data.providers.length) * 100)
@@ -306,17 +302,124 @@ function renderOverview(root: HTMLElement, data: ManagerViewData): void {
   }
 }
 
+function eventDetail(event: ConversationEvent): string {
+  const payload = event.payload;
+  if (event.eventType === "listen.start") {
+    return `Assistant gate · source=${String(payload.source ?? "unknown")}`;
+  }
+  if (event.eventType === "stt.final") {
+    return `${String(payload.locale ?? "unknown")} · ${Number(payload.character_count ?? 0)} ký tự · transcript đã redact`;
+  }
+  if (event.eventType === "admission") {
+    const confidence = Math.round(Number(payload.confidence ?? 0) * 100);
+    return `${String(payload.disposition ?? "unknown")} · ${String(payload.reason_code ?? "unknown")} · ${confidence}%`;
+  }
+  if (event.eventType === "plan") {
+    const tool = payload.tool_name ? ` · tool=${String(payload.tool_name)}` : "";
+    return `${String(payload.action ?? "unknown")} · ${String(payload.intent ?? "unknown")}${tool}`;
+  }
+  if (event.eventType === "abort" || event.eventType === "assistant.sleep") {
+    return `reason=${String(payload.reason ?? "unknown")} · generation=${event.generation}`;
+  }
+  if (event.eventType === "tts.start") return "Bắt đầu phát audio xuống thiết bị";
+  if (event.eventType === "tts.stop") return "Kết thúc playback của generation hiện tại";
+  if (event.eventType === "error") {
+    return `${String(payload.code ?? "unknown_error")} · stage=${String(payload.stage ?? "conversation")}`;
+  }
+  return JSON.stringify(payload).slice(0, 180);
+}
+
+function elapsedMilliseconds(origin: ConversationEvent, event: ConversationEvent): number {
+  return Math.max(0, Date.parse(event.occurredAt) - Date.parse(origin.occurredAt));
+}
+
+function renderTelemetry(root: HTMLElement, data: ManagerViewData): void {
+  const events = data.conversationEvents;
+  const latest = events.at(-1);
+  const sessionEvents = latest
+    ? events.filter((event) => event.sessionId === latest.sessionId)
+    : [];
+  const origin = sessionEvents[0];
+  const latestAge = latest ? Date.now() - Date.parse(latest.occurredAt) : Number.POSITIVE_INFINITY;
+  const recent = latestAge >= 0 && latestAge < 10_000;
+  const voiceStatus = query<HTMLElement>(root, ".voice-card .status-pill");
+  if (voiceStatus) {
+    voiceStatus.classList.toggle("neutral", !recent);
+    voiceStatus.innerHTML = `<i></i> ${recent ? "Voice telemetry live" : events.length ? "Voice telemetry idle" : "Chưa có telemetry"}`;
+  }
+
+  const stt = [...sessionEvents].reverse().find((event) => event.eventType === "stt.final");
+  const firstAudio = stt
+    ? sessionEvents.find(
+        (event) => event.eventType === "tts.start" && Date.parse(event.occurredAt) >= Date.parse(stt.occurredAt),
+      )
+    : undefined;
+  const firstAudioMs = stt && firstAudio ? elapsedMilliseconds(stt, firstAudio) : undefined;
+  const today = new Date().toISOString().slice(0, 10);
+  const sessionsToday = new Set(
+    events.filter((event) => event.occurredAt.slice(0, 10) === today).map((event) => event.sessionId),
+  ).size;
+  const latency = query<HTMLElement>(root, ".voice-card .latency-row");
+  if (latency) {
+    latency.innerHTML = `<div><span>First audio</span><b>${firstAudioMs ?? "—"}${firstAudioMs !== undefined ? "<small>ms</small>" : ""}</b><em>${firstAudioMs !== undefined ? "từ ASR final" : "chờ turn có TTS"}</em></div><div><span>Ngắt lời</span><b>—</b><em>cần playback ACK/AEC</em></div><div><span>Phiên hôm nay</span><b>${sessionsToday}</b><em>${events.length} event đã redact</em></div>`;
+  }
+
+  const traceId = query<HTMLElement>(root, ".trace-id");
+  if (traceId) {
+    const turnId = [...sessionEvents].reverse().find((event) => event.turnId)?.turnId;
+    traceId.textContent = turnId ? turnId.slice(-18).toUpperCase() : latest ? latest.sessionId.slice(0, 12).toUpperCase() : "NO LIVE TURN";
+  }
+  const timeline = query<HTMLElement>(root, ".timeline");
+  if (timeline) {
+    timeline.innerHTML = origin
+      ? sessionEvents
+          .slice(-12)
+          .map(
+            (event, index) => `<div class="timeline-item ${index === sessionEvents.slice(-12).length - 1 && recent ? "active" : "done"}"><span>${String(index).padStart(2, "0")}</span><i></i><div><b>${escapeHtml(event.eventType)}</b><small>${escapeHtml(eventDetail(event))}</small></div><em>${elapsedMilliseconds(origin, event)} ms</em></div>`,
+          )
+          .join("")
+      : '<div class="empty-state"><b>Chưa có conversation event thật.</b><small>Hãy gọi robot bằng nút hoặc “Hey VeeTee”; timeline tự đồng bộ và không lưu transcript/audio.</small></div>';
+  }
+
+  const labState = query<HTMLElement>(root, "#labState");
+  const labToggle = query<HTMLButtonElement>(root, "#labToggle");
+  const labPrompt = query<HTMLElement>(root, "#labPrompt");
+  const labOrb = query<HTMLElement>(root, "#labOrb");
+  if (labState) {
+    labState.classList.toggle("running", recent);
+    labState.innerHTML = `<i></i> ${recent ? "Đang nhận event" : "Đang quan sát"}`;
+  }
+  if (labToggle) labToggle.textContent = "Timeline tự đồng bộ";
+  if (labPrompt) {
+    labPrompt.textContent = data.activeDeviceId
+      ? "Bấm nút trên robot hoặc nói “Hey VeeTee” để mở assistant; VAD tự kết thúc câu và event sẽ xuất hiện ở đây."
+      : "Ghép một thiết bị để bắt đầu nhận conversation telemetry.";
+  }
+  labOrb?.classList.toggle("running", recent);
+  const interruptButton = query<HTMLButtonElement>(root, "#interruptButton");
+  if (interruptButton) {
+    interruptButton.disabled = true;
+    interruptButton.title = "Remote interrupt chưa có device command contract; nút vật lý vẫn là guarantee.";
+  }
+  const eventLog = query<HTMLElement>(root, "#eventLog");
+  if (eventLog) {
+    eventLog.innerHTML = origin
+      ? sessionEvents
+          .slice(-20)
+          .map(
+            (event) => `<div class="event-entry"><i></i><div><b>${escapeHtml(event.eventType)}</b><small>${escapeHtml(eventDetail(event))}</small></div><em>+${elapsedMilliseconds(origin, event)} ms</em></div>`,
+          )
+          .join("")
+      : '<div class="empty-event"><span>⌁</span><b>Chưa có phiên thật</b><small>Không còn timeline mô phỏng; dữ liệu sẽ đến từ voice-server.</small></div>';
+  }
+}
+
 function renderAvailability(root: HTMLElement, data: ManagerViewData): void {
   const device = data.devices[0];
   const agent = data.agents[0];
   const consoleTop = query<HTMLElement>(root, ".console-top");
   if (consoleTop) {
     consoleTop.innerHTML = `<div><span>DEVICE</span><b>${escapeHtml(device?.name ?? "Chưa có thiết bị")}</b></div><div><span>AGENT</span><b>${escapeHtml(agent ? `${agent.name} · v${agent.publishedVersion}` : "Chưa có agent")}</b></div><div><span>ENGINE</span><b>${escapeHtml(agent ? `${agent.interactionMode} · auto gate` : "Cascade · auto")}</b></div>`;
-  }
-  const labPrompt = query<HTMLElement>(root, "#labPrompt");
-  if (labPrompt) {
-    labPrompt.textContent =
-      "Đây là mô phỏng UI. Live event ingestion sẽ được nối sau khi firmware tạo phiên thật.";
   }
   const releaseHero = query<HTMLElement>(root, ".release-hero");
   const releaseList = query<HTMLElement>(root, ".release-list");
@@ -375,6 +478,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
   }
   renderSignatures.set(root, signatures);
   renderOverview(root, data);
+  renderTelemetry(root, data);
   renderAvailability(root, data);
 }
 
@@ -383,10 +487,8 @@ export function initializePrototype(
   callbacks: PrototypeCallbacks,
 ): PrototypeController {
   const abort = new AbortController();
-  const timers = new Set<number>();
   const signal = abort.signal;
   let toastTimer = 0;
-  let labRunning = false;
 
   const listen = (target: EventTarget | null, event: string, handler: EventListener): void => {
     target?.addEventListener(event, handler, { signal });
@@ -647,53 +749,12 @@ export function initializePrototype(
     }
   }) as EventListener);
 
-  const labState = query<HTMLElement>(root, "#labState");
   const labToggle = query<HTMLButtonElement>(root, "#labToggle");
-  const labPrompt = query<HTMLElement>(root, "#labPrompt");
-  const eventLog = query<HTMLElement>(root, "#eventLog");
-  const stopLab = (message: string): void => {
-    timers.forEach((timer) => window.clearTimeout(timer));
-    timers.clear();
-    labRunning = false;
-    labState?.classList.remove("running");
-    if (labState) labState.innerHTML = "<i></i> Sẵn sàng";
-    if (labToggle) labToggle.textContent = "Bắt đầu phiên thử";
-    if (labPrompt) labPrompt.textContent = message;
-    query(root, "#labOrb")?.classList.remove("running");
-  };
   listen(labToggle, "click", (() => {
-    if (labRunning) return stopLab("Đã dừng phiên mô phỏng.");
-    labRunning = true;
-    labState?.classList.add("running");
-    if (labState) labState.innerHTML = "<i></i> Đang chạy";
-    if (labToggle) labToggle.textContent = "Dừng phiên";
-    if (labPrompt) labPrompt.textContent = "Đang mô phỏng luồng auto: hãy nói một câu tiếng Việt.";
-    if (eventLog) eventLog.innerHTML = "";
-    const events = [
-      ["listen:start", "Assistant gate mở · mode=auto", "0 ms"],
-      ["input.accepted", "Input đủ tin cậy và hướng tới robot", "188 ms"],
-      ["vad.final", "Tự kết thúc lượt nói · không cần click lần hai", "188 ms"],
-      ["stt", "ASR final tiếng Việt", "312 ms"],
-      ["llm.first_token", "9Router bắt đầu stream", "302 ms"],
-      ["tts.first_audio", "VieNeu local", "535 ms"],
-    ];
-    events.forEach(([name, detail, time], index) => {
-      const timer = window.setTimeout(() => {
-        eventLog?.insertAdjacentHTML(
-          "beforeend",
-          `<div class="event-entry"><i></i><div><b>${name}</b><small>${detail}</small></div><em>${time}</em></div>`,
-        );
-      }, 450 + index * 620);
-      timers.add(timer);
-    });
+    toast("Realtime Lab tự đồng bộ mỗi 1,5 giây; hãy gọi robot bằng nút hoặc wake word.");
   }) as EventListener);
   listen(query(root, "#interruptButton"), "click", (() => {
-    if (!labRunning) return toast("Chưa có turn đang chạy.");
-    stopLab("Đã ngắt AI · generation cũ bị vô hiệu hóa, sẵn sàng nghe turn mới.");
-    eventLog?.insertAdjacentHTML(
-      "beforeend",
-      '<div class="event-entry"><i></i><div><b>abort</b><small>User interrupt · generation invalidated</small></div><em>118 ms</em></div>',
-    );
+    toast("Remote interrupt chưa được bật; hãy dùng nút vật lý trên robot.");
   }) as EventListener);
 
   showPage(location.hash.slice(1) || "overview");
@@ -702,7 +763,6 @@ export function initializePrototype(
     closePairing,
     destroy(): void {
       abort.abort();
-      timers.forEach((timer) => window.clearTimeout(timer));
       window.clearTimeout(toastTimer);
     },
   };

@@ -11,7 +11,12 @@ const principal = {
 
 async function mockManagerApi(
   page: Page,
-  options: { withDevice?: boolean; toolCalls?: unknown[]; agentPatches?: unknown[] } = {},
+  options: {
+    withDevice?: boolean;
+    withConversationEvents?: boolean;
+    toolCalls?: unknown[];
+    agentPatches?: unknown[];
+  } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
   await page.route("http://127.0.0.1:8001/**", async (route) => {
@@ -46,6 +51,46 @@ async function mockManagerApi(
                 desiredState: { version: 2, state: {} },
                 reportedState: { version: 2, state: {} },
                 pairedAt: "2026-07-22T00:00:00.000Z",
+              },
+            ]
+          : [],
+      );
+    }
+    if (url.pathname === "/api/v1/conversation-events") {
+      return json(
+        options.withConversationEvents
+          ? [
+              {
+                id: "c3fb2e2f-d2f8-458a-8b3b-65033a106cb3",
+                deviceId: "b72559f9-8a1c-47fa-b2af-7c2a85098b2f",
+                agentId: "e31b2263-c5b2-43f9-b17d-4046c9703e73",
+                sessionId: "session_12345678",
+                generation: 1,
+                eventType: "listen.start",
+                payload: { source: "wake_word" },
+                occurredAt: "2026-07-22T03:00:00.000Z",
+              },
+              {
+                id: "232e50eb-857a-4ee7-b4ad-96770f01b560",
+                deviceId: "b72559f9-8a1c-47fa-b2af-7c2a85098b2f",
+                agentId: "e31b2263-c5b2-43f9-b17d-4046c9703e73",
+                sessionId: "session_12345678",
+                turnId: "session_12345678:1",
+                generation: 2,
+                eventType: "stt.final",
+                payload: { locale: "vi-VN", character_count: 28, confidence: 0.91 },
+                occurredAt: "2026-07-22T03:00:01.200Z",
+              },
+              {
+                id: "1dfc897b-4911-40ef-bc0a-cb242dd00da5",
+                deviceId: "b72559f9-8a1c-47fa-b2af-7c2a85098b2f",
+                agentId: "e31b2263-c5b2-43f9-b17d-4046c9703e73",
+                sessionId: "session_12345678",
+                turnId: "session_12345678:1",
+                generation: 2,
+                eventType: "tts.start",
+                payload: {},
+                occurredAt: "2026-07-22T03:00:01.650Z",
               },
             ]
           : [],
@@ -237,4 +282,18 @@ test("publishes bounded conversation changes without dropping extension fields",
       },
     },
   });
+});
+
+test("renders the redacted realtime timeline from Manager API events", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true, withConversationEvents: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="lab"]').first().click();
+  await expect(page.locator("#eventLog")).toContainText("stt.final");
+  await expect(page.locator("#eventLog")).toContainText("28 ký tự · transcript đã redact");
+  await expect(page.locator(".latency-row")).toContainText("450");
+  await expect(page.locator("#interruptButton")).toBeDisabled();
 });

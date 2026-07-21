@@ -103,3 +103,41 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
     assert first is second
     assert first.persona == "Veetee test"
     assert config_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_manager_publishes_redacted_conversation_event_batch() -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["authorization"] = request.headers["authorization"]
+        captured["body"] = request.content.decode()
+        return httpx.Response(201, json={"accepted": 1})
+
+    settings = Settings(
+        environment="test",
+        manager_api_url="http://manager.test",
+        manager_internal_token="internal-test-token",
+    )
+    client = httpx.AsyncClient(
+        base_url="http://manager.test", transport=httpx.MockTransport(handler)
+    )
+    manager = ManagerClient(settings, client=client)
+    accepted = await manager.publish_conversation_events(
+        "4b6fbf00-4072-4ab5-b06e-a2884749d206",
+        [
+            {
+                "eventId": "71b469fa-9fa1-4926-902f-004833a2473d",
+                "sessionId": "session_12345678",
+                "generation": 1,
+                "eventType": "listen.start",
+                "payload": {"source": "button"},
+                "occurredAt": "2026-07-22T04:30:00.000Z",
+            }
+        ],
+    )
+    await client.aclose()
+
+    assert accepted == 1
+    assert captured["authorization"] == "Bearer internal-test-token"
+    assert '"deviceId":"4b6fbf00-4072-4ab5-b06e-a2884749d206"' in str(captured["body"])

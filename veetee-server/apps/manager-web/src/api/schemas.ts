@@ -67,6 +67,18 @@ export const mcpToolSchema = z.object({
   requiresConfirmation: z.boolean().default(false),
 });
 
+export const conversationEventSchema = z.object({
+  id: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  agentId: z.string().uuid().optional(),
+  sessionId: z.string(),
+  turnId: z.string().optional(),
+  generation: z.number().int().nonnegative(),
+  eventType: z.string(),
+  payload: jsonObject,
+  occurredAt: z.string(),
+});
+
 export const healthSchema = z.object({
   status: z.string(),
   service: z.string().optional(),
@@ -85,3 +97,4 @@ export type Device = z.infer<typeof deviceSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
+export type ConversationEvent = z.infer<typeof conversationEventSchema>;

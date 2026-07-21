@@ -35,6 +35,7 @@ from veetee_voice_server.providers.nine_router import NineRouterLlmProvider
 from veetee_voice_server.providers.semantic import StructuredConversationGate
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
+from veetee_voice_server.telemetry import ConversationTelemetryBuffer
 from veetee_voice_server.transport.mcp import DeviceMcpError
 from veetee_voice_server.transport.session import VoiceSession
 from veetee_voice_server.transport.session_registry import (
@@ -364,6 +365,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             asr=cast(SherpaZipformerAsrProvider, runtime["asr"]),
             vad_model=cast(SileroVadModel, runtime["vad_model"]),
             tts=cast(VieNeuTtsProvider, runtime["tts"]),
+            telemetry=(
+                ConversationTelemetryBuffer(
+                    cast(ManagerClient, runtime["manager"]),
+                    manager_device_id,
+                    queue_capacity=resolved_settings.telemetry_queue_capacity,
+                    batch_size=resolved_settings.telemetry_batch_size,
+                    flush_seconds=resolved_settings.telemetry_flush_seconds,
+                    shutdown_seconds=resolved_settings.telemetry_shutdown_seconds,
+                )
+                if manager_device_id is not None
+                else None
+            ),
             engine_factory=engine_factory,
         )
         registration_id: str | None = None

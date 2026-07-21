@@ -14,6 +14,7 @@ import { BootstrapService } from "./database/bootstrap.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { RedisService } from "./database/redis.service.js";
 import { AgentsController } from "./modules/agents.controller.js";
+import { ConversationEventsController } from "./modules/conversation-events.controller.js";
 import { DevicesController } from "./modules/devices.controller.js";
 import { HealthController } from "./modules/health.controller.js";
 import { InternalController } from "./modules/internal.controller.js";
@@ -35,6 +36,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     PairingController,
     DevicesController,
     AgentsController,
+    ConversationEventsController,
     ProvidersController,
     McpController,
     InternalController,

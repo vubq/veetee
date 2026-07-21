@@ -199,6 +199,18 @@ class ManagerClient:
             self._profile_cache[cache_key] = profile
             return profile
 
+    async def publish_conversation_events(
+        self, device_id: str, events: list[dict[str, Any]]
+    ) -> int:
+        response = await self._client.post(
+            "/internal/v1/conversation-events/batch",
+            headers=self._service_headers(),
+            json={"deviceId": device_id, "events": events},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return _bounded_int(payload.get("accepted"), 0, 0, len(events))
+
     def _service_headers(self) -> dict[str, str]:
         token = self._settings.manager_internal_token
         if not token:
