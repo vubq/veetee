@@ -141,6 +141,11 @@ Không dùng một tên `framework.bin` mơ hồ. Artifact có type rõ:
 | `audio_assets` | prompt, chime, offline sound |
 | `admission_model` | optional local signal/input classifier |
 
+Firmware giữ một startup earcon ngắn làm fallback deterministic để vẫn báo boot khi
+resource slot chưa mount hoặc asset lỗi. Earcon sản phẩm, âm lỗi và prompt offline
+được chuyển sang signed `audio_assets`; đây là UI/safety feedback, không phải logic
+ý định hội thoại hard-code.
+
 `assets.bin` và `model.bin` có thể tồn tại như payload logic. Với ESP-SR V1, payload
 vật lý là raw `srmodels.bin` bắt đầu tại offset 0; manifest ký bên ngoài chứa toàn bộ
 metadata/hash và dùng MIME `application/vnd.veetee.esp-sr-model-pack`. Cách này cho

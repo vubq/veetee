@@ -47,7 +47,17 @@ menu "Veetee hardware bring-up"
     config VEETEE_LCD_SPI_CLOCK_HZ
         int "LCD SPI clock (Hz)"
         range 1000000 80000000
-        default 40000000
+        default 10000000
+        help
+            Keep the breadboard profile conservative. Raise this only after
+            the exact panel and wiring pass a visual integrity test.
+
+    config VEETEE_LCD_SPI_MODE
+        int "LCD SPI mode"
+        range 0 3
+        default 0
+        help
+            Most ST7789 modules use mode 0. Some seven-pin variants use mode 3.
 
     choice VEETEE_MIC_SLOT
         prompt "INMP441 slot selected by its L/R pin"
@@ -70,7 +80,7 @@ menu "Veetee hardware bring-up"
         default y
 
     config VEETEE_BOOT_TONE
-        bool "Play a short low-volume speaker tone on boot"
+        bool "Play a short low-volume startup chime"
         default y
 
     config VEETEE_DEFAULT_VOLUME_PERCENT

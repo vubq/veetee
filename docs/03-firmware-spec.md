@@ -21,6 +21,11 @@ Profile dưới đây lấy từ `references/xiaozhi-esp32/main/boards/bread-com
 | BOOT/assistant control | 0 | bật/ngắt assistant; optional PTT, cần tránh giữ khi reset |
 | LED | 48 | tùy module có LED thật |
 
+Profile breadboard dùng ST7789 SPI mode 0 ở 10 MHz để ưu tiên signal integrity trên
+dây Dupont. Clock có thể nâng sau khi panel thật pass color/orientation test; SPI
+mode 3, backlight invert và geometry vẫn là board configuration, không phải nhánh
+runtime tự đoán panel.
+
 ### Điện và layout
 
 - INMP441 và MAX98357A dùng chung GND; kiểm tra mức logic 3.3 V.

@@ -79,7 +79,7 @@ nó vào `resource_0`. Một I2S reader fan-out frame PCM 20 ms vào queue hữu
 WakeNet chạy ở task riêng, drop frame cũ khi nghẽn và generation-check khi đổi
 activation/interrupt role. Đây là layout development; resource updater production
 phải stage/verify/activate slot A/B theo signed manifest trước khi hot-reload.
-Board smoke đã xác nhận model load, contract 16 kHz mono/chunk 512, boot tone và
+Board smoke đã xác nhận model load, contract 16 kHz mono/chunk 512, startup chime và
 mic chạy liên tục hơn 45 giây không panic/watchdog. Wake-to-WebSocket vật lý còn
 cần provision Wi-Fi và bind code 6 số để state machine vào `idle`; captive portal
 không bật detector vì wake không được phép bỏ qua activation.

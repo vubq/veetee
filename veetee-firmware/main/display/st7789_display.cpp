@@ -84,7 +84,7 @@ esp_err_t St7789Display::Initialize() {
     esp_lcd_panel_io_spi_config_t io_config = {};
     io_config.cs_gpio_num = board::kDisplayChipSelect;
     io_config.dc_gpio_num = board::kDisplayDc;
-    io_config.spi_mode = 0;
+    io_config.spi_mode = board::kLcdSpiMode;
     io_config.pclk_hz = CONFIG_VEETEE_LCD_SPI_CLOCK_HZ;
     io_config.trans_queue_depth = 4;
     io_config.lcd_cmd_bits = 8;
@@ -123,10 +123,10 @@ esp_err_t St7789Display::Initialize() {
 
     gpio_set_level(board::kDisplayBacklight,
                    board::kLcdBacklightInvert ? 0 : 1);
-    ESP_LOGI(kTag, "ST7789 initialized: %dx%d offset=%d,%d SPI=%d Hz",
+    ESP_LOGI(kTag, "ST7789 initialized: %dx%d offset=%d,%d SPI=%d Hz mode=%d",
              CONFIG_VEETEE_LCD_WIDTH, CONFIG_VEETEE_LCD_HEIGHT,
              CONFIG_VEETEE_LCD_OFFSET_X, CONFIG_VEETEE_LCD_OFFSET_Y,
-             CONFIG_VEETEE_LCD_SPI_CLOCK_HZ);
+             CONFIG_VEETEE_LCD_SPI_CLOCK_HZ, board::kLcdSpiMode);
     return ESP_OK;
 }
 

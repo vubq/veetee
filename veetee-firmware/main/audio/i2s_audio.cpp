@@ -320,7 +320,7 @@ void I2sAudio::RunCapture() {
 
 void I2sAudio::RunPlayback() {
 #if CONFIG_VEETEE_BOOT_TONE
-    PlayBootTone();
+    PlayBootChime();
 #endif
     PlaybackItem item{};
     std::uint32_t decoder_generation = 0;
@@ -389,28 +389,55 @@ void I2sAudio::RunPlayback() {
     }
 }
 
-void I2sAudio::PlayBootTone() {
-    constexpr double kFrequencyHz = 440.0;
-    constexpr double kAmplitude = 3500.0;
-    constexpr int kFrames = 12;
-    for (std::size_t index = 0; index < tone_dma_buffer_.size(); ++index) {
-        const double phase = 2.0 * kPi * kFrequencyHz * index /
-                             board::kSpeakerSampleRate;
-        const std::int32_t pcm16 =
-            static_cast<std::int32_t>(std::sin(phase) * kAmplitude);
-        tone_dma_buffer_[index] = ToSpeakerSample(
-            static_cast<std::int16_t>(pcm16), volume_percent_.load());
-    }
-    for (int frame = 0; frame < kFrames; ++frame) {
+bool I2sAudio::WriteChimeNote(double frequency_hz, int frame_count) {
+    constexpr double kAmplitude = 4200.0;
+    const std::size_t total_samples =
+        tone_dma_buffer_.size() * static_cast<std::size_t>(frame_count);
+    for (int frame = 0; frame < frame_count; ++frame) {
+        for (std::size_t index = 0; index < tone_dma_buffer_.size(); ++index) {
+            const std::size_t sample =
+                static_cast<std::size_t>(frame) * tone_dma_buffer_.size() + index;
+            const double phase = 2.0 * kPi * frequency_hz * sample /
+                                 board::kSpeakerSampleRate;
+            const double envelope = std::sin(
+                kPi * (static_cast<double>(sample) + 0.5) / total_samples);
+            const std::int32_t pcm16 = static_cast<std::int32_t>(
+                std::sin(phase) * envelope * envelope * kAmplitude);
+            tone_dma_buffer_[index] = ToSpeakerSample(
+                static_cast<std::int16_t>(pcm16), volume_percent_.load());
+        }
         size_t bytes_written = 0;
         if (i2s_channel_write(tx_handle_, tone_dma_buffer_.data(),
                               tone_dma_buffer_.size() * sizeof(tone_dma_buffer_[0]),
                               &bytes_written, pdMS_TO_TICKS(100)) != ESP_OK) {
-            break;
+            return false;
         }
     }
+    return true;
+}
+
+void I2sAudio::PlayBootChime() {
+    constexpr int kFirstNoteFrames = 8;
+    constexpr int kGapFrames = 2;
+    constexpr int kSecondNoteFrames = 10;
+    bool complete = WriteChimeNote(523.25, kFirstNoteFrames);
+    if (complete) {
+        tone_dma_buffer_.fill(0);
+        for (int frame = 0; frame < kGapFrames && complete; ++frame) {
+            size_t bytes_written = 0;
+            complete = i2s_channel_write(
+                           tx_handle_, tone_dma_buffer_.data(),
+                           tone_dma_buffer_.size() * sizeof(tone_dma_buffer_[0]),
+                           &bytes_written, pdMS_TO_TICKS(100)) == ESP_OK;
+        }
+    }
+    if (complete) complete = WriteChimeNote(659.25, kSecondNoteFrames);
     WriteSilence();
-    ESP_LOGI(kTag, "Boot tone complete");
+    if (complete) {
+        ESP_LOGI(kTag, "Startup chime complete");
+    } else {
+        ESP_LOGW(kTag, "Startup chime interrupted by an I2S write error");
+    }
 }
 
 void I2sAudio::WriteSilence() {

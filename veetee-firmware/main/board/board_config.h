@@ -30,6 +30,7 @@ inline constexpr gpio_num_t kStatusLed = GPIO_NUM_48;
 
 inline constexpr std::uint32_t kMicSampleRate = 16000;
 inline constexpr std::uint32_t kSpeakerSampleRate = 24000;
+inline constexpr int kLcdSpiMode = CONFIG_VEETEE_LCD_SPI_MODE;
 
 #ifdef CONFIG_VEETEE_LCD_MIRROR_X
 inline constexpr bool kLcdMirrorX = true;

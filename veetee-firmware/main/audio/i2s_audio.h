@@ -56,7 +56,8 @@ private:
 
     void RunCapture();
     void RunPlayback();
-    void PlayBootTone();
+    void PlayBootChime();
+    bool WriteChimeNote(double frequency_hz, int frame_count);
     void WriteSilence();
     bool QueuePlaybackControl(PlaybackItemKind kind,
                               std::uint32_t generation);

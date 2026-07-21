@@ -16,6 +16,10 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
+# Conservative breadboard clock; raise only after the physical panel passes.
+CONFIG_VEETEE_LCD_SPI_CLOCK_HZ=10000000
+CONFIG_VEETEE_LCD_SPI_MODE=0
+
 # Development board plumbing only. Product wake phrase "Hey VeeTee" is
 # delivered later as a benchmarked, signed model-pack resource.
 CONFIG_VEETEE_ESP_SR_BRINGUP=y
