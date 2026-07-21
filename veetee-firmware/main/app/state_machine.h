@@ -28,6 +28,7 @@ enum class Event : std::uint8_t {
     kWifiConnected,
     kWifiConnectionTimeout,
     kWifiDisconnected,
+    kActivationCodeAvailable,
     kActivationComplete,
     kButtonShortPress,
     kButtonLongPress,

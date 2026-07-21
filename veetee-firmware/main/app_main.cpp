@@ -1,4 +1,5 @@
 #include <cinttypes>
+#include <cstdio>
 #include <cstdlib>
 
 #include "app/state_machine.h"
@@ -14,6 +15,7 @@
 #include "freertos/task.h"
 #include "input/button.h"
 #include "network/wifi_manager.h"
+#include "ota/bootstrap_client.h"
 #include "settings/settings_store.h"
 
 namespace {
@@ -21,20 +23,31 @@ namespace {
 constexpr char kTag[] = "veetee_app";
 constexpr UBaseType_t kEventQueueDepth = 16;
 
+struct AppMessage {
+    veetee::app::Event event;
+    char activation_code[7] = {};
+};
+
 QueueHandle_t g_event_queue = nullptr;
 veetee::app::StateMachine g_state_machine;
 veetee::board::VeeteeBoard g_board;
 veetee::settings::SettingsStore g_settings_store;
 veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
+veetee::ota::BootstrapClient g_bootstrap;
 
-bool PostEvent(veetee::app::Event event) {
-    if (g_event_queue == nullptr || xQueueSend(g_event_queue, &event, 0) != pdTRUE) {
+bool PostMessage(const AppMessage& message) {
+    if (g_event_queue == nullptr ||
+        xQueueSend(g_event_queue, &message, 0) != pdTRUE) {
         ESP_LOGW(kTag, "Dropping event %s: application queue full",
-                 veetee::app::ToString(event));
+                 veetee::app::ToString(message.event));
         return false;
     }
     return true;
+}
+
+bool PostEvent(veetee::app::Event event) {
+    return PostMessage(AppMessage{.event = event});
 }
 
 void OnButtonEvent(veetee::input::ButtonEvent event, void*) {
@@ -68,9 +81,26 @@ void OnWifiEvent(veetee::network::WifiManagerEvent event, void*) {
     }
 }
 
+bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
+                      void*) {
+    AppMessage message{};
+    switch (notification.event) {
+        case veetee::ota::BootstrapEvent::kActivationCodeAvailable:
+            message.event = veetee::app::Event::kActivationCodeAvailable;
+            std::snprintf(message.activation_code, sizeof(message.activation_code),
+                          "%s", notification.activation_code);
+            break;
+        case veetee::ota::BootstrapEvent::kActivationComplete:
+            message.event = veetee::app::Event::kActivationComplete;
+            break;
+    }
+    return PostMessage(message);
+}
+
 void RunApplication(void*) {
-    veetee::app::Event event;
-    while (xQueueReceive(g_event_queue, &event, portMAX_DELAY) == pdTRUE) {
+    AppMessage message{};
+    while (xQueueReceive(g_event_queue, &message, portMAX_DELAY) == pdTRUE) {
+        const veetee::app::Event event = message.event;
         const veetee::app::TransitionResult result = g_state_machine.Handle(event);
         if (!result.accepted) {
             ESP_LOGD(kTag, "Ignored event %s in %s", veetee::app::ToString(event),
@@ -86,6 +116,7 @@ void RunApplication(void*) {
         g_board.ApplyState(result.to);
 
         if (result.to == veetee::app::State::kWifiConfiguring) {
+            g_bootstrap.Cancel();
             if (event == veetee::app::Event::kEnterWifiConfig) {
                 const esp_err_t reset_error = g_wifi.ResetProvisioning();
                 if (reset_error != ESP_OK) {
@@ -101,6 +132,7 @@ void RunApplication(void*) {
                 PostEvent(veetee::app::Event::kRetryWifiProvisioning);
             }
         } else if (result.to == veetee::app::State::kNetworkConnecting) {
+            g_bootstrap.Cancel();
             const esp_err_t error = g_wifi.StartStation();
             if (error != ESP_OK) {
                 ESP_LOGE(kTag, "Unable to start station: %s; opening setup portal",
@@ -108,7 +140,24 @@ void RunApplication(void*) {
                 PostEvent(veetee::app::Event::kWifiConnectionTimeout);
             }
         } else if (result.to == veetee::app::State::kActivating) {
-            ESP_LOGI(kTag, "Network ready; OTA/bootstrap starts in the next firmware slice");
+            if (event == veetee::app::Event::kActivationCodeAvailable) {
+                const esp_err_t error = g_board.ShowActivationCode(
+                    message.activation_code);
+                if (error != ESP_OK) {
+                    ESP_LOGE(kTag, "Unable to render activation code: %s",
+                             esp_err_to_name(error));
+                }
+            } else {
+                g_bootstrap.Start();
+            }
+        } else if (result.to == veetee::app::State::kIdle &&
+                   event == veetee::app::Event::kActivationComplete) {
+            g_bootstrap.Cancel();
+            const esp_err_t error = g_board.ShowStandby();
+            if (error != ESP_OK) {
+                ESP_LOGE(kTag, "Unable to render standby screen: %s",
+                         esp_err_to_name(error));
+            }
         } else if (result.to == veetee::app::State::kConnecting) {
             // The transport phase will replace this local bring-up completion event.
             PostEvent(veetee::app::Event::kTransportConnected);
@@ -137,7 +186,7 @@ void LogPlatformInfo() {
 extern "C" void app_main() {
     LogPlatformInfo();
 
-    g_event_queue = xQueueCreate(kEventQueueDepth, sizeof(veetee::app::Event));
+    g_event_queue = xQueueCreate(kEventQueueDepth, sizeof(AppMessage));
     if (g_event_queue == nullptr) {
         ESP_LOGE(kTag, "Unable to allocate application event queue");
         abort();
@@ -145,6 +194,8 @@ extern "C" void app_main() {
 
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
+    ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
+                                           &OnBootstrapEvent, nullptr));
     ESP_ERROR_CHECK(g_board.Initialize(&OnButtonEvent, nullptr));
     ESP_ERROR_CHECK(g_board.StartDiagnostics());
 

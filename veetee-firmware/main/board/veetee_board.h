@@ -16,6 +16,8 @@ public:
 
     esp_err_t Initialize(ButtonSink sink, void* context);
     esp_err_t StartDiagnostics();
+    esp_err_t ShowActivationCode(const char* code);
+    esp_err_t ShowStandby();
     void ApplyState(app::State state);
     void AbortPlayback();
 

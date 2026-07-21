@@ -5,8 +5,11 @@ set(VEETEE_SRCS
     "board/veetee_board.cpp"
     "display/st7789_display.cpp"
     "input/button.cpp"
+    "network/endpoint_url.cpp"
     "network/provisioning_portal.cpp"
     "network/wifi_manager.cpp"
+    "ota/bootstrap_client.cpp"
+    "settings/activation_record.cpp"
     "settings/settings_store.cpp"
 )
 
@@ -19,12 +22,14 @@ idf_component_register(
         esp_driver_spi
         esp_app_format
         esp_event
+        esp_http_client
         esp_http_server
         esp_lcd
         esp_netif
         esp_psram
         esp_timer
         esp_wifi
+        mbedtls
         nvs_flash
 )
 

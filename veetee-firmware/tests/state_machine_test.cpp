@@ -28,6 +28,7 @@ void TestBootAndProvisioningFlow() {
     Expect(first_boot, Event::kRetryWifiProvisioning, State::kWifiConfiguring);
     Expect(first_boot, Event::kProvisioningSaved, State::kNetworkConnecting);
     Expect(first_boot, Event::kWifiConnected, State::kActivating);
+    Expect(first_boot, Event::kActivationCodeAvailable, State::kActivating);
     Expect(first_boot, Event::kActivationComplete, State::kIdle);
 
     StateMachine timeout;

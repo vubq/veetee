@@ -71,6 +71,12 @@ TransitionResult StateMachine::Handle(Event event) {
             }
             break;
 
+        case Event::kActivationCodeAvailable:
+            if (state_ == State::kActivating) {
+                accepted = true;
+            }
+            break;
+
         case Event::kActivationComplete:
             if (state_ == State::kActivating) {
                 state_ = State::kIdle;
@@ -249,6 +255,7 @@ const char* ToString(Event event) {
         case Event::kWifiConnected: return "wifi_connected";
         case Event::kWifiConnectionTimeout: return "wifi_connection_timeout";
         case Event::kWifiDisconnected: return "wifi_disconnected";
+        case Event::kActivationCodeAvailable: return "activation_code_available";
         case Event::kActivationComplete: return "activation_complete";
         case Event::kButtonShortPress: return "button_short_press";
         case Event::kButtonLongPress: return "button_long_press";

@@ -10,6 +10,7 @@
 #include "esp_wifi.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "network/endpoint_url.h"
 
 namespace veetee::network {
 namespace {
@@ -243,8 +244,7 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
         FormValue(body.data(), "locale", candidate.locale, sizeof(candidate.locale), true) &&
         FormValue(body.data(), "wake_profile", candidate.wake_profile,
                   sizeof(candidate.wake_profile), false) &&
-        (std::strncmp(candidate.bootstrap_url, "http://", 7) == 0 ||
-         std::strncmp(candidate.bootstrap_url, "https://", 8) == 0);
+        IsHttpEndpointUrl(candidate.bootstrap_url);
     httpd_resp_set_type(request, "application/json");
     if (!valid || save_sink_ == nullptr) {
         httpd_resp_set_status(request, "400 Bad Request");

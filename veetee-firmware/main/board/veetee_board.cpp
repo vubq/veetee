@@ -44,6 +44,14 @@ esp_err_t VeeteeBoard::StartDiagnostics() {
     return audio_.StartDiagnostics();
 }
 
+esp_err_t VeeteeBoard::ShowActivationCode(const char* code) {
+    return display_.DrawActivationCode(code);
+}
+
+esp_err_t VeeteeBoard::ShowStandby() {
+    return display_.DrawStandby();
+}
+
 void VeeteeBoard::ApplyState(app::State state) {
     const bool active = state == app::State::kConnecting ||
                         state == app::State::kListening ||
