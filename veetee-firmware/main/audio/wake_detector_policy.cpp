@@ -19,6 +19,7 @@ DetectorRole DetectorRoleForState(app::State state,
         case app::State::kWifiConfiguring:
         case app::State::kNetworkConnecting:
         case app::State::kActivating:
+        case app::State::kPairingRecovery:
         case app::State::kConnecting:
         case app::State::kListening:
         case app::State::kAborting:

@@ -20,10 +20,15 @@
 ### Firmware hardware tests
 
 - GPIO pin smoke; ST7789 color/offset/mirror.
+- ST7789 state sequence, activation code và pairing-recovery screen; redraw không
+  làm chậm button abort hoặc gây watchdog.
 - INMP441 noise floor, clipping, sample rate/slot.
-- MAX98357A playback, volume curve, no underrun.
+- MAX98357A playback, volume curve, no underrun; idle 10 phút không pop/chirp lặp
+  lại khi zero-PCM clock mitigation bật.
 - AP -> station -> AP fallback.
 - Button debounce/hold/interrupt.
+- Stored identity bị Manager từ chối -> pairing-recovery; short press không xóa gì,
+  hold 5 giây mới clear identity/provisioning và mở AP.
 - Activation wake accuracy in standby and interrupt-profile accuracy in standby/thinking; speaking interrupt is best-effort until AEC gate passes.
 - 30 phút conversation loop và heap watermark.
 
@@ -67,6 +72,10 @@ E2E-17 VieNeu batch/stream capability được phản ánh đúng, abort không 
 E2E-18 9router abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
 E2E-19 "Hey VeeTee" corpus -> FAR/FRR/latency gate; `Hi ESP` bring-up không được tính là product pass
 E2E-20 reported-state equal retry -> no mutation; lower sequence -> 409; canonical Veetee route only
+E2E-21 provider secret rotate/clear -> admin response và audit không chứa raw secret
+E2E-22 retryable LLM failure trước output -> fallback; sau output/abort -> không fallback
+E2E-23 revoked/stale device identity -> pairing recovery -> physical hold -> code mới
+E2E-24 10 phút speaker idle/reconnect/bootstrap retry -> không startup chime lặp hoặc pop/chirp
 ```
 
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.
@@ -92,6 +101,8 @@ Admission test corpus phải đa dạng về môi trường, speaker, media play
 - Không overwrite active resource slot trước khi inactive slot verify và health check xong.
 - Capability, size, ABI và minimum firmware được kiểm tra cả API-side lẫn firmware-side.
 - Rate limit activation/bootstrap và exponential backoff.
+- Server từ chối identity không được tự động factory-reset từ xa; recovery xóa
+  credential chỉ sau physical hold trên thiết bị.
 
 ### Server/API
 
@@ -159,17 +170,18 @@ không tạo event theo từng audio frame/token delta.
 
 ## 5. LAN deployment không domain
 
-Docker Compose binding gợi ý:
+Native single-node development binding đang dùng:
 
 ```text
 0.0.0.0:8000 voice WebSocket
-0.0.0.0:8002 manager API
-0.0.0.0:8003 OTA/bootstrap HTTP
+0.0.0.0:8001 manager API + OTA/bootstrap/artifact routes
 0.0.0.0:8081 manager web
 127.0.0.1:5432 Postgres
 127.0.0.1:6379 Redis
-127.0.0.1:9000 MinIO
 ```
+
+MinIO `127.0.0.1:9000` chỉ bật khi cần object-storage profile. Production có thể
+tách admin `8002` và device-edge `8003` ở reverse proxy mà không tách business data.
 
 Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, firewall chỉ cho subnet cần thiết và tuyệt đối không dùng profile này cho public. LAN release nên dùng HTTPS/WSS với local CA/SPKI pinning hoặc IP SAN; public bắt buộc TLS qua tunnel/reverse proxy. Firmware bootstrap nhận URL từ cấu hình nên không cần rebuild khi đổi IP/tunnel/domain.
 
@@ -182,4 +194,6 @@ Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, 
 - Config/resource bundle immutable, signed, capability-compatible và rollout qua canary.
 - Desired/reported state, apply journal và rollback evidence truy vấn được theo device.
 - Physical hardware validation được ghi rõ; build pass không thay thế test board.
+- Release evidence phải tách rõ host/build/serial pass với nghiệm thu nghe/nhìn:
+  LCD orientation/độ sáng và speaker idle noise luôn cần người kiểm tra trực tiếp.
 - Rollout canary 1-5 thiết bị trước khi mở rộng.

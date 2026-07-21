@@ -68,10 +68,11 @@ cmake --build build/host-tests
 ctest --test-dir build/host-tests --output-on-failure
 ```
 
-Firmware bring-up hiện hiển thị color bars, phát tone ngắn, log thống kê PCM16
-của mic và đưa button event qua application queue. Kích thước/offset/mirror màn
-hình và INMP441 slot được đổi bằng `idf.py menuconfig`; giá trị mặc định vẫn là
-baseline provisional cho tới khi kiểm tra trực tiếp trên phần cứng.
+Firmware hiện có ST7789 state UI bất đồng bộ cho toàn bộ boot/conversation/recovery
+flow, startup chime ngắn và button event qua application queue. Display task dùng
+queue depth 1 nên redraw chậm không chặn abort/network/audio hot path. Kích
+thước/offset/mirror màn hình và INMP441 slot được đổi bằng `idf.py menuconfig`; độ
+sáng/orientation cuối cùng vẫn cần nghiệm thu trực tiếp trên phần cứng.
 
 ESP-SR bring-up được bật bởi `CONFIG_VEETEE_ESP_SR_BRINGUP`. Build tạo
 `build/srmodels/srmodels.bin`, kiểm tra không vượt partition và `idf.py flash` ghi
@@ -82,6 +83,9 @@ dừng/thu hồi task cũ rồi destroy model thay vì gọi `clean()` không an
 ESP-SR 2.4.7. Resource updater đã stage/verify/activate slot A/B theo signed manifest
 trước khi hot-reload. Board smoke đã xác nhận model load, contract 16 kHz
 mono/chunk 512, startup chime, microphone, Wi-Fi, activation và resource apply.
+I2S TX giữ clock bằng zero PCM khi idle để tránh MAX98357A pop/chirp do clock
+stop/start; đây là mitigation mặc định, còn xác nhận âm thanh thực tế và phương án
+hardware `SD/MUTE` thuộc board acceptance.
 `resource_1` đã qua health window thành `active` và soak ngắn hơn một phút không
 panic/watchdog; soak 10 phút cùng power-loss matrix vẫn là release gate.
 
@@ -125,6 +129,9 @@ Wi-Fi scan buffers nằm trong manager thay vì system-event stack; event task d
   scoped token, WebSocket URL và config version.
 - Ticket pending được refresh ngay sau reboot và mỗi 30 giây; ticket hết TTL được
   server thay bằng code mới thay vì firmware poll challenge cũ vô hạn.
+- Authenticated bootstrap bị Manager từ chối sẽ vào `pairing_recovery` thay vì
+  retry vô hạn hoặc tự xóa token. Giữ nút vật lý 5 giây mới xóa identity cùng Wi-Fi/
+  bootstrap provisioning và mở AP để bind lại bằng code 6 số.
 - Mã được vẽ bằng renderer số local, không chứa câu semantic hard-code. Sau bind,
   màn hình xóa code và chuyển sang trạng thái standby.
 
@@ -155,5 +162,6 @@ vẫn chờ voice-server/local AI hoàn chỉnh và bài test nói trực tiếp
   session/audio profile hoặc event có `session_id` khác sẽ đóng session.
 - Button/interrupt dùng chung đường `abort`; long press gửi `listen:stop` rồi đóng
   channel. Generation mới làm event của connection cũ trở thành stale.
-- Binary Opus upload/download và `tts:start/stop` playback gate là lát audio kế
-  tiếp; transport hiện chỉ hoàn tất handshake/control lifecycle.
+- Binary Opus upload/download, `tts:start/stop` playback gate, generation isolation
+  và button abort đã nằm trong transport/audio lifecycle; voice E2E vật lý vẫn cần
+  nghiệm thu nói-nghe trực tiếp với local model runtime.

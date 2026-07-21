@@ -19,6 +19,8 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # Conservative breadboard clock; raise only after the physical panel passes.
 CONFIG_VEETEE_LCD_SPI_CLOCK_HZ=10000000
 CONFIG_VEETEE_LCD_SPI_MODE=0
+CONFIG_VEETEE_KEEP_SPEAKER_CLOCKED=y
+# CONFIG_VEETEE_MIC_DIAGNOSTICS is not set
 
 # Development board plumbing only. Product wake phrase "Hey VeeTee" is
 # delivered later as a benchmarked, signed model-pack resource.

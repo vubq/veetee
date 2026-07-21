@@ -21,7 +21,8 @@ soak phần cứng vẫn phải qua benchmark trên thiết bị thật.
 - Tạo protocol fixtures từ `docs/04-protocol-compatibility.md`.
 - Quyết định license/NOTICE cho code reuse.
 - Chốt profile LAN không domain và URL env.
-- Chốt device-edge/gateway ownership cho port 8003; không để bootstrap/artifact route mơ hồ giữa manager-api và storage.
+- Giữ dev single-node ở manager-api port 8001; port 8003 chỉ là production ingress
+  tùy chọn và không được tạo bootstrap/artifact data source thứ hai.
 - Freeze exact repository/commit/license/runtime của Silero VAD, Zipformer
   Vietnamese 30M INT8, ChunkFormer-CTC-Large-Vie và VieNeu-TTS v3 Turbo.
 - Deployment single-node đã chốt; ghi CPU/RAM/VRAM/GPU, concurrency mục tiêu và
@@ -166,6 +167,13 @@ artifact/wake publish, activation/interrupt profile tách riêng, stable benchma
 tenant audit và explicit-device rollout. Desired state không được coi là active;
 rollout chỉ chuyển terminal khi reported resource phase tương ứng. Upload object-store,
 percentage rollout, pause/resume và rollback command vẫn thuộc Phase 8 hardening.
+
+Provider control plane đã có explicit chain theo kind/locale, primary/fallback,
+priority, secret keep/rotate/clear, redacted audit, health/circuit state và internal
+runtime resolver. Voice LLM failover giữ chung cancellation/deadline/generation,
+chỉ fallback lỗi retryable trước user-visible output. Firmware đã có async state UI,
+stale-identity pairing recovery bằng physical hold và zero-PCM speaker idle clock;
+build/flash/serial pass, còn LCD/noise acceptance cần người nghe/nhìn trực tiếp.
 
 ## Phase 6 - MCP + device tools (3-5 ngày)
 

@@ -122,6 +122,15 @@ void TestAssistantSleepWaitsForGoodbyePlaybackDrain() {
     assert(!machine.assistant_gate_open());
 }
 
+void TestRejectedIdentityRequiresPhysicalRecovery() {
+    StateMachine machine;
+    Expect(machine, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(machine, Event::kWifiConnected, State::kActivating);
+    Expect(machine, Event::kDeviceIdentityRejected, State::kPairingRecovery);
+    assert(!machine.Handle(Event::kButtonShortPress).accepted);
+    Expect(machine, Event::kEnterWifiConfig, State::kWifiConfiguring);
+}
+
 }  // namespace
 
 int main() {
@@ -134,6 +143,7 @@ int main() {
     TestLongPressClosesTheAssistantGate();
     TestWakeCancelsClosingGrace();
     TestAssistantSleepWaitsForGoodbyePlaybackDrain();
+    TestRejectedIdentityRequiresPhysicalRecovery();
     std::cout << "state_machine_test: passed\n";
     return 0;
 }

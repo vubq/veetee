@@ -186,6 +186,13 @@ void BootstrapClient::Run(std::uint32_t generation) {
                     return;
                 }
             }
+            if (error == ESP_ERR_INVALID_STATE && IsCurrent(generation)) {
+                ESP_LOGE(kTag,
+                         "Manager rejected the stored device identity; physical recovery required");
+                EmitWithRetry(BootstrapEvent::kDeviceIdentityRejected, nullptr,
+                              nullptr, generation);
+                return;
+            }
         } else if (snapshot.HasPendingActivation()) {
             if (refresh_activation_ticket) {
                 BootstrapPayload ticket{};
@@ -283,8 +290,13 @@ esp_err_t BootstrapClient::RequestBootstrap(
     const esp_err_t error = PerformPost(
         snapshot, snapshot.bootstrap_url, report.c_str(),
         authenticated ? snapshot.device_token : nullptr, &status_code);
-    if (error != ESP_OK || !IsCurrent(generation)) return error;
+    if (!IsCurrent(generation)) return error;
     if (!authenticated && status_code == 409) return ESP_ERR_INVALID_STATE;
+    if (authenticated &&
+        (status_code == 401 || status_code == 403 || status_code == 404)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (error != ESP_OK) return error;
     if (status_code != 200) {
         ESP_LOGW(kTag, "Bootstrap HTTP status=%d", status_code);
         return ESP_ERR_INVALID_RESPONSE;
@@ -324,6 +336,7 @@ esp_err_t BootstrapClient::PerformPost(
     if (url == nullptr || body == nullptr || status_code == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
+    *status_code = 0;
     if (!network::IsHttpEndpointUrl(url)) return ESP_ERR_INVALID_ARG;
     response_size_ = 0;
     response_overflow_ = false;
@@ -382,8 +395,12 @@ esp_err_t BootstrapClient::PerformPost(
     if (error == ESP_OK) {
         error = esp_http_client_set_post_field(client, body, std::strlen(body));
     }
-    if (error == ESP_OK) error = esp_http_client_perform(client);
-    if (error == ESP_OK) *status_code = esp_http_client_get_status_code(client);
+    if (error == ESP_OK) {
+        error = esp_http_client_perform(client);
+        // A 401 challenge can make esp_http_client return ESP_ERR_NOT_SUPPORTED.
+        // Preserve the received status so identity rejection remains recoverable.
+        *status_code = esp_http_client_get_status_code(client);
+    }
     esp_http_client_cleanup(client);
 
     std::fill(std::begin(authorization), std::end(authorization), '\0');

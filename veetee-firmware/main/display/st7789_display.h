@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "app/state_machine.h"
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -15,6 +16,7 @@ class St7789Display {
 public:
     esp_err_t Initialize();
     esp_err_t DrawColorBars();
+    esp_err_t DrawState(app::State state);
     esp_err_t DrawActivationCode(const char* code);
     esp_err_t DrawStandby();
 
@@ -26,6 +28,12 @@ private:
                              const void* pixels);
     esp_err_t FillRectangle(int x, int y, int width, int height,
                             std::uint16_t color);
+    esp_err_t DrawTextCentered(const char* text, int y, int preferred_scale,
+                               std::uint16_t color);
+    esp_err_t DrawGlyph(char character, int x, int y, int scale,
+                        std::uint16_t color);
+    esp_err_t DrawIcon(app::State state, std::uint16_t foreground,
+                       std::uint16_t accent);
 
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;

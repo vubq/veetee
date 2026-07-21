@@ -48,6 +48,7 @@ public:
                                  std::uint32_t config_version,
                                  DeviceSettings* settings);
     esp_err_t ClearPendingActivation(DeviceSettings* settings);
+    esp_err_t ClearDeviceIdentity(DeviceSettings* settings);
 
 private:
     esp_err_t LoadString(const char* key, char* destination, std::size_t capacity,

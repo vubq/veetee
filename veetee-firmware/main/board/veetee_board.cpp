@@ -62,8 +62,14 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
     gpio_set_level(kStatusLed, 0);
 
     if ((error = display_.Initialize()) != ESP_OK ||
-        (error = display_.DrawColorBars()) != ESP_OK) {
+        (error = display_.DrawState(app::State::kStarting)) != ESP_OK) {
         return error;
+    }
+    display_queue_ = xQueueCreate(1, sizeof(DisplayCommand));
+    if (display_queue_ == nullptr ||
+        xTaskCreate(&VeeteeBoard::DisplayTaskEntry, "veetee_display", 4096,
+                    this, 3, &display_task_) != pdPASS) {
+        return ESP_ERR_NO_MEM;
     }
 
     error = wake_detector_.Initialize(
@@ -152,11 +158,17 @@ bool VeeteeBoard::WakeResourceHealthy() const {
 }
 
 esp_err_t VeeteeBoard::ShowActivationCode(const char* code) {
-    return display_.DrawActivationCode(code);
+    if (code == nullptr || std::strlen(code) != 6) return ESP_ERR_INVALID_ARG;
+    DisplayCommand command{.kind = DisplayCommandKind::kActivationCode,
+                           .state = app::State::kActivating};
+    std::snprintf(command.activation_code, sizeof(command.activation_code), "%s",
+                  code);
+    return QueueDisplay(command);
 }
 
 esp_err_t VeeteeBoard::ShowStandby() {
-    return display_.DrawStandby();
+    return QueueDisplay(DisplayCommand{.kind = DisplayCommandKind::kState,
+                                       .state = app::State::kIdle});
 }
 
 void VeeteeBoard::ApplyState(app::State state) {
@@ -178,6 +190,35 @@ void VeeteeBoard::ApplyState(app::State state) {
         ESP_LOGW(kTag, "Unable to apply detector role %s",
                  audio::ToString(detector_role));
     }
+    const esp_err_t display_error = QueueDisplay(
+        DisplayCommand{.kind = DisplayCommandKind::kState, .state = state});
+    if (display_error != ESP_OK) {
+        ESP_LOGW(kTag, "Unable to queue state screen %s: %s",
+                 app::ToString(state), esp_err_to_name(display_error));
+    }
+}
+
+void VeeteeBoard::DisplayTaskEntry(void* context) {
+    static_cast<VeeteeBoard*>(context)->RunDisplay();
+}
+
+void VeeteeBoard::RunDisplay() {
+    DisplayCommand command{};
+    while (xQueueReceive(display_queue_, &command, portMAX_DELAY) == pdTRUE) {
+        const esp_err_t error =
+            command.kind == DisplayCommandKind::kActivationCode
+                ? display_.DrawActivationCode(command.activation_code)
+                : display_.DrawState(command.state);
+        if (error != ESP_OK) {
+            ESP_LOGE(kTag, "Display command failed: %s", esp_err_to_name(error));
+        }
+    }
+}
+
+esp_err_t VeeteeBoard::QueueDisplay(const DisplayCommand& command) {
+    if (display_queue_ == nullptr) return ESP_ERR_INVALID_STATE;
+    return xQueueOverwrite(display_queue_, &command) == pdTRUE ? ESP_OK
+                                                               : ESP_FAIL;
 }
 
 void VeeteeBoard::BeginPlayback() {

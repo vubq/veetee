@@ -347,6 +347,9 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
         case veetee::ota::BootstrapEvent::kActivationComplete:
             message.event = veetee::app::Event::kActivationComplete;
             break;
+        case veetee::ota::BootstrapEvent::kDeviceIdentityRejected:
+            message.event = veetee::app::Event::kDeviceIdentityRejected;
+            break;
         case veetee::ota::BootstrapEvent::kResourceDesired:
             ScheduleResourceReport(
                 veetee::settings::ReportedResourcePhase::kChecking,
@@ -536,6 +539,15 @@ void RunApplication(void*) {
             g_bootstrap.Cancel();
             g_resources.Cancel();
             if (event == veetee::app::Event::kEnterWifiConfig) {
+                if (result.from == veetee::app::State::kPairingRecovery) {
+                    const esp_err_t identity_error =
+                        g_settings_store.ClearDeviceIdentity(&g_settings);
+                    if (identity_error != ESP_OK) {
+                        ESP_LOGE(kTag,
+                                 "Unable to clear rejected device identity: %s",
+                                 esp_err_to_name(identity_error));
+                    }
+                }
                 const esp_err_t reset_error = g_wifi.ResetProvisioning();
                 if (reset_error != ESP_OK) {
                     ESP_LOGE(kTag, "Unable to clear stored provisioning: %s",

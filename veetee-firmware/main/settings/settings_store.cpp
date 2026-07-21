@@ -325,6 +325,18 @@ esp_err_t SettingsStore::ClearPendingActivation(DeviceSettings* settings) {
     return error;
 }
 
+esp_err_t SettingsStore::ClearDeviceIdentity(DeviceSettings* settings) {
+    if (handle_ == 0 || settings == nullptr) return ESP_ERR_INVALID_ARG;
+    esp_err_t error = nvs_erase_key(handle_, kActivationRecordKey);
+    if (error == ESP_ERR_NVS_NOT_FOUND) error = ESP_OK;
+    if (error == ESP_OK) error = nvs_commit(handle_);
+    if (error == ESP_OK) {
+        ClearActivation(settings);
+        ESP_LOGW(kTag, "Device identity cleared by physical recovery action");
+    }
+    return error;
+}
+
 esp_err_t SettingsStore::LoadString(const char* key, char* destination,
                                     std::size_t capacity, const char* fallback) {
     std::size_t length = capacity;

@@ -23,7 +23,8 @@ TransitionResult StateMachine::Handle(Event event) {
 
         case Event::kEnterWifiConfig:
             if (state_ == State::kStarting || state_ == State::kNetworkConnecting ||
-                state_ == State::kActivating || state_ == State::kIdle) {
+                state_ == State::kActivating || state_ == State::kPairingRecovery ||
+                state_ == State::kIdle) {
                 assistant_gate_open_ = false;
                 state_ = State::kWifiConfiguring;
                 accepted = true;
@@ -80,6 +81,14 @@ TransitionResult StateMachine::Handle(Event event) {
         case Event::kActivationComplete:
             if (state_ == State::kActivating) {
                 state_ = State::kIdle;
+                accepted = true;
+            }
+            break;
+
+        case Event::kDeviceIdentityRejected:
+            if (state_ == State::kActivating) {
+                assistant_gate_open_ = false;
+                state_ = State::kPairingRecovery;
                 accepted = true;
             }
             break;
@@ -261,6 +270,7 @@ const char* ToString(State state) {
         case State::kWifiConfiguring: return "wifi_configuring";
         case State::kNetworkConnecting: return "network_connecting";
         case State::kActivating: return "activating";
+        case State::kPairingRecovery: return "pairing_recovery";
         case State::kIdle: return "idle";
         case State::kConnecting: return "connecting";
         case State::kListening: return "listening";
@@ -285,6 +295,7 @@ const char* ToString(Event event) {
         case Event::kWifiDisconnected: return "wifi_disconnected";
         case Event::kActivationCodeAvailable: return "activation_code_available";
         case Event::kActivationComplete: return "activation_complete";
+        case Event::kDeviceIdentityRejected: return "device_identity_rejected";
         case Event::kButtonShortPress: return "button_short_press";
         case Event::kButtonLongPress: return "button_long_press";
         case Event::kActivationWakeDetected: return "activation_wake_detected";

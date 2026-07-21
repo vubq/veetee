@@ -77,11 +77,20 @@ menu "Veetee hardware bring-up"
 
     config VEETEE_MIC_DIAGNOSTICS
         bool "Log bounded microphone statistics"
-        default y
+        default n
 
     config VEETEE_BOOT_TONE
         bool "Play a short low-volume startup chime"
         default y
+
+    config VEETEE_KEEP_SPEAKER_CLOCKED
+        bool "Keep MAX98357A clocked with digital silence"
+        default y
+        help
+            Continuously feeds zero PCM while idle. This avoids repeated
+            shutdown/startup transitions and pop or chirp noise on common
+            MAX98357A breakout boards. Disable only after the exact amplifier
+            wiring has a validated hardware mute/SD control path.
 
     config VEETEE_DEFAULT_VOLUME_PERCENT
         int "Default software speaker volume (percent)"

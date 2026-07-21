@@ -68,8 +68,13 @@ WIFI_CONFIGURING
 
 ACTIVATING
   ├─ activation pending ────> ACTIVATING (retry/backoff)
+  ├─ stored identity reject ─> PAIRING_RECOVERY
   ├─ OTA update ────────────> UPGRADING -> reboot
   └─ bootstrap complete ────> IDLE
+
+PAIRING_RECOVERY
+  ├─ hold button 5 seconds ─> WIFI_CONFIGURING (clear identity + provisioning)
+  └─ short press/no input ──> PAIRING_RECOVERY (không tự xóa credential)
 
 IDLE/STANDBY
   ├─ button wake ───────────> CONNECTING -> LISTENING (mode=auto, source=button)
@@ -111,6 +116,15 @@ CLOSING
 ```
 
 State transition phải chỉ đi qua một state machine; callback Wi-Fi/WebSocket chỉ post event. Firmware không được đổi state trực tiếp từ network callback.
+
+ST7789 dùng renderer trạng thái bất đồng bộ với queue depth 1: event loop chỉ ghi
+snapshot mới nhất, display task tự vẽ `starting`, `wifi_configuring`,
+`network_connecting`, `activating`, `pairing_recovery`, `idle`, `connecting`,
+`listening`, `evaluating`, `thinking`, `speaking`, `aborting` và `closing`. Vẽ màn
+hình hoặc activation code không được chặn button abort, network callback hay audio
+hot path. Text boot/recovery tối thiểu có thể deterministic trong firmware; persona,
+semantic response và nội dung hội thoại vẫn đến từ config/AI. Visual sản phẩm có
+thể chuyển thành signed `display_assets` mà không thay state contract.
 
 ## 4. Wi-Fi provisioning
 
@@ -218,11 +232,11 @@ namespace có version/migration và nút factory reset riêng.
   "config": {
     "version": 13,
     "etag": "agent-config-13",
-    "url": "http://192.168.1.20:8003/veetee/config/v1/devices/AA-BB"
+    "url": "http://192.168.1.20:8001/veetee/config/v1/devices/AA-BB"
   },
   "resources": {
     "version": "1.4.0",
-    "manifest_url": "http://192.168.1.20:8003/veetee/artifacts/manifests/01JRESOURCE"
+    "manifest_url": "http://192.168.1.20:8001/veetee/artifacts/manifests/01JRESOURCE"
   }
 }
 ```
@@ -236,6 +250,14 @@ namespace có version/migration và nút factory reset riêng.
 5. API xóa code/data keys (one-time use), phát audit event.
 6. Device gọi `POST /veetee/ota/activate` với `Device-Id`, `Client-Id`, challenge proof nếu bật.
 7. Server trả 200; firmware xóa activation cache, khởi tạo protocol và vào `idle`.
+
+Nếu authenticated bootstrap trả `401`, `403` hoặc `404`, firmware coi device
+identity đã bị Manager thu hồi/mất dữ liệu và vào `PAIRING_RECOVERY`. Remote response
+không được tự xóa token, Wi-Fi hay bootstrap URL: người dùng phải giữ nút vật lý 5
+giây để xác nhận recovery. Sau xác nhận, firmware xóa identity và provisioning,
+mở AP, lấy code 6 số mới rồi bind lại. `esp_http_client` có thể trả
+`ESP_ERR_NOT_SUPPORTED` khi nhận HTTP 401 không có auth challenge hỗ trợ; firmware
+vẫn phải đọc status code đã nhận trước khi phân loại lỗi.
 
 MVP có thể tương thích code 6 số hiện tại. Production phải thêm `expires_at`, attempt counter, CSPRNG, HTTPS bắt buộc và signature/challenge proof.
 
@@ -385,6 +407,13 @@ inactive slot.
 
 - Mic PCM: 16 kHz, mono, signed 16-bit.
 - Speaker decode: 24 kHz, mono.
+- Sau khi I2S TX khởi tạo, V1 giữ BCLK/LRCLK hoạt động bằng cách feed zero PCM khi
+  playback idle. Đây là mitigation cho pop/chirp của MAX98357A khi clock liên tục
+  stop/start; không phát semantic audio và có thể tắt bằng board config nếu revision
+  phần cứng có chân `SD/MUTE` điều khiển đúng. Đổi lại là idle power cao hơn.
+- Startup chime chỉ phát một lần ở normal/power/USB/JTAG reset, không phát lại trong
+  bootstrap hoặc Wi-Fi retry. Reboot loop phải được chẩn đoán bằng reset reason/log,
+  không được che bằng cách bỏ chime.
 - Compatibility frame: Opus 60 ms.
 - Low-latency profile sau khi có fixture: 20 ms hoặc 40 ms, vẫn dùng field `frame_duration` trong hello.
 - Chỉ một capture task được đọc I2S RX. Diagnostics dùng cùng task; không tạo một
@@ -407,6 +436,8 @@ inactive slot.
 - Wi-Fi sai/không có router tự quay lại AP.
 - OTA bootstrap nhận websocket URL/token và mã 6 số.
 - Bind trên manager xong thì firmware activate và reconnect.
+- Identity cũ bị Manager từ chối phải vào pairing recovery hữu hạn; chỉ giữ nút vật
+  lý 5 giây mới xóa identity/provisioning và mở AP.
 - WebSocket hello + raw Opus + JSON events pass contract tests.
 - Auto conversation, assistant gate và abort không kẹt state, không nghe lại audio cũ.
 - Cả button wake và activation wake word đều mở cùng một `mode=auto` flow.
@@ -419,5 +450,7 @@ inactive slot.
 - Button wake vẫn hoạt động nếu wake model mới load hoặc health check thất bại.
 - Người dùng nói xong thì VAD tự finalize và AI trả lời mà không cần click lần hai.
 - ST7789 hiển thị locale Việt, UTF-8 fallback hợp lý.
+- State UI render bất đồng bộ, đúng orientation/visibility trên board và không làm
+  tăng abort latency; MAX98357A idle không pop/chirp liên tục sau mitigation clock.
 - MCP `initialize/tools/list/tools/call` pass với ít nhất 3 device tools.
 - OTA signed artifact update và rollback test pass trên board thật.

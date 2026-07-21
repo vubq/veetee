@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "board/board_config.h"
+#include "display/state_visual.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_vendor.h"
@@ -39,6 +40,26 @@ constexpr std::array<std::uint16_t, 8> kColorBars = {
 constexpr std::array<std::uint8_t, 10> kSevenSegmentDigits = {
     0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F,
 };
+constexpr std::array<std::array<std::uint8_t, 5>, 36> kFont = {{
+    {{0x3E, 0x51, 0x49, 0x45, 0x3E}}, {{0x00, 0x42, 0x7F, 0x40, 0x00}},
+    {{0x42, 0x61, 0x51, 0x49, 0x46}}, {{0x21, 0x41, 0x45, 0x4B, 0x31}},
+    {{0x18, 0x14, 0x12, 0x7F, 0x10}}, {{0x27, 0x45, 0x45, 0x45, 0x39}},
+    {{0x3C, 0x4A, 0x49, 0x49, 0x30}}, {{0x01, 0x71, 0x09, 0x05, 0x03}},
+    {{0x36, 0x49, 0x49, 0x49, 0x36}}, {{0x06, 0x49, 0x49, 0x29, 0x1E}},
+    {{0x7E, 0x11, 0x11, 0x11, 0x7E}}, {{0x7F, 0x49, 0x49, 0x49, 0x36}},
+    {{0x3E, 0x41, 0x41, 0x41, 0x22}}, {{0x7F, 0x41, 0x41, 0x22, 0x1C}},
+    {{0x7F, 0x49, 0x49, 0x49, 0x41}}, {{0x7F, 0x09, 0x09, 0x09, 0x01}},
+    {{0x3E, 0x41, 0x49, 0x49, 0x7A}}, {{0x7F, 0x08, 0x08, 0x08, 0x7F}},
+    {{0x00, 0x41, 0x7F, 0x41, 0x00}}, {{0x20, 0x40, 0x41, 0x3F, 0x01}},
+    {{0x7F, 0x08, 0x14, 0x22, 0x41}}, {{0x7F, 0x40, 0x40, 0x40, 0x40}},
+    {{0x7F, 0x02, 0x0C, 0x02, 0x7F}}, {{0x7F, 0x04, 0x08, 0x10, 0x7F}},
+    {{0x3E, 0x41, 0x41, 0x41, 0x3E}}, {{0x7F, 0x09, 0x09, 0x09, 0x06}},
+    {{0x3E, 0x41, 0x51, 0x21, 0x5E}}, {{0x7F, 0x09, 0x19, 0x29, 0x46}},
+    {{0x46, 0x49, 0x49, 0x49, 0x31}}, {{0x01, 0x01, 0x7F, 0x01, 0x01}},
+    {{0x3F, 0x40, 0x40, 0x40, 0x3F}}, {{0x1F, 0x20, 0x40, 0x20, 0x1F}},
+    {{0x3F, 0x40, 0x38, 0x40, 0x3F}}, {{0x63, 0x14, 0x08, 0x14, 0x63}},
+    {{0x07, 0x08, 0x70, 0x08, 0x07}}, {{0x61, 0x51, 0x49, 0x45, 0x43}},
+}};
 
 std::uint16_t ToPanelEndian(std::uint16_t color) {
     return static_cast<std::uint16_t>((color << 8U) | (color >> 8U));
@@ -153,6 +174,181 @@ esp_err_t St7789Display::DrawColorBars() {
     }
     if (error == ESP_OK) {
         ESP_LOGI(kTag, "Color bars rendered");
+    }
+    return error;
+}
+
+esp_err_t St7789Display::DrawState(app::State state) {
+    if (panel_ == nullptr || line_buffer_ == nullptr || transfer_faulted_) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const StateVisual& visual = VisualForState(state);
+    esp_err_t error = FillRectangle(0, 0, CONFIG_VEETEE_LCD_WIDTH,
+                                    CONFIG_VEETEE_LCD_HEIGHT,
+                                    visual.background);
+    const int margin = std::max(8, CONFIG_VEETEE_LCD_WIDTH / 20);
+    if (error == ESP_OK) {
+        error = FillRectangle(margin, margin, CONFIG_VEETEE_LCD_WIDTH - margin * 2,
+                              6, visual.accent);
+    }
+    if (error == ESP_OK) {
+        error = DrawTextCentered(visual.label, margin + 22, 3,
+                                 visual.foreground);
+    }
+    if (error == ESP_OK) {
+        error = DrawIcon(state, visual.foreground, visual.accent);
+    }
+    if (error == ESP_OK) {
+        error = DrawTextCentered(visual.detail,
+                                 CONFIG_VEETEE_LCD_HEIGHT - margin - 28, 2,
+                                 visual.foreground);
+    }
+    if (error == ESP_OK) {
+        ESP_LOGI(kTag, "State screen rendered: %s", app::ToString(state));
+    }
+    return error;
+}
+
+esp_err_t St7789Display::DrawTextCentered(const char* text, int y,
+                                          int preferred_scale,
+                                          std::uint16_t color) {
+    if (text == nullptr || preferred_scale <= 0) return ESP_ERR_INVALID_ARG;
+    const int length = static_cast<int>(std::strlen(text));
+    int scale = preferred_scale;
+    while (scale > 1 && length * 6 * scale > CONFIG_VEETEE_LCD_WIDTH - 16) {
+        --scale;
+    }
+    const int width = std::max(0, length * 6 * scale - scale);
+    int x = std::max(0, (CONFIG_VEETEE_LCD_WIDTH - width) / 2);
+    for (const char* cursor = text; *cursor != '\0'; ++cursor) {
+        const esp_err_t error = DrawGlyph(*cursor, x, y, scale, color);
+        if (error != ESP_OK) return error;
+        x += 6 * scale;
+    }
+    return ESP_OK;
+}
+
+esp_err_t St7789Display::DrawGlyph(char character, int x, int y, int scale,
+                                   std::uint16_t color) {
+    if (character == ' ') return ESP_OK;
+    std::array<std::uint8_t, 5> glyph{};
+    if (character >= '0' && character <= '9') {
+        glyph = kFont[character - '0'];
+    } else if (character >= 'A' && character <= 'Z') {
+        glyph = kFont[10 + character - 'A'];
+    } else if (character == '-') {
+        glyph = {0x08, 0x08, 0x08, 0x08, 0x08};
+    } else if (character == '.') {
+        glyph = {0x00, 0x60, 0x60, 0x00, 0x00};
+    } else if (character == ':') {
+        glyph = {0x00, 0x36, 0x36, 0x00, 0x00};
+    } else {
+        return ESP_OK;
+    }
+    for (int column = 0; column < 5; ++column) {
+        for (int row = 0; row < 7; ++row) {
+            if ((glyph[column] & (1U << row)) == 0) continue;
+            const esp_err_t error = FillRectangle(x + column * scale,
+                                                  y + row * scale, scale,
+                                                  scale, color);
+            if (error != ESP_OK) return error;
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t St7789Display::DrawIcon(app::State state,
+                                  std::uint16_t foreground,
+                                  std::uint16_t accent) {
+    const StateVisual& visual = VisualForState(state);
+    const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
+    const int center_y = CONFIG_VEETEE_LCD_HEIGHT / 2;
+    const int left = center_x - 52;
+    const int top = center_y - 42;
+    esp_err_t error = FillRectangle(left, top, 104, 84, accent);
+    if (error != ESP_OK) return error;
+
+    switch (visual.icon) {
+        case VisualIcon::kBoot:
+        case VisualIcon::kFace:
+            if ((error = FillRectangle(center_x - 28, center_y - 16, 12, 14,
+                                       foreground)) != ESP_OK ||
+                (error = FillRectangle(center_x + 16, center_y - 16, 12, 14,
+                                       foreground)) != ESP_OK ||
+                (error = FillRectangle(center_x - 22, center_y + 16, 44, 7,
+                                       foreground)) != ESP_OK) {
+                return error;
+            }
+            break;
+        case VisualIcon::kWifi:
+            for (int index = 0; index < 3 && error == ESP_OK; ++index) {
+                const int width = 72 - index * 20;
+                error = FillRectangle(center_x - width / 2,
+                                      center_y - 24 + index * 18, width, 7,
+                                      foreground);
+            }
+            if (error == ESP_OK) {
+                error = FillRectangle(center_x - 5, center_y + 28, 10, 10,
+                                      foreground);
+            }
+            break;
+        case VisualIcon::kLink:
+            error = FillRectangle(center_x - 38, center_y - 6, 76, 12,
+                                  foreground);
+            if (error == ESP_OK) {
+                error = FillRectangle(center_x - 6, center_y - 28, 12, 56,
+                                      foreground);
+            }
+            break;
+        case VisualIcon::kKey:
+            error = FillRectangle(center_x - 34, center_y - 18, 36, 36,
+                                  foreground);
+            if (error == ESP_OK) {
+                error = FillRectangle(center_x, center_y - 6, 38, 12,
+                                      foreground);
+            }
+            break;
+        case VisualIcon::kListen:
+        case VisualIcon::kSpeak:
+            for (int index = 0; index < 5 && error == ESP_OK; ++index) {
+                const int height = 18 + (index % 3) * 18;
+                error = FillRectangle(center_x - 42 + index * 18,
+                                      center_y - height / 2, 9, height,
+                                      foreground);
+            }
+            break;
+        case VisualIcon::kThink:
+            for (int index = 0; index < 3 && error == ESP_OK; ++index) {
+                error = FillRectangle(center_x - 34 + index * 26,
+                                      center_y - 7, 14, 14, foreground);
+            }
+            break;
+        case VisualIcon::kStop:
+            error = FillRectangle(center_x - 24, center_y - 24, 48, 48,
+                                  foreground);
+            break;
+        case VisualIcon::kClose:
+            error = FillRectangle(center_x - 30, center_y - 8, 18, 8,
+                                  foreground);
+            if (error == ESP_OK) {
+                error = FillRectangle(center_x + 12, center_y - 8, 18, 8,
+                                      foreground);
+            }
+            if (error == ESP_OK) {
+                error = FillRectangle(center_x - 18, center_y + 20, 36, 6,
+                                      foreground);
+            }
+            break;
+        case VisualIcon::kError:
+            for (int offset = -24; offset <= 24 && error == ESP_OK; offset += 6) {
+                error = FillRectangle(center_x + offset, center_y + offset, 8, 8,
+                                      foreground);
+                if (error == ESP_OK) {
+                    error = FillRectangle(center_x + offset, center_y - offset,
+                                          8, 8, foreground);
+                }
+            }
+            break;
     }
     return error;
 }

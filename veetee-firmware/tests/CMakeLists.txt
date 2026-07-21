@@ -15,6 +15,18 @@ target_compile_options(state_machine_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME state_machine_test COMMAND state_machine_test)
 
 add_executable(
+    state_visual_test
+    state_visual_test.cpp
+    ../main/display/state_visual.cpp
+    ../main/app/state_machine.cpp
+)
+target_include_directories(state_visual_test PRIVATE ../main)
+target_compile_features(state_visual_test PRIVATE cxx_std_17)
+target_compile_options(state_visual_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME state_visual_test COMMAND state_visual_test)
+
+add_executable(
     wake_detector_policy_test
     wake_detector_policy_test.cpp
     ../main/audio/wake_detector_policy.cpp

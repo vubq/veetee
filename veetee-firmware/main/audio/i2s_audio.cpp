@@ -329,7 +329,17 @@ void I2sAudio::RunPlayback() {
 #endif
     PlaybackItem item{};
     std::uint32_t decoder_generation = 0;
-    while (xQueueReceive(playback_queue_, &item, portMAX_DELAY) == pdTRUE) {
+    while (true) {
+#if CONFIG_VEETEE_KEEP_SPEAKER_CLOCKED
+        if (xQueueReceive(playback_queue_, &item, 0) != pdTRUE) {
+            WriteSilence();
+            continue;
+        }
+#else
+        if (xQueueReceive(playback_queue_, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+#endif
         if (item.kind == PlaybackItemKind::kBegin) {
             decoder_generation = item.generation;
             esp_opus_dec_reset(decoder_);
@@ -395,7 +405,7 @@ void I2sAudio::RunPlayback() {
 }
 
 bool I2sAudio::WriteChimeNote(double frequency_hz, int frame_count) {
-    constexpr double kAmplitude = 4200.0;
+    constexpr double kAmplitude = 2600.0;
     const std::size_t total_samples =
         tone_dma_buffer_.size() * static_cast<std::size_t>(frame_count);
     for (int frame = 0; frame < frame_count; ++frame) {
@@ -422,10 +432,10 @@ bool I2sAudio::WriteChimeNote(double frequency_hz, int frame_count) {
 }
 
 void I2sAudio::PlayBootChime() {
-    constexpr int kFirstNoteFrames = 8;
-    constexpr int kGapFrames = 2;
-    constexpr int kSecondNoteFrames = 10;
-    bool complete = WriteChimeNote(523.25, kFirstNoteFrames);
+    constexpr int kFirstNoteFrames = 5;
+    constexpr int kGapFrames = 1;
+    constexpr int kSecondNoteFrames = 7;
+    bool complete = WriteChimeNote(659.25, kFirstNoteFrames);
     if (complete) {
         tone_dma_buffer_.fill(0);
         for (int frame = 0; frame < kGapFrames && complete; ++frame) {
@@ -436,7 +446,7 @@ void I2sAudio::PlayBootChime() {
                            &bytes_written, pdMS_TO_TICKS(100)) == ESP_OK;
         }
     }
-    if (complete) complete = WriteChimeNote(659.25, kSecondNoteFrames);
+    if (complete) complete = WriteChimeNote(783.99, kSecondNoteFrames);
     WriteSilence();
     if (complete) {
         ESP_LOGI(kTag, "Startup chime complete");

@@ -8,6 +8,9 @@
 #include "display/st7789_display.h"
 #include "esp_err.h"
 #include "input/button.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
 namespace veetee::board {
 
@@ -46,12 +49,29 @@ public:
     [[nodiscard]] int speaker_volume() const;
 
 private:
+    enum class DisplayCommandKind : std::uint8_t {
+        kState,
+        kActivationCode,
+    };
+
+    struct DisplayCommand {
+        DisplayCommandKind kind = DisplayCommandKind::kState;
+        app::State state = app::State::kStarting;
+        char activation_code[7] = {};
+    };
+
+    static void DisplayTaskEntry(void* context);
+    void RunDisplay();
+    esp_err_t QueueDisplay(const DisplayCommand& command);
+
     display::St7789Display display_;
     audio::I2sAudio audio_;
     audio::WakeDetector wake_detector_;
     input::Button button_;
     app::State state_ = app::State::kStarting;
     std::array<char, 17> loaded_wake_partition_{};
+    QueueHandle_t display_queue_ = nullptr;
+    TaskHandle_t display_task_ = nullptr;
 };
 
 }  // namespace veetee::board

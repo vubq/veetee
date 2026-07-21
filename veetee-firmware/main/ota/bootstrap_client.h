@@ -16,6 +16,7 @@ namespace veetee::ota {
 enum class BootstrapEvent : std::uint8_t {
     kActivationCodeAvailable,
     kActivationComplete,
+    kDeviceIdentityRejected,
     kResourceDesired,
 };
 
