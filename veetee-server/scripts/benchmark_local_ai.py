@@ -126,7 +126,7 @@ async def benchmark(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--text", default="Xin chào, tôi là Veetee. Tôi có thể giúp gì cho bạn?")
-    parser.add_argument("--voice", default="Ngọc Linh")
+    parser.add_argument("--voice", default="Trúc Ly")
     parser.add_argument("--asr-threads", type=int, default=2, choices=range(1, 9))
     parser.add_argument("--tts-threads", type=int, default=6, choices=range(1, 9))
     parser.add_argument("--watermark", action="store_true")
