@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   agentSchema,
+  auditEventSchema,
   apiErrorSchema,
   artifactSchema,
   conversationEventSchema,
@@ -11,6 +12,7 @@ import {
   mcpToolSchema,
   principalSchema,
   providerSchema,
+  operationsProfileSchema,
   resourceRolloutSchema,
   tokenResponseSchema,
   uiPackRolloutSchema,
@@ -143,11 +145,20 @@ export const managerApi = {
       `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools`,
       z.array(mcpToolSchema),
     ),
-  conversationEvents: (deviceId: string, limit = 100) =>
-    request(
-      `/api/v1/conversation-events?deviceId=${encodeURIComponent(deviceId)}&limit=${limit}`,
-      z.array(conversationEventSchema),
-    ),
+  conversationEvents: (deviceId?: string, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (deviceId) params.set("deviceId", deviceId);
+    return request(`/api/v1/conversation-events?${params}`, z.array(conversationEventSchema));
+  },
+  auditEvents: (input: { limit?: number; action?: string; targetType?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (input.limit) params.set("limit", String(input.limit));
+    if (input.action) params.set("action", input.action);
+    if (input.targetType) params.set("targetType", input.targetType);
+    const query = params.toString();
+    return request(`/api/v1/audit-events${query ? `?${query}` : ""}`, z.array(auditEventSchema));
+  },
+  operationsProfile: () => request("/api/v1/operations/profile", operationsProfileSchema),
   artifacts: () => request("/api/v1/artifacts", z.array(artifactSchema)),
   wakeProfiles: () => request("/api/v1/wake-profiles", z.array(wakeProfileSchema)),
   resourceRollouts: () =>

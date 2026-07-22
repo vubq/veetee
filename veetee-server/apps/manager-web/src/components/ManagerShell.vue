@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Dialog, DialogPanel, Menu, MenuButton, MenuItem, MenuItems, TransitionChild, TransitionRoot } from "@headlessui/vue";
 import { useQuery, useQueryClient } from "@tanstack/vue-query";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { managerApi } from "../api/client";
 import type { Artifact } from "../api/schemas";
@@ -14,11 +14,18 @@ import OverviewPage from "./pages/OverviewPage.vue";
 import ProvidersPage from "./pages/ProvidersPage.vue";
 import RealtimeLabPage from "./pages/RealtimeLabPage.vue";
 import ResourcesPage from "./pages/ResourcesPage.vue";
+import OperationsPage from "./pages/OperationsPage.vue";
 import { VtBadge, VtButton, VtIcon, VtToastRegion } from "./ui";
+import { preferredDevice } from "../utils/device-presence";
 
 const auth = useAuthStore();
 const queryClient = useQueryClient();
-const activePage = ref<ManagerPage>("overview");
+const pageIds: ManagerPage[] = ["overview", "devices", "agents", "providers", "lab", "resources", "operations"];
+const pageFromHash = (): ManagerPage => {
+  const value = typeof window === "undefined" ? "" : window.location.hash.replace(/^#\/?/, "");
+  return pageIds.includes(value as ManagerPage) ? value as ManagerPage : "overview";
+};
+const activePage = ref<ManagerPage>(pageFromHash());
 const mobileMenuOpen = ref(false);
 const pairOpen = ref(false);
 const selectedDeviceId = ref("");
@@ -34,14 +41,31 @@ const artifacts = useQuery({ queryKey: ["artifacts"], queryFn: managerApi.artifa
 const wakeProfiles = useQuery({ queryKey: ["wake-profiles"], queryFn: managerApi.wakeProfiles });
 const resourceRollouts = useQuery({ queryKey: ["resource-rollouts"], queryFn: managerApi.resourceRollouts });
 const uiPackRollouts = useQuery({ queryKey: ["ui-pack-rollouts"], queryFn: managerApi.uiPackRollouts });
+const fleetConversationEvents = useQuery({
+  queryKey: ["conversation-events", "fleet"],
+  queryFn: () => managerApi.conversationEvents(undefined, 100),
+  refetchInterval: 5_000,
+  retry: false,
+});
+const operationsProfile = useQuery({
+  queryKey: ["operations-profile"],
+  queryFn: managerApi.operationsProfile,
+  enabled: computed(() => activePage.value === "operations"),
+});
+const auditEvents = useQuery({
+  queryKey: ["audit-events"],
+  queryFn: () => managerApi.auditEvents({ limit: 150 }),
+  enabled: computed(() => activePage.value === "operations"),
+  refetchInterval: 15_000,
+});
 const deviceTools = useQuery({
   queryKey: computed(() => ["device-mcp-tools", selectedDeviceId.value]),
   queryFn: () => managerApi.deviceMcpTools(selectedDeviceId.value),
   enabled: computed(() => Boolean(selectedDeviceId.value)),
   retry: false,
 });
-const conversationEvents = useQuery({
-  queryKey: computed(() => ["conversation-events", selectedDeviceId.value]),
+const deviceConversationEvents = useQuery({
+  queryKey: computed(() => ["conversation-events", "device", selectedDeviceId.value]),
   queryFn: () => managerApi.conversationEvents(selectedDeviceId.value),
   enabled: computed(() => Boolean(selectedDeviceId.value)),
   refetchInterval: 1_500,
@@ -55,18 +79,22 @@ const navItems: Array<{ id: ManagerPage; label: string; short: string; icon: VtI
   { id: "providers", label: "Providers", short: "AI routing", icon: "provider" },
   { id: "lab", label: "Realtime Lab", short: "Voice simulator", icon: "lab" },
   { id: "resources", label: "Tài nguyên", short: "Wake & OTA", icon: "resource" },
+  { id: "operations", label: "Vận hành", short: "Audit & privacy", icon: "telemetry" },
 ];
 
 const tools = computed(() => deviceTools.data.value ?? baselineTools.data.value ?? []);
 const ready = computed(() => health.data.value?.status === "ready");
-const hasQueryError = computed(() => [devices, agents, providers, artifacts, wakeProfiles].some((query) => query.isError.value));
+const hasQueryError = computed(() => [devices, agents, providers, artifacts, wakeProfiles, fleetConversationEvents, operationsProfile, auditEvents].some((query) => query.isError.value));
+const initialDataReady = computed(() => [devices, agents, providers, artifacts, wakeProfiles].every((query) => query.isFetched.value));
 const apiHost = computed(() => { try { return new URL(managerApi.baseUrl).host; } catch { return managerApi.baseUrl; } });
 
 watch(
   () => devices.data.value,
   (list) => {
     if (!list?.length) { selectedDeviceId.value = ""; return; }
-    if (!list.some((device) => device.id === selectedDeviceId.value)) selectedDeviceId.value = list[0]!.id;
+    if (!list.some((device) => device.id === selectedDeviceId.value)) {
+      selectedDeviceId.value = preferredDevice(list)?.id ?? "";
+    }
   },
   { immediate: true },
 );
@@ -83,9 +111,26 @@ function dismissToast(id: number): void {
 
 function navigate(page: ManagerPage): void {
   activePage.value = page;
+  const nextHash = `#/${page}`;
+  if (window.location.hash !== nextHash) window.history.pushState(null, "", nextHash);
   mobileMenuOpen.value = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+
+function syncPageFromLocation(): void {
+  activePage.value = pageFromHash();
+  mobileMenuOpen.value = false;
+}
+
+onMounted(() => {
+  if (!window.location.hash) window.history.replaceState(null, "", "#/overview");
+  window.addEventListener("hashchange", syncPageFromLocation);
+  window.addEventListener("popstate", syncPageFromLocation);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("hashchange", syncPageFromLocation);
+  window.removeEventListener("popstate", syncPageFromLocation);
+});
 
 async function refresh(...keys: string[]): Promise<void> {
   await Promise.all(keys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
@@ -203,16 +248,20 @@ async function callTool(deviceId: string, name: string, args: Record<string, unk
         </div>
       </header>
 
-      <div v-if="hasQueryError" class="global-error"><VtIcon name="warning" :size="18" /><span><b>Một phần dữ liệu chưa tải được.</b> Kiểm tra Manager API rồi thử lại.</span><button type="button" @click="refresh('devices', 'agents', 'providers', 'artifacts', 'wake-profiles')"><VtIcon name="refresh" :size="16" /> Thử lại</button></div>
+      <div v-if="hasQueryError" class="global-error"><VtIcon name="warning" :size="18" /><span><b>Một phần dữ liệu chưa tải được.</b> Kiểm tra Manager API rồi thử lại.</span><button type="button" @click="refresh('devices', 'agents', 'providers', 'artifacts', 'wake-profiles', 'conversation-events', 'operations-profile', 'audit-events')"><VtIcon name="refresh" :size="16" /> Thử lại</button></div>
 
-      <main class="page-container">
-        <OverviewPage v-if="activePage === 'overview'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="conversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
-        <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="conversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
-        <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" />
-        <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
-        <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
-        <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" />
-        <OverviewPage v-else :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="conversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
+      <main class="page-container" :aria-busy="!initialDataReady">
+        <div v-if="!initialDataReady" class="page-loading" role="status" aria-live="polite"><span class="brand-mark" aria-hidden="true"><i></i><i></i></span><div><b>Đang đồng bộ control plane</b><small>Thiết bị, agent, provider và artifact đang được xác thực…</small></div></div>
+        <template v-else>
+          <OverviewPage v-if="activePage === 'overview'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
+          <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
+          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" />
+          <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
+          <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
+          <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" />
+          <OperationsPage v-else-if="activePage === 'operations'" :devices="devices.data.value ?? []" :audit-events="auditEvents.data.value ?? []" :profile="operationsProfile.data.value" :ready="ready" />
+          <OverviewPage v-else :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
+        </template>
       </main>
     </div>
 

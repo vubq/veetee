@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
+import { ControlPlaneStore } from "./control-plane.store.js";
 
 class FakeRedisClient {
   private readonly values = new Map<string, string>();
@@ -55,5 +56,17 @@ describe("PairingService", () => {
     const first = await pairing.create("esp32-retry");
     const retry = await pairing.create("esp32-retry");
     expect(retry).toEqual(first);
+  });
+
+  it("redacts sensitive audit fields recursively", () => {
+    const store = Object.create(ControlPlaneStore.prototype) as ControlPlaneStore;
+    const details = (store as unknown as {
+      redactedAuditDetails(value: unknown): Record<string, unknown>;
+    }).redactedAuditDetails({
+      safe: "kept",
+      nested: { token: "hidden", safe: "kept" },
+      list: [{ password: "hidden", safe: "kept" }],
+    });
+    expect(details).toEqual({ safe: "kept", nested: { safe: "kept" }, list: [{ safe: "kept" }] });
   });
 });

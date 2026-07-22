@@ -3,6 +3,7 @@ import { computed } from "vue";
 
 import type { Agent, ConversationEvent, Device, Provider } from "../../api/schemas";
 import type { ManagerPage } from "../../types/manager";
+import { devicePresence } from "../../utils/device-presence";
 import { formatDate, statusTone } from "../../utils/format";
 import { VtBadge, VtButton, VtEmptyState, VtIcon, VtPageHeader } from "../ui";
 
@@ -15,7 +16,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ navigate: [page: ManagerPage]; pair: [] }>();
 
-const onlineDevices = computed(() => props.devices.filter((device) => device.status === "online").length);
+const onlineDevices = computed(() => props.devices.filter((device) => devicePresence(device).state === "online").length);
 const healthyProviders = computed(
   () => props.providers.filter((provider) => provider.enabled && provider.health === "healthy").length,
 );
@@ -31,12 +32,17 @@ const lastLatency = computed(() => {
   return Math.max(0, new Date(tts.occurredAt).getTime() - new Date(stt.occurredAt).getTime());
 });
 
-const pipeline = [
-  ["VAD", "Silero VAD", "Phát hiện giọng nói"],
-  ["ASR", "Zipformer VI 30M INT8", "Nhận dạng nhanh tại máy"],
-  ["LLM", "9Router", "OpenAI-compatible routing"],
-  ["TTS", "VieNeu · Trúc Ly", "Local voice · tốc độ 1.2×"],
-];
+const pipeline = computed(() => [
+  ["VAD", "Phát hiện giọng nói", "vad"],
+  ["ASR", "Nhận dạng tiếng nói", "asr"],
+  ["LLM", "Lập kế hoạch và trả lời", "llm"],
+  ["TTS", "Tổng hợp giọng nói", "tts"],
+].map(([kind, fallback, providerKind]) => {
+  const provider = [...props.providers]
+    .filter((item) => item.kind === providerKind && item.enabled)
+    .sort((left, right) => left.priority - right.priority)[0];
+  return [kind, provider ? `${provider.adapter} · ${provider.model}` : "Chưa cấu hình", provider ? `${provider.health}` : fallback] as const;
+}));
 </script>
 
 <template>
@@ -78,7 +84,7 @@ const pipeline = [
         <header class="panel-header"><div><span class="vt-kicker">LOCAL VOICE STACK</span><h2>Pipeline đang dùng</h2></div><VtBadge tone="info">LAN-FIRST</VtBadge></header>
         <div class="pipeline-list">
           <div v-for="(step, index) in pipeline" :key="step[0]" class="pipeline-step">
-            <span>{{ String(index + 1).padStart(2, "0") }}</span><div><small>{{ step[0] }}</small><b>{{ step[1] }}</b><p>{{ step[2] }}</p></div><i :class="{ active: ready }"></i>
+            <span>{{ String(index + 1).padStart(2, "0") }}</span><div><small>{{ step[0] }}</small><b>{{ step[1] }}</b><p>{{ step[2] }}</p></div><i :class="{ active: ready && step[1] !== 'Chưa cấu hình' }"></i>
           </div>
         </div>
       </article>
@@ -99,8 +105,8 @@ const pipeline = [
       <article class="vt-panel">
         <header class="panel-header"><div><span class="vt-kicker">FLEET</span><h2>Thiết bị</h2></div><button class="text-link" type="button" @click="emit('navigate', 'devices')">Xem tất cả <VtIcon name="arrow" :size="15" /></button></header>
         <div v-if="devices.length" class="compact-list">
-          <button v-for="device in devices.slice(0, 4)" :key="device.id" type="button" @click="emit('navigate', 'devices')">
-            <span class="list-icon"><VtIcon name="device" :size="20" /></span><span><b>{{ device.name }}</b><small>{{ device.hardwareId }} · FW {{ device.firmwareVersion ?? "—" }}</small></span><VtBadge :tone="statusTone(device.status)" dot>{{ device.status }}</VtBadge>
+            <button v-for="device in devices.slice(0, 4)" :key="device.id" type="button" @click="emit('navigate', 'devices')">
+            <span class="list-icon"><VtIcon name="device" :size="20" /></span><span><b>{{ device.name }}</b><small>{{ device.hardwareId }} · FW {{ device.firmwareVersion ?? "—" }}</small></span><VtBadge :tone="devicePresence(device).tone" dot>{{ devicePresence(device).label }}</VtBadge>
           </button>
         </div>
         <VtEmptyState v-else icon="device" title="Chưa có robot" text="Nhập mã 6 số đang hiển thị trên ESP32 để ghép thiết bị."><VtButton size="sm" @click="emit('pair')">Ghép ngay</VtButton></VtEmptyState>

@@ -108,6 +108,19 @@ export interface ConversationEventRecord {
   occurredAt: string;
 }
 
+export interface AuditEventRecord {
+  id: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  requestId: string;
+  beforeHash?: string;
+  afterHash?: string;
+  details: Record<string, unknown>;
+  actorName?: string;
+  createdAt: string;
+}
+
 export type DeviceBootstrapResult =
   | {
       state: "unbound";
@@ -453,6 +466,59 @@ export class ControlPlaneStore {
       payload: event.payload as Record<string, unknown>,
       occurredAt: event.occurredAt.toISOString(),
     }));
+  }
+
+  async listAuditEvents(
+    tenantId: string,
+    input: { limit: number; action?: string; targetType?: string },
+  ): Promise<AuditEventRecord[]> {
+    const events = await this.prisma.auditEvent.findMany({
+      where: {
+        tenantId,
+        ...(input.action ? { action: { contains: input.action, mode: "insensitive" } } : {}),
+        ...(input.targetType ? { targetType: input.targetType } : {}),
+      },
+      include: { actor: { select: { displayName: true } } },
+      orderBy: { createdAt: "desc" },
+      take: input.limit,
+    });
+    return events.map((event) => ({
+      id: event.id,
+      action: event.action,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      requestId: event.requestId,
+      ...(event.beforeHash ? { beforeHash: event.beforeHash } : {}),
+      ...(event.afterHash ? { afterHash: event.afterHash } : {}),
+      details: this.redactedAuditDetails(event.details),
+      ...(event.actor?.displayName ? { actorName: event.actor.displayName } : {}),
+      createdAt: event.createdAt.toISOString(),
+    }));
+  }
+
+  private redactedAuditDetails(value: Prisma.JsonValue | null): Record<string, unknown> {
+    const redacted = this.redactAuditValue(value);
+    if (!redacted || typeof redacted !== "object" || Array.isArray(redacted)) return {};
+    return redacted as Record<string, unknown>;
+  }
+
+  private redactAuditValue(value: Prisma.JsonValue): Prisma.JsonValue | undefined {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => this.redactAuditValue(item))
+        .filter((item): item is Prisma.JsonValue => item !== undefined);
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).flatMap(([key, child]) => {
+          if (/(secret|token|password|audio|transcript|argument)/i.test(key)) return [];
+          if (child === undefined) return [];
+          const redacted = this.redactAuditValue(child);
+          return redacted === undefined ? [] : [[key, redacted]];
+        }),
+      );
+    }
+    return value;
   }
 
   async device(tenantId: string, id: string): Promise<DeviceRecord> {

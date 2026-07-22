@@ -21,3 +21,12 @@ export function devicePresence(device: Device, now = Date.now()): DevicePresence
   }
   return { state: "online", label: "Online", tone: "success" };
 }
+
+export function preferredDevice(devices: Device[], now = Date.now()): Device | undefined {
+  const rank: Record<DevicePresenceState, number> = { online: 4, idle: 3, stale: 2, offline: 1 };
+  return [...devices].sort((left, right) => {
+    const stateDelta = rank[devicePresence(right, now).state] - rank[devicePresence(left, now).state];
+    if (stateDelta) return stateDelta;
+    return Date.parse(right.lastSeenAt ?? right.pairedAt) - Date.parse(left.lastSeenAt ?? left.pairedAt);
+  })[0];
+}

@@ -48,6 +48,33 @@ async function mockManagerApi(
     if (url.pathname === "/health/ready") {
       return json({ status: "ready", components: { database: "ok", redis: "ok" } });
     }
+    if (url.pathname === "/api/v1/operations/profile") {
+      return json({
+        deployment: {
+          mode: "single_node",
+          domainRequired: false,
+          managerApiUrl: "http://192.168.110.115:8001",
+          voiceWebsocketUrl: "ws://192.168.110.115:8000/veetee/v1/",
+        },
+        privacy: { rawAudioStored: false, transcriptStored: false, conversationEventRetentionDays: 7 },
+        security: { deviceScopedTokens: true, signedArtifacts: true, publicTlsRequired: false },
+        firmware: { configuredVersion: "0.3.0", releaseConfigured: false, otaRoute: "/veetee/ota/" },
+      });
+    }
+    if (url.pathname === "/api/v1/audit-events") {
+      return json([
+        {
+          id: "f8c12a04-4e10-4a5f-a7a8-f522b8b51ac4",
+          action: "device.pair",
+          targetType: "device",
+          targetId: deviceId,
+          requestId: "req_12345678",
+          details: { hardwareId: "A1B2C3D4E5F6" },
+          actorName: "Veetee Owner",
+          createdAt: "2026-07-22T04:00:00.000Z",
+        },
+      ]);
+    }
     if (url.pathname === "/api/v1/devices") {
       return json(
         options.withDevice
@@ -500,7 +527,7 @@ test("logs in and renders API-backed control room", async ({ page }) => {
 
   await expect(page.locator(".profile-button")).toContainText("Veetee Owner");
   await expect(page.locator(".agent-spotlight h3")).toHaveText("Veetee Việt");
-  await expect(page.locator(".desktop-nav button")).toHaveCount(6);
+  await expect(page.locator(".desktop-nav button")).toHaveCount(7);
 
   await page.locator('[data-page-link="providers"]').first().click();
   await expect(page.locator(".provider-grid")).toContainText("cx/gpt-5.6-terra");
@@ -565,7 +592,7 @@ test("uses an accessible Headless UI mobile navigation", async ({ page }) => {
   await expect.poll(async () => (await page.locator(".mobile-nav-panel").boundingBox())?.x ?? -999).toBeGreaterThanOrEqual(0);
   const navBox = await page.locator(".mobile-nav-panel").boundingBox();
   expect((navBox?.x ?? 0) + (navBox?.width ?? 0)).toBeLessThanOrEqual(390);
-  await expect(page.locator(".mobile-nav-panel nav button")).toHaveCount(6);
+  await expect(page.locator(".mobile-nav-panel nav button")).toHaveCount(7);
   await page.locator(".mobile-nav-panel nav button").filter({ hasText: "Providers" }).click();
   await expect(page.locator('[data-page="providers"]')).toBeVisible();
   await expect(page.locator(".mobile-nav-panel")).toBeHidden();
@@ -952,4 +979,48 @@ test("keeps wake profiles global but applies them from a compatible online devic
     },
   ]);
   await expect(page.locator(".vt-toast")).toContainText("desired rollout");
+});
+
+test("opens operations deep link with privacy, firmware and redacted audit data", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/#/operations");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await expect(page.locator('[data-page="operations"]')).toBeVisible();
+  await expect(page.getByText("Không cần mua domain để vận hành Veetee.")).toBeVisible();
+  await expect(page.getByText("device.pair")).toBeVisible();
+  await expect(page).toHaveURL(/#\/operations$/);
+});
+
+test("filters the device fleet without losing the selected device", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/#/devices");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await expect(page.locator('[data-page="devices"]')).toBeVisible();
+  await page.locator(".device-filter-panel select").first().selectOption("offline");
+  await expect(page.getByText("Không có thiết bị phù hợp")).toBeVisible();
+  await page.getByRole("button", { name: /Xóa bộ lọc/ }).click();
+  await expect(page.locator(".device-detail h2")).toHaveText("Veetee Lab");
+});
+
+test("keeps every top-level screen inside the mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  const screens = ["Tổng quan", "Thiết bị", "Trợ lý", "Providers", "Realtime Lab", "Tài nguyên", "Vận hành"];
+  for (const [index, screen] of screens.entries()) {
+    if (index > 0) {
+      await page.locator(".mobile-menu-button").click();
+      await page.locator(".mobile-nav-panel nav button", { hasText: screen }).click();
+    }
+    await expect(page.locator("main .vt-page")).toBeVisible();
+    const width = await page.evaluate(() => ({ innerWidth, scrollWidth: document.documentElement.scrollWidth }));
+    expect(width.scrollWidth, `${screen} overflows mobile viewport`).toBeLessThanOrEqual(width.innerWidth + 1);
+  }
 });

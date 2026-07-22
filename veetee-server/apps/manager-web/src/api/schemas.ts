@@ -112,6 +112,43 @@ export const conversationEventSchema = z.object({
   occurredAt: z.string(),
 });
 
+export const auditEventSchema = z.object({
+  id: z.string().uuid(),
+  action: z.string(),
+  targetType: z.string(),
+  targetId: z.string(),
+  requestId: z.string(),
+  beforeHash: z.string().optional(),
+  afterHash: z.string().optional(),
+  details: jsonObject,
+  actorName: z.string().optional(),
+  createdAt: z.string(),
+});
+
+export const operationsProfileSchema = z.object({
+  deployment: z.object({
+    mode: z.literal("single_node"),
+    domainRequired: z.literal(false),
+    managerApiUrl: z.string(),
+    voiceWebsocketUrl: z.string(),
+  }),
+  privacy: z.object({
+    rawAudioStored: z.literal(false),
+    transcriptStored: z.literal(false),
+    conversationEventRetentionDays: z.number().int().min(1).max(30),
+  }),
+  security: z.object({
+    deviceScopedTokens: z.literal(true),
+    signedArtifacts: z.literal(true),
+    publicTlsRequired: z.literal(false),
+  }),
+  firmware: z.object({
+    configuredVersion: z.string(),
+    releaseConfigured: z.boolean(),
+    otaRoute: z.literal("/veetee/ota/"),
+  }),
+});
+
 const detectorProfileSchema = z.object({
   detectorId: z.string(),
   sensitivity: z.number().min(0).max(1),
@@ -216,6 +253,8 @@ export type Agent = z.infer<typeof agentSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
 export type ConversationEvent = z.infer<typeof conversationEventSchema>;
+export type AuditEvent = z.infer<typeof auditEventSchema>;
+export type OperationsProfile = z.infer<typeof operationsProfileSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type WakeProfile = z.infer<typeof wakeProfileSchema>;
 export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;

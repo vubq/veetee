@@ -17,6 +17,11 @@ version riêng, rollout ghi desired state và chỉ hoàn tất theo reported st
 streaming upload vào quarantine, parser data-only, release signing, immutable
 publish, explicit-device rollout và reported-state riêng cho `state.ui`.
 
+Manager Web có thêm màn Operations read-only tại `#/operations`: audit trail
+tenant-scoped đã redact, runtime LAN/Tailscale profile, privacy retention và
+firmware inventory. Màn này không tạo firmware rollout khi API chưa có release
+artifact đã ký; publish/apply vẫn được phân biệt rõ theo desired/reported state.
+
 ## 2. Data model lõi
 
 Các bảng/aggregate nên bắt đầu nhỏ hơn Xiaozhi nhưng giữ đường mở rộng:

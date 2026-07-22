@@ -4,7 +4,8 @@ export type ManagerPage =
   | "agents"
   | "providers"
   | "lab"
-  | "resources";
+  | "resources"
+  | "operations";
 
 export interface AgentDraftInput {
   id: string;

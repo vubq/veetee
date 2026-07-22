@@ -14,7 +14,7 @@ import type {
 } from "../../api/schemas";
 import type { FirmwareComposition } from "../../device-ui/firmware-contract";
 import { deliveryTone, summarizeDeviceDelivery } from "../../utils/device-delivery";
-import { devicePresence } from "../../utils/device-presence";
+import { devicePresence, type DevicePresenceState } from "../../utils/device-presence";
 import { formatDate, statusTone } from "../../utils/format";
 import DesiredReportedSummary from "../device-ui/DesiredReportedSummary.vue";
 import DeviceWakePanel from "../device-ui/DeviceWakePanel.vue";
@@ -51,9 +51,51 @@ const agentId = ref("");
 const busy = ref(false);
 const error = ref("");
 
-const selected = computed(() => props.devices.find((device) => device.id === props.selectedDeviceId) ?? props.devices[0]);
+const search = ref("");
+const presenceFilter = ref<DevicePresenceState | "all">("all");
+const localeFilter = ref("all");
+const agentFilter = ref("all");
+const firmwareFilter = ref("all");
+const activeFilterCount = computed(() => [
+  search.value.trim(),
+  presenceFilter.value !== "all" ? presenceFilter.value : "",
+  localeFilter.value !== "all" ? localeFilter.value : "",
+  agentFilter.value !== "all" ? agentFilter.value : "",
+  firmwareFilter.value !== "all" ? firmwareFilter.value : "",
+].filter(Boolean).length);
+const localeOptions = computed(() => [...new Set(props.agents.map((agent) => agent.defaultLocale))].sort());
+const firmwareOptions = computed(() => [...new Set(props.devices.map((device) => device.firmwareVersion ?? "__missing__"))].sort());
+const filteredDevices = computed(() => {
+  const needle = search.value.trim().toLowerCase();
+  return props.devices.filter((device) => {
+    const agent = props.agents.find((candidate) => candidate.id === device.agentId);
+    const matchesSearch = !needle || `${device.name} ${device.hardwareId} ${device.firmwareVersion ?? ""}`.toLowerCase().includes(needle);
+    const matchesPresence = presenceFilter.value === "all" || devicePresence(device).state === presenceFilter.value;
+    const matchesLocale = localeFilter.value === "all" || agent?.defaultLocale === localeFilter.value;
+    const matchesAgent = agentFilter.value === "all" || (agentFilter.value === "unassigned" ? !device.agentId : device.agentId === agentFilter.value);
+    const matchesFirmware = firmwareFilter.value === "all" || (device.firmwareVersion ?? "__missing__") === firmwareFilter.value;
+    return matchesSearch && matchesPresence && matchesLocale && matchesAgent && matchesFirmware;
+  });
+});
+const selected = computed(() => filteredDevices.value.find((device) => device.id === props.selectedDeviceId) ?? filteredDevices.value[0]);
 const delivery = computed(() => selected.value ? summarizeDeviceDelivery(selected.value) : undefined);
 const presence = computed(() => selected.value ? devicePresence(selected.value) : undefined);
+
+watch(
+  [filteredDevices, () => props.selectedDeviceId],
+  ([list, selectedId]) => {
+    if (list.length && !list.some((device) => device.id === selectedId)) emit("select", list[0]!.id);
+  },
+  { immediate: true },
+);
+
+function resetFilters(): void {
+  search.value = "";
+  presenceFilter.value = "all";
+  localeFilter.value = "all";
+  agentFilter.value = "all";
+  firmwareFilter.value = "all";
+}
 
 watch(
   () => props.pairOpen,
@@ -93,9 +135,18 @@ async function pair(): Promise<void> {
   <section class="vt-page" data-page="devices">
     <VtPageHeader eyebrow="FLEET / THIẾT BỊ" title="Đội robot của bạn" description="Ghép nối bằng mã một lần, theo dõi firmware và kiểm tra desired/reported state mà không nhầm rollout với đã áp dụng." />
 
-    <div v-if="devices.length" class="device-layout">
+    <div v-if="devices.length" class="device-filter-panel">
+      <VtField label="Tìm thiết bị"><VtInput v-model="search" placeholder="Tên, hardware ID, firmware…" /></VtField>
+      <VtField label="Trạng thái"><VtSelect v-model="presenceFilter"><option value="all">Tất cả trạng thái</option><option value="online">Online mới</option><option value="idle">Đang rảnh</option><option value="stale">Dữ liệu cũ</option><option value="offline">Offline</option></VtSelect></VtField>
+      <VtField label="Locale"><VtSelect v-model="localeFilter"><option value="all">Tất cả locale</option><option v-for="locale in localeOptions" :key="locale" :value="locale">{{ locale }}</option></VtSelect></VtField>
+      <VtField label="Agent"><VtSelect v-model="agentFilter"><option value="all">Tất cả agent</option><option value="unassigned">Chưa gán agent</option><option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option></VtSelect></VtField>
+      <VtField label="Firmware"><VtSelect v-model="firmwareFilter"><option value="all">Tất cả firmware</option><option v-for="version in firmwareOptions" :key="version" :value="version">{{ version === "__missing__" ? "Chưa report" : version }}</option></VtSelect></VtField>
+      <button v-if="activeFilterCount" class="filter-reset" type="button" @click="resetFilters">Xóa lọc <span>{{ activeFilterCount }}</span></button>
+    </div>
+
+    <div v-if="devices.length && filteredDevices.length" class="device-layout">
       <aside class="device-rail">
-        <button v-for="device in devices" :key="device.id" type="button" :class="{ active: device.id === selected?.id }" @click="emit('select', device.id)">
+        <button v-for="device in filteredDevices" :key="device.id" type="button" :class="{ active: device.id === selected?.id }" @click="emit('select', device.id)">
           <span class="device-avatar"><VtIcon name="device" :size="22" /></span>
           <span><b>{{ device.name }}</b><small>{{ device.hardwareId }}</small></span>
           <i :class="devicePresence(device).state"></i>
@@ -142,9 +193,10 @@ async function pair(): Promise<void> {
       </div>
     </div>
 
-    <VtEmptyState v-else icon="device" title="Chưa có thiết bị nào" text="Bật Veetee, lấy mã 6 số trên màn hình rồi ghép robot vào workspace.">
+    <VtEmptyState v-else-if="!devices.length" icon="device" title="Chưa có thiết bị nào" text="Bật Veetee, lấy mã 6 số trên màn hình rồi ghép robot vào workspace.">
       <VtButton @click="emit('openPair')"><VtIcon name="plus" :size="17" /> Ghép thiết bị đầu tiên</VtButton>
     </VtEmptyState>
+    <VtEmptyState v-else icon="device" title="Không có thiết bị phù hợp" text="Thử đổi bộ lọc hoặc xóa lọc để xem toàn bộ fleet."><VtButton size="sm" @click="resetFilters">Xóa bộ lọc</VtButton></VtEmptyState>
 
     <VtDialog :open="pairOpen" title="Ghép một Veetee mới" eyebrow="FLEET / SECURE PAIRING" icon="device" description="Mã chỉ dùng một lần và hết hạn theo policy của Manager API." width="sm" @close="emit('closePair')">
       <form id="device-pair-form" class="form-stack" @submit.prevent="pair">

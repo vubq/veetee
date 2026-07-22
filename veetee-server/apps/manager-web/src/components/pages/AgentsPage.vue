@@ -16,7 +16,7 @@ const busy = ref(false);
 const error = ref("");
 const form = reactive({
   name: "", locale: "vi-VN", mode: "auto" as Agent["interactionMode"], persona: "",
-  firstInput: 15, betweenTurns: 30, closingGrace: 3, maxSession: 600,
+  firstInput: 15, betweenTurns: 30, closingGrace: 5, maxSession: 600,
   vad: "", asr: "", llm: "", tts: "",
 });
 
@@ -49,7 +49,7 @@ watch(
     form.persona = agent.persona;
     form.firstInput = Number(conversation.firstInputSeconds ?? 15);
     form.betweenTurns = Number(conversation.betweenTurnsSeconds ?? 30);
-    form.closingGrace = Number(conversation.closingGraceSeconds ?? 3);
+    form.closingGrace = Number(conversation.closingGraceSeconds ?? 5);
     form.maxSession = Number(conversation.maxSessionSeconds ?? 600);
     form.vad = chainProvider(agent, "vad");
     form.asr = chainProvider(agent, "asr");

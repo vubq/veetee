@@ -25,12 +25,14 @@ import {
   LabSessionsController,
 } from "./lab/lab-sessions.controller.js";
 import { AgentsController } from "./modules/agents.controller.js";
+import { AuditController } from "./modules/audit.controller.js";
 import { ConversationEventsController } from "./modules/conversation-events.controller.js";
 import { DevicesController } from "./modules/devices.controller.js";
 import { HealthController } from "./modules/health.controller.js";
 import { InternalController } from "./modules/internal.controller.js";
 import { McpController } from "./modules/mcp.controller.js";
 import { OtaController } from "./modules/ota.controller.js";
+import { OperationsController } from "./modules/operations.controller.js";
 import { PairingController } from "./modules/pairing.controller.js";
 import { ProvidersController } from "./modules/providers.controller.js";
 import { PairingService } from "./pairing/pairing.service.js";
@@ -49,12 +51,14 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     PairingController,
     DevicesController,
     AgentsController,
+    AuditController,
     ConversationEventsController,
     ProvidersController,
     LabSessionsController,
     McpController,
     InternalController,
     InternalLabSessionsController,
+    OperationsController,
   ],
   providers: [
     PrismaService,

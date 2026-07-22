@@ -6,6 +6,11 @@ application architecture. New interactive UI must be implemented as Vue
 components; auth, devices, agents, providers and MCP data come from Manager API
 through a Zod-validated client and TanStack Query cache.
 
+Top-level screens use stable hash links such as `#/devices`, `#/resources` and
+`#/operations`. Operations is read-only and exposes the tenant-scoped audit trail,
+LAN/Tailscale topology, privacy retention policy and firmware inventory without
+pretending that an unsigned firmware release is ready.
+
 ## UI component contract
 
 Reusable primitives live in `src/components/ui`. Form code must compose
