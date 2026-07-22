@@ -11,6 +11,7 @@ import { UiPackUploadService } from "./artifacts/ui-pack-upload.service.js";
 import { UiPacksController } from "./artifacts/ui-packs.controller.js";
 import { AuthController } from "./auth/auth.controller.js";
 import { AuthGuard } from "./auth/auth.guard.js";
+import { LoginRateLimitService } from "./auth/login-rate-limit.service.js";
 import { AuthService } from "./auth/auth.service.js";
 import { DeviceAuthGuard } from "./auth/device-auth.guard.js";
 import { RolesGuard } from "./auth/roles.guard.js";
@@ -65,6 +66,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     ResourceCatalogService,
     UiPackUploadService,
     AuthService,
+    LoginRateLimitService,
     PairingService,
     VoiceMcpService,
     SecretCryptoService,

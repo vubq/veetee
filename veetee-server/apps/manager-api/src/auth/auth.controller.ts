@@ -6,6 +6,7 @@ import { AuthService, type TokenPair } from "./auth.service.js";
 import type { RequestWithPrincipal } from "./auth.types.js";
 import { CurrentPrincipal } from "./current-principal.decorator.js";
 import type { Principal } from "./auth.types.js";
+import { LoginRateLimitService } from "./login-rate-limit.service.js";
 import { Public } from "./public.decorator.js";
 
 const REFRESH_COOKIE = "veetee_refresh";
@@ -27,16 +28,30 @@ class LoginDto {
 
 @Controller("api/v1/auth")
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly loginRateLimit: LoginRateLimitService,
+  ) {}
 
   @Public()
   @Post("login")
   async login(
     @Body() input: LoginDto,
+    @Req() request: RequestWithPrincipal,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<Record<string, unknown>> {
-    const pair = await this.auth.login(input.email, input.password, input.tenantSlug);
-    this.setRefreshCookie(reply, pair);
+    await this.loginRateLimit.assertAllowed(input.email);
+    let pair: TokenPair;
+    try {
+      pair = await this.auth.login(input.email, input.password, input.tenantSlug);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        await this.loginRateLimit.recordFailure(input.email);
+      }
+      throw error;
+    }
+    await this.loginRateLimit.reset(input.email);
+    this.setRefreshCookie(request, reply, pair);
     return this.publicTokenResponse(pair);
   }
 
@@ -49,7 +64,7 @@ export class AuthController {
     const refreshToken = request.cookies?.[REFRESH_COOKIE];
     if (!refreshToken) throw new UnauthorizedException("Refresh cookie is missing");
     const pair = await this.auth.refresh(refreshToken);
-    this.setRefreshCookie(reply, pair);
+    this.setRefreshCookie(request, reply, pair);
     return this.publicTokenResponse(pair);
   }
 
@@ -69,11 +84,19 @@ export class AuthController {
     return principal;
   }
 
-  private setRefreshCookie(reply: FastifyReply, pair: TokenPair): void {
+  private setRefreshCookie(
+    request: RequestWithPrincipal,
+    reply: FastifyReply,
+    pair: TokenPair,
+  ): void {
+    const forwardedProto = request.headers["x-forwarded-proto"];
+    const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)
+      ?.split(",")[0]
+      ?.trim();
     reply.setCookie(REFRESH_COOKIE, pair.refreshToken, {
       httpOnly: true,
       sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
+      secure: protocol === "https" || process.env.NODE_ENV === "production",
       path: "/api/v1/auth",
       expires: pair.refreshExpiresAt,
     });
