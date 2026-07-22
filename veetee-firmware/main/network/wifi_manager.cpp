@@ -15,6 +15,7 @@ namespace veetee::network {
 namespace {
 
 constexpr char kTag[] = "veetee_wifi";
+constexpr char kCaptivePortalUrl[] = "http://192.168.4.1/";
 constexpr std::uint32_t kApAddress = 0x0104A8C0U;  // 192.168.4.1 in network byte order.
 constexpr std::uint64_t kRetryScanDelayUs = 2500000ULL;
 constexpr std::uint64_t kProvisioningTransitionDelayUs = 750000ULL;
@@ -47,7 +48,7 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
              WIFI_EVENT, ESP_EVENT_ANY_ID, &WifiManager::EventHandler, this,
              &wifi_handler_)) != ESP_OK ||
         (error = esp_event_handler_instance_register(
-             IP_EVENT, IP_EVENT_STA_GOT_IP, &WifiManager::EventHandler, this,
+             IP_EVENT, ESP_EVENT_ANY_ID, &WifiManager::EventHandler, this,
              &ip_handler_)) != ESP_OK) {
         return error;
     }
@@ -147,7 +148,16 @@ esp_err_t WifiManager::StartProvisioning() {
 
     esp_err_t error = ESP_OK;
     if (!provisioning_wifi_ready_) {
-        if (wifi_started_) esp_wifi_disconnect();
+        if (wifi_started_) {
+            const esp_err_t disconnect_error = esp_wifi_disconnect();
+            if (disconnect_error != ESP_OK &&
+                disconnect_error != ESP_ERR_WIFI_NOT_CONNECT) {
+                ESP_LOGD(kTag, "Provisioning disconnect returned %s",
+                         esp_err_to_name(disconnect_error));
+            }
+            error = esp_wifi_stop();
+            if (error == ESP_OK) wifi_started_ = false;
+        }
 
         wifi_config_t config = {};
         std::snprintf(reinterpret_cast<char*>(config.ap.ssid), sizeof(config.ap.ssid),
@@ -157,16 +167,15 @@ esp_err_t WifiManager::StartProvisioning() {
         config.ap.max_connection = 4;
         config.ap.authmode = WIFI_AUTH_OPEN;
 
-        error = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (error == ESP_OK) error = esp_wifi_set_mode(WIFI_MODE_APSTA);
         if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_AP, &config);
+        // Match Xiaozhi's setup order: prepare the AP netif and DHCP server
+        // before Wi-Fi becomes visible, so the first client DHCP discover
+        // cannot race portal initialization.
+        if (error == ESP_OK) error = ConfigureCaptivePortalDhcp();
         if (error == ESP_OK) error = EnsureWifiStarted();
         if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
         if (error == ESP_OK) {
-            const esp_err_t dhcp_error = ConfigureCaptivePortalDhcp();
-            if (dhcp_error != ESP_OK) {
-                ESP_LOGW(kTag, "Unable to advertise captive portal through DHCP: %s",
-                         esp_err_to_name(dhcp_error));
-            }
             provisioning_wifi_ready_ = true;
         }
     }
@@ -207,14 +216,8 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         wifi_sta_list_t stations = {};
         if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK && stations.num == 0) {
             manager->portal_.ResetClientSessions();
-            const esp_err_t dhcp_error = manager->ConfigureCaptivePortalDhcp();
-            if (dhcp_error == ESP_OK) {
-                ESP_LOGI(kTag,
-                         "Last setup client left; captive DHCP session reset");
-            } else {
-                ESP_LOGW(kTag, "Unable to reset captive DHCP session: %s",
-                         esp_err_to_name(dhcp_error));
-            }
+            ESP_LOGI(kTag,
+                     "Last setup client left; DHCP lease server remains active");
         }
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -258,6 +261,14 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
             }
             manager->candidate_in_flight_ = false;
             manager->ConnectNextCandidate();
+        }
+    } else if (event_base == IP_EVENT &&
+               event_id == IP_EVENT_ASSIGNED_IP_TO_CLIENT) {
+        const auto* assigned =
+            static_cast<const ip_event_assigned_ip_to_client_t*>(event_data);
+        if (assigned != nullptr) {
+            ESP_LOGI(kTag, "Setup client " MACSTR " received " IPSTR,
+                     MAC2STR(assigned->mac), IP2STR(&assigned->ip));
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         manager->station_connecting_ = false;
@@ -363,6 +374,12 @@ esp_err_t WifiManager::ConfigureCaptivePortalDhcp() {
         dns.ip.u_addr.ip4.addr = ip_info.ip.addr;
         error = esp_netif_set_dns_info(ap_netif_, ESP_NETIF_DNS_MAIN, &dns);
     }
+    if (error == ESP_OK) {
+        error = esp_netif_dhcps_option(
+            ap_netif_, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
+            const_cast<char*>(kCaptivePortalUrl),
+            std::strlen(kCaptivePortalUrl));
+    }
 
     const esp_err_t start_error = esp_netif_dhcps_start(ap_netif_);
     if (error == ESP_OK && start_error != ESP_OK &&
@@ -371,7 +388,8 @@ esp_err_t WifiManager::ConfigureCaptivePortalDhcp() {
     }
     if (error == ESP_OK) {
         ESP_LOGI(kTag,
-                 "DHCP advertises captive DNS at 192.168.4.1; probe URLs redirect to the portal");
+                 "DHCP advertises captive DNS and portal URL %s",
+                 kCaptivePortalUrl);
     }
     return error;
 }

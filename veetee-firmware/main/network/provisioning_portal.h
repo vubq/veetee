@@ -38,6 +38,8 @@ private:
     static esp_err_t ConfigHandler(httpd_req_t* request);
     static esp_err_t SaveHandler(httpd_req_t* request);
     static esp_err_t CaptivePortalHandler(httpd_req_t* request);
+    static esp_err_t NotFoundHandler(httpd_req_t* request,
+                                     httpd_err_code_t error);
     static void DnsTaskEntry(void* context);
     static void SaveTaskEntry(void* context);
     static void ScanEventHandler(void* context, esp_event_base_t event_base,

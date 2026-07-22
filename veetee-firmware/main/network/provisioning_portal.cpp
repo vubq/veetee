@@ -264,6 +264,13 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
             return error;
         }
     }
+    error = httpd_register_err_handler(
+        http_server_, HTTPD_404_NOT_FOUND,
+        &ProvisioningPortal::NotFoundHandler);
+    if (error != ESP_OK) {
+        Stop();
+        return error;
+    }
     dns_running_.store(true);
     dns_stopped_ = xSemaphoreCreateBinary();
     if (dns_stopped_ == nullptr) {
@@ -387,7 +394,20 @@ esp_err_t ProvisioningPortal::CaptivePortalHandler(httpd_req_t* request) {
     httpd_resp_set_hdr(request, "Location", location);
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     httpd_resp_set_hdr(request, "Connection", "close");
-    return httpd_resp_send(request, nullptr, 0);
+    // Apple captive webviews require response content to treat the network as
+    // a portal instead of a temporarily broken Internet connection.
+    return httpd_resp_sendstr(request, "Mở trang thiết lập Veetee...");
+}
+
+esp_err_t ProvisioningPortal::NotFoundHandler(httpd_req_t* request,
+                                              httpd_err_code_t) {
+    ESP_LOGI(kTag, "Captive fallback %s -> /", request->uri);
+    httpd_resp_set_type(request, "text/html; charset=utf-8");
+    httpd_resp_set_status(request, "303 See Other");
+    httpd_resp_set_hdr(request, "Location", "/");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(request, "Connection", "close");
+    return httpd_resp_sendstr(request, "Mở trang thiết lập Veetee...");
 }
 
 esp_err_t ProvisioningPortal::ScanHandler(httpd_req_t* request) {
