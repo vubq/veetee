@@ -36,7 +36,7 @@ constexpr std::array<const char*, 10> kCaptivePortalPaths = {
 
 constexpr char kPortalHtml[] = R"HTML(<!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Thiết lập Veetee</title><link rel="stylesheet" href="/portal.css"></head><body><main><header class="hero"><div class="brand-row"><span class="brand"><i></i><i></i></span><span><b>VEETEE</b><small>DEVICE SETUP</small></span><em><i></i> LOCAL</em></div><div class="hero-copy"><span>GET ONLINE</span><h1>Kết nối robot với mạng của bạn.</h1><p>Thiết lập trực tiếp trên thiết bị. Không cần domain và không gửi mật khẩu Wi-Fi ra Internet.</p></div><div class="hero-meta"><span><b>01</b> Wi-Fi</span><i></i><span><b>02</b> Manager</span><i></i><span><b>03</b> Sẵn sàng</span></div></header>
-<form id="setup"><section class="section"><div class="section-head"><div><small>BƯỚC 01</small><h2>Chọn mạng Wi-Fi</h2></div><button type="button" id="refresh">Quét lại</button></div><div class="scan-status" id="scanStatus">Đang quét các mạng gần đây...</div><div class="network-list" id="networkList"></div>
+<form id="setup" novalidate><section class="section"><div class="section-head"><div><small>BƯỚC 01</small><h2>Chọn mạng Wi-Fi</h2></div><button type="button" id="refresh">Quét lại</button></div><div class="scan-status" id="scanStatus">Đang quét các mạng gần đây...</div><div class="network-list" id="networkList"></div>
 <label>Tên mạng<input id="ssid" name="ssid" maxlength="32" required autocomplete="off" placeholder="Chọn ở trên hoặc nhập mạng ẩn"><span class="hint">Bạn có thể nhập thủ công nếu mạng không phát SSID.</span></label>
 <label>Mật khẩu Wi-Fi<div class="password-wrap"><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password" placeholder="Nhập mật khẩu"><button type="button" id="togglePassword">Hiện</button></div><span class="hint">Để trống nếu muốn dùng lại mật khẩu của mạng đã lưu.</span></label></section>
 <section class="section"><div class="section-head"><div><small>BƯỚC 02</small><h2>Kết nối Veetee Manager</h2></div></div><label>Bootstrap URL<input id="bootstrapUrl" name="bootstrap_url" maxlength="256" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="http://192.168.1.10:8001/veetee/ota/" required><span class="hint">Dùng địa chỉ LAN của máy đang chạy Manager API.</span></label></section>
@@ -59,7 +59,7 @@ function renderNetworks(items){networkList.replaceChildren();if(!items.length){s
 constexpr char kPortalScript[] = R"JS(async function scan(){scanStatus.textContent='Đang quét các mạng gần đây...';networkList.replaceChildren();document.querySelector('#refresh').disabled=true;try{const response=await fetch('/api/scan',{cache:'no-store'});if(!response.ok)throw new Error();const items=await response.json();if(!items.length&&scanRetry<3){scanRetry++;scanStatus.textContent='Đang hoàn tất quét Wi-Fi...';setTimeout(scan,1200);return}scanRetry=0;renderNetworks(items)}catch{scanStatus.textContent='Bộ quét đang bận. Chạm Quét lại để thử tiếp.'}finally{document.querySelector('#refresh').disabled=false}}
 document.querySelector('#refresh').addEventListener('click',()=>{scanRetry=0;scan()});ssidInput.addEventListener('input',()=>{if(ssidInput.value!==selected){selected='';for(const item of networkList.children)item.setAttribute('aria-pressed','false')}});document.querySelector('#togglePassword').addEventListener('click',e=>{const visible=passwordInput.type==='text';passwordInput.type=visible?'password':'text';e.currentTarget.textContent=visible?'Hiện':'Ẩn'});
 fetch('/api/config',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(config=>{if(!config)return;if(config.ssid){selected=config.ssid;ssidInput.value=config.ssid}if(config.bootstrap_url)document.querySelector('#bootstrapUrl').value=config.bootstrap_url;if(config.locale)document.querySelector('#locale').value=config.locale;if(config.wake_profile)document.querySelector('#wakeProfile').value=config.wake_profile}).catch(()=>{}).finally(scan);
-form.addEventListener('submit',async e=>{e.preventDefault();setStatus('Đang lưu cấu hình và kết nối Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Phản hồi không hợp lệ'}));setStatus(result.message||'Hoàn tất',!response.ok);if(response.ok){submit.querySelector('span').textContent='Đang kết nối...';setStatus('Đã lưu. Điện thoại có thể tự rời mạng Veetee khi robot vào Wi-Fi của bạn.')}}catch{setStatus('Kết nối thiết lập bị gián đoạn. Hãy vào lại mạng Veetee nếu robot chưa kết nối.',true);submit.disabled=false}});)JS";
+form.addEventListener('submit',async e=>{e.preventDefault();const bootstrap=document.querySelector('#bootstrapUrl');const missing=!ssidInput.value.trim()?ssidInput:!bootstrap.value.trim()?bootstrap:passwordInput.required&&!passwordInput.value?passwordInput:null;if(missing){setStatus(missing===bootstrap?'Hãy nhập Bootstrap URL để robot tìm thấy Veetee Manager.':missing===ssidInput?'Hãy chọn hoặc nhập tên mạng Wi-Fi.':'Hãy nhập mật khẩu Wi-Fi.',true);missing.focus();missing.scrollIntoView({behavior:'smooth',block:'center'});return}setStatus('Đang lưu cấu hình và kết nối Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Phản hồi không hợp lệ'}));setStatus(result.message||'Hoàn tất',!response.ok);if(response.ok){submit.querySelector('span').textContent='Đang kết nối...';setStatus('Đã lưu. Điện thoại có thể tự rời mạng Veetee khi robot vào Wi-Fi của bạn.')}else submit.disabled=false}catch{setStatus('Kết nối thiết lập bị gián đoạn. Hãy vào lại mạng Veetee nếu robot chưa kết nối.',true);submit.disabled=false}});)JS";
 
 static_assert(sizeof(kPortalHtml) <= 4096);
 static_assert(sizeof(kPortalCss) <= 8192);
@@ -153,9 +153,15 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     save_sink_ = sink;
     save_context_ = context;
 
+    esp_err_t error = EnsureSaveTask();
+    if (error != ESP_OK) {
+        Stop();
+        return error;
+    }
+
     scan_mutex_ = xSemaphoreCreateMutex();
     if (scan_mutex_ == nullptr) return ESP_ERR_NO_MEM;
-    esp_err_t error = esp_event_handler_instance_register(
+    error = esp_event_handler_instance_register(
         WIFI_EVENT, WIFI_EVENT_SCAN_DONE, &ProvisioningPortal::ScanEventHandler,
         this, &scan_handler_);
     if (error != ESP_OK) {
@@ -463,6 +469,54 @@ esp_err_t ProvisioningPortal::SaveHandler(httpd_req_t* request) {
     return static_cast<ProvisioningPortal*>(request->user_ctx)->HandleSave(request);
 }
 
+void ProvisioningPortal::SaveTaskEntry(void* context) {
+    auto* portal = static_cast<ProvisioningPortal*>(context);
+    for (;;) {
+        xSemaphoreTake(portal->save_request_, portMAX_DELAY);
+        portal->save_result_ =
+            portal->save_sink_ == nullptr
+                ? ESP_ERR_INVALID_STATE
+                : portal->save_sink_(&portal->pending_save_,
+                                     portal->save_context_);
+        xSemaphoreGive(portal->save_complete_);
+    }
+}
+
+esp_err_t ProvisioningPortal::EnsureSaveTask() {
+    if (save_task_ != nullptr) return ESP_OK;
+
+    save_request_ = xSemaphoreCreateBinaryStatic(&save_request_storage_);
+    save_complete_ = xSemaphoreCreateBinaryStatic(&save_complete_storage_);
+    if (save_request_ == nullptr || save_complete_ == nullptr) {
+        save_request_ = nullptr;
+        save_complete_ = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    save_task_ = xTaskCreateStatic(
+        &ProvisioningPortal::SaveTaskEntry, "veetee_wifi_save",
+        save_task_stack_.size(), this, 5, save_task_stack_.data(),
+        &save_task_control_);
+    if (save_task_ == nullptr) {
+        save_request_ = nullptr;
+        save_complete_ = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+esp_err_t ProvisioningPortal::SaveFromInternalRam(
+    const settings::DeviceSettings& candidate) {
+    if (save_task_ == nullptr || save_request_ == nullptr ||
+        save_complete_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    pending_save_ = candidate;
+    save_result_ = ESP_FAIL;
+    xSemaphoreGive(save_request_);
+    xSemaphoreTake(save_complete_, portMAX_DELAY);
+    return save_result_;
+}
+
 esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
     ESP_LOGI(kTag, "HTTP POST %s bytes=%d", request->uri,
              request->content_len);
@@ -503,7 +557,7 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
                                   "{\"message\":\"Hãy kiểm tra SSID, ngôn ngữ và Bootstrap URL\"}");
     }
 
-    const esp_err_t error = save_sink_(&candidate, save_context_);
+    const esp_err_t error = SaveFromInternalRam(candidate);
     if (error != ESP_OK) {
         ESP_LOGE(kTag, "Unable to persist provisioning: %s", esp_err_to_name(error));
         httpd_resp_set_status(request, "500 Internal Server Error");

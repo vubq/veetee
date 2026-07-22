@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "esp_err.h"
@@ -38,13 +39,18 @@ private:
     static esp_err_t SaveHandler(httpd_req_t* request);
     static esp_err_t CaptivePortalHandler(httpd_req_t* request);
     static void DnsTaskEntry(void* context);
+    static void SaveTaskEntry(void* context);
     static void ScanEventHandler(void* context, esp_event_base_t event_base,
                                  std::int32_t event_id, void* event_data);
     static void ScanTimer(void* context);
 
     esp_err_t HandleSave(httpd_req_t* request);
+    esp_err_t EnsureSaveTask();
+    esp_err_t SaveFromInternalRam(const settings::DeviceSettings& candidate);
     void StartScan();
     void RunDnsServer();
+
+    static constexpr std::size_t kSaveTaskStackBytes = 6 * 1024;
 
     httpd_handle_t http_server_ = nullptr;
     TaskHandle_t dns_task_ = nullptr;
@@ -62,6 +68,15 @@ private:
     settings::WifiProfileRecord wifi_profiles_{};
     SaveSink save_sink_ = nullptr;
     void* save_context_ = nullptr;
+    settings::DeviceSettings pending_save_{};
+    esp_err_t save_result_ = ESP_ERR_INVALID_STATE;
+    TaskHandle_t save_task_ = nullptr;
+    StaticTask_t save_task_control_{};
+    alignas(16) std::array<StackType_t, kSaveTaskStackBytes> save_task_stack_{};
+    SemaphoreHandle_t save_request_ = nullptr;
+    SemaphoreHandle_t save_complete_ = nullptr;
+    StaticSemaphore_t save_request_storage_{};
+    StaticSemaphore_t save_complete_storage_{};
     bool running_ = false;
 };
 
