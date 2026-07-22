@@ -31,6 +31,7 @@ constexpr char kTag[] = "veetee_app";
 constexpr UBaseType_t kEventQueueDepth = 16;
 constexpr std::uint64_t kResourceApplyDelayUs = 250000;
 constexpr std::uint64_t kResourceHealthWindowUs = 5000000;
+constexpr std::uint32_t kProvisioningRetryDelayMs = 3000;
 
 enum class AppMessageKind : std::uint8_t {
     kStateEvent,
@@ -743,17 +744,12 @@ void RunApplication(void*) {
                                  esp_err_to_name(identity_error));
                     }
                 }
-                const esp_err_t reset_error = g_wifi.ResetProvisioning();
-                if (reset_error != ESP_OK) {
-                    ESP_LOGE(kTag, "Unable to clear stored provisioning: %s",
-                             esp_err_to_name(reset_error));
-                }
             }
             const esp_err_t error = g_wifi.StartProvisioning();
             if (error != ESP_OK) {
                 ESP_LOGE(kTag, "Unable to start provisioning: %s; retrying",
                          esp_err_to_name(error));
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(kProvisioningRetryDelayMs));
                 PostEvent(veetee::app::Event::kRetryWifiProvisioning);
             }
         } else if (result.to == veetee::app::State::kNetworkConnecting) {

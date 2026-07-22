@@ -86,6 +86,7 @@ esp_err_t WifiManager::StartStation() {
         return ESP_ERR_INVALID_STATE;
     }
     provisioning_active_ = false;
+    provisioning_wifi_ready_ = false;
     profiles_ = store_->WifiProfiles();
     if (!settings::IsValidWifiProfileRecord(profiles_) || profiles_.count == 0) {
         return ESP_ERR_INVALID_STATE;
@@ -127,6 +128,13 @@ esp_err_t WifiManager::StartStation() {
 }
 
 esp_err_t WifiManager::StartProvisioning() {
+    if (portal_.IsRunning()) {
+        provisioning_active_ = true;
+        station_connecting_ = false;
+        station_connected_ = false;
+        ESP_LOGI(kTag, "Provisioning portal is already active; keeping SoftAP stable");
+        return ESP_OK;
+    }
     provisioning_active_ = false;
     station_connecting_ = false;
     station_connected_ = false;
@@ -136,26 +144,30 @@ esp_err_t WifiManager::StartProvisioning() {
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
     esp_timer_stop(provisioning_timer_);
-    portal_.Stop();
-    if (wifi_started_) esp_wifi_disconnect();
 
-    wifi_config_t config = {};
-    std::snprintf(reinterpret_cast<char*>(config.ap.ssid), sizeof(config.ap.ssid),
-                  "%s", ap_ssid_);
-    config.ap.ssid_len = std::strlen(ap_ssid_);
-    config.ap.channel = 1;
-    config.ap.max_connection = 4;
-    config.ap.authmode = WIFI_AUTH_OPEN;
+    esp_err_t error = ESP_OK;
+    if (!provisioning_wifi_ready_) {
+        if (wifi_started_) esp_wifi_disconnect();
 
-    esp_err_t error = esp_wifi_set_mode(WIFI_MODE_APSTA);
-    if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_AP, &config);
-    if (error == ESP_OK) error = EnsureWifiStarted();
-    if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
-    if (error == ESP_OK) {
-        const esp_err_t dhcp_error = ConfigureCaptivePortalDhcp();
-        if (dhcp_error != ESP_OK) {
-            ESP_LOGW(kTag, "Unable to advertise captive portal through DHCP: %s",
-                     esp_err_to_name(dhcp_error));
+        wifi_config_t config = {};
+        std::snprintf(reinterpret_cast<char*>(config.ap.ssid), sizeof(config.ap.ssid),
+                      "%s", ap_ssid_);
+        config.ap.ssid_len = std::strlen(ap_ssid_);
+        config.ap.channel = 1;
+        config.ap.max_connection = 4;
+        config.ap.authmode = WIFI_AUTH_OPEN;
+
+        error = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_AP, &config);
+        if (error == ESP_OK) error = EnsureWifiStarted();
+        if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (error == ESP_OK) {
+            const esp_err_t dhcp_error = ConfigureCaptivePortalDhcp();
+            if (dhcp_error != ESP_OK) {
+                ESP_LOGW(kTag, "Unable to advertise captive portal through DHCP: %s",
+                         esp_err_to_name(dhcp_error));
+            }
+            provisioning_wifi_ready_ = true;
         }
     }
     if (error == ESP_OK) {
@@ -165,6 +177,8 @@ esp_err_t WifiManager::StartProvisioning() {
     if (error == ESP_OK) {
         provisioning_active_ = true;
         ESP_LOGI(kTag, "Provisioning AP '%s' is open for physical setup", ap_ssid_);
+    } else if (!provisioning_wifi_ready_) {
+        portal_.Stop();
     }
     return error;
 }

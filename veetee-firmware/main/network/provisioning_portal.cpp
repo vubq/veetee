@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "lwip/inet.h"
@@ -34,38 +35,34 @@ constexpr std::array<const char*, 10> kCaptivePortalPaths = {
 };
 
 constexpr char kPortalHtml[] = R"HTML(<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Veetee setup</title><link rel="stylesheet" href="/portal.css"></head><body><main><div class="eyebrow">Local-first robot setup</div><h1>Meet Veetee.</h1><p class="lead">Choose a nearby Wi-Fi network, then point the robot at the Veetee manager on your LAN. No domain is required.</p>
-<form id="setup"><section class="section"><div class="section-head"><h2>1. Choose a Wi-Fi network</h2><button type="button" id="refresh">Refresh</button></div><div class="scan-status" id="scanStatus">Scanning nearby networks...</div><div class="network-list" id="networkList"></div>
-<label>Network name<input id="ssid" name="ssid" maxlength="32" required autocomplete="off" placeholder="Select above or enter a hidden network"><span class="hint">Hidden networks can be entered manually.</span></label>
-<label>Wi-Fi password<div class="password-wrap"><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password"><button type="button" id="togglePassword">Show</button></div><span class="hint">For a saved network, leave this empty to reuse its password.</span></label></section>
-<section class="section"><div class="section-head"><h2>2. Connect to Veetee Manager</h2></div><label>Bootstrap URL<input id="bootstrapUrl" name="bootstrap_url" maxlength="256" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="http://192.168.1.10:8001/veetee/ota/" required><span class="hint">Use the LAN IP of the computer running Manager API.</span></label></section>
-<details><summary>Advanced settings</summary><div class="row"><label>Locale<input id="locale" name="locale" maxlength="15" value="vi-VN" required></label><label>Wake profile ID<input id="wakeProfile" name="wake_profile" maxlength="64" placeholder="assigned later"></label></div></details>
-<button class="submit" type="submit">Save and connect</button><div class="status" id="status" role="status" aria-live="polite"></div></form></main>
-<script src="/portal-ui.js"></script><script src="/portal.js"></script></body></html>)HTML";
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Thiết lập Veetee</title><link rel="stylesheet" href="/portal.css"></head><body><main><header class="hero"><div class="brand-row"><span class="brand"><i></i><i></i></span><span><b>VEETEE</b><small>DEVICE SETUP</small></span><em><i></i> LOCAL</em></div><div class="hero-copy"><span>GET ONLINE</span><h1>Kết nối robot với mạng của bạn.</h1><p>Thiết lập trực tiếp trên thiết bị. Không cần domain và không gửi mật khẩu Wi-Fi ra Internet.</p></div><div class="hero-meta"><span><b>01</b> Wi-Fi</span><i></i><span><b>02</b> Manager</span><i></i><span><b>03</b> Sẵn sàng</span></div></header>
+<form id="setup"><section class="section"><div class="section-head"><div><small>BƯỚC 01</small><h2>Chọn mạng Wi-Fi</h2></div><button type="button" id="refresh">Quét lại</button></div><div class="scan-status" id="scanStatus">Đang quét các mạng gần đây...</div><div class="network-list" id="networkList"></div>
+<label>Tên mạng<input id="ssid" name="ssid" maxlength="32" required autocomplete="off" placeholder="Chọn ở trên hoặc nhập mạng ẩn"><span class="hint">Bạn có thể nhập thủ công nếu mạng không phát SSID.</span></label>
+<label>Mật khẩu Wi-Fi<div class="password-wrap"><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password" placeholder="Nhập mật khẩu"><button type="button" id="togglePassword">Hiện</button></div><span class="hint">Để trống nếu muốn dùng lại mật khẩu của mạng đã lưu.</span></label></section>
+<section class="section"><div class="section-head"><div><small>BƯỚC 02</small><h2>Kết nối Veetee Manager</h2></div></div><label>Bootstrap URL<input id="bootstrapUrl" name="bootstrap_url" maxlength="256" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="http://192.168.1.10:8001/veetee/ota/" required><span class="hint">Dùng địa chỉ LAN của máy đang chạy Manager API.</span></label></section>
+<details><summary>Cấu hình nâng cao <b>+</b></summary><div class="row"><label>Ngôn ngữ<input id="locale" name="locale" maxlength="15" value="vi-VN" required></label><label>Wake profile ID<input id="wakeProfile" name="wake_profile" maxlength="64" placeholder="Gán sau"></label></div></details>
+<button class="submit" type="submit"><span>Lưu và kết nối</span><b>→</b></button><div class="status" id="status" role="status" aria-live="polite"></div><footer><i></i><span>Kết nối cục bộ được bảo vệ trên thiết bị</span></footer></form></main><script src="/portal-ui.js"></script><script src="/portal.js"></script></body></html>)HTML";
 
-constexpr char kPortalCss[] = R"CSS(:root{color-scheme:light;--ink:#132019;--muted:#66726b;--leaf:#1f6b45;--leaf-soft:#e5f0e8;--paper:#f4f0e5;--card:#fffdf8;--line:#cbc5b6;--sun:#f2b544;--danger:#a73e32}
-*{box-sizing:border-box}html{background:var(--paper)}body{margin:0;min-height:100vh;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:radial-gradient(circle at 94% 4%,#f8d98d 0 8%,transparent 30%),linear-gradient(145deg,#dcead7,var(--paper) 48%,#eadbc5);padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
-main{width:min(100%,540px);margin:0 auto;padding:clamp(22px,6vw,40px);background:rgba(255,255,255,.9);border:1px solid rgba(19,32,25,.17);border-radius:28px;box-shadow:0 24px 70px rgba(27,54,40,.14);backdrop-filter:blur(14px)}
-.eyebrow{font-size:11px;font-weight:800;letter-spacing:.17em;text-transform:uppercase;color:var(--leaf)}h1{font-family:Georgia,serif;font-size:clamp(38px,11vw,58px);line-height:.94;margin:.28em 0 .22em}.lead{margin:0 0 22px;color:#39463f;font:15px/1.55 Georgia,serif;max-width:42ch}
-.section{margin-top:22px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}.section-head h2{margin:0;font:800 13px/1.2 ui-sans-serif,sans-serif;letter-spacing:.04em}.section-head button{flex:none;width:auto;margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--leaf);font-size:12px}
-.scan-status{margin:8px 0;color:var(--muted);font-size:12px}.network-list{display:grid;gap:8px;max-height:238px;overflow:auto;overscroll-behavior:contain;padding:1px}.network{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;margin:0;padding:11px;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);text-align:left}.network[aria-pressed="true"]{border-color:var(--leaf);background:var(--leaf-soft);box-shadow:0 0 0 2px rgba(31,107,69,.12)}.signal{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#eef2ea;color:var(--leaf);font-weight:900}.network b,.network small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.network b{font-size:14px}.network small{margin-top:3px;color:var(--muted);font-size:11px}.lock{font-size:14px;color:var(--muted)}
-label{display:block;margin-top:14px;font-size:12px;font-weight:800;line-height:1.35;letter-spacing:.02em}input,select{width:100%;margin-top:7px;padding:13px 14px;border:1px solid var(--line);border-radius:12px;outline:0;background:var(--card);font:16px ui-sans-serif,sans-serif;color:var(--ink)}input:focus,select:focus{border-color:var(--leaf);box-shadow:0 0 0 3px rgba(31,107,69,.12)}.password-wrap{position:relative}.password-wrap input{padding-right:72px}.password-wrap button{position:absolute;right:7px;bottom:7px;width:auto;margin:0;padding:7px 9px;border-radius:8px;background:#edf1e9;color:var(--leaf);font-size:11px}.hint{display:block;margin-top:6px;color:var(--muted);font-size:11px;font-weight:500;letter-spacing:0}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}details{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}summary{cursor:pointer;color:var(--leaf);font-size:12px;font-weight:800}button{border:0;cursor:pointer}.submit{margin-top:24px;width:100%;min-height:50px;padding:14px 18px;border-radius:14px;background:var(--leaf);color:white;font-size:15px;font-weight:800}.submit:disabled{cursor:wait;opacity:.65}.status{min-height:20px;margin-top:12px;color:var(--leaf);font-size:13px;line-height:1.45}.status.error{color:var(--danger)}
-@media(max-width:420px){body{padding:0}main{min-height:100vh;border:0;border-radius:0;padding:22px 18px 30px;box-shadow:none}.row{grid-template-columns:1fr}.network-list{max-height:210px}})CSS";
+constexpr char kPortalCss[] = R"CSS(:root{color-scheme:light;--canvas:#f3f3ed;--paper:#fbfbf7;--white:#fff;--ink:#13272c;--ink2:#284047;--muted:#687b7f;--line:#d9ded8;--navy:#102c33;--navy2:#1a424a;--orange:#f2643c;--orange2:#d94b27;--lime:#c8f36b;--blue:#dceeee;--danger:#b9382b;--success:#18745e}
+*{box-sizing:border-box}html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;background:var(--canvas)}body{margin:0;min-width:320px;min-height:100vh;padding:max(16px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));color:var(--ink);background:radial-gradient(circle at 88% 0,#dbe8df,transparent 30%),var(--canvas);font-family:"Be Vietnam Pro","Noto Sans","Segoe UI",sans-serif}button,input{font:inherit}button{-webkit-tap-highlight-color:transparent;cursor:pointer}main{width:min(100%,560px);overflow:hidden;margin:auto;border:1px solid var(--line);border-radius:26px;background:var(--paper);box-shadow:0 22px 70px rgba(16,44,51,.12)}
+.hero{position:relative;overflow:hidden;padding:22px 23px 20px;color:white;background:var(--navy)}.hero:after{position:absolute;inset:0;content:"";pointer-events:none;opacity:.3;background:radial-gradient(circle at 90% 0,rgba(200,243,107,.4),transparent 28%),radial-gradient(circle at 1px 1px,rgba(255,255,255,.15) 1px,transparent 0);background-size:auto,22px 22px}.brand-row,.hero-copy,.hero-meta{position:relative;z-index:1}.brand-row{display:flex;align-items:center;gap:10px}.brand{position:relative;display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;border-radius:12px;background:var(--orange);transform:rotate(-3deg)}.brand i{width:5px;height:5px;margin:0 4px;border-radius:50%;background:white}.brand-row>span:nth-child(2){display:grid;gap:1px}.brand-row b{font-size:13px;letter-spacing:.08em}.brand-row small{color:#78969a;font-size:7px;letter-spacing:.16em}.brand-row em{display:flex;align-items:center;gap:7px;margin-left:auto;border:1px solid rgba(255,255,255,.13);border-radius:999px;padding:5px 9px;color:#a8bbbd;font-size:8px;font-style:normal;font-weight:700;letter-spacing:.08em}.brand-row em i,footer i{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 0 4px rgba(200,243,107,.1)}.hero-copy>span,.section-head small{color:var(--lime);font-size:8px;font-weight:700;letter-spacing:.16em}.hero-copy{margin-top:28px}.hero h1{max-width:470px;margin:6px 0 9px;font-size:clamp(29px,8vw,43px);line-height:1.08;letter-spacing:-.045em}.hero p{max-width:450px;margin:0;color:#a6bbbe;font-size:11px;line-height:1.65}.hero-meta{display:flex;align-items:center;gap:8px;margin-top:22px;color:#7d999d;font-size:8px}.hero-meta span{white-space:nowrap}.hero-meta b{color:white}.hero-meta>i{width:22px;height:1px;background:rgba(255,255,255,.14)}
+form{padding:22px 23px 18px}.section+.section{margin-top:25px;border-top:1px solid var(--line);padding-top:22px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}.section-head>div{display:grid;gap:3px}.section-head small{color:var(--orange2)}.section-head h2{margin:0;font-size:17px;letter-spacing:-.025em}.section-head button{flex:none;border:1px solid var(--line);border-radius:10px;padding:8px 11px;color:var(--ink2);background:white;font-size:10px;font-weight:700}.scan-status{margin:0 0 9px;color:var(--muted);font-size:10px}.network-list{display:grid;max-height:230px;gap:7px;overflow:auto;overscroll-behavior:contain;padding:1px}.network{display:grid;width:100%;grid-template-columns:37px minmax(0,1fr) auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:13px;padding:10px;background:white;color:var(--ink);text-align:left}.network[aria-pressed="true"]{border-color:var(--navy2);background:#f2f8f5;box-shadow:0 0 0 3px rgba(26,66,74,.1)}.signal{display:grid;width:35px;height:35px;place-items:center;border-radius:11px;color:var(--navy2);background:var(--blue);font-size:10px;font-weight:800}.network b,.network small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.network b{font-size:12px}.network small{margin-top:3px;color:var(--muted);font-size:8px}.lock{border-radius:999px;padding:4px 7px;color:var(--muted);background:#f0f2ee;font-size:7px;font-weight:700;text-transform:uppercase}
+label{display:block;margin-top:14px;color:var(--ink2);font-size:10px;font-weight:700}input{width:100%;min-height:47px;margin-top:7px;border:1px solid var(--line);border-radius:12px;outline:0;padding:11px 13px;color:var(--ink);background:white;font-size:14px;font-weight:500;transition:.15s}input:hover{border-color:#abbab2}input:focus{border-color:var(--navy2);box-shadow:0 0 0 3px rgba(26,66,74,.12)}input::placeholder{color:#9aa6a4;font-weight:400}.hint{display:block;margin-top:5px;color:var(--muted);font-size:9px;font-weight:400;line-height:1.5}.password-wrap{position:relative}.password-wrap input{padding-right:64px}.password-wrap button{position:absolute;right:7px;bottom:7px;border:0;border-radius:8px;padding:8px;color:var(--orange2);background:#ffebe5;font-size:9px;font-weight:700}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}details{margin-top:20px;border-top:1px dashed #c7d0c9;padding-top:15px}summary{display:flex;justify-content:space-between;color:var(--ink2);font-size:10px;font-weight:700;cursor:pointer;list-style:none}.submit{display:flex;width:100%;min-height:51px;align-items:center;justify-content:space-between;margin-top:23px;border:0;border-radius:13px;padding:0 17px;color:white;background:var(--orange);box-shadow:0 10px 25px rgba(242,100,60,.2);font-size:13px;font-weight:700}.submit b{font-size:19px}.submit:disabled{cursor:wait;opacity:.58}.status{min-height:18px;margin-top:10px;color:var(--success);font-size:10px;line-height:1.5}.status.error{color:var(--danger)}footer{display:flex;align-items:center;justify-content:center;gap:8px;border-top:1px solid var(--line);margin-top:12px;padding-top:15px;color:var(--muted);font-size:8px}footer i{background:var(--success);box-shadow:0 0 0 4px rgba(24,116,94,.08)}
+@media(max-width:440px){body{padding:0;background:var(--paper)}main{min-height:100vh;border:0;border-radius:0;box-shadow:none}.hero{padding:20px 18px}.hero-copy{margin-top:24px}.hero h1{font-size:34px}form{padding:20px 18px}.row{grid-template-columns:1fr}.network-list{max-height:212px}})CSS";
 
 constexpr char kPortalUiScript[] = R"JS(const form=document.querySelector('#setup'),statusEl=document.querySelector('#status'),scanStatus=document.querySelector('#scanStatus'),networkList=document.querySelector('#networkList'),ssidInput=document.querySelector('#ssid'),passwordInput=document.querySelector('#password'),submit=form.querySelector('.submit');
 let selected='',scanRetry=0;
 function setStatus(message,error=false){statusEl.textContent=message;statusEl.classList.toggle('error',error)}
-function quality(rssi){return rssi>=-55?'Excellent':rssi>=-67?'Good':rssi>=-75?'Fair':'Weak'}
-function renderNetworks(items){networkList.replaceChildren();if(!items.length){scanStatus.textContent='No visible networks found. Enter a hidden network below.';return}scanStatus.textContent=`${items.length} network${items.length===1?'':'s'} found. Tap one to select it.`;for(const item of items){const button=document.createElement('button');button.type='button';button.className='network';button.setAttribute('aria-pressed',String(item.ssid===selected));const signal=document.createElement('span');signal.className='signal';signal.textContent=item.rssi>=-60?'3':item.rssi>=-72?'2':'1';const copy=document.createElement('span');const name=document.createElement('b');name.textContent=item.ssid;const detail=document.createElement('small');detail.textContent=`${item.saved?'Saved - ':''}${quality(item.rssi)} - ${item.rssi} dBm - channel ${item.channel}`;copy.append(name,detail);const lock=document.createElement('span');lock.className='lock';lock.textContent=item.saved?'saved':item.secure?'lock':'open';button.append(signal,copy,lock);button.addEventListener('click',()=>{selected=item.ssid;ssidInput.value=item.ssid;passwordInput.required=item.secure&&!item.saved;passwordInput.value='';renderNetworks(items);passwordInput.focus()});networkList.append(button)}})JS";
+function quality(rssi){return rssi>=-55?'Rất tốt':rssi>=-67?'Tốt':rssi>=-75?'Ổn định':'Yếu'}
+function renderNetworks(items){networkList.replaceChildren();if(!items.length){scanStatus.textContent='Chưa thấy mạng. Bạn vẫn có thể nhập mạng ẩn bên dưới.';return}scanStatus.textContent=`Đã tìm thấy ${items.length} mạng. Chạm để chọn.`;for(const item of items){const button=document.createElement('button');button.type='button';button.className='network';button.setAttribute('aria-pressed',String(item.ssid===selected));const signal=document.createElement('span');signal.className='signal';signal.textContent=item.rssi>=-60?'III':item.rssi>=-72?'II':'I';const copy=document.createElement('span');const name=document.createElement('b');name.textContent=item.ssid;const detail=document.createElement('small');detail.textContent=`${item.saved?'Đã lưu · ':''}${quality(item.rssi)} · ${item.rssi} dBm · Kênh ${item.channel}`;copy.append(name,detail);const lock=document.createElement('span');lock.className='lock';lock.textContent=item.saved?'Đã lưu':item.secure?'Bảo mật':'Mở';button.append(signal,copy,lock);button.addEventListener('click',()=>{selected=item.ssid;ssidInput.value=item.ssid;passwordInput.required=item.secure&&!item.saved;passwordInput.value='';renderNetworks(items);passwordInput.focus()});networkList.append(button)}})JS";
 
-constexpr char kPortalScript[] = R"JS(async function scan(){scanStatus.textContent='Scanning nearby networks...';networkList.replaceChildren();document.querySelector('#refresh').disabled=true;try{const response=await fetch('/api/scan',{cache:'no-store'});if(!response.ok)throw new Error();const items=await response.json();if(!items.length&&scanRetry<3){scanRetry++;scanStatus.textContent='Finding nearby networks...';setTimeout(scan,1200);return}scanRetry=0;renderNetworks(items)}catch{scanStatus.textContent='Scan is busy. Tap Refresh to try again.'}finally{document.querySelector('#refresh').disabled=false}}
-document.querySelector('#refresh').addEventListener('click',()=>{scanRetry=0;scan()});ssidInput.addEventListener('input',()=>{if(ssidInput.value!==selected){selected='';for(const item of networkList.children)item.setAttribute('aria-pressed','false')}});document.querySelector('#togglePassword').addEventListener('click',e=>{const visible=passwordInput.type==='text';passwordInput.type=visible?'password':'text';e.currentTarget.textContent=visible?'Show':'Hide'});
+constexpr char kPortalScript[] = R"JS(async function scan(){scanStatus.textContent='Đang quét các mạng gần đây...';networkList.replaceChildren();document.querySelector('#refresh').disabled=true;try{const response=await fetch('/api/scan',{cache:'no-store'});if(!response.ok)throw new Error();const items=await response.json();if(!items.length&&scanRetry<3){scanRetry++;scanStatus.textContent='Đang hoàn tất quét Wi-Fi...';setTimeout(scan,1200);return}scanRetry=0;renderNetworks(items)}catch{scanStatus.textContent='Bộ quét đang bận. Chạm Quét lại để thử tiếp.'}finally{document.querySelector('#refresh').disabled=false}}
+document.querySelector('#refresh').addEventListener('click',()=>{scanRetry=0;scan()});ssidInput.addEventListener('input',()=>{if(ssidInput.value!==selected){selected='';for(const item of networkList.children)item.setAttribute('aria-pressed','false')}});document.querySelector('#togglePassword').addEventListener('click',e=>{const visible=passwordInput.type==='text';passwordInput.type=visible?'password':'text';e.currentTarget.textContent=visible?'Hiện':'Ẩn'});
 fetch('/api/config',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(config=>{if(!config)return;if(config.ssid){selected=config.ssid;ssidInput.value=config.ssid}if(config.bootstrap_url)document.querySelector('#bootstrapUrl').value=config.bootstrap_url;if(config.locale)document.querySelector('#locale').value=config.locale;if(config.wake_profile)document.querySelector('#wakeProfile').value=config.wake_profile}).catch(()=>{}).finally(scan);
-form.addEventListener('submit',async e=>{e.preventDefault();setStatus('Saving settings and starting Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Invalid response'}));setStatus(result.message||'Done',!response.ok);if(response.ok){submit.textContent='Connecting...';setStatus('Saved. Your phone may leave the Veetee network while the robot joins your Wi-Fi.')}}catch{setStatus('The setup connection was interrupted. Rejoin the Veetee network if the robot does not connect.',true);submit.disabled=false}});)JS";
+form.addEventListener('submit',async e=>{e.preventDefault();setStatus('Đang lưu cấu hình và kết nối Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Phản hồi không hợp lệ'}));setStatus(result.message||'Hoàn tất',!response.ok);if(response.ok){submit.querySelector('span').textContent='Đang kết nối...';setStatus('Đã lưu. Điện thoại có thể tự rời mạng Veetee khi robot vào Wi-Fi của bạn.')}}catch{setStatus('Kết nối thiết lập bị gián đoạn. Hãy vào lại mạng Veetee nếu robot chưa kết nối.',true);submit.disabled=false}});)JS";
 
 static_assert(sizeof(kPortalHtml) <= 4096);
-static_assert(sizeof(kPortalCss) <= 4096);
+static_assert(sizeof(kPortalCss) <= 8192);
 static_assert(sizeof(kPortalUiScript) <= 4096);
 static_assert(sizeof(kPortalScript) <= 4096);
 
@@ -140,6 +137,15 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
                                     const settings::DeviceSettings& current,
                                     const settings::WifiProfileRecord& wifi_profiles,
                                     SaveSink sink, void* context) {
+    if (IsRunning()) {
+        ap_address_ = ap_address;
+        current_ = current;
+        wifi_profiles_ = wifi_profiles;
+        save_sink_ = sink;
+        save_context_ = context;
+        ESP_LOGI(kTag, "Captive portal already running; refreshed setup context");
+        return ESP_OK;
+    }
     Stop();
     ap_address_ = ap_address;
     current_ = current;
@@ -178,8 +184,16 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     // ESP-IDF 6's HTTP send path plus the bounded scan/form handlers exceed the
     // 4 KiB default on ESP32-S3, especially inside iOS captive webviews.
     config.stack_size = kHttpServerStackBytes;
+    // The N16R8 target has ample PSRAM while audio and WakeNet intentionally
+    // reserve internal RAM. Keeping the portal stack external avoids an
+    // ESP-IDF 6.0.2 failure path that leaves port 80 bound if task creation
+    // runs out of contiguous internal memory.
+    config.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     error = httpd_start(&http_server_, &config);
-    if (error != ESP_OK) return error;
+    if (error != ESP_OK) {
+        Stop();
+        return error;
+    }
 
     httpd_uri_t scan = {};
     scan.uri = "/api/scan";
@@ -259,11 +273,13 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
         return ESP_ERR_NO_MEM;
     }
     StartScan();
+    running_ = true;
     ESP_LOGI(kTag, "Captive portal started at http://192.168.4.1");
     return ESP_OK;
 }
 
 void ProvisioningPortal::Stop() {
+    running_ = false;
     if (scan_timer_ != nullptr) {
         esp_timer_stop(scan_timer_);
         esp_timer_delete(scan_timer_);
@@ -280,7 +296,11 @@ void ProvisioningPortal::Stop() {
         scan_mutex_ = nullptr;
     }
     if (http_server_ != nullptr) {
-        httpd_stop(http_server_);
+        const esp_err_t error = httpd_stop(http_server_);
+        if (error != ESP_OK) {
+            ESP_LOGW(kTag, "Unable to stop captive HTTP server cleanly: %s",
+                     esp_err_to_name(error));
+        }
         http_server_ = nullptr;
     }
     dns_running_.store(false);
@@ -301,6 +321,10 @@ void ProvisioningPortal::Stop() {
         vSemaphoreDelete(dns_stopped_);
         dns_stopped_ = nullptr;
     }
+}
+
+bool ProvisioningPortal::IsRunning() const {
+    return running_ && http_server_ != nullptr;
 }
 
 void ProvisioningPortal::ResetClientSessions() {
@@ -447,7 +471,7 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
     httpd_resp_set_hdr(request, "Connection", "close");
     if (request->content_len <= 0 || request->content_len > kMaxPostBytes) {
         httpd_resp_set_status(request, "413 Payload Too Large");
-        return httpd_resp_sendstr(request, "{\"message\":\"Invalid form size\"}");
+        return httpd_resp_sendstr(request, "{\"message\":\"Kích thước biểu mẫu không hợp lệ\"}");
     }
 
     std::array<char, kMaxPostBytes + 1> body{};
@@ -476,21 +500,21 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
     if (!valid || save_sink_ == nullptr) {
         httpd_resp_set_status(request, "400 Bad Request");
         return httpd_resp_sendstr(request,
-                                  "{\"message\":\"Check SSID, locale and bootstrap URL\"}");
+                                  "{\"message\":\"Hãy kiểm tra SSID, ngôn ngữ và Bootstrap URL\"}");
     }
 
     const esp_err_t error = save_sink_(&candidate, save_context_);
     if (error != ESP_OK) {
         ESP_LOGE(kTag, "Unable to persist provisioning: %s", esp_err_to_name(error));
         httpd_resp_set_status(request, "500 Internal Server Error");
-        return httpd_resp_sendstr(request, "{\"message\":\"Unable to save settings\"}");
+        return httpd_resp_sendstr(request, "{\"message\":\"Không thể lưu cấu hình\"}");
     }
     current_ = candidate;
     settings::UpsertWifiProfile(&wifi_profiles_, candidate.ssid,
                                 candidate.password);
     return httpd_resp_sendstr(
         request,
-        "{\"message\":\"Saved. Veetee is connecting to the selected network.\"}");
+        "{\"message\":\"Đã lưu. Veetee đang kết nối tới mạng đã chọn.\"}");
 }
 
 void ProvisioningPortal::ScanEventHandler(void* context,

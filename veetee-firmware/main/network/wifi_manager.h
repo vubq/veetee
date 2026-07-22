@@ -82,6 +82,7 @@ private:
     bool scan_pending_ = false;
     bool ignore_disconnect_until_scan_ = false;
     bool provisioning_active_ = false;
+    bool provisioning_wifi_ready_ = false;
     char connecting_ssid_[33] = {};
     char ap_ssid_[24] = {};
 };

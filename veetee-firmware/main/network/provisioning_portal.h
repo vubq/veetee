@@ -25,6 +25,7 @@ public:
                     SaveSink sink, void* context);
     void Stop();
     void ResetClientSessions();
+    bool IsRunning() const;
 
 private:
     static esp_err_t PortalHandler(httpd_req_t* request);
@@ -61,6 +62,7 @@ private:
     settings::WifiProfileRecord wifi_profiles_{};
     SaveSink save_sink_ = nullptr;
     void* save_context_ = nullptr;
+    bool running_ = false;
 };
 
 }  // namespace veetee::network
