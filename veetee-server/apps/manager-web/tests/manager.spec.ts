@@ -452,6 +452,16 @@ test("uses one Vietnamese font and a consistent focus treatment for form control
   expect(style.appearance).toBe("none");
   expect(style.outlineStyle).toBe("none");
   expect(style.boxShadow).toContain("rgba(33, 66, 85, 0.12)");
+
+  await page.evaluate(() => document.fonts.ready);
+  const fontResources = await page.evaluate(() =>
+    performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .filter((name) => name.includes("be-vietnam-pro")),
+  );
+  expect(fontResources.some((name) => name.includes("-latin-"))).toBe(true);
+  expect(fontResources.some((name) => name.includes("-vietnamese-"))).toBe(true);
 });
 
 test("keeps the approved mobile navigation", async ({ page }) => {

@@ -38,10 +38,14 @@ VEETEE_WEB_ALLOWED_HOSTS=veetee-dev.example.ts.net \
 npm run dev --workspace @veetee/manager-web
 ```
 
-The production bundle self-hosts Be Vietnam Pro Vietnamese subsets at weights
-400–700 for both body and display copy. It does not require Google Fonts or
-another public CDN on the LAN. Playwright defaults to the local Brave executable
-and can be overridden with `PLAYWRIGHT_CHROMIUM_PATH`.
+The production bundle self-hosts the Vietnamese, Latin Extended and Latin
+subsets of Be Vietnam Pro at weights 400–700 for both body and display copy.
+Import the complete weight CSS, not only `vietnamese-*.css`: Vietnamese words
+contain both basic Latin and accented glyphs, so loading only the Vietnamese
+subset would mix Be Vietnam Pro with the browser fallback inside one word. The
+bundle does not require Google Fonts or another public CDN on the LAN.
+Playwright defaults to the local Brave executable and can be overridden with
+`PLAYWRIGHT_CHROMIUM_PATH`.
 
 ## Web Device Simulator
 
