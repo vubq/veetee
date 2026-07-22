@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     models_root: Path = Path("models")
     asr_threads: int = Field(default=2, ge=1, le=8)
-    tts_threads: int = Field(default=6, ge=1, le=8)
+    tts_threads: int = Field(default=2, ge=1, le=8)
     tts_voice: str = "Ngọc Linh"
     tts_output_sample_rate: int = Field(default=24_000, ge=16_000, le=48_000)
     tts_apply_watermark: bool = True

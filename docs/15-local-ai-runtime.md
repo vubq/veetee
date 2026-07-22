@@ -8,9 +8,10 @@ state machine.
 ## Host profile
 
 The benchmark host has an Intel i5-10300H (4 physical / 8 logical CPU threads),
-15 GiB RAM and an NVIDIA GTX 1650 Ti with 4 GiB VRAM. CUDA toolkit (`nvcc`) is
-not installed, so the reproducible baseline uses CPU execution. The NVIDIA driver
-does not by itself make the current ONNX or native C++ pipeline a CUDA pipeline.
+15 GiB RAM and an NVIDIA GTX 1650 Ti with 4 GiB VRAM. The production environment
+uses ONNX Runtime CPU. A separate CUDA 12 / ONNX Runtime GPU environment was also
+measured against the same models and fixed random seeds; it did not improve this
+INT8 workload on the GTX 1650 Ti.
 
 All model workers run directly in the voice-server virtual environment. Docker is
 not required for speech inference. Model files are under `veetee-server/models/`
@@ -24,7 +25,7 @@ uses them.
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
 | ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 6 threads, streaming codec | first audio is available before the utterance finishes and cancellation can stop the stream |
+| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, streaming codec | best measured p95/RTF balance, lower thermal load, incremental audio and cancellation |
 | TTS benchmark option | VieNeu-TTS.cpp native CPU | llama.cpp native SIMD + ONNX MOSS codec | faster complete synthesis on this host, but the current C ABI is batch-only |
 
 The default TTS remains the ONNX path even though the native benchmark is faster
@@ -35,25 +36,32 @@ stream callback and cancellation API are implemented and benchmarked.
 
 ## Measured results
 
-The measurements below use the same Vietnamese sentence and a warmed model. TTS
-audio duration varies slightly because sampling is enabled, so compare ranges and
-not a single run as an absolute promise.
+The latest measurements use the same Vietnamese sentence, a warmed model, five
+runs per TTS profile and a fixed NumPy seed per run. The fixed seeds ensure every
+profile generates equivalent acoustic-token sequences instead of comparing
+different random samples.
 
 ### ASR
 
 | Model | Audio | Warm decode | RTF | Output |
 | --- | ---: | ---: | ---: | --- |
-| Zipformer Vietnamese 30M INT8 | 1.55 s | 31--37 ms at 2 threads | 0.020--0.024 | `ÂM LƯỢNG TV GIẢM` |
+| Zipformer Vietnamese 30M INT8 | 1.55 s | 38.06 ms median / 44.37 ms p95 at 2 threads | 0.025 median | `ÂM LƯỢNG TV GIẢM` |
 
 This is comfortably below the V1 ASR-final latency budget. Keep the recognizer
 resident and do not load ChunkFormer on the normal path.
 
 ### TTS
 
-| Backend | Threads | First audio | Complete synthesis | Audio | RTF |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| VieNeu ONNX INT8 | 6 | 304--347 ms | 2.28--2.44 s | 3.20--3.28 s | 0.745--0.803 |
-| VieNeu native C++ CPU | 4 | batch-only | 2.22 s | 2.96 s | 0.75 |
+| Backend | Threads | First audio median / p95 | Complete median / p95 | RTF median / p95 |
+| --- | ---: | ---: | ---: | ---: |
+| VieNeu ONNX INT8 CPU | 2 | 521 / 596 ms | 3.68 / 3.94 s | 1.124 / 1.202 |
+| VieNeu ONNX INT8 CUDA with CPU fallback | 2 | 696 / 1,365 ms | 4.06 / 5.05 s | 1.303 / 1.804 |
+| VieNeu native C++ CPU | 4 | batch-only | 2.22 s historical run | 0.75 historical run |
+
+The CUDA graph produced many CPU/GPU copy boundaries, used only about 4--10% GPU,
+and peaked near 1 GiB VRAM during the sampled run. The current VieNeu INT8 export
+is therefore kept on CPU. Revisit CUDA only with a GPU-oriented FP16/FP32 export
+or a newer engine that keeps the recurrent decode path on the GPU.
 
 The native run used a 630 MiB model pack and peaked at about 959 MiB RSS. A
 one-shot CLI process took about 5.4 s wall time because model loading dominates;
@@ -63,26 +71,28 @@ user-stop guarantees as the ONNX streaming profile.
 
 ### Thread sweep for local speech
 
-The 2026-07-21 median sweep used three warmed runs with the TTS watermark enabled:
+The ASR sweep used 20 warmed runs. The TTS sweep on 2026-07-22 used five warmed,
+fixed-seed runs with the production watermark enabled:
 
-| Threads | ASR decode | TTS first audio | TTS RTF |
+| Threads | ASR median / p95 | TTS first audio median / p95 | TTS RTF median / p95 |
 | ---: | ---: | ---: | ---: |
-| 2 | 36.66 ms | 388.71 ms | 0.725 |
-| 4 | 64.22 ms | 358.04 ms | 0.815 |
-| 6 | 97.10 ms | 304.06 ms | 0.745 |
+| 1 | 46.59 / 53.84 ms | not selected | not selected |
+| 2 | 38.06 / 44.37 ms | 521 / 596 ms | 1.124 / 1.202 |
+| 4 | 61.83 / 81.26 ms | 533 / 625 ms | 1.215 / 1.297 |
+| 6 | 82.32 / 141.58 ms | 516 / 654 ms | 1.239 / 1.348 |
+| 8 | 108.28 / 158.63 ms | not selected | not selected |
 
-The selected single-session profile uses two ASR threads and six TTS threads.
-They are separate controls because the fastest setting is not the same for both
-models. For concurrent sessions, benchmark again and lower TTS to four or two
-threads per worker before increasing process count; do not assume that maxing
-logical threads improves aggregate latency.
+The selected profile uses two ASR threads and two TTS threads. Six TTS threads had
+a similar median first-audio result but worse p95, worse complete RTF and much
+higher sustained CPU temperature. More logical threads do not improve this
+recurrent INT8 workload on the four-core host.
 
 ## Runtime controls
 
 ```env
 VEETEE_MODELS_ROOT=models
 VEETEE_ASR_THREADS=2
-VEETEE_TTS_THREADS=6
+VEETEE_TTS_THREADS=2
 VEETEE_TTS_VOICE=Ngọc Linh
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
@@ -111,7 +121,7 @@ The benchmark accepts separate controls, for example:
 
 ```bash
 uv run --project apps/voice-server python scripts/benchmark_local_ai.py \
-  --asr-threads 2 --tts-threads 6 --watermark --runs 3
+  --asr-threads 2 --tts-threads 2 --watermark --runs 5 --seed 20260722
 ```
 
 `VEETEE_DEFAULT_PERSONA` is only the configurable fallback when Manager auth is

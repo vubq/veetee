@@ -294,14 +294,16 @@ chỉ hỗ trợ batch, sentence chunking vẫn cho UX incremental nhưng latenc
 không giả định “Turbo” tự động có streaming. Adapter phải có `cancel()` và trả
 sample-rate/format rõ ràng.
 
-Đã benchmark trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB; chưa có
-CUDA toolkit): median ba lượt có watermark cho VieNeu ONNX INT8 đạt first audio
-khoảng 304--347 ms và RTF 0.745--0.803 ở 6 threads; Zipformer INT8 decode 1.55
-giây audio trong 31--37 ms ở 2 threads. VieNeu
-native C++ CPU đạt RTF khoảng 0.75 cho batch hoàn chỉnh nhưng C ABI hiện chưa có
-stream callback/cancellation. Vì vậy ONNX streaming vẫn là primary V1; native chỉ
-là benchmark/opt-in worker cho tới khi bổ sung API streaming tương đương. Chi tiết
-và lệnh tái lập nằm ở `docs/15-local-ai-runtime.md`.
+Đã benchmark lại trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB)
+bằng năm lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first
+audio median/p95 khoảng 521/596 ms và RTF 1.124/1.202. CUDA 12 với ONNX Runtime
+GPU chậm hơn: 696/1,365 ms first audio và RTF 1.303/1.804 do nhiều đoạn graph phải
+sao chép hoặc fallback qua CPU; GPU chỉ được dùng khoảng 4--10%. Zipformer INT8
+decode 1,55 giây audio trong 38/44 ms median/p95 ở 2 threads. Vì vậy V1 giữ
+Zipformer và VieNeu ONNX INT8 trên CPU với 2 threads cho mỗi provider. VieNeu
+native C++ vẫn chỉ là benchmark/opt-in worker cho tới khi có streaming callback
+và cancellation tương đương. Chi tiết và lệnh tái lập nằm ở
+`docs/15-local-ai-runtime.md`.
 
 Model TTS phải được benchmark về first-audio, real-time factor, CPU/RAM/VRAM,
 phát âm tên riêng/số/ngày, chất lượng giọng, output sample rate, license và khả năng

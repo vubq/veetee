@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 from pathlib import Path
 from statistics import median
 from time import monotonic, perf_counter
 
+import numpy as np
 import soundfile as sf
 
 from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
@@ -14,6 +16,11 @@ from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(len(ordered) * fraction) - 1)]
 
 
 def operation_context(name: str, seconds: float = 60) -> OperationContext:
@@ -28,6 +35,7 @@ async def benchmark(
     tts_threads: int,
     apply_watermark: bool,
     runs: int,
+    seed: int,
 ) -> dict[str, object]:
     asr_path = SERVER_ROOT / "models/sherpa-onnx-zipformer-vi-30m-int8"
     tts_path = SERVER_ROOT / "models/vieneu-v3-turbo"
@@ -66,6 +74,7 @@ async def benchmark(
     audio_seconds_runs: list[float] = []
     rtf_runs: list[float] = []
     for index in range(runs):
+        np.random.seed(seed + index)
         started = perf_counter()
         first_audio_ms: float | None = None
         output_bytes = 0
@@ -86,17 +95,26 @@ async def benchmark(
         "asr": {
             "load_ms": round(asr_load_ms, 2),
             "decode_ms": round(median(asr_runs_ms), 2),
+            "decode_p95_ms": round(percentile(asr_runs_ms, 0.95), 2),
+            "decode_max_ms": round(max(asr_runs_ms), 2),
             "audio_seconds": round(len(pcm) / (sample_rate * 2), 3),
             "text": transcript.text,
+            "device": "cpu",
             "threads": asr_threads,
             "runs": runs,
         },
         "tts": {
             "load_ms": round(tts_load_ms, 2),
             "first_audio_ms": round(median(first_audio_runs_ms), 2),
+            "first_audio_p95_ms": round(percentile(first_audio_runs_ms, 0.95), 2),
+            "first_audio_max_ms": round(max(first_audio_runs_ms), 2),
             "synthesis_ms": round(median(synthesis_runs_ms), 2),
+            "synthesis_p95_ms": round(percentile(synthesis_runs_ms, 0.95), 2),
+            "synthesis_max_ms": round(max(synthesis_runs_ms), 2),
             "audio_seconds": round(median(audio_seconds_runs), 3),
             "rtf": round(median(rtf_runs), 3) if rtf_runs else None,
+            "rtf_p95": round(percentile(rtf_runs, 0.95), 3) if rtf_runs else None,
+            "device": "cpu",
             "voice": voice,
             "threads": tts_threads,
             "watermark": apply_watermark,
@@ -113,6 +131,7 @@ def main() -> None:
     parser.add_argument("--tts-threads", type=int, default=6, choices=range(1, 9))
     parser.add_argument("--watermark", action="store_true")
     parser.add_argument("--runs", type=int, default=1, choices=range(1, 11))
+    parser.add_argument("--seed", type=int, default=20_260_722)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -124,6 +143,7 @@ def main() -> None:
                     tts_threads=args.tts_threads,
                     apply_watermark=args.watermark,
                     runs=args.runs,
+                    seed=args.seed,
                 )
             ),
             ensure_ascii=False,
