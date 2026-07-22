@@ -242,7 +242,7 @@ bool ParseManifest(const cJSON* root, char theme_id[33]) {
         !cJSON_IsString(board) ||
         std::strcmp(board->valuestring, "veetee-s3-n16r8") != 0 ||
         !cJSON_IsString(display) ||
-        std::strcmp(display->valuestring, "st7789-240x320-rgb565") != 0 ||
+        std::strcmp(display->valuestring, "st7789-240x280-rgb565") != 0 ||
         !cJSON_IsObject(compatibility) || !cJSON_IsNumber(resource_abi) ||
         resource_abi->valueint != 2 || !cJSON_IsNumber(ui_abi) ||
         ui_abi->valueint != 1 || !cJSON_IsArray(locales)) {
@@ -335,13 +335,13 @@ bool ParseVietnameseStrings(const cJSON* root) {
 UiTheme BuiltInSignalTheme() {
     UiTheme theme{};
     const std::array<UiStateStyle, 13> styles = {{
-        {0x1167, 0xF79D, 0xCF6F}, {0x1B08, 0xF79D, 0x9EFC},
-        {0x1B08, 0xF79D, 0x9EFC}, {0x21A8, 0xF79D, 0xA6FC},
+        {0x1167, 0xF79D, 0xCF6F}, {0x11C8, 0xF79D, 0x9EFC},
+        {0x11C8, 0xF79D, 0x9EFC}, {0x21A7, 0xF79D, 0xA6DC},
         {0x38C3, 0xFF9D, 0xFB4A}, {0x1167, 0xF79D, 0xCF6F},
-        {0x1B08, 0xF79D, 0x9EFC}, {0x09E6, 0xF79D, 0xCF6F},
+        {0x11C8, 0xF79D, 0x9EFC}, {0x09C6, 0xF79D, 0xCF6F},
         {0x3164, 0xF79D, 0xF5EA}, {0x3164, 0xF79D, 0xF5EA},
-        {0x4945, 0xFF9D, 0xFC4F}, {0x38C3, 0xFF9D, 0xFB4A},
-        {0x19A7, 0xF79D, 0x8596},
+        {0x4925, 0xFF9D, 0xFC4F}, {0x38C3, 0xFF9D, 0xFB4A},
+        {0x19A7, 0xF79D, 0x8576},
     }};
     theme.states = styles;
     return theme;

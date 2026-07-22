@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "kind": "ui_pack",
-  "id": "ui-signal-1.0.0",
-  "version": "1.0.0",
+  "id": "ui-signal-1.1.0",
+  "version": "1.1.0",
   "theme_id": "signal",
   "channel": "stable",
   "license": "MIT",
   "target": {
     "board": "veetee-s3-n16r8",
-    "display": "st7789-240x320-rgb565"
+    "display": "st7789-240x280-rgb565"
   },
   "compatibility": {
     "resource_abi": 2,

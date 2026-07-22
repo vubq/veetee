@@ -99,18 +99,22 @@ mạng nào lấy được IP trong timeout 60 giây. Chọn lại mạng đã l
 sẽ dùng lại secret cũ. HTTP task dành 12 KiB stack để chịu được iOS captive webview
 trên ESP-IDF 6; 4 KiB default đã được xác nhận gây reboot khi gửi portal. Settings
 cũng giữ `client_id` UUID bền vững. AP quảng bá DNS nội bộ nhưng không dùng DHCP
-option 114 sai mục đích cho trang HTML. Scan chạy nền một lần trước khi client thao
-tác rồi HTTP chỉ đọc cache, tránh SoftAP channel hopping làm trang cấu hình timeout.
+option 114 sai mục đích cho trang HTML. Scan chỉ bắt đầu từ request `/api/scan` sau
+khi client đã nhận IPv4, tránh channel hopping đúng lúc DHCP và chỉ trả cache sau đó.
+DNS/HTTP chỉ được mở sau khi `esp_netif` xác nhận DHCP server đã `STARTED`.
+Giống lifecycle Xiaozhi, AP/station netif chỉ tồn tại trong mode tương ứng và được
+destroy sau `esp_wifi_stop()` khi chuyển mode. Provisioning giữ static-ARP unicast
+DHCP path và profile RX nhỏ của Xiaozhi để dynamic TX còn đủ internal/DMA memory.
 Giống flow captive portal của Xiaozhi, các probe Apple/Android/Windows/Firefox
 nhận `302 Found` tới `http://192.168.4.1/?_=<monotonic-nonce>`. Redirect có
 cache-busting mở thẳng portal trong webview được OS bind với SoftAP, không qua
 trang loading trung gian. Mọi response dùng `Connection: close` và timeout 15 giây.
 Chỉ probe captive đã biết mới redirect; favicon trả `204` và URL lạ giữ 404 mặc
 định để resource phụ không thể reload portal giữa lúc người dùng nhập cấu hình.
-Khi client cuối rời AP mà chưa lưu, firmware đóng captive HTTP session cũ và restart
-DHCP; reconnect sau đó nhận một phiên cấu hình sạch mà không cần reboot ESP32.
-HTML/CSS/JavaScript được tách thành resource
-dưới 4 KiB để tránh lỗi gửi dừng tại 4.320 byte đã đo trên phần cứng. Sau khi lưu,
+Khi client cuối rời AP mà chưa lưu, firmware đóng captive HTTP session cũ, hủy scan
+đang chạy và giữ DHCP hoạt động; reconnect không cần reboot ESP32.
+HTML/CSS/JavaScript được tách thành resource và gửi theo chunk 1 KiB để tránh lỗi
+gửi dừng tại 4.320 byte đã đo trên phần cứng. Sau khi lưu,
 firmware giữ AP thêm 750 ms để response hoàn tất trước khi chuyển sang station.
 Wi-Fi scan buffers nằm trong manager thay vì system-event stack; event task dùng
 4 KiB để tránh reboot loop sau `WIFI_EVENT_SCAN_DONE`.

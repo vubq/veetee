@@ -25,6 +25,7 @@ public:
                     const settings::WifiProfileRecord& wifi_profiles,
                     SaveSink sink, void* context);
     void Stop();
+    void NotifyClientNetworkReady();
     void ResetClientSessions();
     bool IsRunning() const;
 
@@ -38,8 +39,6 @@ private:
     static esp_err_t ConfigHandler(httpd_req_t* request);
     static esp_err_t SaveHandler(httpd_req_t* request);
     static esp_err_t CaptivePortalHandler(httpd_req_t* request);
-    static esp_err_t NotFoundHandler(httpd_req_t* request,
-                                     httpd_err_code_t error);
     static void DnsTaskEntry(void* context);
     static void SaveTaskEntry(void* context);
     static void ScanEventHandler(void* context, esp_event_base_t event_base,
@@ -62,6 +61,7 @@ private:
     esp_timer_handle_t scan_timer_ = nullptr;
     std::atomic<bool> dns_running_{false};
     std::atomic<int> dns_socket_{-1};
+    std::atomic<bool> client_network_ready_{false};
     std::atomic<bool> scan_in_progress_{false};
     std::array<wifi_ap_record_t, 16> scan_records_{};
     std::uint16_t scan_count_ = 0;

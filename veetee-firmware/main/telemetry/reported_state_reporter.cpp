@@ -7,10 +7,12 @@
 #include <cstring>
 
 #include "cJSON.h"
+#include "board/board_config.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_partition.h"
 #include "esp_random.h"
 #include "network/endpoint_url.h"
 #include "sdkconfig.h"
@@ -21,7 +23,7 @@ namespace {
 constexpr char kTag[] = "veetee_reporter";
 constexpr std::uint32_t kInitialRetryMs = 500;
 constexpr std::uint32_t kMaximumRetryMs = 30000;
-constexpr std::size_t kMaximumBodyBytes = 1024;
+constexpr std::size_t kMaximumBodyBytes = 2048;
 
 bool IsSafeDeviceId(const char* value) {
     if (value == nullptr || value[0] == '\0' || std::strlen(value) > 64) {
@@ -54,6 +56,19 @@ bool AddString(cJSON* object, const char* name, const char* value) {
 
 bool AddNumber(cJSON* object, const char* name, std::uint32_t value) {
     return cJSON_AddNumberToObject(object, name, value) != nullptr;
+}
+
+bool AddBoolean(cJSON* object, const char* name, bool value) {
+    return cJSON_AddBoolToObject(object, name, value) != nullptr;
+}
+
+std::uint32_t PartitionBytes(const char* first_label, const char* second_label) {
+    const esp_partition_t* first = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, first_label);
+    const esp_partition_t* second = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, second_label);
+    if (first == nullptr || second == nullptr) return 0;
+    return std::min(first->size, second->size);
 }
 
 }  // namespace
@@ -216,7 +231,7 @@ esp_err_t ReportedStateReporter::Send(
     config.url = url;
     config.timeout_ms = 6000;
     config.buffer_size = 1024;
-    config.buffer_size_tx = 1024;
+    config.buffer_size_tx = 2048;
     config.keep_alive_enable = true;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.disable_auto_redirect = true;
@@ -276,6 +291,18 @@ bool ReportedStateReporter::BuildBody(
     cJSON* firmware = reported == nullptr
                           ? nullptr
                           : cJSON_AddObjectToObject(reported, "firmware");
+    cJSON* capabilities = reported == nullptr
+                              ? nullptr
+                              : cJSON_AddObjectToObject(reported, "capabilities");
+    cJSON* display = capabilities == nullptr
+                         ? nullptr
+                         : cJSON_AddObjectToObject(capabilities, "display");
+    cJSON* compositions = display == nullptr
+                              ? nullptr
+                              : cJSON_AddArrayToObject(display, "compositions");
+    cJSON* wake = capabilities == nullptr
+                      ? nullptr
+                      : cJSON_AddObjectToObject(capabilities, "wake");
     const char* artifact_name =
         state.artifact_kind == settings::ReportedArtifactKind::kUiPack
             ? "ui"
@@ -284,12 +311,44 @@ bool ReportedStateReporter::BuildBody(
                           ? nullptr
                           : cJSON_AddObjectToObject(reported, artifact_name);
     const char* phase = settings::ReportedResourcePhaseName(state.phase);
+    char display_target[48] = {};
+    const int display_target_length = std::snprintf(
+        display_target, sizeof(display_target), "st7789-%dx%d-rgb565",
+        CONFIG_VEETEE_LCD_WIDTH, CONFIG_VEETEE_LCD_HEIGHT);
+    const bool composition_values =
+        compositions != nullptr &&
+        cJSON_AddItemToArray(compositions, cJSON_CreateString("signal")) &&
+        cJSON_AddItemToArray(compositions, cJSON_CreateString("monolith")) &&
+        cJSON_AddItemToArray(compositions, cJSON_CreateString("quiet"));
     const bool valid = root != nullptr && reported != nullptr && firmware != nullptr &&
-                       resource != nullptr && AddNumber(root, "version", version) &&
+                       capabilities != nullptr && display != nullptr && wake != nullptr &&
+                       resource != nullptr && display_target_length > 0 &&
+                       display_target_length < static_cast<int>(sizeof(display_target)) &&
+                       AddNumber(root, "version", version) &&
                        AddString(root, "bootId", boot_id_.data()) &&
                        AddNumber(reported, "schemaVersion", 1) &&
                        AddString(firmware, "version",
                                  CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION) &&
+                       AddString(capabilities, "board", board::kBoardName) &&
+                       AddString(display, "target", display_target) &&
+                       AddString(display, "controller", "st7789") &&
+                       AddNumber(display, "width", CONFIG_VEETEE_LCD_WIDTH) &&
+                       AddNumber(display, "height", CONFIG_VEETEE_LCD_HEIGHT) &&
+                       AddString(display, "colorFormat", "rgb565") &&
+                       AddNumber(display, "resourceAbi", 2) &&
+                       AddNumber(display, "uiAbi", 1) &&
+                       AddNumber(display, "slotBytes",
+                                 PartitionBytes("ui_0", "ui_1")) &&
+                       AddBoolean(display, "hotReload", true) &&
+                       composition_values &&
+                       AddString(wake, "runtime", "esp-sr") &&
+                       AddNumber(wake, "runtimeAbi", 1) &&
+                       AddNumber(wake, "resourceAbi", 1) &&
+                       AddNumber(wake, "slotBytes",
+                                 PartitionBytes("resource_0", "resource_1")) &&
+                       AddNumber(wake, "sampleRateHz", board::kMicSampleRate) &&
+                       AddNumber(wake, "channels", 1) &&
+                       AddBoolean(wake, "hotReload", true) &&
                        AddString(resource, "phase", phase) &&
                        AddString(resource, "currentVersion",
                                  state.current_version) &&

@@ -49,6 +49,17 @@ target_compile_options(endpoint_url_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME endpoint_url_test COMMAND endpoint_url_test)
 
 add_executable(
+    captive_portal_routes_test
+    captive_portal_routes_test.cpp
+    ../main/network/captive_portal_routes.cpp
+)
+target_include_directories(captive_portal_routes_test PRIVATE ../main)
+target_compile_features(captive_portal_routes_test PRIVATE cxx_std_17)
+target_compile_options(captive_portal_routes_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME captive_portal_routes_test COMMAND captive_portal_routes_test)
+
+add_executable(
     activation_record_test
     activation_record_test.cpp
     ../main/settings/activation_record.cpp

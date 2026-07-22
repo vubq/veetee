@@ -45,6 +45,16 @@ export class UiPacksController {
     return this.uploads.stage(body, fileName, { principal, requestId: request.id });
   }
 
+  @Roles(TenantRole.ADMIN)
+  @Post("standard/:theme/stage")
+  async stageStandard(
+    @Param("theme") theme: string,
+    @CurrentPrincipal() principal: Principal,
+    @Req() request: RequestWithPrincipal,
+  ): Promise<ArtifactRecord> {
+    return this.uploads.stageStandard(theme, { principal, requestId: request.id });
+  }
+
   @Get("rollouts")
   async rollouts(@CurrentPrincipal() principal: Principal): Promise<UiPackRolloutRecord[]> {
     return this.resources.listUiPackRollouts(principal.tenantId);

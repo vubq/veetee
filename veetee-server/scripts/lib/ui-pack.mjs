@@ -119,7 +119,7 @@ function validateManifest(value) {
   const target = object(manifest.target, "manifest.target");
   if (
     target.board !== "veetee-s3-n16r8" ||
-    target.display !== "st7789-240x320-rgb565"
+    target.display !== "st7789-240x280-rgb565"
   ) {
     throw new Error("UI Pack target is incompatible");
   }

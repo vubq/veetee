@@ -15,8 +15,9 @@ namespace veetee::network {
 namespace {
 
 constexpr char kTag[] = "veetee_wifi";
-constexpr char kCaptivePortalUrl[] = "http://192.168.4.1/";
 constexpr std::uint32_t kApAddress = 0x0104A8C0U;  // 192.168.4.1 in network byte order.
+constexpr std::uint32_t kDhcpReadyTimeoutMs = 1000;
+constexpr std::uint32_t kDhcpReadyPollMs = 10;
 constexpr std::uint64_t kRetryScanDelayUs = 2500000ULL;
 constexpr std::uint64_t kProvisioningTransitionDelayUs = 750000ULL;
 
@@ -37,13 +38,10 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) return error;
     error = esp_event_loop_create_default();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) return error;
-    station_netif_ = esp_netif_create_default_wifi_sta();
-    ap_netif_ = esp_netif_create_default_wifi_ap();
-    if (station_netif_ == nullptr || ap_netif_ == nullptr) return ESP_ERR_NO_MEM;
 
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_config.nvs_enable = false;
     if ((error = esp_wifi_init(&wifi_config)) != ESP_OK ||
-        (error = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK ||
         (error = esp_event_handler_instance_register(
              WIFI_EVENT, ESP_EVENT_ANY_ID, &WifiManager::EventHandler, this,
              &wifi_handler_)) != ESP_OK ||
@@ -56,7 +54,6 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
     std::uint8_t mac[6] = {};
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
         std::snprintf(ap_ssid_, sizeof(ap_ssid_), "Veetee-%02X%02X", mac[4], mac[5]);
-        esp_netif_set_hostname(station_netif_, ap_ssid_);
     } else {
         std::snprintf(ap_ssid_, sizeof(ap_ssid_), "Veetee-Setup");
     }
@@ -93,6 +90,23 @@ esp_err_t WifiManager::StartStation() {
         return ESP_ERR_INVALID_STATE;
     }
     portal_.Stop();
+    if (wifi_started_) {
+        esp_wifi_disconnect();
+        const esp_err_t stop_error = esp_wifi_stop();
+        if (stop_error != ESP_OK) return stop_error;
+        wifi_started_ = false;
+    }
+    if (ap_netif_ != nullptr) {
+        esp_netif_destroy_default_wifi(ap_netif_);
+        ap_netif_ = nullptr;
+    }
+    if (station_netif_ == nullptr) {
+        station_netif_ = esp_netif_create_default_wifi_sta();
+        if (station_netif_ == nullptr) return ESP_ERR_NO_MEM;
+        const esp_err_t hostname_error =
+            esp_netif_set_hostname(station_netif_, ap_ssid_);
+        if (hostname_error != ESP_OK) return hostname_error;
+    }
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
     esp_timer_stop(provisioning_timer_);
@@ -158,6 +172,18 @@ esp_err_t WifiManager::StartProvisioning() {
             error = esp_wifi_stop();
             if (error == ESP_OK) wifi_started_ = false;
         }
+        if (error == ESP_OK && station_netif_ != nullptr) {
+            esp_netif_destroy_default_wifi(station_netif_);
+            station_netif_ = nullptr;
+        }
+        if (error == ESP_OK && ap_netif_ != nullptr) {
+            esp_netif_destroy_default_wifi(ap_netif_);
+            ap_netif_ = nullptr;
+        }
+        if (error == ESP_OK) {
+            ap_netif_ = esp_netif_create_default_wifi_ap();
+            if (ap_netif_ == nullptr) error = ESP_ERR_NO_MEM;
+        }
 
         wifi_config_t config = {};
         std::snprintf(reinterpret_cast<char*>(config.ap.ssid), sizeof(config.ap.ssid),
@@ -169,12 +195,15 @@ esp_err_t WifiManager::StartProvisioning() {
 
         if (error == ESP_OK) error = esp_wifi_set_mode(WIFI_MODE_APSTA);
         if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_AP, &config);
-        // Match Xiaozhi's setup order: prepare the AP netif and DHCP server
-        // before Wi-Fi becomes visible, so the first client DHCP discover
-        // cannot race portal initialization.
+        // Prepare DHCP before the SoftAP becomes visible, matching Xiaozhi's
+        // proven order and avoiding a second stop/start after WIFI_EVENT_AP_START.
         if (error == ESP_OK) error = ConfigureCaptivePortalDhcp();
         if (error == ESP_OK) error = EnsureWifiStarted();
         if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (error == ESP_OK) {
+            error = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
+        }
+        if (error == ESP_OK) error = WaitForCaptivePortalDhcp();
         if (error == ESP_OK) {
             provisioning_wifi_ready_ = true;
         }
@@ -211,13 +240,31 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         manager->ignore_disconnect_until_scan_ = false;
         manager->ConnectNextCandidate();
     } else if (event_base == WIFI_EVENT &&
+               event_id == WIFI_EVENT_AP_STACONNECTED &&
+               manager->provisioning_active_) {
+        const auto* connected =
+            static_cast<const wifi_event_ap_staconnected_t*>(event_data);
+        if (connected != nullptr) {
+            ESP_LOGI(kTag, "Setup client " MACSTR " joined AID=%u",
+                     MAC2STR(connected->mac),
+                     static_cast<unsigned>(connected->aid));
+        }
+    } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_AP_STADISCONNECTED &&
                manager->provisioning_active_) {
+        const auto* disconnected =
+            static_cast<const wifi_event_ap_stadisconnected_t*>(event_data);
+        if (disconnected != nullptr) {
+            ESP_LOGI(kTag, "Setup client " MACSTR " left AID=%u reason=%u",
+                     MAC2STR(disconnected->mac),
+                     static_cast<unsigned>(disconnected->aid),
+                     static_cast<unsigned>(disconnected->reason));
+        }
         wifi_sta_list_t stations = {};
         if (esp_wifi_ap_get_sta_list(&stations) == ESP_OK && stations.num == 0) {
             manager->portal_.ResetClientSessions();
             ESP_LOGI(kTag,
-                     "Last setup client left; DHCP lease server remains active");
+                     "Last setup client left; captive HTTP sessions reset");
         }
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -269,6 +316,7 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         if (assigned != nullptr) {
             ESP_LOGI(kTag, "Setup client " MACSTR " received " IPSTR,
                      MAC2STR(assigned->mac), IP2STR(&assigned->ip));
+            manager->portal_.NotifyClientNetworkReady();
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         manager->station_connecting_ = false;
@@ -374,13 +422,6 @@ esp_err_t WifiManager::ConfigureCaptivePortalDhcp() {
         dns.ip.u_addr.ip4.addr = ip_info.ip.addr;
         error = esp_netif_set_dns_info(ap_netif_, ESP_NETIF_DNS_MAIN, &dns);
     }
-    if (error == ESP_OK) {
-        error = esp_netif_dhcps_option(
-            ap_netif_, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
-            const_cast<char*>(kCaptivePortalUrl),
-            std::strlen(kCaptivePortalUrl));
-    }
-
     const esp_err_t start_error = esp_netif_dhcps_start(ap_netif_);
     if (error == ESP_OK && start_error != ESP_OK &&
         start_error != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
@@ -388,10 +429,26 @@ esp_err_t WifiManager::ConfigureCaptivePortalDhcp() {
     }
     if (error == ESP_OK) {
         ESP_LOGI(kTag,
-                 "DHCP advertises captive DNS and portal URL %s",
-                 kCaptivePortalUrl);
+                 "DHCP advertises captive DNS at 192.168.4.1; probe URLs redirect to the portal");
     }
     return error;
+}
+
+esp_err_t WifiManager::WaitForCaptivePortalDhcp() {
+    for (std::uint32_t elapsed = 0; elapsed < kDhcpReadyTimeoutMs;
+         elapsed += kDhcpReadyPollMs) {
+        esp_netif_dhcp_status_t status = ESP_NETIF_DHCP_INIT;
+        const esp_err_t error = esp_netif_dhcps_get_status(ap_netif_, &status);
+        if (error != ESP_OK) return error;
+        if (status == ESP_NETIF_DHCP_STARTED) {
+            ESP_LOGI(kTag, "DHCP server ready before captive services start");
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(kDhcpReadyPollMs));
+    }
+    ESP_LOGE(kTag, "DHCP server did not become ready within %u ms",
+             static_cast<unsigned>(kDhcpReadyTimeoutMs));
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t WifiManager::BeginScan() {

@@ -11,6 +11,9 @@ import {
 import { TenantRole } from "@prisma/client";
 import { Type } from "class-transformer";
 import {
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsObject,
@@ -52,6 +55,105 @@ export class ReportedFirmwareStateDto {
   @MaxLength(32)
   @Matches(/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/)
   version!: string;
+}
+
+class ReportedDisplayCapabilityDto {
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[a-z0-9][a-z0-9._-]*$/)
+  target!: string;
+
+  @IsString()
+  @IsIn(["st7789"])
+  controller!: string;
+
+  @IsInt()
+  @Min(80)
+  @Max(320)
+  width!: number;
+
+  @IsInt()
+  @Min(80)
+  @Max(320)
+  height!: number;
+
+  @IsString()
+  @IsIn(["rgb565"])
+  colorFormat!: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(64)
+  resourceAbi!: number;
+
+  @IsInt()
+  @Min(1)
+  @Max(64)
+  uiAbi!: number;
+
+  @IsInt()
+  @Min(1)
+  @Max(16_777_216)
+  slotBytes!: number;
+
+  @IsBoolean()
+  hotReload!: boolean;
+
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(["signal", "monolith", "quiet"], { each: true })
+  compositions!: string[];
+}
+
+class ReportedWakeCapabilityDto {
+  @IsString()
+  @IsIn(["esp-sr"])
+  runtime!: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(64)
+  runtimeAbi!: number;
+
+  @IsInt()
+  @Min(1)
+  @Max(64)
+  resourceAbi!: number;
+
+  @IsInt()
+  @Min(1)
+  @Max(16_777_216)
+  slotBytes!: number;
+
+  @IsInt()
+  @Min(8_000)
+  @Max(48_000)
+  sampleRateHz!: number;
+
+  @IsInt()
+  @Min(1)
+  @Max(2)
+  channels!: number;
+
+  @IsBoolean()
+  hotReload!: boolean;
+}
+
+class ReportedCapabilitiesDto {
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[a-z0-9][a-z0-9._-]*$/)
+  board!: string;
+
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedDisplayCapabilityDto)
+  display!: ReportedDisplayCapabilityDto;
+
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedWakeCapabilityDto)
+  wake!: ReportedWakeCapabilityDto;
 }
 
 export class ReportedResourceStateDto {
@@ -110,6 +212,12 @@ export class ReportedDeviceStateDto {
   @ValidateNested()
   @Type(() => ReportedFirmwareStateDto)
   firmware!: ReportedFirmwareStateDto;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedCapabilitiesDto)
+  capabilities?: ReportedCapabilitiesDto;
 
   @IsOptional()
   @IsObject()

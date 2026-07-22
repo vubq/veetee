@@ -12,6 +12,30 @@ const validReport = {
   state: {
     schemaVersion: 1,
     firmware: { version: "0.2.0" },
+    capabilities: {
+      board: "veetee-s3-n16r8",
+      display: {
+        target: "st7789-240x280-rgb565",
+        controller: "st7789",
+        width: 240,
+        height: 280,
+        colorFormat: "rgb565",
+        resourceAbi: 2,
+        uiAbi: 1,
+        slotBytes: 2_097_152,
+        hotReload: true,
+        compositions: ["signal", "monolith", "quiet"],
+      },
+      wake: {
+        runtime: "esp-sr",
+        runtimeAbi: 1,
+        resourceAbi: 1,
+        slotBytes: 2_097_152,
+        sampleRateHz: 16_000,
+        channels: 1,
+        hotReload: true,
+      },
+    },
     resource: {
       phase: "downloading",
       currentVersion: "factory-bringup",

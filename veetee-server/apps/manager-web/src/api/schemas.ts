@@ -2,6 +2,31 @@ import { z } from "zod";
 
 const jsonObject = z.record(z.string(), z.unknown());
 
+export const deviceCapabilitiesSchema = z.object({
+  board: z.string(),
+  display: z.object({
+    target: z.string(),
+    controller: z.string(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    colorFormat: z.string(),
+    resourceAbi: z.number().int().positive(),
+    uiAbi: z.number().int().positive(),
+    slotBytes: z.number().int().positive(),
+    hotReload: z.boolean(),
+    compositions: z.array(z.enum(["signal", "monolith", "quiet"])),
+  }),
+  wake: z.object({
+    runtime: z.string(),
+    runtimeAbi: z.number().int().positive(),
+    resourceAbi: z.number().int().positive(),
+    slotBytes: z.number().int().positive(),
+    sampleRateHz: z.number().int().positive(),
+    channels: z.number().int().positive(),
+    hotReload: z.boolean(),
+  }),
+});
+
 export const principalSchema = z.object({
   userId: z.string(),
   tenantId: z.string(),
@@ -32,6 +57,7 @@ export const deviceSchema = z.object({
     bootId: z.string().optional(),
   }),
   pairedAt: z.string(),
+  lastSeenAt: z.string().optional(),
 });
 
 export const agentSchema = z.object({
@@ -195,3 +221,4 @@ export type WakeProfile = z.infer<typeof wakeProfileSchema>;
 export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;
 export type UiPackRollout = z.infer<typeof uiPackRolloutSchema>;
 export type LabSession = z.infer<typeof labSessionSchema>;
+export type DeviceCapabilities = z.infer<typeof deviceCapabilitiesSchema>;

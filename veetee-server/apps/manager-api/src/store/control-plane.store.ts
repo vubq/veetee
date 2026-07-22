@@ -27,6 +27,10 @@ import {
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
+import {
+  probeVoiceRuntimeComponent,
+  type VoiceRuntimeComponent,
+} from "../providers/voice-runtime-probe.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
 
 export interface DeviceRecord {
@@ -39,6 +43,7 @@ export interface DeviceRecord {
   desiredState: { version: number; state: Record<string, unknown> };
   reportedState: { version: number; state: Record<string, unknown>; bootId?: string };
   pairedAt: string;
+  lastSeenAt?: string;
 }
 
 export interface AgentRecord {
@@ -185,6 +190,12 @@ const providerKindToDatabase: Record<ProviderRecord["kind"], ProviderKind> = {
   realtime: ProviderKind.REALTIME,
   memory: ProviderKind.MEMORY,
 };
+
+const providerKindToVoiceComponent = new Map<ProviderKind, VoiceRuntimeComponent>([
+  [ProviderKind.VAD, "vad"],
+  [ProviderKind.ASR, "asr"],
+  [ProviderKind.TTS, "tts"],
+]);
 
 @Injectable()
 export class ControlPlaneStore {
@@ -980,6 +991,7 @@ export class ControlPlaneStore {
     agentId: string | null;
     firmwareVersion: string | null;
     pairedAt: Date;
+    lastSeenAt: Date | null;
     desiredState: { version: number; state: Prisma.JsonValue } | null;
     reportedState: { version: number; state: Prisma.JsonValue; bootId: string | null } | null;
   }): DeviceRecord {
@@ -1000,6 +1012,7 @@ export class ControlPlaneStore {
         ...(device.reportedState?.bootId ? { bootId: device.reportedState.bootId } : {}),
       },
       pairedAt: device.pairedAt.toISOString(),
+      ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt.toISOString() } : {}),
     };
   }
 
@@ -1099,7 +1112,18 @@ export class ControlPlaneStore {
       return { health: ProviderHealth.DEGRADED, errorCode: "disabled" };
     }
     if (!provider.baseUrl) {
-      return { health: ProviderHealth.UNKNOWN, errorCode: "runtime_probe_unavailable" };
+      const componentName = providerKindToVoiceComponent.get(provider.kind);
+      if (!componentName) {
+        return { health: ProviderHealth.UNKNOWN, errorCode: "runtime_probe_unavailable" };
+      }
+      const result = await probeVoiceRuntimeComponent(
+        componentName,
+        process.env.VEETEE_VOICE_INTERNAL_URL ?? "http://127.0.0.1:8000",
+      );
+      return {
+        health: result.healthy ? ProviderHealth.HEALTHY : ProviderHealth.DEGRADED,
+        errorCode: result.errorCode,
+      };
     }
     this.validateProviderUrl(provider.baseUrl);
     const headers: Record<string, string> = { accept: "application/json" };

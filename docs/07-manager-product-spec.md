@@ -178,6 +178,7 @@ Hiển thị health của voice-server, provider, Redis/Postgres, số thiết b
 - Filter theo online/locale/agent/firmware.
 - Pair device bằng code 6 số.
 - Xem pin, Wi-Fi RSSI, firmware, last seen, active session.
+- Device list trả `lastSeenAt` độc lập với nhãn status để UI không phải suy diễn thời điểm liên hệ từ desired/reported sequence.
 - Xem desired vs reported config/resource/firmware version và drift.
 - Reconcile, xem apply journal/error và rollback version đã ký.
 - Gửi user-only MCP command với confirmation.

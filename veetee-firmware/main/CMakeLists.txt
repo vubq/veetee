@@ -10,6 +10,7 @@ set(VEETEE_SRCS
     "display/ui_pack.cpp"
     "input/button.cpp"
     "mcp/device_mcp.cpp"
+    "network/captive_portal_routes.cpp"
     "network/endpoint_url.cpp"
     "network/provisioning_portal.cpp"
     "network/wifi_candidate_order.cpp"

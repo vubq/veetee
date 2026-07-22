@@ -46,6 +46,7 @@ private:
     void Emit(WifiManagerEvent event) const;
     esp_err_t EnsureWifiStarted();
     esp_err_t ConfigureCaptivePortalDhcp();
+    esp_err_t WaitForCaptivePortalDhcp();
     esp_err_t BeginScan();
     void BuildCandidateQueue();
     void ConnectNextCandidate();

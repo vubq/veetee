@@ -14,6 +14,21 @@ import { PairingService } from "../pairing/pairing.service.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./control-plane.store.js";
 
+const reportedCapabilities = {
+  capabilities: {
+    board: "veetee-s3-n16r8",
+    display: {
+      target: "st7789-240x280-rgb565", controller: "st7789", width: 240, height: 280,
+      colorFormat: "rgb565", resourceAbi: 2, uiAbi: 1, slotBytes: 2_097_152,
+      hotReload: true, compositions: ["signal", "monolith", "quiet"],
+    },
+    wake: {
+      runtime: "esp-sr", runtimeAbi: 1, resourceAbi: 1, slotBytes: 2_097_152,
+      sampleRateHz: 16_000, channels: 1, hotReload: true,
+    },
+  },
+};
+
 describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneStore", () => {
   const prisma = new PrismaService();
   const redis = new RedisService();
@@ -184,13 +199,13 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     const idempotent = await store.updateReportedState(device.id, 2, { unexpected: true });
     expect(idempotent.reportedState.state).toEqual(reported.reportedState.state);
     await Promise.allSettled([
-      store.updateReportedState(device.id, 4, { marker: "newest" }),
+      store.updateReportedState(device.id, 4, { marker: "newest", ...reportedCapabilities }),
       store.updateReportedState(device.id, 3, { marker: "older" }),
     ]);
     const concurrent = await store.updateReportedState(device.id, 4, { unexpected: true });
     expect(concurrent.reportedState).toMatchObject({
       version: 4,
-      state: { marker: "newest" },
+      state: { marker: "newest", ...reportedCapabilities },
     });
     await expect(store.updateReportedState(device.id, 1, {})).rejects.toThrow(/stale/i);
     await expect(store.getAgentConfig(agent.id, published.publishedVersion)).resolves.toMatchObject({

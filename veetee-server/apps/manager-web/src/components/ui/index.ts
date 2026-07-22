@@ -1,5 +1,14 @@
 export { default as VtButton } from "./VtButton.vue";
+export { default as VtBadge } from "./VtBadge.vue";
+export { default as VtDialog } from "./VtDialog.vue";
+export { default as VtEmptyState } from "./VtEmptyState.vue";
 export { default as VtField } from "./VtField.vue";
+export { default as VtIcon } from "./VtIcon.vue";
 export { default as VtInput } from "./VtInput.vue";
+export { default as VtMetricStrip } from "./VtMetricStrip.vue";
+export { default as VtOperationsHero } from "./VtOperationsHero.vue";
+export { default as VtPageHeader } from "./VtPageHeader.vue";
 export { default as VtSelect } from "./VtSelect.vue";
+export { default as VtSwitch } from "./VtSwitch.vue";
 export { default as VtTextarea } from "./VtTextarea.vue";
+export { default as VtToastRegion } from "./VtToastRegion.vue";

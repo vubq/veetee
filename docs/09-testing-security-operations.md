@@ -34,6 +34,22 @@
 - Activation wake accuracy in standby and interrupt-profile accuracy in standby/thinking; speaking interrupt is best-effort until AEC gate passes.
 - 30 phút conversation loop và heap watermark.
 
+### Hardware validation pending user interaction
+
+Các bước dưới đây cần người ở cạnh board/điện thoại thực hiện; host không tự
+thay Wi-Fi đang dùng và không được tự xóa NVS:
+
+1. Từ trạng thái idle, giữ GPIO0 khoảng 5 giây để vào Wi-Fi config mode.
+2. Kết nối điện thoại vào `VeeTee-9D1C`; kiểm tra DHCP, captive popup và toàn bộ
+   HTML/CSS/JS, scan SSID, lưu cấu hình, chuyển AP -> station rồi reconnect.
+3. Bấm nút ngắn, nói tiếng Việt và xác nhận WebSocket/ASR/LLM/TTS cùng loa thật;
+   không cần bấm lần hai để gửi câu.
+4. Kiểm tra wake word và button interrupt khi robot đang thinking/speaking.
+5. Kiểm tra trực quan hướng/độ sáng LCD, trạng thái activation/idle và nghe loa
+   xem có pop/chirp lặp trong 10 phút.
+6. Chạy conversation/heap soak dài hơn và ma trận mất điện, payload hỏng,
+   rollback resource/UI trên board.
+
 ### Server tests
 
 - Contract fixture tests với firmware messages.

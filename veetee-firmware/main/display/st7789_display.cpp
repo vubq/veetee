@@ -423,10 +423,10 @@ void St7789Display::RenderSignal(app::State state, const UiStateStyle& style,
     CanvasText("VEE/TEE", 54, 13, 1, style.foreground);
     CanvasText(copy.number, 16, 48, 2, style.accent);
     CanvasText(copy.kicker, 58, 53, 1, style.foreground);
-    CanvasTextCentered(copy.title, 82, 3, style.foreground);
+    CanvasTextCentered(copy.title, 76, 3, style.foreground);
 
     const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
-    const int center_y = 183;
+    const int center_y = 162;
     if (activation_code != nullptr) {
         CanvasCircle(center_x, center_y, 57, style.accent, false);
         CanvasCircle(center_x, center_y, 49, style.foreground, false);
@@ -444,8 +444,8 @@ void St7789Display::RenderSignal(app::State state, const UiStateStyle& style,
                        style.foreground);
         }
     }
-    CanvasRectangle(16, 273, CONFIG_VEETEE_LCD_WIDTH - 32, 1, style.accent);
-    CanvasTextCentered(copy.hint, 290, 1, style.foreground);
+    CanvasRectangle(16, 239, CONFIG_VEETEE_LCD_WIDTH - 32, 1, style.accent);
+    CanvasTextCentered(copy.hint, 255, 1, style.foreground);
 }
 
 void St7789Display::RenderMonolith(app::State state,
@@ -464,11 +464,11 @@ void St7789Display::RenderMonolith(app::State state,
     } else {
         for (int bar = 0; bar < 9; ++bar) {
             const int height = 10 + ((bar + static_cast<int>(index)) % 5) * 11;
-            CanvasRectangle(24 + bar * 20, 234 - height, 11, height,
+            CanvasRectangle(24 + bar * 20, 218 - height, 11, height,
                             bar % 2 == 0 ? style.accent : style.foreground);
         }
     }
-    CanvasText(copy.hint, 24, 286, 1, style.foreground);
+    CanvasText(copy.hint, 24, 255, 1, style.foreground);
 }
 
 void St7789Display::RenderQuiet(app::State state, const UiStateStyle& style,
@@ -479,7 +479,7 @@ void St7789Display::RenderQuiet(app::State state, const UiStateStyle& style,
     CanvasText("VEE TEE", 18, 18, 1, style.foreground);
     CanvasText(copy.number, CONFIG_VEETEE_LCD_WIDTH - 42, 18, 1, style.accent);
     const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
-    const int center_y = 150;
+    const int center_y = 137;
     CanvasCircle(center_x, center_y, 58, style.accent, false);
     CanvasCircle(center_x, center_y, 40, style.foreground, false);
     if (activation_code != nullptr) {
@@ -487,8 +487,8 @@ void St7789Display::RenderQuiet(app::State state, const UiStateStyle& style,
     } else {
         CanvasCircle(center_x, center_y, 11, style.accent, true);
     }
-    CanvasTextCentered(copy.title, 229, 2, style.foreground);
-    CanvasTextCentered(copy.hint, 278, 1, style.foreground);
+    CanvasTextCentered(copy.title, 210, 2, style.foreground);
+    CanvasTextCentered(copy.hint, 254, 1, style.foreground);
 }
 
 void St7789Display::CanvasFill(std::uint16_t color) {

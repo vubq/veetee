@@ -13,20 +13,51 @@ Reusable primitives live in `src/components/ui`. Form code must compose
 page-specific native control styles. They share the same height, spacing,
 Vietnamese typography, focus ring, disabled state and error treatment.
 
-Manager screens still rendered from the approved prototype receive the same
-`.vt-control` contract through a temporary compatibility enhancer. Remove that
-bridge page-by-page as each screen moves to Vue components; do not add new
-imperative HTML renderers. `ProviderDialog` is the first Manager workflow moved
-off the renderer, and Login uses the same primitives.
+All Manager screens live in `src/components/pages` and are rendered as Vue SFCs.
+The old raw-prototype injection and imperative DOM controllers have been
+removed. Do not introduce `v-html`, `innerHTML`, selector-driven event wiring or
+standalone prototype JavaScript into the runtime application.
+
+Headless UI owns behavior and accessibility for dialogs, menus, tabs,
+transitions and the mobile navigation drawer. Veetee components own the visual
+tokens, typography and control states. Native form elements remain wrapped by
+the shared `Vt*` components where browser semantics are more appropriate than a
+custom widget.
+
+Realtime Lab state and WebSocket/audio behavior live in
+`src/composables/useRealtimeLab.ts`; the page component only renders reactive
+state and invokes typed actions. API-backed lists remain in TanStack Query, and
+mutations always invalidate the relevant cache key instead of rewriting the DOM.
+
+## Device display contract
+
+`DISPLAY SYSTEM / UI PACK` is not a conceptual web mockup. It is a software twin
+of the current `veetee-firmware/main/display/st7789_display.cpp` renderer:
+
+- portrait ST7789 canvas at 240x280 using the same RGB565 quantization;
+- the same 5x7 bitmap glyphs, operational ASCII copy and activation-code layout;
+- the exact 13 firmware state IDs in enum order;
+- the three compiled UI ABI 1 compositions: `signal`, `monolith` and `quiet`;
+- palettes imported directly from the standard UI Packs in `ui-packs`.
+
+The corresponding contract and Canvas renderer live in `src/device-ui` and
+`src/components/device-ui`. `firmware-contract.test.ts` reads the firmware C++
+sources and fails when state order, copy, target/ABI, built-in Signal colors or
+renderer geometry drift without a matching Web update. Signal remains the
+firmware built-in fallback. UI Packs are data only and cannot upload executable
+layout code; rotation, panel offset, color order and brightness still require
+acceptance on physical hardware.
 
 ```bash
 npm run dev --workspace @veetee/manager-web
 npm run test:e2e --workspace @veetee/manager-web
 ```
 
-Default Manager API URL is `http://127.0.0.1:8001`. Override it with
-`VITE_MANAGER_API_URL` at build/dev time. No domain is required for the LAN-first
-profile.
+When `VITE_MANAGER_API_URL` is not set, Manager Web targets port `8001` on the
+same host used to open the web page. This keeps LAN clients from accidentally
+calling their own `127.0.0.1`; override it with `VITE_MANAGER_API_URL` at
+build/dev time when the API is on another host. No domain is required for the
+LAN-first profile.
 
 When the Vite development server is placed behind a trusted HTTPS tunnel, add its
 exact public hostname with `VEETEE_WEB_ALLOWED_HOSTS`. Multiple hosts are

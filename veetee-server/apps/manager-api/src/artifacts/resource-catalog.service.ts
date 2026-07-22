@@ -2,6 +2,7 @@ import {
   ArtifactBenchmarkStatus,
   ArtifactKind,
   ArtifactStatus,
+  DeviceStatus,
   Prisma,
   ResourceRolloutStatus,
 } from "@prisma/client";
@@ -404,7 +405,7 @@ export class ResourceCatalogService {
     }
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, tenantId: context.principal.tenantId },
-      include: { desiredState: true },
+      include: { desiredState: true, reportedState: true },
     });
     if (devices.length !== new Set(deviceIds).size) {
       throw new NotFoundException("One or more rollout devices were not found");
@@ -480,7 +481,7 @@ export class ResourceCatalogService {
     }
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, tenantId: context.principal.tenantId },
-      include: { desiredState: true },
+      include: { desiredState: true, reportedState: true },
     });
     if (devices.length !== new Set(deviceIds).size) {
       throw new NotFoundException("One or more rollout devices were not found");
@@ -547,7 +548,11 @@ export class ResourceCatalogService {
   }
 
   private assertDeviceCompatibility(
-    device: { firmwareVersion: string | null },
+    device: {
+      firmwareVersion: string | null;
+      status: DeviceStatus;
+      reportedState: { state: Prisma.JsonValue } | null;
+    },
     artifact: {
       board: string;
       runtime: string;
@@ -557,11 +562,20 @@ export class ResourceCatalogService {
       maxFirmware: string;
     },
   ): void {
+    if (device.status === DeviceStatus.OFFLINE) {
+      throw new ConflictException("Device must be connected before resource rollout");
+    }
+    const capability = reportedCapabilities(device.reportedState?.state).wake;
+    if (!capability) {
+      throw new ConflictException("Device wake capability has not been reported");
+    }
     if (
-      artifact.board !== "veetee-s3-n16r8" ||
-      artifact.runtime !== "esp-sr" ||
-      artifact.runtimeAbi !== 1 ||
-      artifact.sizeBytes > 2 * 1024 * 1024
+      capability.board !== artifact.board ||
+      capability.runtime !== artifact.runtime ||
+      capability.runtimeAbi !== artifact.runtimeAbi ||
+      capability.resourceAbi !== 1 ||
+      !capability.hotReload ||
+      artifact.sizeBytes > capability.slotBytes
     ) {
       throw new ConflictException("Artifact is outside the V1 board capability bounds");
     }
@@ -577,7 +591,11 @@ export class ResourceCatalogService {
   }
 
   private assertUiPackCompatibility(
-    device: { firmwareVersion: string | null },
+    device: {
+      firmwareVersion: string | null;
+      status: DeviceStatus;
+      reportedState: { state: Prisma.JsonValue } | null;
+    },
     artifact: {
       board: string;
       runtime: string;
@@ -587,11 +605,21 @@ export class ResourceCatalogService {
       maxFirmware: string;
     },
   ): void {
+    if (device.status === DeviceStatus.OFFLINE) {
+      throw new ConflictException("Device must be connected before UI Pack rollout");
+    }
+    const capability = reportedCapabilities(device.reportedState?.state).display;
+    if (!capability) {
+      throw new ConflictException("Device display capability has not been reported");
+    }
     if (
-      artifact.board !== "veetee-s3-n16r8" ||
+      capability.board !== artifact.board ||
+      capability.target !== "st7789-240x280-rgb565" ||
       artifact.runtime !== "veetee-ui" ||
-      artifact.runtimeAbi !== 1 ||
-      artifact.sizeBytes > 2 * 1024 * 1024
+      capability.uiAbi !== artifact.runtimeAbi ||
+      capability.resourceAbi !== 2 ||
+      !capability.hotReload ||
+      artifact.sizeBytes > capability.slotBytes
     ) {
       throw new ConflictException("UI Pack is outside the device capability bounds");
     }
@@ -753,6 +781,71 @@ export class ResourceCatalogService {
     if (value === "failed") return ArtifactBenchmarkStatus.FAILED;
     return ArtifactBenchmarkStatus.NOT_RUN;
   }
+}
+
+interface WakeCapability {
+  board: string;
+  runtime: string;
+  runtimeAbi: number;
+  resourceAbi: number;
+  slotBytes: number;
+  hotReload: boolean;
+}
+
+interface DisplayCapability {
+  board: string;
+  target: string;
+  uiAbi: number;
+  resourceAbi: number;
+  slotBytes: number;
+  hotReload: boolean;
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function reportedCapabilities(value: unknown): {
+  wake?: WakeCapability;
+  display?: DisplayCapability;
+} {
+  const state = jsonRecord(value);
+  const capabilities = jsonRecord(state?.capabilities);
+  const board = typeof capabilities?.board === "string" ? capabilities.board : undefined;
+  const wake = jsonRecord(capabilities?.wake);
+  const display = jsonRecord(capabilities?.display);
+  return {
+    ...(board && wake && typeof wake.runtime === "string" &&
+    Number.isInteger(wake.runtimeAbi) && Number.isInteger(wake.resourceAbi) &&
+    Number.isInteger(wake.slotBytes) && typeof wake.hotReload === "boolean"
+      ? {
+          wake: {
+            board,
+            runtime: wake.runtime,
+            runtimeAbi: wake.runtimeAbi as number,
+            resourceAbi: wake.resourceAbi as number,
+            slotBytes: wake.slotBytes as number,
+            hotReload: wake.hotReload,
+          },
+        }
+      : {}),
+    ...(board && display && typeof display.target === "string" &&
+    Number.isInteger(display.uiAbi) && Number.isInteger(display.resourceAbi) &&
+    Number.isInteger(display.slotBytes) && typeof display.hotReload === "boolean"
+      ? {
+          display: {
+            board,
+            target: display.target,
+            uiAbi: display.uiAbi as number,
+            resourceAbi: display.resourceAbi as number,
+            slotBytes: display.slotBytes as number,
+            hotReload: display.hotReload,
+          },
+        }
+      : {}),
+  };
 }
 
 const semver = /^\d+\.\d+\.\d+$/;

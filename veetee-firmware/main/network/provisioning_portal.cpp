@@ -11,6 +11,7 @@
 #include "esp_wifi.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "network/captive_portal_routes.h"
 #include "network/endpoint_url.h"
 
 namespace veetee::network {
@@ -20,20 +21,8 @@ constexpr char kTag[] = "veetee_portal";
 constexpr std::size_t kMaxPostBytes = 1024;
 constexpr std::size_t kMaxScanResults = 16;
 constexpr std::size_t kHttpServerStackBytes = 12 * 1024;
+constexpr std::size_t kStaticResponseChunkBytes = 1024;
 constexpr std::uint64_t kScanRetryIntervalUs = 1500000ULL;
-constexpr std::array<const char*, 10> kCaptivePortalPaths = {
-    "/hotspot-detect.html",       // Apple
-    "/library/test/success.html", // Apple
-    "/generate_204*",             // Android
-    "/mobile/status.php",         // Android
-    "/check_network_status.txt",  // Windows
-    "/ncsi.txt",                  // Windows
-    "/fwlink/",                   // Windows
-    "/connectivity-check.html",   // Firefox
-    "/success.txt",               // Other clients
-    "/portal.html",               // Other clients
-};
-
 constexpr char kPortalHtml[] = R"HTML(<!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Thiết lập Veetee</title><link rel="stylesheet" href="/portal.css"></head><body><main><header class="hero"><div class="brand-row"><span class="brand"><i></i><i></i></span><span><b>VEETEE</b><small>DEVICE SETUP</small></span><em><i></i> LOCAL</em></div><div class="hero-copy"><span>GET ONLINE</span><h1>Kết nối robot với mạng của bạn.</h1><p>Thiết lập trực tiếp trên thiết bị. Không cần domain và không gửi mật khẩu Wi-Fi ra Internet.</p></div><div class="hero-meta"><span><b>01</b> Wi-Fi</span><i></i><span><b>02</b> Manager</span><i></i><span><b>03</b> Sẵn sàng</span></div></header>
 <form id="setup" novalidate><section class="section"><div class="section-head"><div><small>BƯỚC 01</small><h2>Chọn mạng Wi-Fi</h2></div><button type="button" id="refresh">Quét lại</button></div><div class="scan-status" id="scanStatus">Đang quét các mạng gần đây...</div><div class="network-list" id="networkList"></div>
@@ -68,12 +57,32 @@ static_assert(sizeof(kPortalScript) <= 4096);
 
 esp_err_t SendStatic(httpd_req_t* request, const char* content_type,
                      const char* content) {
+    const std::size_t content_length = std::strlen(content);
     ESP_LOGI(kTag, "HTTP GET %s bytes=%u", request->uri,
-             static_cast<unsigned>(std::strlen(content)));
+             static_cast<unsigned>(content_length));
     httpd_resp_set_type(request, content_type);
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     httpd_resp_set_hdr(request, "Connection", "close");
-    return httpd_resp_send(request, content, HTTPD_RESP_USE_STRLEN);
+    for (std::size_t offset = 0; offset < content_length;
+         offset += kStaticResponseChunkBytes) {
+        const std::size_t chunk_length =
+            std::min(kStaticResponseChunkBytes, content_length - offset);
+        const esp_err_t error = httpd_resp_send_chunk(
+            request, content + offset, static_cast<ssize_t>(chunk_length));
+        if (error != ESP_OK) {
+            ESP_LOGW(kTag, "HTTP send %s failed at %u/%u: %s", request->uri,
+                     static_cast<unsigned>(offset),
+                     static_cast<unsigned>(content_length),
+                     esp_err_to_name(error));
+            return error;
+        }
+    }
+    const esp_err_t error = httpd_resp_send_chunk(request, nullptr, 0);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "HTTP send %s failed while finishing: %s", request->uri,
+                 esp_err_to_name(error));
+    }
+    return error;
 }
 
 int HexValue(char value) {
@@ -152,6 +161,7 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     wifi_profiles_ = wifi_profiles;
     save_sink_ = sink;
     save_context_ = context;
+    client_network_ready_.store(false);
 
     esp_err_t error = EnsureSaveTask();
     if (error != ESP_OK) {
@@ -252,21 +262,12 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
         Stop();
         return error;
     }
-    for (const char* path : kCaptivePortalPaths) {
-        httpd_uri_t captive = {};
-        captive.uri = path;
-        captive.method = HTTP_GET;
-        captive.handler = &ProvisioningPortal::CaptivePortalHandler;
-        captive.user_ctx = this;
-        error = httpd_register_uri_handler(http_server_, &captive);
-        if (error != ESP_OK) {
-            Stop();
-            return error;
-        }
-    }
-    error = httpd_register_err_handler(
-        http_server_, HTTPD_404_NOT_FOUND,
-        &ProvisioningPortal::NotFoundHandler);
+    httpd_uri_t captive = {};
+    captive.uri = "/*";
+    captive.method = HTTP_GET;
+    captive.handler = &ProvisioningPortal::CaptivePortalHandler;
+    captive.user_ctx = this;
+    error = httpd_register_uri_handler(http_server_, &captive);
     if (error != ESP_OK) {
         Stop();
         return error;
@@ -285,14 +286,15 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
         Stop();
         return ESP_ERR_NO_MEM;
     }
-    StartScan();
     running_ = true;
-    ESP_LOGI(kTag, "Captive portal started at http://192.168.4.1");
+    ESP_LOGI(kTag,
+             "Captive portal started at http://192.168.4.1; Wi-Fi scan waits for a DHCP client");
     return ESP_OK;
 }
 
 void ProvisioningPortal::Stop() {
     running_ = false;
+    client_network_ready_.store(false);
     if (scan_timer_ != nullptr) {
         esp_timer_stop(scan_timer_);
         esp_timer_delete(scan_timer_);
@@ -340,7 +342,19 @@ bool ProvisioningPortal::IsRunning() const {
     return running_ && http_server_ != nullptr;
 }
 
+void ProvisioningPortal::NotifyClientNetworkReady() {
+    client_network_ready_.store(true);
+}
+
 void ProvisioningPortal::ResetClientSessions() {
+    client_network_ready_.store(false);
+    if (scan_in_progress_.exchange(false)) {
+        const esp_err_t error = esp_wifi_scan_stop();
+        if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_STARTED) {
+            ESP_LOGD(kTag, "Stopping captive scan returned %s",
+                     esp_err_to_name(error));
+        }
+    }
     if (http_server_ == nullptr) return;
     std::array<int, 8> client_sockets{};
     std::size_t count = client_sockets.size();
@@ -384,6 +398,14 @@ esp_err_t ProvisioningPortal::FaviconHandler(httpd_req_t* request) {
 }
 
 esp_err_t ProvisioningPortal::CaptivePortalHandler(httpd_req_t* request) {
+    if (!IsCaptivePortalProbePath(request->uri)) {
+        ESP_LOGI(kTag, "HTTP GET %s -> 404", request->uri);
+        httpd_resp_set_type(request, "text/plain; charset=utf-8");
+        httpd_resp_set_status(request, "404 Not Found");
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(request, "Connection", "close");
+        return httpd_resp_sendstr(request, "Not found");
+    }
     char location[96] = {};
     std::snprintf(location, sizeof(location),
                   "http://192.168.4.1/?_=%llu",
@@ -396,17 +418,6 @@ esp_err_t ProvisioningPortal::CaptivePortalHandler(httpd_req_t* request) {
     httpd_resp_set_hdr(request, "Connection", "close");
     // Apple captive webviews require response content to treat the network as
     // a portal instead of a temporarily broken Internet connection.
-    return httpd_resp_sendstr(request, "Mở trang thiết lập Veetee...");
-}
-
-esp_err_t ProvisioningPortal::NotFoundHandler(httpd_req_t* request,
-                                              httpd_err_code_t) {
-    ESP_LOGI(kTag, "Captive fallback %s -> /", request->uri);
-    httpd_resp_set_type(request, "text/html; charset=utf-8");
-    httpd_resp_set_status(request, "303 See Other");
-    httpd_resp_set_hdr(request, "Location", "/");
-    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(request, "Connection", "close");
     return httpd_resp_sendstr(request, "Mở trang thiết lập Veetee...");
 }
 
@@ -618,11 +629,24 @@ void ProvisioningPortal::ScanTimer(void* context) {
 }
 
 void ProvisioningPortal::StartScan() {
-    if (http_server_ == nullptr || scan_in_progress_.exchange(true)) return;
+    if (!CanStartCaptivePortalScan(client_network_ready_.load(),
+                                   http_server_ != nullptr,
+                                   scan_in_progress_.load())) {
+        return;
+    }
+    bool expected = false;
+    if (!scan_in_progress_.compare_exchange_strong(expected, true)) return;
+    if (!client_network_ready_.load()) {
+        scan_in_progress_.store(false);
+        return;
+    }
     wifi_scan_config_t scan_config = {};
     scan_config.show_hidden = true;
     const esp_err_t error = esp_wifi_scan_start(&scan_config, false);
-    if (error == ESP_OK) return;
+    if (error == ESP_OK) {
+        ESP_LOGI(kTag, "Started Wi-Fi scan after captive client received IPv4");
+        return;
+    }
     scan_in_progress_.store(false);
     ESP_LOGW(kTag, "Unable to start background Wi-Fi scan: %s",
              esp_err_to_name(error));

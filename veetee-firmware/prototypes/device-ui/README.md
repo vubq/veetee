@@ -1,6 +1,6 @@
 # VeeTee Device UI prototype
 
-HTML prototype for the 240x320 portrait ST7789 display. It is intentionally
+HTML prototype for the 240x280 portrait ST7789 display. It is intentionally
 separate from the firmware renderer so a visual direction can be approved
 before committing to LVGL, fonts, assets, memory budgets, and redraw strategy.
 

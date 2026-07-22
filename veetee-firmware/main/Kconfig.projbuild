@@ -8,7 +8,7 @@ menu "Veetee hardware bring-up"
     config VEETEE_LCD_HEIGHT
         int "ST7789 visible height"
         range 80 320
-        default 320
+        default 280
 
     config VEETEE_LCD_OFFSET_X
         int "ST7789 X offset"
@@ -18,7 +18,7 @@ menu "Veetee hardware bring-up"
     config VEETEE_LCD_OFFSET_Y
         int "ST7789 Y offset"
         range 0 100
-        default 0
+        default 20
 
     config VEETEE_LCD_MIRROR_X
         bool "Mirror LCD on X axis"

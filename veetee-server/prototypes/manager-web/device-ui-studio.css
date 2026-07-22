@@ -1,4 +1,4 @@
-/* Device UI Studio previews the 240x320 contract without touching firmware state. */
+/* Device UI Studio previews the 240x280 contract without touching firmware state. */
 .ui-studio-actions { display: flex; align-items: center; gap: 10px; }
 .ui-studio-layout { display: grid; grid-template-columns: minmax(520px, 1.3fr) minmax(310px, .7fr); gap: 17px; }
 .ui-preview-panel, .ui-theme-panel, .ui-upload-panel, .ui-delivery-panel { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(255,253,247,.74); box-shadow: var(--shadow); }
@@ -8,10 +8,10 @@
 .ui-language-toggle span { color: var(--ink-soft); }
 .ui-preview-stage { position: relative; display: grid; place-items: center; min-height: 397px; margin: 17px -22px 0; overflow: hidden; background: radial-gradient(circle at 50% 42%, rgba(199,236,123,.15), transparent 38%), var(--navy); }
 .ui-preview-stage:before, .ui-preview-stage:after { content: ""; position: absolute; width: 420px; height: 420px; border: 1px solid rgba(255,255,255,.055); border-radius: 50%; }
-.ui-preview-stage:after { width: 320px; height: 320px; }
+.ui-preview-stage:after { width: 280px; height: 280px; }
 .ui-device-shell { position: relative; z-index: 1; width: 280px; height: 360px; padding: 20px; border-radius: 36px; background: #0a202b; box-shadow: 0 24px 45px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.11), inset 0 -3px 7px rgba(0,0,0,.55); }
 .ui-device-shell:before { content: ""; position: absolute; top: 7px; left: 50%; width: 28px; height: 3px; border-radius: 3px; background: #060707; transform: translateX(-50%); }
-.ui-device-screen { --ui-bg: #112f3b; --ui-fg: #f4f2e8; --ui-accent: #c9ed7c; position: relative; width: 240px; height: 320px; overflow: hidden; isolation: isolate; color: var(--ui-fg); background: var(--ui-bg); font-family: var(--font-display); transition: color .25s ease, background .25s ease; }
+.ui-device-screen { --ui-bg: #112f3b; --ui-fg: #f4f2e8; --ui-accent: #c9ed7c; position: relative; width: 240px; height: 280px; overflow: hidden; isolation: isolate; color: var(--ui-fg); background: var(--ui-bg); font-family: var(--font-display); transition: color .25s ease, background .25s ease; }
 .ui-screen-grid { position: absolute; z-index: -1; inset: 0; opacity: 0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 24px 24px; }
 .ui-screen-header { display: flex; align-items: center; justify-content: space-between; height: 42px; padding: 0 17px; border-bottom: 1px solid color-mix(in srgb, var(--ui-fg) 14%, transparent); font-size: 7px; font-weight: 700; letter-spacing: .18em; }
 .ui-network { display: flex; align-items: flex-end; gap: 2px; height: 8px; }

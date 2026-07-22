@@ -14,7 +14,12 @@ import {
 } from "@nestjs/common";
 
 import { sha256File, signResourceManifest } from "../../../../scripts/lib/resource-manifest.mjs";
-import { inspectUiPackFile, UI_PACK_MAX_BYTES } from "../../../../scripts/lib/ui-pack.mjs";
+import {
+  buildUiPack,
+  inspectUiPackFile,
+  suggestedUiPackFileName,
+  UI_PACK_MAX_BYTES,
+} from "../../../../scripts/lib/ui-pack.mjs";
 import type { Principal } from "../auth/auth.types.js";
 import { ResourceCatalogService, type ArtifactRecord } from "./resource-catalog.service.js";
 
@@ -22,6 +27,9 @@ interface UploadContext {
   principal: Principal;
   requestId: string;
 }
+
+const standardThemeIds = ["signal", "monolith", "quiet"] as const;
+export type StandardUiThemeId = (typeof standardThemeIds)[number];
 
 class SizeLimiter extends Transform {
   private bytes = 0;
@@ -44,6 +52,38 @@ class SizeLimiter extends Transform {
 @Injectable()
 export class UiPackUploadService {
   constructor(private readonly catalog: ResourceCatalogService) {}
+
+  async stageStandard(
+    themeId: string,
+    context: UploadContext,
+  ): Promise<ArtifactRecord> {
+    if (!standardThemeIds.includes(themeId as StandardUiThemeId)) {
+      throw new BadRequestException("Unknown standard UI theme");
+    }
+    const sourceRoot = resolve(
+      process.env.VEETEE_UI_PACK_SOURCE_ROOT ?? resolve(process.cwd(), "../../ui-packs"),
+    );
+    try {
+      const built = await buildUiPack(resolve(sourceRoot, themeId));
+      return await this.stage(
+        Readable.from([built.buffer]),
+        suggestedUiPackFileName(built.manifest),
+        context,
+      );
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof PayloadTooLargeException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
+      throw new ServiceUnavailableException(
+        error instanceof Error ? `Standard UI Pack is unavailable: ${error.message}` : "Standard UI Pack is unavailable",
+      );
+    }
+  }
 
   async stage(
     body: unknown,

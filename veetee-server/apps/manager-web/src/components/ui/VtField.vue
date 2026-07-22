@@ -8,7 +8,7 @@ defineProps<{
 </script>
 
 <template>
-  <label class="vt-field" :class="{ 'has-error': error }">
+  <label class="vt-field" :class="{ 'has-error': Boolean(error) }">
     <span class="vt-field-label">
       {{ label }}
       <i v-if="required" aria-hidden="true">*</i>

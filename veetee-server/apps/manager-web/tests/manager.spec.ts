@@ -17,11 +17,13 @@ async function mockManagerApi(
     withDevice?: boolean;
     withConversationEvents?: boolean;
     withResources?: boolean;
+    withRollouts?: boolean;
     rolloutCalls?: unknown[];
     toolCalls?: unknown[];
     agentPatches?: unknown[];
     providerPatches?: unknown[];
     uiUploads?: unknown[];
+    standardUiStages?: unknown[];
     uiRollouts?: unknown[];
     labSessionCalls?: unknown[];
   } = {},
@@ -57,7 +59,35 @@ async function mockManagerApi(
                 status: "online",
                 firmwareVersion: "0.1.0",
                 desiredState: { version: 2, state: {} },
-                reportedState: { version: 2, state: {} },
+                reportedState: {
+                  version: 42,
+                  state: {
+                    capabilities: {
+                      board: "veetee-s3-n16r8",
+                      display: {
+                        target: "st7789-240x280-rgb565",
+                        controller: "st7789",
+                        width: 240,
+                        height: 280,
+                        colorFormat: "rgb565",
+                        resourceAbi: 2,
+                        uiAbi: 1,
+                        slotBytes: 2_097_152,
+                        hotReload: true,
+                        compositions: ["signal", "monolith", "quiet"],
+                      },
+                      wake: {
+                        runtime: "esp-sr",
+                        runtimeAbi: 1,
+                        resourceAbi: 1,
+                        slotBytes: 2_097_152,
+                        sampleRateHz: 16_000,
+                        channels: 1,
+                        hotReload: true,
+                      },
+                    },
+                  },
+                },
                 pairedAt: "2026-07-22T00:00:00.000Z",
               },
             ]
@@ -165,7 +195,17 @@ async function mockManagerApi(
       );
     }
     if (url.pathname === "/api/v1/resource-rollouts" && request.method() === "GET") {
-      return json([]);
+      return json(options.withRollouts ? [
+        {
+          id: "cb00e69d-e7c3-4e72-bfd0-37711ec4ebbf",
+          deviceId,
+          artifactId: "stable",
+          wakeProfileVersion: 2,
+          status: "active",
+          desiredStateVersion: 3,
+          createdAt: "2026-07-22T03:50:00.000Z",
+        },
+      ] : []);
     }
     if (url.pathname === "/api/v1/resource-rollouts" && request.method() === "POST") {
       options.rolloutCalls?.push(request.postDataJSON());
@@ -182,7 +222,16 @@ async function mockManagerApi(
       ]);
     }
     if (url.pathname === "/api/v1/ui-packs/rollouts" && request.method() === "GET") {
-      return json([]);
+      return json(options.withRollouts ? [
+        {
+          id: "76d98993-d0b3-45a8-a2e7-6f00942c6fd7",
+          deviceId,
+          artifactId: "ui-signal-1.0.0",
+          status: "complete",
+          desiredStateVersion: 4,
+          createdAt: "2026-07-22T04:00:00.000Z",
+        },
+      ] : []);
     }
     if (url.pathname === "/api/v1/ui-packs/uploads" && request.method() === "POST") {
       options.uiUploads?.push({
@@ -211,11 +260,41 @@ async function mockManagerApi(
         createdAt: "2026-07-22T03:44:00.000Z",
       });
     }
-    if (url.pathname === "/api/v1/artifacts/ui-signal-1.0.0/publish") {
+    const standardUiMatch = url.pathname.match(
+      /^\/api\/v1\/ui-packs\/standard\/(signal|monolith|quiet)\/stage$/,
+    );
+    if (standardUiMatch && request.method() === "POST") {
+      const theme = standardUiMatch[1]!;
+      options.standardUiStages?.push(theme);
       return json({
-        id: "ui-signal-1.0.0",
+        id: `ui-${theme}-1.1.0`,
         kind: "display_assets",
-        version: "1.0.0",
+        version: "1.1.0",
+        channel: "stable",
+        sizeBytes: 5108,
+        sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+        contentType: "application/vnd.veetee.ui-pack",
+        runtime: "veetee-ui",
+        runtimeAbi: 1,
+        license: "MIT",
+        board: "veetee-s3-n16r8",
+        minFirmware: "0.3.0",
+        maxFirmware: "0.4.0",
+        signatureKeyId: "veetee-dev-release-2026-01",
+        securityEpoch: 1,
+        benchmarkStatus: "not_run",
+        status: "validated",
+        createdAt: "2026-07-22T03:44:00.000Z",
+      });
+    }
+    const publishUiMatch = url.pathname.match(
+      /^\/api\/v1\/artifacts\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1)\.0)\/publish$/,
+    );
+    if (publishUiMatch) {
+      return json({
+        id: publishUiMatch[1]!,
+        kind: "display_assets",
+        version: publishUiMatch[1]!.endsWith("1.1.0") ? "1.1.0" : "1.0.0",
         channel: "stable",
         sizeBytes: 19,
         sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
@@ -234,13 +313,16 @@ async function mockManagerApi(
         createdAt: "2026-07-22T03:44:00.000Z",
       });
     }
-    if (url.pathname === "/api/v1/ui-packs/ui-signal-1.0.0/rollout") {
+    const rolloutUiMatch = url.pathname.match(
+      /^\/api\/v1\/ui-packs\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1)\.0)\/rollout$/,
+    );
+    if (rolloutUiMatch) {
       options.uiRollouts?.push(request.postDataJSON());
       return json([
         {
           id: "76d98993-d0b3-45a8-a2e7-6f00942c6fd7",
           deviceId,
-          artifactId: "ui-signal-1.0.0",
+          artifactId: rolloutUiMatch[1]!,
           status: "active",
           desiredStateVersion: 3,
           createdAt: "2026-07-22T03:50:00.000Z",
@@ -416,14 +498,16 @@ test("logs in and renders API-backed control room", async ({ page }) => {
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
-  await expect(page.locator(".profile-card b")).toHaveText("Veetee Owner");
-  await expect(page.locator(".agent-poster h2")).toHaveText("Veetee Việt");
-  await expect(page.locator(".release-hero")).toContainText("CHƯA CÓ ARTIFACT");
+  await expect(page.locator(".profile-button")).toContainText("Veetee Owner");
+  await expect(page.locator(".agent-spotlight h3")).toHaveText("Veetee Việt");
+  await expect(page.locator(".desktop-nav button")).toHaveCount(6);
 
   await page.locator('[data-page-link="providers"]').first().click();
-  await expect(page.locator(".provider-table")).toContainText("cx/gpt-5.6-terra");
-  await page.getByRole("button", { name: "Test" }).click();
-  await expect(page.locator(".provider-row").nth(1)).toContainText("healthy");
+  await expect(page.locator(".provider-grid")).toContainText("cx/gpt-5.6-terra");
+  await expect(page.locator(".vt-operations-hero")).toContainText("Hệ điều phối AI");
+  await expect(page.locator(".vt-metric-strip article")).toHaveCount(3);
+  await page.getByRole("button", { name: "Test runtime" }).click();
+  await expect(page.locator(".provider-card")).toContainText("Khỏe");
 });
 
 test("uses one Vietnamese font and a consistent focus treatment for form controls", async ({
@@ -451,7 +535,7 @@ test("uses one Vietnamese font and a consistent focus treatment for form control
   expect(style.fontFamily).toContain("Be Vietnam Pro");
   expect(style.appearance).toBe("none");
   expect(style.outlineStyle).toBe("none");
-  expect(style.boxShadow).toContain("rgba(33, 66, 85, 0.12)");
+  expect(style.boxShadow).toContain("rgba(26, 66, 74, 0.12)");
 
   await page.evaluate(() => document.fonts.ready);
   const fontResources = await page.evaluate(() =>
@@ -464,28 +548,82 @@ test("uses one Vietnamese font and a consistent focus treatment for form control
   expect(fontResources.some((name) => name.includes("-vietnamese-"))).toBe(true);
 });
 
-test("keeps the approved mobile navigation", async ({ page }) => {
+test("uses an accessible Headless UI mobile navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockManagerApi(page);
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
-  const menuToggle = page.locator("[data-mobile-menu]");
+  const menuToggle = page.locator(".mobile-menu-button");
   await expect(menuToggle).toBeVisible();
-  await expect(page.locator(".primary-nav")).toBeHidden();
+  await expect(page.locator(".mobile-nav-panel")).toBeHidden();
   await menuToggle.click();
-  await expect(page.locator(".primary-nav")).toBeVisible();
-  await expect(page.locator(".primary-nav")).toHaveCSS("position", "fixed");
-  await expect(page.locator(".mobile-brand")).toBeVisible();
-  await expect(page.locator(".mobile-brand")).toHaveText("manager");
-  const navBox = await page.locator(".primary-nav").boundingBox();
-  expect(navBox?.x).toBeGreaterThanOrEqual(0);
+  await expect(page.locator(".mobile-nav-panel")).toBeVisible();
+  await expect(page.locator(".mobile-nav-panel")).toHaveCSS("position", "fixed");
+  await expect(page.locator(".mobile-nav-panel .brand-lockup")).toContainText("veetee");
+  await expect.poll(async () => (await page.locator(".mobile-nav-panel").boundingBox())?.x ?? -999).toBeGreaterThanOrEqual(0);
+  const navBox = await page.locator(".mobile-nav-panel").boundingBox();
   expect((navBox?.x ?? 0) + (navBox?.width ?? 0)).toBeLessThanOrEqual(390);
-  await expect(page.locator(".nav-item")).toHaveCount(8);
-  await page.locator('.nav-item[data-page-link="providers"]').click();
+  await expect(page.locator(".mobile-nav-panel nav button")).toHaveCount(6);
+  await page.locator(".mobile-nav-panel nav button").filter({ hasText: "Providers" }).click();
   await expect(page.locator('[data-page="providers"]')).toBeVisible();
-  await expect(page.locator(".primary-nav")).toBeHidden();
+  await expect(page.locator(".mobile-nav-panel")).toBeHidden();
+});
+
+test("renders semantic device delivery and a unified rollout history", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true, withRollouts: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="devices"]').first().click();
+  const delivery = page.locator("[data-device-delivery]");
+  await expect(delivery).toHaveAttribute("data-delivery-state", "unmanaged");
+  await expect(delivery).toContainText("không được dùng để suy ra drift");
+  await expect(delivery).toContainText("Desired revision");
+  await expect(delivery).toContainText("Report sequence");
+
+  await page.getByRole("tab", { name: /MCP live/ }).click();
+  await expect.poll(async () => {
+    const columns = await page.locator(".mcp-toolbar.is-embedded").evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    return columns.trim().split(/\s+/).length;
+  }).toBe(1);
+
+  await page.getByRole("tab", { name: /Telemetry/ }).click();
+  await expect.poll(async () => {
+    const columns = await page.locator(".telemetry-toolbar.is-embedded").evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+    return columns.trim().split(/\s+/).length;
+  }).toBe(2);
+
+  await page.locator('[data-page-link="resources"]').first().click();
+  await page.getByRole("tab", { name: /Rollouts/ }).click();
+  await expect(page.locator(".vt-operations-hero")).toContainText("Phân phối có xác nhận");
+  await expect(page.locator(".vt-metric-strip article")).toHaveCount(3);
+  const history = page.locator("[data-rollout-history]");
+  await expect(history.locator("article")).toHaveCount(2);
+  await expect(history).toContainText("Wake / model");
+  await expect(history).toContainText("UI Pack");
+  await expect(history).toContainText("Chờ thiết bị");
+  await expect(history).toContainText("Đã áp dụng");
+});
+
+test("keeps all five device tabs usable without mobile page overflow", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const tabs = page.locator(".device-tabs");
+  await expect(tabs.getByRole("tab")).toHaveCount(5);
+  await expect.poll(async () => tabs.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await tabs.getByRole("tab", { name: /Telemetry/ }).click();
+  await expect(page.locator('[data-page="telemetry"]')).toBeVisible();
 });
 
 test("shows only the input panel selected in Realtime Lab", async ({ page }) => {
@@ -523,7 +661,14 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
-  await page.locator('[data-page-link="device-ui"]').first().click();
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByRole("tab", { name: /Display \/ UI/ }).click();
+  const capabilityBadge = page.locator(".capability-gate > .vt-badge");
+  const capabilityBadgeBox = await capabilityBadge.boundingBox();
+  expect(capabilityBadgeBox?.width ?? 0).toBeGreaterThan(capabilityBadgeBox?.height ?? 0);
+  const fileBadge = page.locator("[data-ui-upload-status]");
+  const fileBadgeBox = await fileBadge.boundingBox();
+  expect(fileBadgeBox?.width ?? 0).toBeGreaterThan(fileBadgeBox?.height ?? 0);
   const preview = page.locator("[data-ui-preview]");
   await expect(preview).toHaveAttribute("data-theme", "signal");
   await expect(page.locator("#uiPreviewName")).toHaveText("01 / Signal");
@@ -531,8 +676,9 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   await page.locator('[data-ui-theme="monolith"]').click();
   await expect(preview).toHaveAttribute("data-theme", "monolith");
   await expect(page.locator("#uiPreviewName")).toHaveText("02 / Monolith");
-  await page.locator('[data-ui-state="pairingLost"]').click();
-  await expect(preview).toContainText("Cần kết nối lại.");
+  await page.locator('[data-ui-state="pairing_recovery"]').click();
+  await expect(preview).toHaveAttribute("data-state", "pairing_recovery");
+  await expect(page.locator(".firmware-contract-card")).toContainText("PAIRING LOST");
 
   await page.locator("[data-ui-pack-file]").setInputFiles({
     name: "veetee-signal.vtp",
@@ -543,6 +689,9 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   await expect(page.locator("[data-ui-file-name]")).toHaveText("veetee-signal.vtp");
   const action = page.locator("[data-ui-stage-pack]");
   await expect(action).toBeEnabled();
+  const actionBox = await action.boundingBox();
+  const uploadPanelBox = await page.locator(".upload-panel").boundingBox();
+  expect(actionBox?.width ?? 0).toBeGreaterThan((uploadPanelBox?.width ?? 0) * 0.8);
   await action.click();
   await expect(action).toHaveText("Publish UI Pack");
   await action.click();
@@ -560,6 +709,27 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   await expect.poll(() => uiRollouts).toEqual([{ deviceIds: [deviceId] }]);
 });
 
+test("builds, publishes and rolls out the selected standard firmware UI", async ({ page }) => {
+  const standardUiStages: unknown[] = [];
+  const uiRollouts: unknown[] = [];
+  await mockManagerApi(page, { withDevice: true, standardUiStages, uiRollouts });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByRole("tab", { name: /Display \/ UI/ }).click();
+  await page.locator('[data-ui-theme="monolith"]').click();
+  await page.locator("[data-apply-standard-theme]").click();
+
+  await expect(page.locator(".firmware-contract-card")).toContainText(
+    "Đã đặt Monolith làm desired UI cho Veetee Lab.",
+  );
+  await expect.poll(() => standardUiStages).toEqual(["monolith"]);
+  await expect.poll(() => uiRollouts).toEqual([{ deviceIds: [deviceId] }]);
+});
+
 test("edits provider routing and rotates secrets without reading the old secret", async ({
   page,
 }) => {
@@ -571,7 +741,7 @@ test("edits provider routing and rotates secrets without reading the old secret"
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
   await page.locator('[data-page-link="providers"]').first().click();
-  await page.getByRole("button", { name: "Sửa" }).click();
+  await page.getByRole("button", { name: "Cấu hình" }).click();
   await page.getByLabel("Priority").fill("20");
   await page.getByLabel("Locales").fill("vi-VN, en-US");
   await page.locator('select[name="secretAction"]').selectOption("rotate");
@@ -600,8 +770,9 @@ test("builds a live MCP form from the device JSON Schema", async ({ page }) => {
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
-  await page.locator('[data-page-link="mcp"]').first().click();
-  await expect(page.locator(".tool-detail")).toContainText("Live device catalog");
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByRole("tab", { name: /MCP live/ }).click();
+  await expect(page.locator(".mcp-toolbar")).toContainText("Live device catalog");
   await page.getByLabel("volume").fill("55");
   await page.getByRole("button", { name: "Chạy trên thiết bị" }).click();
 
@@ -621,8 +792,8 @@ test("publishes bounded conversation changes without dropping extension fields",
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
   await page.locator('[data-page-link="agents"]').first().click();
-  await page.getByLabel("Chờ câu đầu (giây)").fill("20");
-  await page.getByLabel("Giới hạn phiên (giây)").fill("900");
+  await page.getByLabel("Chờ câu đầu").fill("20");
+  await page.getByLabel("Giới hạn phiên").fill("900");
   await page.getByRole("button", { name: /Publish version/ }).click();
 
   await expect.poll(() => agentPatches).toHaveLength(1);
@@ -756,7 +927,7 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
   ]);
 });
 
-test("shows signed wake resources and creates desired rollout without claiming apply", async ({
+test("keeps wake profiles global but applies them from a compatible online device", async ({
   page,
 }) => {
   const rolloutCalls: unknown[] = [];
@@ -766,15 +937,19 @@ test("shows signed wake resources and creates desired rollout without claiming a
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
-  await page.locator('[data-page-link="ota"]').first().click();
-  await expect(page.locator(".release-hero")).toContainText("Resource 1.0.0");
-  await expect(page.locator(".release-list")).toContainText("bring-up/not benchmarked");
-  await page.getByRole("button", { name: "Rollout →" }).click();
+  await page.locator('[data-page-link="resources"]').first().click();
+  await page.getByRole("tab", { name: /Wake profiles/ }).click();
+  await expect(page.locator(".wake-list")).toContainText("Hi ESP");
+  await expect(page.locator(".wake-list")).toContainText("Chưa benchmark");
+  await expect(page.locator(".wake-list")).toContainText("Áp dụng trong Thiết bị");
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByRole("tab", { name: /Wake word/ }).click();
+  await page.locator("[data-apply-wake-profile]").click();
   await expect.poll(() => rolloutCalls).toEqual([
     {
       wakeProfileId: "a9dc1d82-e265-47cc-a6a0-73f938dcf3b8",
       deviceIds: [deviceId],
     },
   ]);
-  await expect(page.locator("#toast")).toContainText("chờ reported state");
+  await expect(page.locator(".vt-toast")).toContainText("desired rollout");
 });

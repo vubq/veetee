@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildUiPack } from "../../../../scripts/lib/ui-pack.mjs";
+import { buildUiPack, inspectUiPackBuffer } from "../../../../scripts/lib/ui-pack.mjs";
 import type { Principal } from "../auth/auth.types.js";
 import { ArtifactFilesService } from "./artifact-files.service.js";
 import type { ResourceCatalogService } from "./resource-catalog.service.js";
@@ -88,7 +88,7 @@ describe("UiPackUploadService", () => {
     );
 
     expect(artifact).toMatchObject({
-      id: "ui-signal-1.0.0",
+      id: "ui-signal-1.1.0",
       kind: "display_assets",
       runtime: "veetee-ui",
       runtimeAbi: 1,
@@ -98,7 +98,7 @@ describe("UiPackUploadService", () => {
     expect(registerArtifact).toHaveBeenCalledTimes(1);
     await expect(manifests.validate(artifact.id)).resolves.toMatchObject({
       kind: "display_assets",
-      version: "1.0.0",
+      version: "1.1.0",
     });
   });
 
@@ -114,5 +114,27 @@ describe("UiPackUploadService", () => {
       }),
     ).rejects.toThrow(/magic|header|size|unexpectedly/i);
     expect(registerArtifact).not.toHaveBeenCalled();
+  });
+
+  it("builds a selected standard theme before passing it through normal staging", async () => {
+    const service = new UiPackUploadService({} as ResourceCatalogService);
+    const artifact = { id: "ui-quiet-1.1.0" } as Awaited<ReturnType<UiPackUploadService["stage"]>>;
+    const stage = vi.spyOn(service, "stage").mockImplementation(async (body, fileName) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of body as Readable) chunks.push(Buffer.from(chunk));
+      const inspected = await inspectUiPackBuffer(Buffer.concat(chunks));
+      expect(fileName).toBe("quiet-1.1.0.vtp");
+      expect(inspected.manifest.theme_id).toBe("quiet");
+      expect(inspected.theme.composition).toBe("quiet");
+      return artifact;
+    });
+
+    await expect(
+      service.stageStandard("quiet", { principal, requestId: "standard-quiet" }),
+    ).resolves.toBe(artifact);
+    expect(stage).toHaveBeenCalledOnce();
+    await expect(
+      service.stageStandard("custom-script", { principal, requestId: "standard-invalid" }),
+    ).rejects.toThrow(/unknown standard UI theme/i);
   });
 });

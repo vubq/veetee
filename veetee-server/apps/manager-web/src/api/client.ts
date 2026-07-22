@@ -18,11 +18,9 @@ import {
   type Agent,
   type Provider,
 } from "./schemas";
+import { resolveManagerApiBaseUrl } from "./base-url";
 
-const apiBaseUrl = (import.meta.env.VITE_MANAGER_API_URL ?? "http://127.0.0.1:8001").replace(
-  /\/$/,
-  "",
-);
+const apiBaseUrl = resolveManagerApiBaseUrl(import.meta.env.VITE_MANAGER_API_URL);
 const tokenStorageKey = "veetee.manager.access-token";
 
 let accessToken = sessionStorage.getItem(tokenStorageKey) ?? "";
@@ -239,6 +237,14 @@ export const managerApi = {
       },
       body: file,
     });
+  },
+
+  stageStandardUiPack(theme: "signal" | "monolith" | "quiet") {
+    return request(
+      `/api/v1/ui-packs/standard/${encodeURIComponent(theme)}/stage`,
+      artifactSchema,
+      { method: "POST" },
+    );
   },
 
   rolloutUiPack(id: string, deviceIds: string[]) {

@@ -278,7 +278,7 @@ button {
 .device-screen {
   position: relative;
   width: 240px;
-  height: 320px;
+  height: 280px;
   overflow: hidden;
   isolation: isolate;
 }

@@ -2,7 +2,7 @@
 
 ## 1. Quyết định sản phẩm
 
-Veetee giữ ba visual direction cho ST7789 dọc `240x320`:
+Veetee giữ ba visual direction cho ST7789 dọc `240x280`:
 
 | ID | Tên | Phân phối | Vai trò |
 |---|---|---|---|
@@ -15,9 +15,13 @@ presentation; UI Pack không có quyền thay TurnArbiter, state machine, admiss
 policy, provider routing, MCP permission hoặc executable behavior.
 
 Signal tối thiểu luôn nằm trong executable để boot, provisioning, pairing code,
-pairing recovery và lỗi artifact vẫn hiển thị nếu cả hai UI slot đều hỏng. Monolith
-và Quiet không cần compile vào firmware; source chuẩn của ba pack nằm trong
-`veetee-server/ui-packs/` để build reproducible.
+pairing recovery và lỗi artifact vẫn hiển thị nếu cả hai UI slot đều hỏng. Ba
+composition hình học `signal`, `monolith`, `quiet` đều compile sẵn như một
+allowlist an toàn; đo trên ELF hiện tại, ba hàm renderer chỉ chiếm khoảng 1.3 KiB
+text tổng cộng. Palette, locale và asset của từng giao diện không nhúng cả ba vào
+app image mà nằm trong pack tương ứng. Cách này nhẹ hơn nhiều so với ảnh/font/audio,
+đồng thời tránh OTA toàn firmware hoặc thực thi layout code động khi đổi UI. Source
+chuẩn của ba pack nằm trong `veetee-server/ui-packs/` để build reproducible.
 
 ## 2. Kiến trúc lưu trữ
 
@@ -77,14 +81,14 @@ Manifest trong container hiện dùng schema:
 {
   "schema_version": 1,
   "kind": "ui_pack",
-  "id": "ui-signal-1.0.0",
-  "version": "1.0.0",
+  "id": "ui-signal-1.1.0",
+  "version": "1.1.0",
   "theme_id": "signal",
   "channel": "stable",
   "license": "MIT",
   "target": {
     "board": "veetee-s3-n16r8",
-    "display": "st7789-240x320-rgb565"
+    "display": "st7789-240x280-rgb565"
   },
   "compatibility": {
     "resource_abi": 2,
@@ -132,9 +136,27 @@ không phụ thuộc font pack trong boot/recovery. Áp dụng localized strings
 icon/background và product earcon là phần mở rộng kế tiếp của cùng data-only ABI;
 không được quảng bá là đã render đầy đủ tiếng Việt có dấu trước hardware/font test.
 
-## 5. Manager upload, publish và rollout
+## 5. Manager chọn, tạo pack, publish và rollout
 
-Luồng đã triển khai:
+Luồng chính cho ba giao diện chuẩn đã triển khai:
+
+```text
+chọn Signal / Monolith / Quiet trên software twin
+  -> POST /api/v1/ui-packs/standard/:theme/stage
+  -> server build deterministic VTPACK1 từ source chuẩn
+  -> chạy cùng quarantine/parser/hash/signature pipeline như file upload
+  -> publish immutable artifact
+  -> rollout explicit device
+  -> desired state.ui
+  -> device download content.bin vào inactive ui slot
+  -> verify/apply/report
+```
+
+Người dùng không phải tự tạo hoặc chọn file. Extension chuẩn của artifact nguồn là
+`.vtp`; Manager lưu payload phân phối dưới tên `content.bin`, còn firmware quyết
+định hợp lệ bằng magic `VTPACK1`, ABI và chữ ký chứ không dựa vào đuôi file.
+
+Upload thủ công vẫn tồn tại như luồng nâng cao:
 
 ```text
 select/drop file
@@ -156,8 +178,10 @@ cầu ADMIN; rollout yêu cầu OPERATOR; mutation có tenant scope và audit/re
 Publish không có nghĩa device đã apply. Rollout chỉ terminal khi reported `state.ui`
 xác nhận `active`, `failed` hoặc `rolled_back`.
 
-Ba standard pack `ui-signal-1.0.0`, `ui-monolith-1.0.0` và `ui-quiet-1.0.0` đã build,
-inspect, ký và publish trong local artifact store; binary generated không commit Git.
+Ba standard template `ui-signal-1.1.0`, `ui-monolith-1.1.0` và
+`ui-quiet-1.1.0` đã build/inspect deterministic; binary generated không commit Git.
+Manager có thể tạo, ký, publish và rollout lại từ Web qua endpoint chuẩn mà không
+buffer pack upload tùy ý trong browser.
 Không có domain không chặn luồng LAN. HTTP/IP có thể làm Web Crypto browser không
 khả dụng, nhưng server-side stream/hash/signature vẫn là authority.
 
@@ -204,6 +228,8 @@ Firmware không phân nhánh theo exact phrase như `dừng lại` để chọn 
 Đã pass trên host/build:
 
 - deterministic build/inspect cho Signal, Monolith và Quiet;
+- Web chọn standard theme -> server build/stage -> publish -> desired rollout;
+- test chống drift giữa Web software twin, C++ renderer, state order và Signal RGB565;
 - corruption, executable member và path traversal rejection;
 - Manager upload/publish/rollout E2E;
 - simulated firmware `0.3.0` bootstrap + `state.ui` complete;

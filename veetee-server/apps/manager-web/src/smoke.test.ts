@@ -1,27 +1,43 @@
 import { describe, expect, it } from "vitest";
 
-import prototypePage from "../../../prototypes/manager-web/index.html?raw";
+import managerShell from "./components/ManagerShell.vue?raw";
+import devicesPage from "./components/pages/DevicesPage.vue?raw";
+import deviceUiPage from "./components/pages/DeviceUiPage.vue?raw";
+import realtimeLabPage from "./components/pages/RealtimeLabPage.vue?raw";
+import firmwareContract from "./device-ui/firmware-contract.ts?raw";
 
-describe("approved manager prototype", () => {
-  it("keeps all primary product pages", () => {
-    for (const page of [
-      "overview",
-      "devices",
-      "device-ui",
-      "agents",
-      "providers",
-      "lab",
-      "mcp",
-      "ota",
+describe("Vue-native Manager Web", () => {
+  it("routes every primary product area through Vue page components", () => {
+    for (const component of [
+      "OverviewPage",
+      "DevicesPage",
+      "AgentsPage",
+      "ProvidersPage",
+      "RealtimeLabPage",
+      "ResourcesPage",
     ]) {
-      expect(prototypePage).toContain(`data-page="${page}"`);
+      expect(managerShell).toContain(component);
+    }
+    expect(managerShell).not.toContain("prototypePage");
+    expect(managerShell).not.toContain("v-html");
+    expect(managerShell).not.toContain("initializePrototype");
+    for (const devicePanel of ["DeviceUiPage", "DeviceWakePanel", "McpPage", "TelemetryPage"]) {
+      expect(devicesPage).toContain(devicePanel);
     }
   });
 
-  it("keeps Signal as the built-in default and exposes UI Pack ingest", () => {
-    expect(prototypePage).toContain('data-ui-preview data-theme="signal"');
-    expect(prototypePage).toContain('data-ui-theme="monolith"');
-    expect(prototypePage).toContain('data-ui-theme="quiet"');
-    expect(prototypePage).toContain("data-ui-pack-file");
+  it("keeps Signal as the default UI and all three built-in themes", () => {
+    expect(deviceUiPage).toContain('ref<FirmwareComposition>("signal")');
+    expect(firmwareContract).toContain('firmwareTheme(signalTheme, "01", "Signal"');
+    expect(firmwareContract).toContain('firmwareTheme(monolithTheme, "02", "Monolith"');
+    expect(firmwareContract).toContain('firmwareTheme(quietTheme, "03", "Quiet"');
+    expect(deviceUiPage).toContain("stageStandardUiPack");
+    expect(deviceUiPage).toContain("data-ui-pack-file");
+  });
+
+  it("implements Realtime Lab as Vue state instead of DOM selectors", () => {
+    expect(realtimeLabPage).toContain("useRealtimeLab");
+    expect(realtimeLabPage).not.toContain("querySelector");
+    expect(realtimeLabPage).not.toContain("innerHTML");
   });
 });
