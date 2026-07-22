@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/vue-query";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
 
 import prototypePage from "../../../../prototypes/manager-web/index.html?raw";
+import ProviderDialog from "./providers/ProviderDialog.vue";
 import { managerApi } from "../api/client";
 import { initializeRealtimeLab, type RealtimeLabController } from "../lab-controller";
 import {
@@ -231,5 +232,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" v-html="body"></div>
+  <div ref="root">
+    <div v-html="body"></div>
+    <ProviderDialog />
+  </div>
 </template>

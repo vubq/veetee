@@ -153,6 +153,23 @@ function queryAll<T extends Element>(root: ParentNode, selector: string): T[] {
   return [...root.querySelectorAll<T>(selector)];
 }
 
+function enhanceFormControls(root: ParentNode): void {
+  queryAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+    root,
+    "input, select, textarea",
+  ).forEach((control) => {
+    if (control instanceof HTMLInputElement) {
+      if (["hidden", "checkbox", "radio", "file"].includes(control.type)) return;
+      control.classList.add("vt-control", "vt-input");
+    } else if (control instanceof HTMLSelectElement) {
+      control.classList.add("vt-control", "vt-select");
+    } else {
+      control.classList.add("vt-control", "vt-textarea");
+    }
+    control.closest("label")?.classList.add("vt-field");
+  });
+}
+
 function escapeHtml(value: unknown): string {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -258,7 +275,7 @@ function renderProviders(root: HTMLElement, providers: Provider[]): void {
   if (table) {
     table.innerHTML = `<div class="provider-row table-head"><span>Provider</span><span>Loại</span><span>Locale / model</span><span>Latency</span><span>Health / circuit</span><span></span></div>${providers
       .map(
-        (provider) => `<div class="provider-row"><span><i class="provider-logo local">${escapeHtml(provider.kind.slice(0, 2).toUpperCase())}</i><b>${escapeHtml(provider.adapter)}</b></span><span>${escapeHtml(provider.kind.toUpperCase())}<small>P${provider.priority}</small></span><span>${escapeHtml(provider.model)}<small>${escapeHtml(provider.locales.join(", "))} · ${provider.secretConfigured ? "secret" : "no secret"}</small></span><span>${provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "—"}<small>${provider.healthCheckedAt ? new Date(provider.healthCheckedAt).toLocaleTimeString("vi-VN") : "chưa test"}</small></span><span class="health-text ${provider.health === "healthy" ? "ok-text" : provider.health === "degraded" ? "warn-text" : ""}">${escapeHtml(provider.health)} · ${escapeHtml(provider.circuitState)}${provider.healthErrorCode ? `<small>${escapeHtml(provider.healthErrorCode)}</small>` : ""}</span><span><button class="edit-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Sửa</button> <button class="test-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Test</button></span></div>`,
+        (provider) => `<div class="provider-row"><span class="provider-name"><i class="provider-logo local">${escapeHtml(provider.kind.slice(0, 2).toUpperCase())}</i><b>${escapeHtml(provider.adapter)}</b></span><span class="provider-kind" data-label="Loại">${escapeHtml(provider.kind.toUpperCase())}<small>P${provider.priority}</small></span><span class="provider-model" data-label="Model">${escapeHtml(provider.model)}<small>${escapeHtml(provider.locales.join(", "))} · ${provider.secretConfigured ? "secret" : "no secret"}</small></span><span class="provider-latency" data-label="Latency">${provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "—"}<small>${provider.healthCheckedAt ? new Date(provider.healthCheckedAt).toLocaleTimeString("vi-VN") : "chưa test"}</small></span><span class="provider-health-state health-text ${provider.health === "healthy" ? "ok-text" : provider.health === "degraded" ? "warn-text" : ""}" data-label="Health">${escapeHtml(provider.health)} · ${escapeHtml(provider.circuitState)}${provider.healthErrorCode ? `<small>${escapeHtml(provider.healthErrorCode)}</small>` : ""}</span><span class="provider-actions"><button class="edit-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Sửa</button><button class="test-provider" data-provider-id="${escapeHtml(provider.id)}" type="button">Test</button></span></div>`,
       )
       .join("")}`;
   }
@@ -609,8 +626,20 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
       .join("");
   }
   const lan = query<HTMLElement>(root, ".sidebar-note strong");
+  const lanDescription = query<HTMLElement>(root, ".sidebar-note > span:not(.eyebrow)");
   const health = query<HTMLElement>(root, ".mini-health");
-  if (lan) lan.textContent = data.apiHost;
+  if (lan) {
+    const remote = data.apiHost.includes(".ts.net");
+    const local = /^(localhost|127\.0\.0\.1)(:|$)/.test(data.apiHost);
+    lan.textContent = remote ? "Remote test" : local ? "Local console" : "Manager API";
+    lan.title = data.apiHost;
+  }
+  if (lanDescription) {
+    lanDescription.textContent = data.apiHost.includes(".ts.net")
+      ? "Tailscale · HTTPS"
+      : "Không cần domain";
+    lanDescription.title = data.apiHost;
+  }
   if (health) {
     health.innerHTML = `<i></i> ${data.ready ? "Manager API sẵn sàng" : "Manager API suy giảm"}`;
     health.classList.toggle("degraded", !data.ready);
@@ -645,6 +674,7 @@ export function renderManagerView(root: HTMLElement, data: ManagerViewData): voi
   renderTelemetry(root, data);
   renderResources(root, data);
   renderAvailability(root, data);
+  enhanceFormControls(root);
 }
 
 export function initializePrototype(
@@ -654,13 +684,7 @@ export function initializePrototype(
   const abort = new AbortController();
   const signal = abort.signal;
   let toastTimer = 0;
-
-  if (!query(root, "#providerModal")) {
-    root.insertAdjacentHTML(
-      "beforeend",
-      `<div class="modal-backdrop" id="providerModal" hidden><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="providerTitle"><button class="modal-close" type="button" data-close-provider-modal aria-label="Đóng">×</button><span class="modal-kicker">PROVIDER BINDING</span><h2 id="providerTitle">Cấu hình provider</h2><form class="provider-edit-form"><input type="hidden" name="providerId"><label>Adapter<input name="adapter" required maxlength="120"></label><label>Model<input name="model" required maxlength="200"></label><label>Base URL<input name="baseUrl" placeholder="http://127.0.0.1:20128/v1"></label><div class="two-cols"><label>Priority<input name="priority" type="number" min="0" max="1000" required></label><label>Locales<input name="locales" placeholder="vi-VN, en-US" required></label></div><div class="two-cols"><label>Trạng thái<select name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label><label>Secret<select name="secretAction"><option value="keep">Giữ nguyên</option><option value="rotate">Thay secret</option><option value="clear">Xóa secret</option></select></label></div><label>Secret mới<input name="secret" type="password" autocomplete="new-password" placeholder="Chỉ nhập khi chọn Thay secret"></label><button class="button button-primary modal-submit" type="submit">Lưu provider</button></form></div></div>`,
-    );
-  }
+  enhanceFormControls(root);
 
   const listen = (target: EventTarget | null, event: string, handler: EventListener): void => {
     target?.addEventListener(event, handler, { signal });
@@ -675,6 +699,15 @@ export function initializePrototype(
     toastTimer = window.setTimeout(() => element.classList.remove("show"), 2_800);
   };
 
+  const sidebar = query<HTMLElement>(root, ".sidebar");
+  const mobileMenuToggle = query<HTMLButtonElement>(root, "[data-mobile-menu]");
+  const setMobileMenu = (open: boolean): void => {
+    sidebar?.classList.toggle("menu-open", open);
+    mobileMenuToggle?.setAttribute("aria-expanded", String(open));
+    if (mobileMenuToggle) mobileMenuToggle.setAttribute("aria-label", open ? "Đóng điều hướng" : "Mở điều hướng");
+  };
+  const closeMobileMenu = (): void => setMobileMenu(false);
+
   const showPage = (page: string): void => {
     const selected = pageNames[page] ? page : "overview";
     queryAll<HTMLElement>(root, ".page").forEach((section) =>
@@ -685,6 +718,7 @@ export function initializePrototype(
     );
     const crumb = query<HTMLElement>(root, "#pageCrumb");
     if (crumb) crumb.textContent = pageNames[selected] ?? "Tổng quan";
+    closeMobileMenu();
     history.replaceState(null, "", `#${selected}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -977,6 +1011,14 @@ export function initializePrototype(
 
   listen(root, "click", (async (event: Event) => {
     const target = event.target as Element;
+    if (target.closest("[data-mobile-menu]")) {
+      setMobileMenu(!sidebar?.classList.contains("menu-open"));
+      return;
+    }
+    if (target.closest("[data-close-mobile-menu]")) {
+      closeMobileMenu();
+      return;
+    }
     const page = target.closest<HTMLElement>("[data-page-link]")?.dataset.pageLink;
     if (page) {
       event.preventDefault();
@@ -1277,6 +1319,7 @@ export function initializePrototype(
       window.setTimeout(() => commandInput?.focus(), 50);
     }
     if (event.key === "Escape") {
+      closeMobileMenu();
       closePalette();
       closePairing();
       closeProvider();

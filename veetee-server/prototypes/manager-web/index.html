@@ -7,7 +7,7 @@
   <title>Veetee Manager — Prototype</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="device-ui-studio.css">
 </head>
@@ -22,6 +22,10 @@
         <span><b>veetee</b><small>robot operations</small></span>
       </a>
 
+      <button class="mobile-menu-toggle" type="button" data-mobile-menu aria-label="Mở điều hướng" aria-expanded="false">
+        <span aria-hidden="true"><i></i><i></i></span><b>Menu</b>
+      </button>
+
       <nav class="primary-nav" aria-label="Điều hướng chính">
         <button class="nav-item active" data-page-link="overview"><span class="nav-icon">⌁</span><span>Tổng quan</span></button>
         <button class="nav-item" data-page-link="devices"><span class="nav-icon">◫</span><span>Thiết bị</span><b class="nav-count">3</b></button>
@@ -32,6 +36,8 @@
         <button class="nav-item" data-page-link="mcp"><span class="nav-icon">⌗</span><span>MCP tools</span></button>
         <button class="nav-item" data-page-link="ota"><span class="nav-icon">↥</span><span>OTA &amp; releases</span></button>
       </nav>
+
+      <button class="mobile-nav-backdrop" type="button" data-close-mobile-menu aria-label="Đóng điều hướng"></button>
 
       <div class="sidebar-note">
         <span class="eyebrow">LAN PROFILE</span>
@@ -50,7 +56,7 @@
     <main class="workspace">
       <header class="topbar">
         <div>
-          <span class="mobile-brand">veetee</span>
+          <span class="mobile-brand">manager</span>
           <p class="breadcrumb"><span>Veetee lab</span><i>/</i><b id="pageCrumb">Tổng quan</b></p>
         </div>
         <div class="topbar-actions">

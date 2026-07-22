@@ -411,6 +411,7 @@ async function mockManagerApi(
 test("logs in and renders API-backed control room", async ({ page }) => {
   await mockManagerApi(page);
   await page.goto("/");
+  await expect(page.getByLabel("Email")).toHaveClass(/vt-control/);
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
@@ -425,6 +426,34 @@ test("logs in and renders API-backed control room", async ({ page }) => {
   await expect(page.locator(".provider-row").nth(1)).toContainText("healthy");
 });
 
+test("uses one Vietnamese font and a consistent focus treatment for form controls", async ({
+  page,
+}) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="lab"]').first().click();
+
+  const select = page.locator("#labInputMode");
+  await expect(select).toHaveClass(/vt-select/);
+  await select.focus();
+  const style = await select.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return {
+      appearance: computed.appearance,
+      boxShadow: computed.boxShadow,
+      fontFamily: computed.fontFamily,
+      outlineStyle: computed.outlineStyle,
+    };
+  });
+  expect(style.fontFamily).toContain("Be Vietnam Pro");
+  expect(style.appearance).toBe("none");
+  expect(style.outlineStyle).toBe("none");
+  expect(style.boxShadow).toContain("rgba(33, 66, 85, 0.12)");
+});
+
 test("keeps the approved mobile navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockManagerApi(page);
@@ -432,9 +461,47 @@ test("keeps the approved mobile navigation", async ({ page }) => {
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
+  const menuToggle = page.locator("[data-mobile-menu]");
+  await expect(menuToggle).toBeVisible();
+  await expect(page.locator(".primary-nav")).toBeHidden();
+  await menuToggle.click();
   await expect(page.locator(".primary-nav")).toBeVisible();
   await expect(page.locator(".primary-nav")).toHaveCSS("position", "fixed");
   await expect(page.locator(".mobile-brand")).toBeVisible();
+  await expect(page.locator(".mobile-brand")).toHaveText("manager");
+  const navBox = await page.locator(".primary-nav").boundingBox();
+  expect(navBox?.x).toBeGreaterThanOrEqual(0);
+  expect((navBox?.x ?? 0) + (navBox?.width ?? 0)).toBeLessThanOrEqual(390);
+  await expect(page.locator(".nav-item")).toHaveCount(8);
+  await page.locator('.nav-item[data-page-link="providers"]').click();
+  await expect(page.locator('[data-page="providers"]')).toBeVisible();
+  await expect(page.locator(".primary-nav")).toBeHidden();
+});
+
+test("shows only the input panel selected in Realtime Lab", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="lab"]').first().click();
+
+  await expect(page.locator("#labTextForm")).toBeVisible();
+  await expect(page.locator("#labAudioReplay")).toBeHidden();
+  await expect(page.locator("#labLiveMic")).toBeHidden();
+  await expect(page.locator("#labDeviceField")).toBeHidden();
+
+  await page.locator("#labInputMode").selectOption("audio_replay");
+  await expect(page.locator("#labTextForm")).toBeHidden();
+  await expect(page.locator("#labAudioReplay")).toBeVisible();
+  await expect(page.locator("#labLiveMic")).toBeHidden();
+
+  await page.locator("#labInputMode").selectOption("live_mic");
+  await expect(page.locator("#labAudioReplay")).toBeHidden();
+  await expect(page.locator("#labLiveMic")).toBeVisible();
+
+  await page.locator("#labMcpMode").selectOption("selected_device");
+  await expect(page.locator("#labDeviceField")).toBeVisible();
 });
 
 test("previews all built-in device themes and inspects a UI Pack locally", async ({ page }) => {

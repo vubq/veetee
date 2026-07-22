@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 
 import { ApiError, managerApi } from "../api/client";
 import { useAuthStore } from "../stores/auth";
+import { VtButton, VtField, VtInput } from "./ui";
 
 const auth = useAuthStore();
 const { t } = useI18n();
@@ -47,13 +48,19 @@ async function submit(): Promise<void> {
       <span class="modal-kicker">{{ t("login.workspaceAccess") }}</span>
       <h2>{{ t("login.title") }}</h2>
       <p>{{ t("login.security") }}</p>
-      <label>{{ t("login.email") }}<input v-model="email" type="email" autocomplete="username" required /></label>
-      <label>{{ t("login.password") }}<input v-model="password" type="password" autocomplete="current-password" minlength="8" required /></label>
-      <label>{{ t("login.workspace") }} <small>{{ t("login.workspaceHint") }}</small><input v-model="tenantSlug" autocomplete="organization" /></label>
+      <VtField :label="t('login.email')" required>
+        <VtInput v-model="email" type="email" autocomplete="username" required />
+      </VtField>
+      <VtField :label="t('login.password')" required>
+        <VtInput v-model="password" type="password" autocomplete="current-password" minlength="8" required />
+      </VtField>
+      <VtField :label="t('login.workspace')" :hint="t('login.workspaceHint')">
+        <VtInput v-model="tenantSlug" autocomplete="organization" />
+      </VtField>
       <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
-      <button class="button button-primary" type="submit" :disabled="auth.busy">
+      <VtButton type="submit" :busy="auth.busy">
         {{ auth.busy ? t("login.submitting") : t("login.submit") }}
-      </button>
+      </VtButton>
       <small>{{ t("login.sourceNotice") }}</small>
     </form>
   </main>

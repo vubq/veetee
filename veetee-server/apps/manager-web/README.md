@@ -1,9 +1,23 @@
 # manager-web
 
-Vue 3/Vite management console. Visual and responsive behavior remain sourced from
-the approved prototype at `../../prototypes/manager-web/index.html`, while auth,
-devices, agents, providers and MCP data now come from Manager API through a
-Zod-validated client and TanStack Query cache.
+Vue 3/Vite management console. The approved prototype at
+`../../prototypes/manager-web/index.html` is a visual reference, not the target
+application architecture. New interactive UI must be implemented as Vue
+components; auth, devices, agents, providers and MCP data come from Manager API
+through a Zod-validated client and TanStack Query cache.
+
+## UI component contract
+
+Reusable primitives live in `src/components/ui`. Form code must compose
+`VtField`, `VtInput`, `VtSelect`, `VtTextarea` and `VtButton` instead of adding
+page-specific native control styles. They share the same height, spacing,
+Vietnamese typography, focus ring, disabled state and error treatment.
+
+Manager screens still rendered from the approved prototype receive the same
+`.vt-control` contract through a temporary compatibility enhancer. Remove that
+bridge page-by-page as each screen moves to Vue components; do not add new
+imperative HTML renderers. `ProviderDialog` is the first Manager workflow moved
+off the renderer, and Login uses the same primitives.
 
 ```bash
 npm run dev --workspace @veetee/manager-web
@@ -24,9 +38,10 @@ VEETEE_WEB_ALLOWED_HOSTS=veetee-dev.example.ts.net \
 npm run dev --workspace @veetee/manager-web
 ```
 
-The production bundle self-hosts the Vietnamese font subsets; it does not require
-Google Fonts or another public CDN on the LAN. Playwright defaults to the local
-Brave executable and can be overridden with `PLAYWRIGHT_CHROMIUM_PATH`.
+The production bundle self-hosts Be Vietnam Pro Vietnamese subsets at weights
+400–700 for both body and display copy. It does not require Google Fonts or
+another public CDN on the LAN. Playwright defaults to the local Brave executable
+and can be overridden with `PLAYWRIGHT_CHROMIUM_PATH`.
 
 ## Web Device Simulator
 

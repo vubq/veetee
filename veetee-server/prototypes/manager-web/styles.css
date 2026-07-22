@@ -14,8 +14,8 @@
   --white: #fffdf7;
   --shadow: 0 18px 60px rgba(32, 43, 48, .08);
   --radius: 24px;
-  --font-body: "Be Vietnam Pro", "Avenir Next", sans-serif;
-  --font-display: "Space Grotesk", "Avenir Next", sans-serif;
+  --font-body: "Be Vietnam Pro", sans-serif;
+  --font-display: "Be Vietnam Pro", sans-serif;
 }
 
 * { box-sizing: border-box; }
