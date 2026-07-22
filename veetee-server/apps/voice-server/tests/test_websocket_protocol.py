@@ -6,11 +6,16 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
 
-from veetee_voice_server.app import _valid_device_header
+from veetee_voice_server.app import (
+    _planner_output_schema,
+    _valid_device_header,
+    _validated_planner_output,
+)
 from veetee_voice_server.config import Settings
 from veetee_voice_server.conversation.arbiter import ConversationState
 from veetee_voice_server.conversation.types import (
@@ -21,6 +26,7 @@ from veetee_voice_server.conversation.types import (
     WakeSource,
 )
 from veetee_voice_server.manager import SessionProfile
+from veetee_voice_server.transport.lab import SimulatedLabToolBroker
 from veetee_voice_server.transport.protocol import (
     AbortEvent,
     ProtocolViolationError,
@@ -88,6 +94,11 @@ class FakeVadModel:
 class FakeAsr:
     async def transcribe_pcm(self, *_: object, **__: object) -> Transcript:
         return Transcript("", "vi-VN")
+
+
+class TranscriptAsr:
+    async def transcribe_pcm(self, *_: object, **__: object) -> Transcript:
+        return Transcript("xin chào", "vi-VN", 0.99, 1.0)
 
 
 class FakeTts:
@@ -485,3 +496,73 @@ async def test_abort_while_asr_is_pending_keeps_assistant_listening() -> None:
         "state": "start",
     }
     await voice_session.close()
+
+
+async def test_provider_failure_rearms_inactivity_after_candidate_started() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    voice_session.asr = TranscriptAsr()  # type: ignore[assignment]
+    candidate_rejected = AsyncMock()
+
+    with patch.object(voice_session.inactivity, "candidate_rejected", candidate_rejected):
+        await voice_session._transcribe(b"\0\0" * 320)
+
+    candidate_rejected.assert_awaited_once()
+    await voice_session.close()
+
+
+async def test_invalid_semantic_schema_falls_back_to_safe_unclear_without_tool() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "unclear",
+                "confidence": 0.8,
+                "addressed_to_robot": False,
+                "reason_code": "unintelligible_transcript",
+            },
+            "dialogue_act": "answer",
+            "plan": {"action": "invented_tool"},
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"] == {
+        "decision": "unclear",
+        "confidence": 0.0,
+        "addressed_to_robot": 0.0,
+        "reason_code": "invalid_model_output",
+    }
+    assert output["plan"]["action"] == "noop"
+    assert output["plan"]["tool_call"] is None
+
+
+async def test_semantic_schema_normalizes_boolean_addressed_signal() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": 0.96,
+                "addressed_to_robot": True,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "question",
+            "plan": {
+                "action": "respond",
+                "locale": "vi-VN",
+                "intent": "date.current",
+                "response_required": True,
+                "response_text": "Hôm nay là thứ Tư.",
+                "tool_call": None,
+            },
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"]["addressed_to_robot"] == 1.0
+    assert output["admission"]["decision"] == "accepted"
+    assert output["plan"]["action"] == "respond"

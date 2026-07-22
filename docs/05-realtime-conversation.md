@@ -237,11 +237,11 @@ Assistant không được giữ session vô hạn. Mỗi session có các deadli
 | `max_session_duration` | 10 phút | absolute ceiling; policy có thể kết thúc sớm hơn |
 | `admission_deadline` | 1 s | gate không giữ turn vô hạn |
 | `asr_deadline` | 8 s | tính từ VAD final đến ASR final |
-| `planner_deadline` | 3 s | structured plan/intent |
+| `planner_deadline` | 15 s ceiling | structured plan/intent; mục tiêu LAN <6 s |
 | `llm_first_token_deadline` | 5 s | fallback nếu model không stream |
 | `tts_first_audio_deadline` | 5 s | fallback hoặc text-only error |
 | `mcp_deadline` | 10 s mặc định | override theo tool trong safe range |
-| `total_turn_deadline` | 30 s | hard ceiling cho một turn bình thường |
+| `total_turn_deadline` | 45 s | hard ceiling cho turn có planner/MCP; normal turn phải thấp hơn nhiều |
 
 Timeout không gọi LLM chỉ để tạo câu tạm biệt. Server lấy localized template/voice policy từ agent config, ví dụ `session.timeout_goodbye`, phát TTS ngắn, gửi `system.assistant_sleep` và đóng gate. Nếu user bấm nút hoặc nói activation/interrupt profile trước khi kết thúc, `closing` bị cancel và session mới/turn mới được ưu tiên.
 
@@ -295,7 +295,43 @@ Mục tiêu cascade trên Wi-Fi tốt:
 
 Đo từng đoạn bằng monotonic timestamp và propagate `trace_id`, `session_id`, `turn_id`.
 
-## 9. Vietnamese-first behavior
+## 9. Web Device Simulator
+
+Manager Web có một client Lab dùng chính `SessionProfile`, `TurnArbiter`, admission,
+planner, provider chain, MCP broker, TTS và inactivity controller của voice-server.
+Đây là công cụ kiểm thử pipeline thật khi chưa ở cạnh ESP32, không phải một
+conversation engine riêng.
+
+| Input | Đường chạy | Phần bị bypass |
+|---|---|---|
+| Text chat | admission -> planner/LLM/MCP -> VieNeu TTS -> browser | VAD và ASR, có event `vad.bypassed`/`asr.bypassed` |
+| Audio Replay | PCM16 mono 16 kHz -> Silero -> Zipformer -> admission -> AI/MCP -> TTS | không bypass stage AI nào |
+| Live Mic | browser capture/resample -> cùng pipeline Audio Replay | không bypass stage AI nào |
+
+Lab giữ đúng semantics sản phẩm: bắt đầu phiên chỉ mở assistant gate, audio tự
+finalize bằng VAD, interrupt tăng generation và hủy ASR/LLM/TTS/MCP, timeout đưa
+assistant về sleep và nút wake mở lại cùng session. Ba MCP mode là `simulated`,
+`selected_device` và `disabled`; mode thiết bị thật chỉ dùng được khi robot đang có
+voice session hoạt động.
+
+Độ trung thực phải được công bố rõ trong UI và `lab.hello`:
+
+- Browser nhận PCM TTS để phát trực tiếp; Lab không đo packetization/pacing Opus V1,
+  Wi-Fi ESP32, decoder queue, amplifier hoặc loa vật lý.
+- Browser AEC/noise suppression/AGC của Live Mic không phải AEC của INMP441/
+  MAX98357A. `getUserMedia` trên LAN HTTP thường bị chặn; dùng HTTPS/localhost hoặc
+  Audio Replay.
+- Latency timeline đo speech end -> ASR final -> admission -> first text -> first
+  audio và abort -> server silence. `abort_to_silence` trên loa vẫn cần playback ACK
+  và nghiệm thu board.
+- Transcript/audio không được ghi vào Manager DB; raw event chỉ sống trong browser
+  session và vẫn phải bounded/redacted.
+
+Manager cấp JWT Lab dùng một lần, TTL 90 giây. Token chỉ gửi trong `lab.auth` frame
+đầu tiên của `/veetee/lab/v1/`, không đặt trong URL/query/log. Contract versioned
+nằm tại `veetee-server/packages/contracts/fixtures/lab/`.
+
+## 10. Vietnamese-first behavior
 
 - ASR giữ dấu và số; không lower-case mù quáng trước intent.
 - Chuẩn hóa cách đọc số, ngày, tiền tệ trước TTS.
@@ -303,7 +339,7 @@ Mục tiêu cascade trên Wi-Fi tốt:
 - Sentence chunker không cắt sau viết tắt tiếng Việt (`TP.`, `PGS.`, `v.v.`).
 - TTS ưu tiên voice nữ/nam `vi-VN` đã benchmark; nếu fail provider, fallback voice khác cùng locale trước khi fallback English.
 
-## 10. Acceptance scenarios
+## 11. Acceptance scenarios
 
 1. Click mở assistant -> nói câu hỏi -> VAD tự finalize -> qua quality/intent gate -> LLM/TTS trả lời, không click lần hai.
 2. “Hey VeeTee” (đọc “hây vi ti”) khi standby -> channel mở và bắt đầu nghe mode auto.
@@ -317,3 +353,5 @@ Mục tiêu cascade trên Wi-Fi tốt:
 10. “Tạm biệt” hoặc cách diễn đạt tương đương -> semantic intent `conversation.end` -> không chạy tool/response dư và đóng channel sạch.
 11. Wi-Fi drop trong speaking -> device về standby/idle, không kẹt queue.
 12. Provider TTS/MCP timeout -> server hủy task, báo lỗi ngắn và cho phép turn mới.
+13. Text Lab ghi rõ VAD/ASR bypass nhưng vẫn chạy admission/LLM/MCP/TTS thật; Audio
+    Replay chạy Silero/Zipformer thật và không tuyên bố đã đo Opus/AEC/loa ESP32.

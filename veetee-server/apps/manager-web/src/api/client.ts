@@ -7,6 +7,7 @@ import {
   conversationEventSchema,
   deviceSchema,
   healthSchema,
+  labSessionSchema,
   mcpToolSchema,
   principalSchema,
   providerSchema,
@@ -155,6 +156,18 @@ export const managerApi = {
     request("/api/v1/resource-rollouts", z.array(resourceRolloutSchema)),
   uiPackRollouts: () =>
     request("/api/v1/ui-packs/rollouts", z.array(uiPackRolloutSchema)),
+
+  createLabSession(input: {
+    agentId: string;
+    inputMode: "text" | "audio_replay" | "live_mic";
+    mcpMode: "simulated" | "selected_device" | "disabled";
+    deviceId?: string;
+  }) {
+    return request("/api/v1/lab/sessions", labSessionSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
 
   async logout(): Promise<void> {
     const response = await rawRequest("/api/v1/auth/logout", { method: "POST" });

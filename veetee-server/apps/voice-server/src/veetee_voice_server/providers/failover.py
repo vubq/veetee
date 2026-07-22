@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -86,6 +86,7 @@ class FailoverLlmProvider:
         context: OperationContext,
         schema: Mapping[str, Any] | None = None,
         schema_name: str = "veetee_return_json",
+        schema_transport: Literal["tool_call", "json_object"] = "tool_call",
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         attempted = False
@@ -102,6 +103,7 @@ class FailoverLlmProvider:
                     context=context,
                     schema=schema,
                     schema_name=schema_name,
+                    schema_transport=schema_transport,
                 )
             except (TurnCancelledError, OperationDeadlineExceededError):
                 raise

@@ -15,6 +15,10 @@ không nằm trong fixture; `base_url_env` chỉ là tên biến môi trường 
 `fixtures/devices/reported-state-v1.json` khóa body firmware gửi sau từng phase
 resource apply, gồm monotonic version, boot ID, firmware và bounded resource state.
 
+`fixtures/lab/*.json` khóa REST cấp token một lần và WebSocket V1 của Web Device
+Simulator. Token chỉ xuất hiện trong auth frame đầu tiên; PCM Lab không đại diện cho
+Opus uplink, AEC hay loa vật lý của ESP32.
+
 Artifact fixture dùng một chữ ký development có thể verify để cùng một document
 chạy qua Node contract test và firmware host test. Vector riêng tại
 `fixtures/artifacts/signed-resource-manifest-vector-v1.json` khóa RFC 8785 JCS,

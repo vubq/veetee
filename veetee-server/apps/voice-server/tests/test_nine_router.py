@@ -20,7 +20,10 @@ from veetee_voice_server.providers.contracts import (
     LlmTextDelta,
     LlmToolCallFragment,
 )
-from veetee_voice_server.providers.nine_router import NineRouterLlmProvider
+from veetee_voice_server.providers.nine_router import (
+    NineRouterLlmProvider,
+    NineRouterProviderError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -208,6 +211,67 @@ async def test_structured_completion_can_use_forced_tool_arguments() -> None:
     )
     await client.aclose()
     assert value == {"action": "respond"}
+
+
+async def test_structured_completion_can_validate_json_object_without_forced_tool() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["response_format"] == {"type": "json_object"}
+        assert "tools" not in payload
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"action\\":\\"respond\\"}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    value = await provider.complete_json(
+        system_prompt="Return a plan",
+        user_prompt="Xin chào",
+        context=context(),
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["action"],
+            "properties": {"action": {"const": "respond"}},
+        },
+        schema_transport="json_object",
+    )
+    await client.aclose()
+    assert value == {"action": "respond"}
+
+
+async def test_structured_completion_rejects_json_object_outside_schema() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"action\\":\\"invented\\"}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    with pytest.raises(NineRouterProviderError) as error:
+        await provider.complete_json(
+            system_prompt="Return a plan",
+            user_prompt="Xin chào",
+            context=context(),
+            schema={
+                "type": "object",
+                "required": ["action"],
+                "properties": {"action": {"const": "respond"}},
+            },
+            schema_transport="json_object",
+        )
+    await client.aclose()
+    assert error.value.retryable is True
 
 
 async def test_prewarm_requires_a_valid_ready_response() -> None:

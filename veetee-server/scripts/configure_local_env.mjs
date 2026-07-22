@@ -40,12 +40,14 @@ async function main() {
   const artifactRoot = resolve(serverRoot, "data/artifacts");
   const lines = [
     "DATABASE_URL=postgresql://veetee@127.0.0.1:5432/veetee?schema=public",
+    "VEETEE_INTEGRATION_DATABASE_URL=postgresql://veetee@127.0.0.1:5432/veetee_test?schema=public",
     "REDIS_URL=redis://127.0.0.1:6379/1",
     "VEETEE_MANAGER_PORT=8001",
     "VEETEE_MANAGER_HOST=0.0.0.0",
     `VEETEE_MANAGER_CORS_ORIGIN=http://127.0.0.1:8081,http://${address}:8081`,
     `VEETEE_MANAGER_PUBLIC_URL=http://${address}:8001`,
     `VEETEE_VOICE_WS_URL=ws://${address}:8000/veetee/v1/`,
+    `VEETEE_VOICE_LAB_WS_URL=ws://${address}:8000/veetee/lab/v1/`,
     "VEETEE_FIRMWARE_VERSION=0.2.0",
     "VEETEE_FIRMWARE_URL=",
     "VEETEE_RESOURCE_VERSION=1.0.0",
@@ -55,6 +57,7 @@ async function main() {
     "VEETEE_MAX_RESOURCE_ARTIFACT_BYTES=67108864",
     "VEETEE_ACTIVATION_MESSAGE_TEMPLATE=Nhap ma {code} trong Veetee Manager",
     `VEETEE_AUTH_SECRET=${secret()}`,
+    `VEETEE_LAB_TOKEN_SECRET=${secret()}`,
     `VEETEE_DEVICE_TOKEN_SECRET=${secret()}`,
     `VEETEE_MASTER_KEY=${randomBytes(32).toString("base64")}`,
     `VEETEE_INTERNAL_SERVICE_TOKEN=${secret()}`,

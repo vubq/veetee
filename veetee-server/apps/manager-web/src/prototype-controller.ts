@@ -492,28 +492,29 @@ function renderTelemetry(root: HTMLElement, data: ManagerViewData): void {
       : '<div class="empty-state"><b>Chưa có conversation event thật.</b><small>Hãy gọi robot bằng nút hoặc “Hey VeeTee”; timeline tự đồng bộ và không lưu transcript/audio.</small></div>';
   }
 
+  const labManaged = query<HTMLElement>(root, '[data-page="lab"]')?.dataset.labManaged === "true";
   const labState = query<HTMLElement>(root, "#labState");
   const labToggle = query<HTMLButtonElement>(root, "#labToggle");
   const labPrompt = query<HTMLElement>(root, "#labPrompt");
   const labOrb = query<HTMLElement>(root, "#labOrb");
-  if (labState) {
+  if (!labManaged && labState) {
     labState.classList.toggle("running", recent);
     labState.innerHTML = `<i></i> ${recent ? "Đang nhận event" : "Đang quan sát"}`;
   }
-  if (labToggle) labToggle.textContent = "Timeline tự đồng bộ";
-  if (labPrompt) {
+  if (!labManaged && labToggle) labToggle.textContent = "Timeline tự đồng bộ";
+  if (!labManaged && labPrompt) {
     labPrompt.textContent = data.activeDeviceId
       ? "Bấm nút trên robot hoặc nói “Hey VeeTee” để mở assistant; VAD tự kết thúc câu và event sẽ xuất hiện ở đây."
       : "Ghép một thiết bị để bắt đầu nhận conversation telemetry.";
   }
-  labOrb?.classList.toggle("running", recent);
+  if (!labManaged) labOrb?.classList.toggle("running", recent);
   const interruptButton = query<HTMLButtonElement>(root, "#interruptButton");
-  if (interruptButton) {
+  if (!labManaged && interruptButton) {
     interruptButton.disabled = true;
     interruptButton.title = "Remote interrupt chưa có device command contract; nút vật lý vẫn là guarantee.";
   }
   const eventLog = query<HTMLElement>(root, "#eventLog");
-  if (eventLog) {
+  if (!labManaged && eventLog) {
     eventLog.innerHTML = origin
       ? sessionEvents
           .slice(-20)
@@ -585,11 +586,12 @@ function renderResources(root: HTMLElement, data: ManagerViewData): void {
 }
 
 function renderAvailability(root: HTMLElement, data: ManagerViewData): void {
+  if (query<HTMLElement>(root, '[data-page="lab"]')?.dataset.labManaged === "true") return;
   const device = data.devices[0];
   const agent = data.agents[0];
   const consoleTop = query<HTMLElement>(root, ".console-top");
   if (consoleTop) {
-    consoleTop.innerHTML = `<div><span>DEVICE</span><b>${escapeHtml(device?.name ?? "Chưa có thiết bị")}</b></div><div><span>AGENT</span><b>${escapeHtml(agent ? `${agent.name} · v${agent.publishedVersion}` : "Chưa có agent")}</b></div><div><span>ENGINE</span><b>${escapeHtml(agent ? `${agent.interactionMode} · auto gate` : "Cascade · auto")}</b></div>`;
+    consoleTop.innerHTML = `<div><span>DEVICE</span><b id="labDeviceLabel">${escapeHtml(device?.name ?? "Chưa có thiết bị")}</b></div><div><span>AGENT</span><b id="labAgentLabel">${escapeHtml(agent ? `${agent.name} · v${agent.publishedVersion}` : "Chưa có agent")}</b></div><div><span>ENGINE</span><b id="labEngineLabel">${escapeHtml(agent ? `${agent.interactionMode} · auto gate` : "Cascade · auto")}</b></div>`;
   }
 }
 
@@ -1292,14 +1294,6 @@ export function initializePrototype(
       closePalette();
       openPairing();
     }
-  }) as EventListener);
-
-  const labToggle = query<HTMLButtonElement>(root, "#labToggle");
-  listen(labToggle, "click", (() => {
-    toast("Realtime Lab tự đồng bộ mỗi 1,5 giây; hãy gọi robot bằng nút hoặc wake word.");
-  }) as EventListener);
-  listen(query(root, "#interruptButton"), "click", (() => {
-    toast("Remote interrupt chưa được bật; hãy dùng nút vật lý trên robot.");
   }) as EventListener);
 
   showPage(location.hash.slice(1) || "overview");

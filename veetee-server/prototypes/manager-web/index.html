@@ -203,10 +203,26 @@
       </section>
 
       <section class="page" data-page="lab">
-        <div class="section-title"><div><span class="eyebrow">REALTIME LAB</span><h1>Nghe toàn bộ một lượt nói.</h1><p>Quan sát frame, ASR, model, tool và TTS trên cùng timeline.</p></div><div class="lab-actions"><span class="lab-state" id="labState"><i></i> Sẵn sàng</span><button class="button button-primary" id="labToggle">Bắt đầu phiên thử</button></div></div>
+        <div class="section-title"><div><span class="eyebrow">WEB DEVICE SIMULATOR</span><h1>Chạy pipeline thật, thấy đúng phần chưa mô phỏng.</h1><p>Đo VAD, ASR, admission, LLM/MCP, TTS và cancellation trên cùng timeline.</p></div><div class="lab-actions"><span class="lab-state" id="labState"><i></i> Sẵn sàng</span><button class="button button-primary" id="labToggle">Bắt đầu phiên thử</button></div></div>
+        <form class="lab-setup" id="labSetup">
+          <label>Trợ lý<select id="labAgent"></select></label>
+          <label>Đầu vào<select id="labInputMode"><option value="text">Text chat · bypass VAD/ASR</option><option value="audio_replay">Audio replay · VAD/ASR thật</option><option value="live_mic">Live mic · VAD/ASR thật</option></select></label>
+          <label>MCP<select id="labMcpMode"><option value="simulated">Simulated device (an toàn)</option><option value="selected_device">Thiết bị đang kết nối</option><option value="disabled">Tắt MCP</option></select></label>
+          <label id="labDeviceField" hidden>Thiết bị<select id="labDevice"></select></label>
+          <div class="lab-fidelity" id="labFidelity"><b>CASCADE THẬT</b><span>Admission → LLM/MCP → VieNeu TTS</span><small>Text không giả VAD/ASR. Audio trình duyệt dùng PCM16; chưa đo Opus/AEC/loa vật lý.</small></div>
+        </form>
         <div class="lab-grid">
-          <article class="lab-console"><div class="console-top"><div><span>DEVICE</span><b>Veetee Lab 01</b></div><div><span>AGENT</span><b>Veetee Việt · v12</b></div><div><span>ENGINE</span><b>Cascade · auto</b></div></div><div class="console-visual"><div class="big-orb" id="labOrb"><span>V</span><i></i></div><div class="lab-wave" id="labWave"></div><p id="labPrompt">Nhấn “Bắt đầu phiên thử” để bật assistant; VAD sẽ tự kết thúc lượt nói.</p></div><div class="console-controls"><button class="control-button">🎙 Tắt mic</button><button class="control-button danger" id="interruptButton">■ Ngắt AI</button><button class="control-button">⌁ Raw events</button></div></article>
-          <article class="event-stream"><div class="panel-heading"><div><span class="eyebrow">EVENT STREAM</span><h3>Timeline</h3></div><button class="icon-button tiny">•••</button></div><div id="eventLog" class="event-log"><div class="empty-event"><span>⌁</span><b>Chưa có phiên đang chạy</b><small>Event sẽ xuất hiện theo thời gian thực.</small></div></div></article>
+          <article class="lab-console">
+            <div class="console-top"><div><span>DEVICE</span><b id="labDeviceLabel">Web Simulator</b></div><div><span>AGENT</span><b id="labAgentLabel">Chưa chọn</b></div><div><span>ENGINE</span><b id="labEngineLabel">Cascade · auto</b></div></div>
+            <div class="console-visual"><div class="big-orb" id="labOrb"><span>V</span><i></i></div><div class="lab-wave" id="labWave"></div><div class="lab-chat" id="labChat"><div class="lab-message system">Phiên Lab không lưu transcript hoặc audio vào Manager.</div></div><p id="labPrompt">Chọn trợ lý và đầu vào, sau đó bắt đầu phiên.</p></div>
+            <div class="lab-inputs">
+              <form id="labTextForm" class="lab-text-form"><input id="labTextInput" maxlength="4000" placeholder="Nhập câu nói thay cho microphone…" disabled><button class="button button-primary" type="submit" disabled>Gửi lượt nói</button></form>
+              <div id="labAudioReplay" class="lab-audio-input" hidden><input id="labAudioFile" type="file" accept="audio/*,.wav"><button class="button button-primary" id="labReplayButton" type="button" disabled>Phát file qua VAD/ASR</button><small id="labAudioMeta">WAV/MP3/OGG được browser decode, resample mono 16 kHz và gửi realtime.</small></div>
+              <div id="labLiveMic" class="lab-audio-input" hidden><button class="button button-primary" id="labMicButton" type="button" disabled>🎙 Bật microphone</button><small id="labMicHint">Live mic cần HTTPS hoặc localhost; LAN HTTP thường bị browser chặn.</small></div>
+            </div>
+            <div class="console-controls"><button class="control-button" id="labWakeButton" type="button" disabled>⌁ Đánh thức lại</button><button class="control-button" id="labRawToggle" type="button">{ } Raw events</button><button class="control-button danger" id="interruptButton" type="button" disabled>■ Ngắt AI</button><button class="control-button" id="labEndButton" type="button" disabled>Kết thúc phiên</button></div>
+          </article>
+          <article class="event-stream"><div class="panel-heading"><div><span class="eyebrow">MEASURED TIMELINE</span><h3>Latency theo stage</h3></div><span class="lab-session-id" id="labSessionId">NO SESSION</span></div><div class="lab-metrics" id="labMetrics"><div><span>Speech → ASR</span><b>—</b></div><div><span>ASR → admission</span><b>—</b></div><div><span>Admission → first text</span><b>—</b></div><div><span>Text → first audio</span><b>—</b></div><div><span>End → first audio</span><b>—</b></div><div><span>Abort → silence</span><b>—</b></div></div><div id="eventLog" class="event-log"><div class="empty-event"><span>⌁</span><b>Chưa có phiên đang chạy</b><small>Token một lần chỉ được cấp khi bạn bấm bắt đầu.</small></div></div><pre id="labRawEvents" class="lab-raw-events" hidden></pre></article>
         </div>
       </section>
 

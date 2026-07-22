@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, Literal
 
 import httpx
+from jsonschema import Draft202012Validator
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.providers.contracts import (
@@ -73,6 +74,7 @@ class NineRouterLlmProvider:
         context: OperationContext,
         schema: Mapping[str, Any] | None = None,
         schema_name: str = "veetee_return_json",
+        schema_transport: Literal["tool_call", "json_object"] = "tool_call",
     ) -> dict[str, Any]:
         """Stream a structured call so planners do not wait for the full HTTP body."""
         context.checkpoint()
@@ -86,7 +88,7 @@ class NineRouterLlmProvider:
             "reasoning_effort": self._reasoning_effort,
             "temperature": 0,
         }
-        if schema is None:
+        if schema is None or schema_transport == "json_object":
             payload["response_format"] = {"type": "json_object"}
         else:
             payload["tools"] = [
@@ -148,6 +150,15 @@ class NineRouterLlmProvider:
             ) from error
         if not isinstance(parsed, dict):
             raise NineRouterProviderError("9router structured response was not an object")
+        if schema is not None:
+            validation_error = next(
+                Draft202012Validator(dict(schema)).iter_errors(parsed), None
+            )
+            if validation_error is not None:
+                raise NineRouterProviderError(
+                    "9router structured response did not match the requested schema",
+                    retryable=True,
+                )
         context.checkpoint()
         return parsed
 

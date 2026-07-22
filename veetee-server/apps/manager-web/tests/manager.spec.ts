@@ -23,6 +23,7 @@ async function mockManagerApi(
     providerPatches?: unknown[];
     uiUploads?: unknown[];
     uiRollouts?: unknown[];
+    labSessionCalls?: unknown[];
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
@@ -265,6 +266,24 @@ async function mockManagerApi(
           publishedVersion: 1,
         },
       ]);
+    }
+    if (url.pathname === "/api/v1/lab/sessions" && request.method() === "POST") {
+      options.labSessionCalls?.push(request.postDataJSON());
+      return json({
+        id: "79baf98d-9cf2-4fc4-a15e-7deec63f502e",
+        token: "test-lab-token-that-is-long-enough-for-the-browser-contract-and-never-logged",
+        websocketUrl: "ws://127.0.0.1:8000/veetee/lab/v1/",
+        expiresAt: "2026-07-22T06:01:30.000Z",
+        agent: {
+          id: "e31b2263-c5b2-43f9-b17d-4046c9703e73",
+          name: "Veetee Việt",
+          locale: "vi-VN",
+          version: 1,
+          interactionMode: "auto",
+        },
+        inputMode: request.postDataJSON().inputMode,
+        mcpMode: request.postDataJSON().mcpMode,
+      });
     }
     if (url.pathname === "/api/v1/agents/agent-1" && request.method() === "PATCH") {
       const patch = request.postDataJSON();
@@ -550,18 +569,114 @@ test("publishes bounded conversation changes without dropping extension fields",
   );
 });
 
-test("renders the redacted realtime timeline from Manager API events", async ({ page }) => {
+test("keeps device telemetry on overview and opens a clean Web Device Simulator", async ({
+  page,
+}) => {
   await mockManagerApi(page, { withDevice: true, withConversationEvents: true });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
-  await page.locator('[data-page-link="lab"]').first().click();
-  await expect(page.locator("#eventLog")).toContainText("stt.final");
-  await expect(page.locator("#eventLog")).toContainText("28 ký tự · transcript đã redact");
   await expect(page.locator(".latency-row")).toContainText("450");
+  await page.locator('[data-page-link="lab"]').first().click();
+  await expect(page.locator("#eventLog")).toContainText("Chưa có phiên đang chạy");
+  await expect(page.locator("#labFidelity")).toContainText("Text không giả VAD/ASR");
   await expect(page.locator("#interruptButton")).toBeDisabled();
+});
+
+test("runs typed turns through the one-use Lab WebSocket without faking VAD or ASR", async ({
+  page,
+}) => {
+  const labSessionCalls: unknown[] = [];
+  await page.routeWebSocket("ws://127.0.0.1:8000/veetee/lab/v1/", (webSocket) => {
+    let sessionId = "";
+    let elapsed = 0;
+    const sendEvent = (event: string, payload: Record<string, unknown> = {}) => {
+      elapsed += 25;
+      webSocket.send(
+        JSON.stringify({
+          type: "lab.event",
+          session_id: sessionId,
+          event,
+          elapsed_ms: elapsed,
+          generation: 2,
+          payload,
+        }),
+      );
+    };
+    webSocket.onMessage((message) => {
+      if (typeof message !== "string") return;
+      const payload = JSON.parse(message);
+      if (payload.type === "lab.auth") {
+        sessionId = "79baf98d-9cf2-4fc4-a15e-7deec63f502e";
+        webSocket.send(
+          JSON.stringify({
+            type: "lab.hello",
+            version: 1,
+            session_id: sessionId,
+            input_mode: "text",
+            mcp_mode: "simulated",
+            audio: { output_sample_rate: 24000 },
+            fidelity: {
+              vad_asr: "bypassed",
+              admission_llm_tts: "real",
+              device_opus_transport: "not_measured",
+            },
+          }),
+        );
+        sendEvent("session.opened", { source: "web_lab" });
+        sendEvent("listen.start", { source: "button" });
+      } else if (payload.type === "lab.text") {
+        sendEvent("vad.bypassed", { reason: "typed_text" });
+        sendEvent("asr.bypassed", { reason: "typed_text" });
+        sendEvent("stt.final", { text: payload.text, source: "typed_text" });
+        if (payload.text === "Âm thanh không rõ") {
+          sendEvent("admission.final", {
+            disposition: "unclear",
+            confidence: 0,
+            reason_code: "invalid_model_output",
+          });
+          return;
+        }
+        sendEvent("admission.final", { disposition: "accepted", confidence: 0.98 });
+        sendEvent("llm.delta", { text: "Xin chào, đây là pipeline thật." });
+        sendEvent("tts.start");
+        sendEvent("tts.first_audio", { sample_rate: 24000 });
+        sendEvent("tts.stop");
+        sendEvent("listen.start", { source: "turn_continuation" });
+      } else if (payload.type === "lab.abort") {
+        sendEvent("abort.complete", { reason: "web_interrupt", duration_ms: 18 });
+        sendEvent("listen.start", { source: "interrupt" });
+      }
+    });
+  });
+  await mockManagerApi(page, { labSessionCalls });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="lab"]').first().click();
+
+  await page.getByRole("button", { name: "Bắt đầu phiên thử" }).click();
+  await expect(page.locator("#labState")).toContainText("Đang lắng nghe");
+  await page.locator("#labTextInput").fill("Xin chào Veetee");
+  await page.getByRole("button", { name: "Gửi lượt nói" }).click();
+
+  await expect(page.locator("#labChat")).toContainText("Xin chào Veetee");
+  await expect(page.locator("#labChat")).toContainText("pipeline thật");
+  await expect(page.locator("#eventLog")).toContainText("vad.bypassed");
+  await expect(page.locator("#eventLog")).toContainText("asr.bypassed");
+  await expect(page.locator("#labMetrics")).toContainText("BYPASS");
+  await page.locator("#labTextInput").fill("Âm thanh không rõ");
+  await page.getByRole("button", { name: "Gửi lượt nói" }).click();
+  await expect(page.locator("#labState")).toContainText("đang nghe tiếp");
+  await expect(page.locator("#labTextInput")).toBeEnabled();
+  await page.locator("#interruptButton").click();
+  await expect(page.locator("#labMetrics")).toContainText("18");
+  await expect.poll(() => labSessionCalls).toEqual([
+    { agentId: "agent-1", inputMode: "text", mcpMode: "simulated" },
+  ]);
 });
 
 test("shows signed wake resources and creates desired rollout without claiming apply", async ({

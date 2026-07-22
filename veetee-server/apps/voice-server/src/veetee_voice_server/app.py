@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from time import monotonic
 from typing import Any, cast
@@ -13,6 +13,7 @@ from uuid import uuid4
 import httpx
 import structlog
 from fastapi import FastAPI, Header, HTTPException, Request, Response, WebSocket, status
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field
 
 from veetee_voice_server.config import Settings, get_settings
@@ -25,6 +26,7 @@ from veetee_voice_server.conversation.cancellation import (
 from veetee_voice_server.conversation.engine import ConversationEngine
 from veetee_voice_server.logging import configure_logging
 from veetee_voice_server.manager import (
+    DeviceContext,
     ManagerAuthenticationError,
     ManagerClient,
     SessionProfile,
@@ -41,6 +43,12 @@ from veetee_voice_server.providers.semantic import StructuredConversationGate
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
 from veetee_voice_server.telemetry import ConversationTelemetryBuffer
+from veetee_voice_server.transport.lab import (
+    EmptyLabToolBroker,
+    LabSession,
+    SelectedDeviceLabToolBroker,
+    SimulatedLabToolBroker,
+)
 from veetee_voice_server.transport.mcp import DeviceMcpError
 from veetee_voice_server.transport.session import VoiceSession
 from veetee_voice_server.transport.session_registry import (
@@ -73,7 +81,11 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     return (
         "Return one JSON object with admission, dialogue_act and plan. admission.decision "
         "must be accepted, non_actionable, not_addressed, unclear, interrupt or end; "
-        "include confidence, addressed_to_robot and one bounded reason_code. Decide whether "
+        "include confidence, addressed_to_robot and one bounded reason_code. confidence and "
+        "addressed_to_robot must be JSON numbers from 0.0 through 1.0, never booleans. "
+        "reason_code must be one of speech_relevant, non_speech, low_quality, not_addressed, "
+        "self_echo, duplicate, low_confidence, semantic_interrupt, conversation_end, unclear "
+        "or invalid_model_output. Decide whether "
         "the transcript is intentional, relevant and directed to this assistant before "
         "planning a response or tool. Do not infer a named environmental source or answer "
         "incidental speech. plan.action must be one of respond, "
@@ -174,6 +186,7 @@ def _planner_output_schema(tools: ToolBroker) -> dict[str, object]:
                             "semantic_interrupt",
                             "conversation_end",
                             "unclear",
+                            "invalid_model_output",
                         ],
                     },
                 },
@@ -211,6 +224,44 @@ def _planner_output_schema(tools: ToolBroker) -> dict[str, object]:
     }
 
 
+def _validated_planner_output(
+    value: dict[str, Any], schema: dict[str, object], locale: str
+) -> dict[str, Any]:
+    normalized = dict(value)
+    admission = value.get("admission")
+    if isinstance(admission, dict):
+        normalized_admission = dict(admission)
+        addressed_to_robot = normalized_admission.get("addressed_to_robot")
+        if isinstance(addressed_to_robot, bool):
+            normalized_admission["addressed_to_robot"] = float(addressed_to_robot)
+        normalized["admission"] = normalized_admission
+    validation_error = next(Draft202012Validator(schema).iter_errors(normalized), None)
+    if validation_error is None:
+        return normalized
+    logger.warning(
+        "conversation_gate_schema_rejected",
+        validator=validation_error.validator,
+        path=".".join(str(part) for part in validation_error.path),
+    )
+    return {
+        "admission": {
+            "decision": "unclear",
+            "confidence": 0.0,
+            "addressed_to_robot": 0.0,
+            "reason_code": "invalid_model_output",
+        },
+        "dialogue_act": "clarification_answer",
+        "plan": {
+            "action": "noop",
+            "locale": locale,
+            "intent": "input.invalid_model_output",
+            "response_required": False,
+            "response_text": None,
+            "tool_call": None,
+        },
+    }
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings)
@@ -219,6 +270,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     llm_registry: dict[tuple[str, str, str, str, str], LlmProviderCandidate] = {}
     llm_chain_registry: dict[tuple[tuple[str, str, str, str, str], ...], FailoverLlmProvider] = {}
     device_sessions = DeviceSessionRegistry()
+    lab_capacity_lock = asyncio.Lock()
+    active_lab_sessions = 0
 
     def llm_for_profile(profile: SessionProfile) -> FailoverLlmProvider:
         keys: list[tuple[str, str, str, str, str]] = []
@@ -267,13 +320,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def gate_json(
             payload: dict[str, object], context: OperationContext
         ) -> dict[str, Any]:
-            return await asr_llm.complete_json(
+            schema = _planner_output_schema(tool_broker)
+            value = await asr_llm.complete_json(
                 system_prompt=_planner_system_prompt(profile, tool_broker),
                 user_prompt=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 context=context,
-                schema=_planner_output_schema(tool_broker),
-                schema_name="veetee_submit_conversation_gate",
             )
+            return _validated_planner_output(value, schema, profile.locale)
 
         gate = StructuredConversationGate(gate_json, locale=profile.locale)
         return ConversationEngine(
@@ -434,6 +487,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     if resolved_settings.websocket_path != "/veetee/v1/":
         application.add_api_websocket_route("/veetee/v1/", websocket_voice)
+
+    @application.websocket(resolved_settings.lab_websocket_path)
+    async def websocket_lab(websocket: WebSocket) -> None:
+        nonlocal active_lab_sessions
+        origin = websocket.headers.get("origin")
+        if not _lab_origin_allowed(origin, resolved_settings.lab_allowed_origins):
+            await websocket.close(code=1008, reason="Lab origin is not allowed")
+            return
+        async with lab_capacity_lock:
+            if active_lab_sessions >= resolved_settings.lab_max_sessions:
+                await websocket.close(code=1013, reason="Lab capacity is full")
+                return
+            active_lab_sessions += 1
+        await websocket.accept()
+        try:
+            auth_message = await asyncio.wait_for(
+                websocket.receive(), timeout=resolved_settings.hello_timeout_seconds
+            )
+            token = _parse_lab_auth(auth_message)
+            manager = cast(ManagerClient, runtime["manager"])
+            lab_context = await manager.consume_lab_session(token)
+            profile = await manager.session_profile(
+                DeviceContext(
+                    device_id=f"lab:{lab_context.session_id}",
+                    tenant_id=lab_context.tenant_id,
+                    agent_id=lab_context.agent_id,
+                    config_version=lab_context.config_version,
+                )
+            )
+            if lab_context.mcp_mode == "simulated":
+                tool_broker: ToolBroker = SimulatedLabToolBroker()
+            elif lab_context.mcp_mode == "disabled":
+                tool_broker = EmptyLabToolBroker()
+            else:
+                if lab_context.device_id is None:
+                    raise ValueError("Selected-device Lab session is missing device id")
+                catalog = await device_sessions.regular_tools(lab_context.device_id)
+                tool_broker = SelectedDeviceLabToolBroker(
+                    device_sessions, lab_context.device_id, catalog
+                )
+            session = LabSession(
+                websocket,
+                settings=resolved_settings,
+                context=lab_context,
+                profile=profile,
+                asr=cast(SherpaZipformerAsrProvider, runtime["asr"]),
+                vad_model=cast(SileroVadModel, runtime["vad_model"]),
+                tts=cast(VieNeuTtsProvider, runtime["tts"]),
+                tool_broker=tool_broker,
+                engine_factory=engine_factory,
+            )
+            await session.run()
+        except TimeoutError:
+            await websocket.close(code=1008, reason="Lab authentication timeout")
+        except (ManagerAuthenticationError, httpx.HTTPError, KeyError, ValueError):
+            await websocket.close(code=1008, reason="Lab authentication failed")
+        except DeviceSessionUnavailableError:
+            await websocket.close(code=1013, reason="Selected device is not connected")
+        finally:
+            async with lab_capacity_lock:
+                active_lab_sessions = max(0, active_lab_sessions - 1)
+
+    if resolved_settings.lab_websocket_path != "/veetee/lab/v1/":
+        application.add_api_websocket_route("/veetee/lab/v1/", websocket_lab)
 
     @application.middleware("http")
     async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -607,6 +724,33 @@ def _valid_device_header(value: str | None) -> bool:
             for character in value
         )
     )
+
+
+def _lab_origin_allowed(origin: str | None, configured: str) -> bool:
+    allowed = {item.strip() for item in configured.split(",") if item.strip()}
+    return origin is not None and origin in allowed
+
+
+def _parse_lab_auth(message: Mapping[str, Any]) -> str:
+    if message.get("type") == "websocket.disconnect":
+        raise ManagerAuthenticationError("Lab disconnected before authentication")
+    raw = message.get("text")
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > 4_096:
+        raise ManagerAuthenticationError("Lab authentication frame is invalid")
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise ManagerAuthenticationError("Lab authentication frame is invalid") from error
+    token = payload.get("token") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("type") != "lab.auth"
+        or not isinstance(token, str)
+        or not 64 <= len(token) <= 2_048
+        or not token.isascii()
+    ):
+        raise ManagerAuthenticationError("Lab authentication frame is invalid")
+    return token
 
 
 app = create_app()

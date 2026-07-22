@@ -44,6 +44,20 @@ class DeviceSessionRegistry:
         registration = await self._get(device_id)
         return await registration.mcp.manager_tools(timeout_seconds)
 
+    async def regular_tools(self, device_id: str) -> list[dict[str, Any]]:
+        registration = await self._get(device_id)
+        return registration.mcp.list_tools()
+
+    async def call_ai(
+        self,
+        device_id: str,
+        name: str,
+        arguments: dict[str, Any],
+        context: OperationContext,
+    ) -> Any:
+        registration = await self._get(device_id)
+        return await registration.mcp.call(name, arguments, context)
+
     async def call(
         self,
         device_id: str,

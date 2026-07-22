@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     )
     llm_prewarm: bool = True
     llm_prewarm_seconds: float = Field(default=12.0, gt=0.1, le=30.0)
-    planner_seconds: float = Field(default=8.0, gt=0.5, le=15.0)
+    planner_seconds: float = Field(default=15.0, gt=0.5, le=15.0)
 
     models_root: Path = Path("models")
     asr_threads: int = Field(default=2, ge=1, le=8)
@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     default_locale: str = "vi-VN"
     default_persona: str = ""
     websocket_path: str = "/veetee/v1/"
+    lab_websocket_path: str = "/veetee/lab/v1/"
+    lab_allowed_origins: str = "http://127.0.0.1:8081,http://localhost:8081"
+    lab_max_sessions: int = Field(default=4, ge=1, le=32)
     input_sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
     input_frame_duration_ms: Literal[20, 40, 60] = 60
     wire_sample_rate: int = Field(default=24_000, ge=8_000, le=48_000)

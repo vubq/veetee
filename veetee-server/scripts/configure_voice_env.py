@@ -89,6 +89,10 @@ def main() -> None:
         "VEETEE_RELOAD": "false",
         "VEETEE_MANAGER_API_URL": "http://127.0.0.1:8001",
         "VEETEE_MANAGER_INTERNAL_TOKEN": manager_token,
+        "VEETEE_LAB_ALLOWED_ORIGINS": manager.get(
+            "VEETEE_MANAGER_CORS_ORIGIN",
+            "http://127.0.0.1:8081,http://localhost:8081",
+        ),
         "VEETEE_9ROUTER_API_KEY": active_nine_router_key(),
     }
     atomic_write_private(VOICE_ENV, render_environment(replacements))

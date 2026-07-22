@@ -99,8 +99,25 @@ Benchmark voice loop trên host V1 so sánh các model sẵn có qua cùng adapt
 ổn định hơn trong các lượt đo hiện tại. Đây không phải quyết định production:
 Manager vẫn lưu model theo provider binding, giữ fallback adapter và phải benchmark
 lại khi phiên bản 9Router, quota hoặc upstream model thay đổi. Structured planner
-được prewarm khi voice-server khởi động; deadline 8 giây là safety ceiling, không
-phải latency target.
+được prewarm khi voice-server khởi động.
+
+Đo lại ngày 2026-07-22 cho thấy latency của provider Codex qua 9Router biến động
+mạnh theo quota/upstream: `cx/gpt-5.6-terra` trả JSON probe khoảng 5.27 s và prose
+khoảng 1.82 s; forced function schema của full conversation gate có lượt vượt quá
+15 s. Trong cùng điều kiện, full gate dùng `response_format=json_object` mất khoảng
+3.16 s; lượt Text Lab thật đạt admission khoảng 5.26 s và first audio khoảng 5.83 s.
+`cx/gpt-5.4-mini`/`cx/gpt-5.6-luna` có lượt probe khoảng 21 s và
+`cx/gpt-5.3-codex-spark` timeout, nên không thay default chỉ dựa trên catalog model.
+
+Vì vậy semantic gate của adapter 9Router dùng JSON-object SSE và vẫn validate toàn
+bộ output bằng Draft 2020-12 JSON Schema tại voice-server. Provider boundary chỉ
+chuẩn hóa tín hiệu boolean `addressed_to_robot` thành điểm `0.0/1.0`; đây là tương
+thích kiểu dữ liệu không thay đổi quyết định semantic. Tool name nằm trong enum
+catalog, arguments tiếp tục qua schema/policy MCP. Các lỗi schema còn lại được hạ
+an toàn thành `admission=unclear`, `plan=noop`, không gọi LLM/MCP/TTS và không biến
+lỗi model thành tool tùy ý. Forced function call vẫn nằm trong provider conformance suite
+nhưng không còn là transport bắt buộc của gate. Baseline local dùng planner ceiling
+15 s và total-turn ceiling 45 s; đây là safety bound, không phải latency target.
 
 Live Manager probe ngày 2026-07-22 đã lấy API key active do chính 9Router quản lý,
 rotate vào encrypted provider secret mà không ghi giá trị ra log/repo, rồi gọi đúng
@@ -133,11 +150,14 @@ với quota 5 giờ/tuần theo README. Source hiện còn đánh dấu provider
 `cx/gpt-5.4-mini` đã pass smoke tool call lịch sử; `cx/gpt-5.6-terra` đã pass
 structured planner, direct response, MCP và cancellation loop hiện tại. Cả hai đều
 không được coi là production contract trước khi đo tiếng Việt, quota reset và hành
-vi khi quota/upstream hết. Với voice, ưu tiên model không phải `*-review`, đặt
-`reasoning_effort=none` cho lượt bình thường và chỉ nâng lên `low` theo agent policy
-khi request cần suy luận thêm. Reasoning event phải được giữ cho
-planner/telemetry có kiểm soát nhưng tuyệt đối không đưa
-`reasoning_content`/`reasoning` vào TTS.
+vi khi quota/upstream hết. Với voice, ưu tiên model không phải `*-review`. Mọi lượt
+hội thoại hiện cố định `reasoning_effort=none` để ưu tiên độ trễ và tính
+dự đoán được. Cấu hình provider/agent không được tự nâng lên `low/medium/high`;
+nếu sau này cần reasoning cho một workflow riêng thì phải bổ sung policy tách biệt,
+không dùng ngầm trong hội thoại. Voice-server bỏ qua hoàn toàn
+`reasoning_content`/`reasoning`, không lưu, không phát event cho client và tuyệt
+đối không đưa vào TTS. Trạng thái giao thức `thinking` chỉ có nghĩa kỹ thuật là
+đang chờ planner/provider/tool, UI hiển thị ngắn gọn là “Đang xử lý”.
 
 ### 2.2.4 API key và network policy
 

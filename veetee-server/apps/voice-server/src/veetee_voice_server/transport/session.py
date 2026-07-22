@@ -599,11 +599,11 @@ class VoiceSession:
             if len(self._pre_roll) > self._pre_roll_bytes:
                 del self._pre_roll[: len(self._pre_roll) - self._pre_roll_bytes]
             if started:
+                await self.inactivity.candidate_started()
                 self._speech.extend(self._pre_roll or pcm)
                 self._pre_roll.clear()
                 self._speech_active = True
         if ended and self._speech_active:
-            await self.inactivity.candidate_started()
             self._start_asr()
 
     def _start_asr(self) -> None:
@@ -659,6 +659,8 @@ class VoiceSession:
                 AdmissionDisposition.NOT_ADDRESSED,
                 AdmissionDisposition.UNCLEAR,
             }:
+                await self.inactivity.candidate_rejected()
+            elif disposition is None:
                 await self.inactivity.candidate_rejected()
             state = self.arbiter.snapshot.state
             if state is ConversationState.LISTENING and disposition not in {

@@ -27,6 +27,11 @@ if ! "$pg_bin/psql" -h 127.0.0.1 -p 5432 -U veetee -d postgres \
   "$pg_bin/createdb" -h 127.0.0.1 -p 5432 -U veetee veetee
 fi
 
+if ! "$pg_bin/psql" -h 127.0.0.1 -p 5432 -U veetee -d postgres \
+  -tAc "SELECT 1 FROM pg_database WHERE datname = 'veetee_test'" | rg -q '^1$'; then
+  "$pg_bin/createdb" -h 127.0.0.1 -p 5432 -U veetee veetee_test
+fi
+
 if ! "$redis_bin/redis-cli" -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
   "$redis_bin/redis-server" \
     --port 6379 \

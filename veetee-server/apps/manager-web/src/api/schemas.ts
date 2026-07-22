@@ -160,6 +160,23 @@ export const healthSchema = z.object({
   components: z.record(z.string(), z.string()).optional(),
 });
 
+export const labSessionSchema = z.object({
+  id: z.string().uuid(),
+  token: z.string(),
+  websocketUrl: z.string(),
+  expiresAt: z.string(),
+  agent: z.object({
+    id: z.string().uuid(),
+    name: z.string(),
+    locale: z.string(),
+    version: z.number().int().positive(),
+    interactionMode: z.enum(["auto", "manual", "realtime"]),
+  }),
+  inputMode: z.enum(["text", "audio_replay", "live_mic"]),
+  mcpMode: z.enum(["simulated", "selected_device", "disabled"]),
+  deviceId: z.string().uuid().optional(),
+});
+
 export const apiErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
@@ -177,3 +194,4 @@ export type Artifact = z.infer<typeof artifactSchema>;
 export type WakeProfile = z.infer<typeof wakeProfileSchema>;
 export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;
 export type UiPackRollout = z.infer<typeof uiPackRolloutSchema>;
+export type LabSession = z.infer<typeof labSessionSchema>;

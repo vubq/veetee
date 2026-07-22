@@ -4,7 +4,12 @@ import httpx
 import pytest
 
 from veetee_voice_server.config import Settings
-from veetee_voice_server.manager import DeviceContext, ManagerClient, SessionProfile
+from veetee_voice_server.manager import (
+    DeviceContext,
+    LabSessionContext,
+    ManagerClient,
+    SessionProfile,
+)
 
 
 def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
@@ -40,7 +45,7 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
     assert profile.policy.closing_grace_seconds == 60.0
     assert profile.policy.max_session_seconds == 3_600.0
     assert profile.llm_model == "cx/configured-model"
-    assert profile.llm_reasoning_effort == "low"
+    assert profile.llm_reasoning_effort == "none"
 
 
 def test_session_profile_uses_configurable_local_persona_fallback() -> None:
@@ -220,3 +225,47 @@ async def test_manager_publishes_redacted_conversation_event_batch() -> None:
     assert accepted == 1
     assert captured["authorization"] == "Bearer internal-test-token"
     assert '"deviceId":"4b6fbf00-4072-4ab5-b06e-a2884749d206"' in str(captured["body"])
+
+
+@pytest.mark.asyncio
+async def test_manager_consumes_one_use_lab_context_through_internal_api() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer internal-test-token"
+        assert request.url.path == "/internal/v1/lab/sessions/consume"
+        assert request.content == b'{"token":"signed-lab-token"}'
+        return httpx.Response(
+            201,
+            json={
+                "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "tenantId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "userId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "agentId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "configVersion": 4,
+                "inputMode": "text",
+                "mcpMode": "simulated",
+            },
+        )
+
+    settings = Settings(
+        environment="test",
+        manager_api_url="http://manager.test",
+        manager_internal_token="internal-test-token",
+    )
+    client = httpx.AsyncClient(
+        base_url="http://manager.test", transport=httpx.MockTransport(handler)
+    )
+    manager = ManagerClient(settings, client=client)
+
+    context = await manager.consume_lab_session("signed-lab-token")
+    await client.aclose()
+
+    assert context == LabSessionContext(
+        session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        tenant_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        user_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        agent_id="dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        config_version=4,
+        input_mode="text",
+        mcp_mode="simulated",
+        device_id=None,
+    )

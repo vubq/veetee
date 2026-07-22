@@ -556,6 +556,224 @@ export const deviceReportedStateSchema = {
   },
 } as const;
 
+export const labSessionRestSchema = {
+  $id: "https://schemas.veetee.local/lab/session-rest-v1.json",
+  oneOf: [{ $ref: "#/$defs/create_request" }, { $ref: "#/$defs/create_response" }],
+  $defs: {
+    mode_fields: {
+      type: "object",
+      properties: {
+        inputMode: { enum: ["text", "audio_replay", "live_mic"] },
+        mcpMode: { enum: ["simulated", "selected_device", "disabled"] },
+        deviceId: { type: "string", format: "uuid" },
+      },
+      allOf: [
+        {
+          if: {
+            required: ["mcpMode"],
+            properties: { mcpMode: { const: "selected_device" } },
+          },
+          then: {
+            properties: { deviceId: { type: "string", format: "uuid" } },
+            required: ["deviceId"],
+          },
+          else: { not: { required: ["deviceId"] } },
+        },
+      ],
+    },
+    create_request: {
+      type: "object",
+      additionalProperties: false,
+      required: ["agentId", "inputMode", "mcpMode"],
+      properties: {
+        agentId: { type: "string", format: "uuid" },
+        inputMode: { enum: ["text", "audio_replay", "live_mic"] },
+        mcpMode: { enum: ["simulated", "selected_device", "disabled"] },
+        deviceId: { type: "string", format: "uuid" },
+      },
+      allOf: [{ $ref: "#/$defs/mode_fields" }],
+    },
+    create_response: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "token",
+        "websocketUrl",
+        "expiresAt",
+        "agent",
+        "inputMode",
+        "mcpMode",
+      ],
+      properties: {
+        id: { type: "string", format: "uuid" },
+        token: { type: "string", minLength: 64, maxLength: 2048 },
+        websocketUrl: { type: "string", format: "uri" },
+        expiresAt: { type: "string", format: "date-time" },
+        agent: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "name", "locale", "version", "interactionMode"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            name: id,
+            locale: id,
+            version: { type: "integer", minimum: 1 },
+            interactionMode: { enum: ["auto", "manual", "realtime"] },
+          },
+        },
+        inputMode: { enum: ["text", "audio_replay", "live_mic"] },
+        mcpMode: { enum: ["simulated", "selected_device", "disabled"] },
+        deviceId: { type: "string", format: "uuid" },
+      },
+      allOf: [{ $ref: "#/$defs/mode_fields" }],
+    },
+  },
+} as const;
+
+export const labWebSocketSchema = {
+  $id: "https://schemas.veetee.local/lab/websocket-v1.json",
+  oneOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "token"],
+      properties: {
+        type: { const: "lab.auth" },
+        token: { type: "string", minLength: 64, maxLength: 2048 },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "type",
+        "version",
+        "session_id",
+        "agent",
+        "input_mode",
+        "mcp_mode",
+        "audio",
+        "fidelity",
+        "tools",
+      ],
+      properties: {
+        type: { const: "lab.hello" },
+        version: { const: 1 },
+        session_id: { type: "string", format: "uuid" },
+        agent: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "version", "locale"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            version: { type: "integer", minimum: 1 },
+            locale: id,
+          },
+        },
+        input_mode: { enum: ["text", "audio_replay", "live_mic"] },
+        mcp_mode: { enum: ["simulated", "selected_device", "disabled"] },
+        audio: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "input_encoding",
+            "input_sample_rate",
+            "output_encoding",
+            "output_sample_rate",
+            "channels",
+          ],
+          properties: {
+            input_encoding: { const: "pcm_s16le" },
+            input_sample_rate: { const: 16000 },
+            output_encoding: { const: "pcm_s16le" },
+            output_sample_rate: { enum: [16000, 24000, 48000] },
+            channels: { const: 1 },
+          },
+        },
+        fidelity: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "vad_asr",
+            "admission_llm_tts",
+            "device_opus_transport",
+            "physical_aec_speaker",
+          ],
+          properties: {
+            vad_asr: { enum: ["real", "bypassed"] },
+            admission_llm_tts: { const: "real" },
+            device_opus_transport: { const: "not_measured" },
+            physical_aec_speaker: { const: "not_measured" },
+          },
+        },
+        tools: { type: "array", items: { type: "object" } },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "session_id", "text"],
+      properties: {
+        type: { const: "lab.text" },
+        session_id: { type: "string", format: "uuid" },
+        text: { type: "string", minLength: 1, maxLength: 4000 },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "session_id", "encoding", "sample_rate"],
+      properties: {
+        type: { const: "lab.audio.start" },
+        session_id: { type: "string", format: "uuid" },
+        encoding: { const: "pcm_s16le" },
+        sample_rate: { const: 16000 },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "session_id"],
+      properties: {
+        type: { enum: ["lab.audio.end", "lab.wake", "lab.close"] },
+        session_id: { type: "string", format: "uuid" },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "session_id", "reason"],
+      properties: {
+        type: { const: "lab.abort" },
+        session_id: { type: "string", format: "uuid" },
+        reason: reasonCode,
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "type",
+        "session_id",
+        "event",
+        "elapsed_ms",
+        "generation",
+        "payload",
+      ],
+      properties: {
+        type: { const: "lab.event" },
+        session_id: { type: "string", format: "uuid" },
+        event: id,
+        elapsed_ms: { type: "number", minimum: 0 },
+        generation: nonNegativeInteger,
+        turn_id: id,
+        payload: { type: "object" },
+      },
+    },
+  ],
+} as const;
+
 const sessionEvent = {
   type: "object",
   required: ["session_id", "type"],
@@ -688,5 +906,7 @@ export const schemas = [
   mcpEnvelopeSchema,
   otaBootstrapSchema,
   deviceReportedStateSchema,
+  labSessionRestSchema,
+  labWebSocketSchema,
   webSocketEventSchema,
 ] as const;

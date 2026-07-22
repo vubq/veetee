@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from
 
 import prototypePage from "../../../../prototypes/manager-web/index.html?raw";
 import { managerApi } from "../api/client";
+import { initializeRealtimeLab, type RealtimeLabController } from "../lab-controller";
 import {
   initializePrototype,
   renderManagerView,
@@ -19,6 +20,7 @@ if (!body) throw new Error("Unable to load the approved Manager Web prototype");
 
 const root = ref<HTMLElement>();
 const controller = ref<PrototypeController>();
+const labController = ref<RealtimeLabController>();
 const auth = useAuthStore();
 const queryClient = useQueryClient();
 
@@ -195,6 +197,11 @@ onMounted(async () => {
     rolloutWakeProfile,
     logout: () => auth.logout(),
   });
+  labController.value = initializeRealtimeLab(root.value, {
+    createSession: managerApi.createLabSession,
+    toast: (message) => controller.value?.toast(message),
+  });
+  labController.value.updateCatalog(agents.data.value ?? [], devices.data.value ?? []);
 });
 
 watchEffect(() => {
@@ -214,9 +221,13 @@ watchEffect(() => {
     apiHost: apiHost.value,
     ready: health.data.value?.status === "ready",
   });
+  labController.value?.updateCatalog(agents.data.value ?? [], devices.data.value ?? []);
 });
 
-onBeforeUnmount(() => controller.value?.destroy());
+onBeforeUnmount(() => {
+  labController.value?.destroy();
+  controller.value?.destroy();
+});
 </script>
 
 <template>

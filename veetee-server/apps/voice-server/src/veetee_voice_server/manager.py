@@ -23,6 +23,18 @@ class DeviceContext:
 
 
 @dataclass(frozen=True, slots=True)
+class LabSessionContext:
+    session_id: str
+    tenant_id: str
+    user_id: str
+    agent_id: str
+    config_version: int
+    input_mode: str
+    mcp_mode: str
+    device_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class LlmEndpoint:
     provider_id: str
     adapter: str
@@ -67,7 +79,7 @@ class SessionProfile:
                 between_turns_seconds=settings.between_turns_seconds,
                 closing_grace_seconds=settings.closing_grace_seconds,
                 max_session_seconds=settings.max_session_seconds,
-                total_turn_seconds=30.0,
+                total_turn_seconds=45.0,
                 admission_seconds=1.0,
                 planner_seconds=settings.planner_seconds,
                 llm_seconds=20.0,
@@ -81,7 +93,7 @@ class SessionProfile:
                     base_url=str(settings.nine_router_base_url),
                     model=settings.nine_router_model,
                     api_key=settings.nine_router_api_key,
-                    reasoning_effort=settings.nine_router_reasoning_effort,
+                    reasoning_effort="none",
                 ),
             ),
         )
@@ -245,6 +257,36 @@ class ManagerClient:
             self._profile_cache[cache_key] = profile
             return profile
 
+    async def consume_lab_session(self, token: str) -> LabSessionContext:
+        response = await self._client.post(
+            "/internal/v1/lab/sessions/consume",
+            headers=self._service_headers(),
+            json={"token": token},
+        )
+        if response.status_code in {401, 403, 404}:
+            raise ManagerAuthenticationError("Lab session was rejected")
+        response.raise_for_status()
+        payload = response.json()
+        input_mode = _optional_string(payload.get("inputMode"))
+        mcp_mode = _optional_string(payload.get("mcpMode"))
+        if input_mode not in {"text", "audio_replay", "live_mic"}:
+            raise ValueError("Manager returned an invalid Lab input mode")
+        if mcp_mode not in {"simulated", "selected_device", "disabled"}:
+            raise ValueError("Manager returned an invalid Lab MCP mode")
+        config_version = _bounded_int(payload.get("configVersion"), -1, 1, 2_147_483_647)
+        if config_version <= 0:
+            raise ValueError("Manager returned an invalid Lab config version")
+        return LabSessionContext(
+            session_id=str(payload["sessionId"]),
+            tenant_id=str(payload["tenantId"]),
+            user_id=str(payload["userId"]),
+            agent_id=str(payload["agentId"]),
+            config_version=config_version,
+            input_mode=input_mode,
+            mcp_mode=mcp_mode,
+            device_id=_optional_string(payload.get("deviceId")),
+        )
+
     async def publish_conversation_events(
         self, device_id: str, events: list[dict[str, Any]]
     ) -> int:
@@ -360,10 +402,9 @@ def _llm_endpoint(
         base_url=base_url,
         model=model,
         api_key=_optional_string(runtime.get("secret")) or settings.nine_router_api_key,
-        reasoning_effort=(
-            _reasoning_effort(published.get("reasoningEffort"))
-            or defaults.llm_reasoning_effort
-        ),
+        # Voice turns favor predictable latency; published profiles cannot enable
+        # hidden model reasoning unless Veetee introduces an explicit policy later.
+        reasoning_effort="none",
     )
 
 
@@ -381,7 +422,3 @@ def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int
     if not isinstance(value, int) or isinstance(value, bool):
         return default
     return min(max(value, minimum), maximum)
-
-
-def _reasoning_effort(value: object) -> str | None:
-    return value if value in {"none", "low", "medium", "high"} else None
