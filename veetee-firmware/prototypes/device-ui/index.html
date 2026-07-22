@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e9e5da" />
+    <title>VeeTee Device UI — Design Lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="design-lab">
+      <header class="lab-header">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">V</span>
+          <div>
+            <p>VEETEE / DEVICE EXPERIENCE</p>
+            <h1>Một giọng nói.<br />Ba tính cách thị giác.</h1>
+          </div>
+        </div>
+        <div class="header-note">
+          <span class="spec-dot"></span>
+          <div>
+            <strong>ST7789 · 240 × 320</strong>
+            <small>Prototype tỉ lệ 1:1 · chưa áp dụng firmware</small>
+          </div>
+        </div>
+      </header>
+
+      <section class="lab-controls" aria-label="Điều khiển prototype">
+        <div class="control-group state-control">
+          <span class="control-label">TRẠNG THÁI</span>
+          <div class="state-tabs" role="tablist" aria-label="Chọn trạng thái màn hình">
+            <button type="button" data-state="idle" class="active">Chờ</button>
+            <button type="button" data-state="listening">Đang nghe</button>
+            <button type="button" data-state="understanding">Đánh giá</button>
+            <button type="button" data-state="thinking">Suy nghĩ</button>
+            <button type="button" data-state="speaking">Đang nói</button>
+            <button type="button" data-state="stopping">Dừng</button>
+            <button type="button" data-state="pairing">Mã ghép nối</button>
+            <button type="button" data-state="pairingLost">Mất ghép nối</button>
+            <button type="button" data-state="wifiSetup">Cài Wi-Fi</button>
+            <button type="button" data-state="boot">Khởi động</button>
+            <button type="button" data-state="goodbye">Kết thúc</button>
+          </div>
+        </div>
+        <div class="control-actions">
+          <button type="button" id="languageToggle" class="utility-button" aria-label="Đổi ngôn ngữ">
+            VI <span>/ EN</span>
+          </button>
+          <button type="button" id="autoPlay" class="utility-button play-button">
+            <i aria-hidden="true"></i> Chạy luồng
+          </button>
+        </div>
+      </section>
+
+      <section class="concept-grid" aria-label="Ba phương án giao diện">
+        <article class="concept-card recommended" data-concept="signal">
+          <div class="concept-heading">
+            <div>
+              <span class="concept-index">01 / SIGNAL</span>
+              <h2>Tĩnh, có chiều sâu</h2>
+            </div>
+            <span class="recommend-badge">Đề xuất</span>
+          </div>
+
+          <div class="device-shell signal-shell">
+            <div class="device-screen signal-screen" data-device-screen data-state="idle">
+              <div class="signal-atmosphere" aria-hidden="true"></div>
+              <header class="device-status">
+                <span class="mini-brand">VEE/TEE</span>
+                <span class="status-network"><i></i><i></i><i></i></span>
+              </header>
+              <div class="signal-copy">
+                <span class="state-number">01</span>
+                <p class="state-kicker" data-state-kicker>SẴN SÀNG</p>
+                <h3 data-state-title>Chào bạn.</h3>
+              </div>
+              <div class="signal-object" aria-hidden="true">
+                <span class="signal-ring ring-one"></span>
+                <span class="signal-ring ring-two"></span>
+                <span class="signal-core"></span>
+                <span class="signal-bar bar-one"></span>
+                <span class="signal-bar bar-two"></span>
+                <span class="signal-bar bar-three"></span>
+                <span class="signal-bar bar-four"></span>
+                <span class="signal-bar bar-five"></span>
+              </div>
+              <div class="pair-code" data-pair-code>284<span>·</span>716</div>
+              <footer class="device-footer">
+                <span class="state-hint" data-state-hint>Bấm nút hoặc nói “Hey VeeTee”</span>
+                <span class="footer-mark" aria-hidden="true"></span>
+              </footer>
+            </div>
+          </div>
+
+          <div class="concept-notes">
+            <p>Ngôn ngữ hình ảnh nối tiếp trực tiếp từ Manager Web: navy, lime, coral và chuyển động âm thanh.</p>
+            <div><span>Ấm áp</span><span>Nhận diện mạnh</span><span>Dễ mở rộng</span></div>
+          </div>
+        </article>
+
+        <article class="concept-card" data-concept="monolith">
+          <div class="concept-heading">
+            <div>
+              <span class="concept-index">02 / MONOLITH</span>
+              <h2>Công cụ AI chuyên nghiệp</h2>
+            </div>
+          </div>
+
+          <div class="device-shell monolith-shell">
+            <div class="device-screen monolith-screen" data-device-screen data-state="idle">
+              <div class="mono-grid" aria-hidden="true"></div>
+              <header class="mono-header">
+                <span>V/T</span>
+                <span data-state-kicker>SẴN SÀNG</span>
+              </header>
+              <div class="mono-hero">
+                <span class="mono-index">01</span>
+                <div class="mono-glyph" aria-hidden="true">
+                  <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                </div>
+                <div class="pair-code" data-pair-code>284<span>·</span>716</div>
+              </div>
+              <footer class="mono-footer">
+                <h3 data-state-title>Chào bạn.</h3>
+                <p data-state-hint>Bấm nút hoặc nói “Hey VeeTee”</p>
+                <span class="mono-progress" aria-hidden="true"><i></i></span>
+              </footer>
+            </div>
+          </div>
+
+          <div class="concept-notes">
+            <p>Chữ lớn, lưới kỹ thuật và tín hiệu tuyến tính. Nghiêm túc, rõ trạng thái, gần sản phẩm công nghiệp.</p>
+            <div><span>Chính xác</span><span>Tương phản cao</span><span>Ít cảm xúc</span></div>
+          </div>
+        </article>
+
+        <article class="concept-card" data-concept="quiet">
+          <div class="concept-heading">
+            <div>
+              <span class="concept-index">03 / QUIET</span>
+              <h2>Hiện diện trong không gian</h2>
+            </div>
+          </div>
+
+          <div class="device-shell quiet-shell">
+            <div class="device-screen quiet-screen" data-device-screen data-state="idle">
+              <header class="quiet-header">
+                <span class="quiet-logo">V</span>
+                <span class="quiet-network"><i></i> ONLINE</span>
+              </header>
+              <div class="quiet-landscape" aria-hidden="true">
+                <span class="quiet-sun"></span>
+                <span class="quiet-horizon horizon-one"></span>
+                <span class="quiet-horizon horizon-two"></span>
+                <span class="quiet-horizon horizon-three"></span>
+              </div>
+              <div class="pair-code" data-pair-code>284<span>·</span>716</div>
+              <div class="quiet-copy">
+                <p data-state-kicker>SẴN SÀNG</p>
+                <h3 data-state-title>Chào bạn.</h3>
+                <span data-state-hint>Bấm nút hoặc nói “Hey VeeTee”</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="concept-notes">
+            <p>Giao diện sáng, yên và gần đồ nội thất thông minh. Trạng thái được biểu diễn như cảnh quan âm thanh.</p>
+            <div><span>Tinh tế</span><span>Thân thiện</span><span>Sáng phòng</span></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="decision-panel">
+        <div>
+          <span class="decision-label">KHUYẾN NGHỊ THIẾT KẾ</span>
+          <h2>Lấy Signal làm hệ chính,<br />mượn độ rõ từ Monolith.</h2>
+        </div>
+        <div class="decision-copy">
+          <p>
+            Signal đồng bộ nhất với UI quản trị bạn đã chọn và đủ trưởng thành khi bỏ khuôn mặt hoạt hình.
+            Khi triển khai thật, màn hình chỉ hiển thị dữ liệu có thật; chuyển động là phản hồi trực tiếp từ VAD,
+            ASR, LLM, TTS và TurnArbiter.
+          </p>
+          <div class="implementation-tags">
+            <span>RGB565</span><span>30 FPS mục tiêu</span><span>Font Việt</span><span>Không hard-code cảm xúc</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
