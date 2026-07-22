@@ -12,6 +12,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import { i18n } from "./i18n";
 import "../../../prototypes/manager-web/styles.css";
+import "../../../prototypes/manager-web/device-ui-studio.css";
 import "./app.css";
 
 createApp(App).use(createPinia()).use(VueQueryPlugin).use(i18n).mount("#app");

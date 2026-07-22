@@ -348,6 +348,34 @@ test("keeps the approved mobile navigation", async ({ page }) => {
   await expect(page.locator(".mobile-brand")).toBeVisible();
 });
 
+test("previews all built-in device themes and inspects a UI Pack locally", async ({ page }) => {
+  await mockManagerApi(page);
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="device-ui"]').first().click();
+  const preview = page.locator("[data-ui-preview]");
+  await expect(preview).toHaveAttribute("data-theme", "signal");
+  await expect(page.locator("#uiPreviewName")).toHaveText("01 / Signal");
+
+  await page.locator('[data-ui-theme="monolith"]').click();
+  await expect(preview).toHaveAttribute("data-theme", "monolith");
+  await expect(page.locator("#uiPreviewName")).toHaveText("02 / Monolith");
+  await page.locator('[data-ui-state="pairingLost"]').click();
+  await expect(preview).toContainText("Cần kết nối lại.");
+
+  await page.locator("[data-ui-pack-file]").setInputFiles({
+    name: "veetee-signal.vtp",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("veetee-ui-pack-test"),
+  });
+  await expect(page.locator("[data-ui-upload-status]")).toHaveText("Hợp lệ để staging");
+  await expect(page.locator("[data-ui-file-name]")).toHaveText("veetee-signal.vtp");
+  await expect(page.locator("[data-ui-stage-pack]")).toBeDisabled();
+});
+
 test("edits provider routing and rotates secrets without reading the old secret", async ({
   page,
 }) => {

@@ -13,12 +13,40 @@ import type {
 const pageNames: Record<string, string> = {
   overview: "Tổng quan",
   devices: "Thiết bị",
+  "device-ui": "Giao diện thiết bị",
   agents: "Trợ lý AI",
   providers: "Providers",
   lab: "Realtime Lab",
   mcp: "MCP tools",
   ota: "OTA & releases",
 };
+
+const deviceUiCopy = {
+  vi: {
+    idle: ["01", "SẴN SÀNG", "Chào bạn.", "Bấm nút hoặc nói “Hey VeeTee”"],
+    listening: ["02", "ĐANG NGHE", "Bạn cứ nói.", "Nói tự nhiên · bấm để tạm dừng"],
+    understanding: ["03", "ĐANG ĐÁNH GIÁ", "Tôi đang nghe rõ.", "Phân biệt lời nói và âm thanh nền"],
+    thinking: ["04", "ĐANG XỬ LÝ", "Một chút nhé.", "AI có thể gọi công cụ khi cần"],
+    speaking: ["05", "ĐANG TRẢ LỜI", "Tôi đang nói.", "Bấm nút để ngắt ngay"],
+    pairing: ["07", "GHÉP THIẾT BỊ", "Nhập mã này.", "Mở Manager Web · mã chỉ dùng một lần"],
+    pairingLost: ["08", "MẤT GHÉP NỐI", "Cần kết nối lại.", "Giữ nút 5 giây để bắt đầu phục hồi"],
+  },
+  en: {
+    idle: ["01", "READY", "Hello there.", "Press the button or say “Hey VeeTee”"],
+    listening: ["02", "LISTENING", "Go ahead.", "Speak naturally · press to pause"],
+    understanding: ["03", "EVALUATING", "I can hear you.", "Separating speech from background audio"],
+    thinking: ["04", "WORKING", "One moment.", "AI may call a tool when needed"],
+    speaking: ["05", "RESPONDING", "I’m speaking.", "Press the button to interrupt"],
+    pairing: ["07", "PAIR DEVICE", "Enter this code.", "Open Manager Web · single-use code"],
+    pairingLost: ["08", "PAIRING LOST", "Let’s reconnect.", "Hold the button for 5 seconds to recover"],
+  },
+} as const;
+
+const deviceUiThemeNames = {
+  signal: "01 / Signal",
+  monolith: "02 / Monolith",
+  quiet: "03 / Quiet",
+} as const;
 
 export interface AgentDraftInput {
   id: string;
@@ -704,6 +732,112 @@ export function initializePrototype(
     }
   });
 
+  type DeviceUiLocale = keyof typeof deviceUiCopy;
+  type DeviceUiState = keyof (typeof deviceUiCopy)["vi"];
+  type DeviceUiTheme = keyof typeof deviceUiThemeNames;
+  let deviceUiLocale: DeviceUiLocale = "vi";
+  let deviceUiState: DeviceUiState = "idle";
+  let deviceUiTheme: DeviceUiTheme = "signal";
+
+  const renderDeviceUiPreview = (): void => {
+    const preview = query<HTMLElement>(root, "[data-ui-preview]");
+    const content = deviceUiCopy[deviceUiLocale][deviceUiState];
+    if (!preview || !content) return;
+    const [number, kicker, title, hint] = content;
+    preview.dataset.theme = deviceUiTheme;
+    preview.dataset.state = deviceUiState;
+    const numberNode = query<HTMLElement>(preview, "[data-ui-number]");
+    const kickerNode = query<HTMLElement>(preview, "[data-ui-kicker]");
+    const titleNode = query<HTMLElement>(preview, "[data-ui-title]");
+    const hintNode = query<HTMLElement>(preview, "[data-ui-hint]");
+    const nameNode = query<HTMLElement>(root, "#uiPreviewName");
+    if (numberNode) numberNode.textContent = number;
+    if (kickerNode) kickerNode.textContent = kicker;
+    if (titleNode) titleNode.textContent = title;
+    if (hintNode) hintNode.textContent = hint;
+    if (nameNode) nameNode.textContent = deviceUiThemeNames[deviceUiTheme];
+    queryAll<HTMLButtonElement>(root, "[data-ui-state]").forEach((button) =>
+      button.classList.toggle("active", button.dataset.uiState === deviceUiState),
+    );
+    queryAll<HTMLButtonElement>(root, "[data-ui-theme]").forEach((button) => {
+      const active = button.dataset.uiTheme === deviceUiTheme;
+      button.classList.toggle("active", active);
+      const marker = query<HTMLElement>(button, "strong");
+      if (marker) marker.textContent = active ? "✓" : "○";
+    });
+  };
+
+  const uiPackInput = query<HTMLInputElement>(root, "[data-ui-pack-file]");
+  const uiDropZone = query<HTMLElement>(root, ".ui-drop-zone");
+  const uiInspection = query<HTMLElement>(root, "[data-ui-file-inspection]");
+  const uiClearFile = query<HTMLButtonElement>(root, "[data-ui-clear-file]");
+  const uiStagePack = query<HTMLButtonElement>(root, "[data-ui-stage-pack]");
+
+  const clearUiPack = (): void => {
+    if (uiPackInput) uiPackInput.value = "";
+    if (uiInspection) uiInspection.hidden = true;
+    if (uiClearFile) uiClearFile.disabled = true;
+    if (uiStagePack) uiStagePack.disabled = true;
+    const status = query<HTMLElement>(root, "[data-ui-upload-status]");
+    if (status) status.textContent = "Chưa chọn file";
+  };
+
+  const inspectUiPack = async (file: File): Promise<void> => {
+    const status = query<HTMLElement>(root, "[data-ui-upload-status]");
+    const fileName = query<HTMLElement>(root, "[data-ui-file-name]");
+    const fileSize = query<HTMLElement>(root, "[data-ui-file-size]");
+    const fileHash = query<HTMLElement>(root, "[data-ui-file-hash]");
+    const extensionValid = /\.(?:vtp|bin)$/i.test(file.name);
+    const sizeValid = file.size > 0 && file.size <= 4 * 1024 * 1024;
+    if (uiInspection) uiInspection.hidden = false;
+    if (fileName) fileName.textContent = file.name;
+    if (fileSize) fileSize.textContent = `${(file.size / 1024).toFixed(file.size < 1024 * 1024 ? 1 : 0)} KiB`;
+    if (uiClearFile) uiClearFile.disabled = false;
+    if (!extensionValid || !sizeValid) {
+      if (status) status.textContent = !extensionValid ? "Sai định dạng" : "Vượt quá 4 MiB";
+      if (fileHash) fileHash.textContent = "Không tính";
+      if (uiStagePack) uiStagePack.disabled = true;
+      toast(!extensionValid ? "UI Pack phải là file .vtp hoặc .bin." : "UI Pack không được vượt quá 4 MiB.");
+      return;
+    }
+    if (status) status.textContent = "Đang inspect…";
+    if (fileHash) fileHash.textContent = "Đang tính…";
+    try {
+      const subtle = globalThis.crypto?.subtle;
+      if (!subtle) throw new Error("secure-context-required");
+      const digest = await subtle.digest("SHA-256", await file.arrayBuffer());
+      const hash = [...new Uint8Array(digest)]
+        .map((value) => value.toString(16).padStart(2, "0"))
+        .join("");
+      if (fileHash) {
+        fileHash.textContent = `${hash.slice(0, 12)}…${hash.slice(-8)}`;
+        fileHash.title = hash;
+      }
+    } catch {
+      if (fileHash) fileHash.textContent = "Tính khi staging";
+    }
+    if (status) status.textContent = "Hợp lệ để staging";
+    // Staging remains deliberately disabled until the signed UI Pack API exists.
+    if (uiStagePack) uiStagePack.disabled = true;
+  };
+
+  listen(uiPackInput, "change", (async () => {
+    const file = uiPackInput?.files?.[0];
+    if (file) await inspectUiPack(file);
+  }) as EventListener);
+  listen(uiDropZone, "dragover", ((event: Event) => {
+    event.preventDefault();
+    uiDropZone?.classList.add("dragging");
+  }) as EventListener);
+  listen(uiDropZone, "dragleave", (() => uiDropZone?.classList.remove("dragging")) as EventListener);
+  listen(uiDropZone, "drop", (async (event: Event) => {
+    event.preventDefault();
+    uiDropZone?.classList.remove("dragging");
+    const file = (event as DragEvent).dataTransfer?.files[0];
+    if (file) await inspectUiPack(file);
+  }) as EventListener);
+  renderDeviceUiPreview();
+
   const codeInputs = queryAll<HTMLInputElement>(root, "#codeInputs input");
   codeInputs.forEach((input, index) => {
     listen(input, "input", (() => {
@@ -831,6 +965,36 @@ export function initializePrototype(
     if (page) {
       event.preventDefault();
       showPage(page);
+      return;
+    }
+    const uiState = target.closest<HTMLButtonElement>("[data-ui-state]")?.dataset.uiState;
+    if (uiState && uiState in deviceUiCopy.vi) {
+      deviceUiState = uiState as DeviceUiState;
+      renderDeviceUiPreview();
+      return;
+    }
+    const uiTheme = target.closest<HTMLButtonElement>("[data-ui-theme]")?.dataset.uiTheme;
+    if (uiTheme && uiTheme in deviceUiThemeNames) {
+      deviceUiTheme = uiTheme as DeviceUiTheme;
+      renderDeviceUiPreview();
+      return;
+    }
+    if (target.closest("[data-ui-language]")) {
+      deviceUiLocale = deviceUiLocale === "vi" ? "en" : "vi";
+      const toggle = query<HTMLButtonElement>(root, "[data-ui-language]");
+      if (toggle) {
+        toggle.innerHTML = deviceUiLocale === "vi" ? 'VI <span>/ EN</span>' : '<span>VI /</span> EN';
+      }
+      renderDeviceUiPreview();
+      return;
+    }
+    if (target.closest("[data-open-ui-upload]")) {
+      query<HTMLElement>(root, "#uiUploadPanel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      uiPackInput?.click();
+      return;
+    }
+    if (target.closest("[data-ui-clear-file]")) {
+      clearUiPack();
       return;
     }
     if (target.closest("[data-open-pair]")) return openPairing();

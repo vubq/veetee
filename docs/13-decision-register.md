@@ -42,6 +42,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Voice server | Python 3.12 + Starlette/FastAPI + Uvicorn trong một ASGI process. | Chỉ tách standalone WebSocket nếu benchmark connection/frame path yêu cầu. |
 | Manager API | NestJS + Fastify + PostgreSQL + Redis. | Đổi nếu team đã có nền tảng Java/Spring bắt buộc. |
 | Manager Web | Vue 3 + TypeScript + Vite + TanStack Vue Query + Zod. | Giữ visual prototype hiện tại, bổ sung artifact/security/privacy screens. |
+| Device UI | Giữ Signal, Monolith và Quiet; Signal là built-in default. UI Pack data-only được preview/upload từ Manager, phân phối qua signed resource A/B. | UI Pack ABI V2 phải hoàn tất trước khi staging/rollout được mở. |
 | Device edge | Dev single-node gộp admin + device routes trong manager-api port 8001; production có thể tách Caddy/Nginx listener 8003. | Không tạo business data source hoặc branded alias thứ hai. |
 | Object storage | Local filesystem adapter cho dev; MinIO cho rollout/Range/multi-node. | Không để manager-api buffer artifact lớn trong RAM. |
 | Resource layout | Executable A/B + resource A/B sau size probe; ưu tiên đơn giản/recover cho V1. | Mở ADR resource store 8 MB nếu model/assets vượt slot. |

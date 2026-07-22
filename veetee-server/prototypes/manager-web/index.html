@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="device-ui-studio.css">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -24,6 +25,7 @@
       <nav class="primary-nav" aria-label="Điều hướng chính">
         <button class="nav-item active" data-page-link="overview"><span class="nav-icon">⌁</span><span>Tổng quan</span></button>
         <button class="nav-item" data-page-link="devices"><span class="nav-icon">◫</span><span>Thiết bị</span><b class="nav-count">3</b></button>
+        <button class="nav-item" data-page-link="device-ui"><span class="nav-icon">◇</span><span>Giao diện</span></button>
         <button class="nav-item" data-page-link="agents"><span class="nav-icon">✦</span><span>Trợ lý AI</span></button>
         <button class="nav-item" data-page-link="providers"><span class="nav-icon">⌘</span><span>Providers</span></button>
         <button class="nav-item" data-page-link="lab"><span class="nav-icon">≋</span><span>Realtime Lab</span><i class="live-dot"></i></button>
@@ -121,6 +123,62 @@
           <article class="device-card selected"><div class="device-screen"><span>◉</span><div class="face"><i></i><i></i></div><small>đang nghe</small></div><div class="device-copy"><div><span class="status-pill"><i></i> online</span><b>Veetee Lab 01</b><small>AA:BB:CC:DD:EE:01</small></div><dl><div><dt>Wi-Fi</dt><dd>-52 dBm</dd></div><div><dt>Firmware</dt><dd>0.1.3</dd></div><div><dt>Agent</dt><dd>Veetee Việt</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
           <article class="device-card"><div class="device-screen clay"><span>◌</span><div class="face"><i></i><i></i></div><small>idle</small></div><div class="device-copy"><div><span class="status-pill neutral"><i></i> idle</span><b>Veetee Desk</b><small>AA:BB:CC:DD:EE:02</small></div><dl><div><dt>Wi-Fi</dt><dd>-68 dBm</dd></div><div><dt>Firmware</dt><dd>0.1.3</dd></div><div><dt>Agent</dt><dd>Veetee Việt</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
           <article class="device-card muted"><div class="device-screen smoke"><span>×</span><div class="face"><i></i><i></i></div><small>offline</small></div><div class="device-copy"><div><span class="status-pill off"><i></i> offline</span><b>Proto Audio</b><small>AA:BB:CC:DD:EE:03</small></div><dl><div><dt>Thấy lần cuối</dt><dd>2 giờ</dd></div><div><dt>Firmware</dt><dd>0.1.2</dd></div><div><dt>Agent</dt><dd>Chưa gán</dd></div></dl><button class="button button-ghost">Mở thiết bị →</button></div></article>
+        </div>
+      </section>
+
+      <section class="page" data-page="device-ui">
+        <div class="section-title"><div><span class="eyebrow">DEVICE EXPERIENCE / UI PACKS</span><h1>Giao diện thiết bị</h1><p>Preview đúng khung ST7789 240 × 320 và chuẩn bị gói giao diện độc lập với firmware.</p></div><div class="ui-studio-actions"><span class="status-pill"><i></i> Signal mặc định</span><button class="button button-primary" type="button" data-open-ui-upload>↥ Upload UI Pack</button></div></div>
+
+        <div class="ui-studio-layout">
+          <article class="ui-preview-panel">
+            <div class="panel-heading"><div><span class="eyebrow">LIVE PREVIEW · 1:1</span><h3 id="uiPreviewName">01 / Signal</h3></div><button class="ui-language-toggle" type="button" data-ui-language>VI <span>/ EN</span></button></div>
+            <div class="ui-preview-stage">
+              <div class="ui-device-shell">
+                <div class="ui-device-screen" data-ui-preview data-theme="signal" data-state="idle">
+                  <div class="ui-screen-grid" aria-hidden="true"></div>
+                  <header class="ui-screen-header"><span>VEE/TEE</span><span class="ui-network"><i></i><i></i><i></i></span></header>
+                  <div class="ui-screen-copy"><span data-ui-number>01</span><p data-ui-kicker>SẴN SÀNG</p><h3 data-ui-title>Chào bạn.</h3></div>
+                  <div class="ui-screen-object" aria-hidden="true"><span class="ui-ring ring-a"></span><span class="ui-ring ring-b"></span><span class="ui-core"></span><span class="ui-bar"></span><span class="ui-bar"></span><span class="ui-bar"></span><span class="ui-bar"></span><span class="ui-bar"></span></div>
+                  <div class="ui-pair-code">284<span>·</span>716</div>
+                  <footer class="ui-screen-footer"><span data-ui-hint>Bấm nút hoặc nói “Hey VeeTee”</span><i></i></footer>
+                </div>
+              </div>
+            </div>
+            <div class="ui-state-picker" aria-label="Chọn trạng thái preview">
+              <button class="active" type="button" data-ui-state="idle">Chờ</button><button type="button" data-ui-state="listening">Nghe</button><button type="button" data-ui-state="understanding">Đánh giá</button><button type="button" data-ui-state="thinking">Suy nghĩ</button><button type="button" data-ui-state="speaking">Nói</button><button type="button" data-ui-state="pairing">Pairing</button><button type="button" data-ui-state="pairingLost">Recovery</button>
+            </div>
+          </article>
+
+          <aside class="ui-theme-panel">
+            <div class="panel-heading"><div><span class="eyebrow">BUILT-IN THEMES</span><h3>Ba giao diện nền</h3></div><span class="ui-pack-version">UI ABI · DRAFT 1</span></div>
+            <button class="ui-theme-option active" type="button" data-ui-theme="signal"><span class="ui-theme-swatch signal"><i></i></span><span><small>01 / SIGNAL · DEFAULT</small><b>Tĩnh, có chiều sâu</b><em>Đồng bộ nhận diện Manager Web.</em></span><strong>✓</strong></button>
+            <button class="ui-theme-option" type="button" data-ui-theme="monolith"><span class="ui-theme-swatch monolith"><i></i></span><span><small>02 / MONOLITH</small><b>Công cụ AI chuyên nghiệp</b><em>Tương phản cao, rõ trạng thái.</em></span><strong>○</strong></button>
+            <button class="ui-theme-option" type="button" data-ui-theme="quiet"><span class="ui-theme-swatch quiet"><i></i></span><span><small>03 / QUIET</small><b>Hiện diện trong không gian</b><em>Sáng, yên và gần đồ nội thất.</em></span><strong>○</strong></button>
+            <div class="ui-runtime-note"><span>RUNTIME RULE</span><p>Theme chỉ đổi cách trình bày. TurnArbiter và state machine vẫn là nguồn sự thật duy nhất; UI Pack không được chứa hoặc thay đổi logic hội thoại.</p></div>
+          </aside>
+        </div>
+
+        <div class="ui-pack-grid">
+          <article class="ui-upload-panel" id="uiUploadPanel">
+            <div class="panel-heading"><div><span class="eyebrow">UI PACK INGEST</span><h3>Upload gói giao diện</h3></div><span class="ui-upload-status" data-ui-upload-status>Chưa chọn file</span></div>
+            <label class="ui-drop-zone" for="uiPackFile">
+              <input id="uiPackFile" type="file" accept=".vtp,.bin,application/octet-stream" data-ui-pack-file>
+              <span class="ui-upload-icon">↥</span>
+              <b>Thả UI Pack vào đây</b>
+              <small>hoặc chạm để chọn `.vtp` / `.bin` · tối đa 4 MiB</small>
+            </label>
+            <div class="ui-file-inspection" data-ui-file-inspection hidden>
+              <div><small>Tệp</small><b data-ui-file-name>—</b></div><div><small>Kích thước</small><b data-ui-file-size>—</b></div><div><small>SHA-256</small><b data-ui-file-hash>—</b></div>
+            </div>
+            <div class="ui-upload-actions"><button class="button button-ghost" type="button" data-ui-clear-file disabled>Xóa lựa chọn</button><button class="button button-primary" type="button" data-ui-stage-pack disabled>Đưa vào staging</button></div>
+            <small class="audit-note">Hiện tại Web chỉ inspect file cục bộ; nút staging chỉ được mở khi Manager API hỗ trợ UI Pack ABI, signature và compatibility validation.</small>
+          </article>
+
+          <article class="ui-delivery-panel">
+            <div class="panel-heading"><div><span class="eyebrow">SAFE DELIVERY</span><h3>Từ file đến màn hình</h3></div><span class="status-pill neutral"><i></i> Chưa rollout</span></div>
+            <div class="ui-delivery-flow"><div class="ready"><span>01</span><p><b>Inspect</b><small>Loại file, kích thước, SHA-256</small></p></div><div><span>02</span><p><b>Validate &amp; sign</b><small>Manifest, UI ABI, board, firmware</small></p></div><div><span>03</span><p><b>Canary</b><small>Một thiết bị, health window</small></p></div><div><span>04</span><p><b>Activate A/B</b><small>resource_0 ↔ resource_1</small></p></div><div><span>05</span><p><b>Rollback</b><small>Tự trở lại theme built-in</small></p></div></div>
+            <div class="ui-pack-contents"><span>UI PACK ĐƯỢC PHÉP</span><div><b>theme.json</b><b>font.bin</b><b>icons.bin</b><b>background.rgb565</b><b>strings.vi.json</b><b>sounds.opus</b></div><small>Wake model là artifact riêng; không gộp vào UI Pack dù có thể dùng chung resource partition vật lý.</small></div>
+          </article>
         </div>
       </section>
 
