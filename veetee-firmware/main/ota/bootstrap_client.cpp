@@ -10,11 +10,11 @@
 
 #include "board/board_config.h"
 #include "cJSON.h"
-#include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "network/endpoint_url.h"
+#include "sdkconfig.h"
 
 namespace veetee::ota {
 namespace {
@@ -76,13 +76,13 @@ bool IsOpaqueIdentifier(const char* value, std::size_t minimum_length) {
 }
 
 std::string BuildBootstrapReport() {
-    const esp_app_desc_t* app = esp_app_get_description();
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) return {};
     cJSON* application = cJSON_AddObjectToObject(root, "application");
     cJSON* board = cJSON_AddObjectToObject(root, "board");
     if (application == nullptr || board == nullptr ||
-        cJSON_AddStringToObject(application, "version", app->version) == nullptr ||
+        cJSON_AddStringToObject(application, "version",
+                               CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION) == nullptr ||
         cJSON_AddStringToObject(board, "type", board::kBoardName) == nullptr) {
         cJSON_Delete(root);
         return {};
@@ -178,6 +178,11 @@ void BootstrapClient::Run(std::uint32_t generation) {
                 if (error == ESP_OK) {
                     if (payload.has_resources &&
                         !EmitWithRetry(BootstrapEvent::kResourceDesired, nullptr,
+                                       &payload, generation)) {
+                        return;
+                    }
+                    if (payload.has_ui &&
+                        !EmitWithRetry(BootstrapEvent::kUiPackDesired, nullptr,
                                        &payload, generation)) {
                         return;
                     }
@@ -373,7 +378,7 @@ esp_err_t BootstrapClient::PerformPost(
     }
     if (error == ESP_OK) {
         error = esp_http_client_set_header(client, "Firmware-Version",
-                                           esp_app_get_description()->version);
+                                           CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
     }
     if (error == ESP_OK) {
         error = esp_http_client_set_header(client, "Accept-Language",
@@ -467,6 +472,15 @@ esp_err_t BootstrapClient::ParseBootstrap(BootstrapPayload* payload) const {
                                sizeof(payload->resource_manifest_url)) &&
                 network::IsHttpEndpointUrl(payload->resource_manifest_url);
     }
+    const cJSON* ui = cJSON_GetObjectItemCaseSensitive(root, "ui");
+    if (valid && cJSON_IsObject(ui)) {
+        payload->has_ui = true;
+        valid = CopyJsonString(ui, "version", payload->ui_version,
+                               sizeof(payload->ui_version)) &&
+                CopyJsonString(ui, "manifest_url", payload->ui_manifest_url,
+                               sizeof(payload->ui_manifest_url)) &&
+                network::IsHttpEndpointUrl(payload->ui_manifest_url);
+    }
     cJSON_Delete(root);
     return valid ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
@@ -507,6 +521,14 @@ bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
         std::snprintf(notification.resource_manifest_url,
                       sizeof(notification.resource_manifest_url), "%s",
                       payload->resource_manifest_url);
+    }
+    if (event == BootstrapEvent::kUiPackDesired && payload != nullptr &&
+        payload->has_ui) {
+        std::snprintf(notification.ui_version, sizeof(notification.ui_version),
+                      "%s", payload->ui_version);
+        std::snprintf(notification.ui_manifest_url,
+                      sizeof(notification.ui_manifest_url), "%s",
+                      payload->ui_manifest_url);
     }
     return sink_(notification, sink_context_);
 }

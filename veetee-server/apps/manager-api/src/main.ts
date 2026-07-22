@@ -6,6 +6,7 @@ import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { LogController } from "fastify";
+import type { Readable } from "node:stream";
 
 import { AppModule } from "./app.module.js";
 import { HttpExceptionFilter } from "./common/http-exception.filter.js";
@@ -26,6 +27,10 @@ async function bootstrap(): Promise<void> {
     trustProxy: true,
   });
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter);
+  app.getHttpAdapter().getInstance().addContentTypeParser(
+    ["application/vnd.veetee.ui-pack", "application/octet-stream"],
+    (request, payload: Readable, done) => done(null, payload),
+  );
   await app.register(cookie);
   await app.register(cors, {
     origin: process.env.VEETEE_MANAGER_CORS_ORIGIN?.split(",") ?? ["http://127.0.0.1:8081"],

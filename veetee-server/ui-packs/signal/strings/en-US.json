@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "en-US",
+  "states": {
+    "starting": {"kicker": "STARTING", "title": "VeeTee.", "hint": "Checking the system"},
+    "wifi_configuring": {"kicker": "WI-FI SETUP", "title": "Connect a network.", "hint": "Open 192.168.4.1 on your phone"},
+    "network_connecting": {"kicker": "CONNECTING", "title": "One moment.", "hint": "Trying saved networks"},
+    "activating": {"kicker": "PAIR DEVICE", "title": "Enter this code.", "hint": "Open Manager Web · single-use code"},
+    "pairing_recovery": {"kicker": "PAIRING LOST", "title": "Let's reconnect.", "hint": "Hold the button for 5 seconds"},
+    "idle": {"kicker": "READY", "title": "Hello there.", "hint": "Press the button or say “Hey VeeTee”"},
+    "connecting": {"kicker": "OPENING ASSISTANT", "title": "I'm here.", "hint": "Opening the conversation"},
+    "listening": {"kicker": "LISTENING", "title": "Go ahead.", "hint": "Speak naturally · press to interrupt"},
+    "evaluating": {"kicker": "EVALUATING", "title": "I can hear you.", "hint": "Checking quality and intent"},
+    "thinking": {"kicker": "WORKING", "title": "One moment.", "hint": "AI may call a tool when needed"},
+    "speaking": {"kicker": "RESPONDING", "title": "I'm speaking.", "hint": "Press the button to interrupt"},
+    "aborting": {"kicker": "STOPPING", "title": "Got it.", "hint": "Cancelling the current turn"},
+    "closing": {"kicker": "SLEEPING SOON", "title": "See you.", "hint": "Press or call to continue"}
+  }
+}

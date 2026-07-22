@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 
 import { sha256File, signResourceManifest } from "./lib/resource-manifest.mjs";
 
-const maximumSlotBytes = 4 * 1024 * 1024;
+const maximumSlotBytes = 2 * 1024 * 1024;
 
 function parseArguments(values) {
   const result = {};
@@ -102,9 +102,9 @@ async function main() {
       psram_bytes: 8 * 1024 * 1024,
     },
     compatibility: {
-      min_firmware: semver(options["min-firmware"] ?? "0.2.0", "min-firmware"),
+      min_firmware: semver(options["min-firmware"] ?? "0.3.0", "min-firmware"),
       max_firmware_exclusive: semver(
-        options["max-firmware-exclusive"] ?? "0.3.0",
+        options["max-firmware-exclusive"] ?? "0.4.0",
         "max-firmware-exclusive",
       ),
       resource_abi: 1,

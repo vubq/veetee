@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "en-US",
+  "states": {
+    "starting": {"kicker": "SYSTEM / BOOT", "title": "VEE/TEE", "hint": "Initializing hardware"},
+    "wifi_configuring": {"kicker": "NETWORK / CONFIG", "title": "WI-FI", "hint": "192.168.4.1"},
+    "network_connecting": {"kicker": "NETWORK / LINK", "title": "CONNECT", "hint": "Trying network profiles"},
+    "activating": {"kicker": "DEVICE / PAIR", "title": "PAIRING", "hint": "Enter the code in Manager"},
+    "pairing_recovery": {"kicker": "DEVICE / RECOVERY", "title": "PAIRING LOST", "hint": "Hold the button for 5 seconds"},
+    "idle": {"kicker": "ASSISTANT / READY", "title": "STANDBY", "hint": "BUTTON / HEY VEETEE"},
+    "connecting": {"kicker": "SESSION / OPEN", "title": "CONNECT", "hint": "Opening the voice channel"},
+    "listening": {"kicker": "AUDIO / INPUT", "title": "LISTEN", "hint": "Press to interrupt"},
+    "evaluating": {"kicker": "INPUT / ADMISSION", "title": "EVALUATE", "hint": "Checking signal and intent"},
+    "thinking": {"kicker": "AI / EXECUTION", "title": "THINK", "hint": "MODEL + MCP"},
+    "speaking": {"kicker": "AUDIO / OUTPUT", "title": "SPEAK", "hint": "Press to interrupt now"},
+    "aborting": {"kicker": "TURN / CANCEL", "title": "ABORT", "hint": "Dropping stale audio"},
+    "closing": {"kicker": "SESSION / CLOSE", "title": "STANDBY", "hint": "Call again during goodbye"}
+  }
+}

@@ -145,6 +145,15 @@ export const resourceRolloutSchema = z.object({
   createdAt: z.string(),
 });
 
+export const uiPackRolloutSchema = z.object({
+  id: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  artifactId: z.string(),
+  status: z.enum(["active", "complete", "failed", "rolled_back"]),
+  desiredStateVersion: z.number().int().positive(),
+  createdAt: z.string(),
+});
+
 export const healthSchema = z.object({
   status: z.string(),
   service: z.string().optional(),
@@ -167,3 +176,4 @@ export type ConversationEvent = z.infer<typeof conversationEventSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type WakeProfile = z.infer<typeof wakeProfileSchema>;
 export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;
+export type UiPackRollout = z.infer<typeof uiPackRolloutSchema>;

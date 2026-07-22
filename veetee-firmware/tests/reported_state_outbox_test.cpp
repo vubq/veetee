@@ -11,6 +11,7 @@ veetee::settings::ReportedResourceState MakeState(
     const char* error = "") {
     veetee::settings::ReportedResourceState state{};
     state.phase = phase;
+    state.artifact_kind = veetee::settings::ReportedArtifactKind::kWakeResource;
     state.active_slot = 0;
     state.target_slot = 1;
     state.expected_bytes = 4096;

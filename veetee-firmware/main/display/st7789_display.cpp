@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -9,6 +10,7 @@
 #include "display/state_visual.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -19,14 +21,6 @@ namespace {
 constexpr char kTag[] = "veetee_display";
 constexpr spi_host_device_t kLcdHost = SPI3_HOST;
 constexpr int kDrawLines = 16;
-constexpr int kDigitWidth = 30;
-constexpr int kDigitHeight = 66;
-constexpr int kDigitThickness = 6;
-constexpr int kDigitSpacing = 8;
-constexpr std::uint16_t kActivationBackground = 0x0B44;
-constexpr std::uint16_t kActivationDigit = 0xFEC0;
-constexpr std::uint16_t kStandbyBackground = 0x10C3;
-constexpr std::uint16_t kStandbyAccent = 0x4E69;
 constexpr std::array<std::uint16_t, 8> kColorBars = {
     0xFFFF,  // white
     0xFFE0,  // yellow
@@ -36,9 +30,6 @@ constexpr std::array<std::uint16_t, 8> kColorBars = {
     0xF800,  // red
     0x001F,  // blue
     0x0000,  // black
-};
-constexpr std::array<std::uint8_t, 10> kSevenSegmentDigits = {
-    0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F,
 };
 constexpr std::array<std::array<std::uint8_t, 5>, 36> kFont = {{
     {{0x3E, 0x51, 0x49, 0x45, 0x3E}}, {{0x00, 0x42, 0x7F, 0x40, 0x00}},
@@ -59,6 +50,29 @@ constexpr std::array<std::array<std::uint8_t, 5>, 36> kFont = {{
     {{0x3F, 0x40, 0x40, 0x40, 0x3F}}, {{0x1F, 0x20, 0x40, 0x20, 0x1F}},
     {{0x3F, 0x40, 0x38, 0x40, 0x3F}}, {{0x63, 0x14, 0x08, 0x14, 0x63}},
     {{0x07, 0x08, 0x70, 0x08, 0x07}}, {{0x61, 0x51, 0x49, 0x45, 0x43}},
+}};
+
+struct ScreenCopy {
+    const char* number;
+    const char* kicker;
+    const char* title;
+    const char* hint;
+};
+
+constexpr std::array<ScreenCopy, 13> kScreenCopy = {{
+    {"00", "SYSTEM / BOOT", "VEE TEE", "INITIALIZING HARDWARE"},
+    {"01", "NETWORK / CONFIG", "WI-FI SETUP", "OPEN 192.168.4.1"},
+    {"02", "NETWORK / LINK", "CONNECTING", "TRYING SAVED NETWORKS"},
+    {"03", "DEVICE / PAIR", "PAIRING", "ENTER CODE IN MANAGER"},
+    {"04", "DEVICE / RECOVERY", "PAIRING LOST", "HOLD BUTTON FOR RECOVERY"},
+    {"05", "ASSISTANT / READY", "HEY VEETEE", "BUTTON OR WAKE WORD"},
+    {"06", "SESSION / OPEN", "CONNECTING", "OPENING VOICE CHANNEL"},
+    {"07", "AUDIO / INPUT", "LISTENING", "SPEAK NATURALLY"},
+    {"08", "INPUT / ADMISSION", "EVALUATING", "SIGNAL AND INTENT CHECK"},
+    {"09", "AI / EXECUTION", "THINKING", "MODEL AND MCP TOOLS"},
+    {"10", "AUDIO / OUTPUT", "SPEAKING", "PRESS TO INTERRUPT"},
+    {"11", "TURN / CANCEL", "STOPPING", "CLEARING CURRENT TURN"},
+    {"12", "SESSION / CLOSE", "GOODBYE", "READY TO WAKE AGAIN"},
 }};
 
 std::uint16_t ToPanelEndian(std::uint16_t color) {
@@ -101,6 +115,16 @@ esp_err_t St7789Display::Initialize() {
     line_buffer_ = static_cast<std::uint16_t*>(spi_bus_dma_memory_alloc(
         kLcdHost, line_buffer_pixels_ * sizeof(std::uint16_t), 0));
     if (line_buffer_ == nullptr) return ESP_ERR_NO_MEM;
+    framebuffer_pixels_ = static_cast<std::size_t>(CONFIG_VEETEE_LCD_WIDTH) *
+                          CONFIG_VEETEE_LCD_HEIGHT;
+    framebuffer_ = static_cast<std::uint16_t*>(heap_caps_malloc(
+        framebuffer_pixels_ * sizeof(std::uint16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (framebuffer_ == nullptr) {
+        framebuffer_ = static_cast<std::uint16_t*>(heap_caps_malloc(
+            framebuffer_pixels_ * sizeof(std::uint16_t), MALLOC_CAP_8BIT));
+    }
+    if (framebuffer_ == nullptr) return ESP_ERR_NO_MEM;
 
     esp_lcd_panel_io_spi_config_t io_config = {};
     io_config.cs_gpio_num = board::kDisplayChipSelect;
@@ -179,34 +203,7 @@ esp_err_t St7789Display::DrawColorBars() {
 }
 
 esp_err_t St7789Display::DrawState(app::State state) {
-    if (panel_ == nullptr || line_buffer_ == nullptr || transfer_faulted_) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    const StateVisual& visual = VisualForState(state);
-    esp_err_t error = FillRectangle(0, 0, CONFIG_VEETEE_LCD_WIDTH,
-                                    CONFIG_VEETEE_LCD_HEIGHT,
-                                    visual.background);
-    const int margin = std::max(8, CONFIG_VEETEE_LCD_WIDTH / 20);
-    if (error == ESP_OK) {
-        error = FillRectangle(margin, margin, CONFIG_VEETEE_LCD_WIDTH - margin * 2,
-                              6, visual.accent);
-    }
-    if (error == ESP_OK) {
-        error = DrawTextCentered(visual.label, margin + 22, 3,
-                                 visual.foreground);
-    }
-    if (error == ESP_OK) {
-        error = DrawIcon(state, visual.foreground, visual.accent);
-    }
-    if (error == ESP_OK) {
-        error = DrawTextCentered(visual.detail,
-                                 CONFIG_VEETEE_LCD_HEIGHT - margin - 28, 2,
-                                 visual.foreground);
-    }
-    if (error == ESP_OK) {
-        ESP_LOGI(kTag, "State screen rendered: %s", app::ToString(state));
-    }
-    return error;
+    return RenderState(state, nullptr);
 }
 
 esp_err_t St7789Display::DrawTextCentered(const char* text, int y,
@@ -360,71 +357,273 @@ esp_err_t St7789Display::DrawActivationCode(const char* code) {
     for (const char* digit = code; *digit != '\0'; ++digit) {
         if (*digit < '0' || *digit > '9') return ESP_ERR_INVALID_ARG;
     }
-
-    esp_err_t error = FillRectangle(0, 0, CONFIG_VEETEE_LCD_WIDTH,
-                                    CONFIG_VEETEE_LCD_HEIGHT,
-                                    kActivationBackground);
-    const int total_width = 6 * kDigitWidth + 5 * kDigitSpacing;
-    const int origin_x = std::max(0, (CONFIG_VEETEE_LCD_WIDTH - total_width) / 2);
-    const int origin_y = std::max(0, (CONFIG_VEETEE_LCD_HEIGHT - kDigitHeight) / 2);
-    const int middle_y = (kDigitHeight - kDigitThickness) / 2;
-    const int vertical_height = (kDigitHeight - 3 * kDigitThickness) / 2;
-
-    for (int index = 0; index < 6 && error == ESP_OK; ++index) {
-        const int x = origin_x + index * (kDigitWidth + kDigitSpacing);
-        const int y = origin_y;
-        const std::uint8_t segments = kSevenSegmentDigits[code[index] - '0'];
-        if ((segments & 0x01U) != 0) {
-            error = FillRectangle(x + kDigitThickness, y,
-                                  kDigitWidth - 2 * kDigitThickness,
-                                  kDigitThickness, kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x02U) != 0) {
-            error = FillRectangle(x + kDigitWidth - kDigitThickness,
-                                  y + kDigitThickness, kDigitThickness,
-                                  vertical_height, kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x04U) != 0) {
-            error = FillRectangle(x + kDigitWidth - kDigitThickness,
-                                  y + middle_y + kDigitThickness,
-                                  kDigitThickness, vertical_height,
-                                  kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x08U) != 0) {
-            error = FillRectangle(x + kDigitThickness,
-                                  y + kDigitHeight - kDigitThickness,
-                                  kDigitWidth - 2 * kDigitThickness,
-                                  kDigitThickness, kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x10U) != 0) {
-            error = FillRectangle(x, y + middle_y + kDigitThickness,
-                                  kDigitThickness, vertical_height,
-                                  kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x20U) != 0) {
-            error = FillRectangle(x, y + kDigitThickness, kDigitThickness,
-                                  vertical_height, kActivationDigit);
-        }
-        if (error == ESP_OK && (segments & 0x40U) != 0) {
-            error = FillRectangle(x + kDigitThickness, y + middle_y,
-                                  kDigitWidth - 2 * kDigitThickness,
-                                  kDigitThickness, kActivationDigit);
-        }
-    }
-    if (error == ESP_OK) ESP_LOGI(kTag, "Activation code rendered");
-    return error;
+    return RenderState(app::State::kActivating, code);
 }
 
 esp_err_t St7789Display::DrawStandby() {
-    esp_err_t error = FillRectangle(0, 0, CONFIG_VEETEE_LCD_WIDTH,
-                                    CONFIG_VEETEE_LCD_HEIGHT,
-                                    kStandbyBackground);
+    return DrawState(app::State::kIdle);
+}
+
+esp_err_t St7789Display::ReloadUiPack(const char* partition_label) {
+    UiTheme candidate{};
+    const esp_err_t error = LoadUiPackPartition(partition_label, &candidate);
     if (error != ESP_OK) return error;
-    constexpr int kAccentWidth = 72;
-    constexpr int kAccentHeight = 6;
-    return FillRectangle((CONFIG_VEETEE_LCD_WIDTH - kAccentWidth) / 2,
-                         (CONFIG_VEETEE_LCD_HEIGHT - kAccentHeight) / 2,
-                         kAccentWidth, kAccentHeight, kStandbyAccent);
+    theme_ = candidate;
+    std::snprintf(loaded_ui_partition_, sizeof(loaded_ui_partition_), "%s",
+                  partition_label);
+    last_render_ok_ = false;
+    return ESP_OK;
+}
+
+void St7789Display::UseBuiltInSignal() {
+    theme_ = BuiltInSignalTheme();
+    loaded_ui_partition_[0] = '\0';
+    last_render_ok_ = false;
+}
+
+bool St7789Display::UiPackHealthy() const {
+    return last_render_ok_ && IsValidUiTheme(theme_);
+}
+
+esp_err_t St7789Display::RenderState(app::State state,
+                                     const char* activation_code) {
+    if (panel_ == nullptr || line_buffer_ == nullptr || framebuffer_ == nullptr ||
+        transfer_faulted_) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const std::size_t state_index = static_cast<std::size_t>(state);
+    if (state_index >= theme_.states.size()) return ESP_ERR_INVALID_ARG;
+    const UiStateStyle& style = theme_.states[state_index];
+    switch (theme_.composition) {
+        case UiComposition::kSignal:
+            RenderSignal(state, style, activation_code);
+            break;
+        case UiComposition::kMonolith:
+            RenderMonolith(state, style, activation_code);
+            break;
+        case UiComposition::kQuiet:
+            RenderQuiet(state, style, activation_code);
+            break;
+    }
+    const esp_err_t error = FlushFramebuffer();
+    last_render_ok_ = error == ESP_OK;
+    if (error == ESP_OK) {
+        ESP_LOGI(kTag, "State rendered state=%s theme=%s external=%d",
+                 app::ToString(state), theme_.theme_id, theme_.external);
+    }
+    return error;
+}
+
+void St7789Display::RenderSignal(app::State state, const UiStateStyle& style,
+                                 const char* activation_code) {
+    const std::size_t index = static_cast<std::size_t>(state);
+    const ScreenCopy& copy = kScreenCopy[index];
+    CanvasFill(style.background);
+    CanvasRectangle(16, 18, 30, 3, style.accent);
+    CanvasText("VEE/TEE", 54, 13, 1, style.foreground);
+    CanvasText(copy.number, 16, 48, 2, style.accent);
+    CanvasText(copy.kicker, 58, 53, 1, style.foreground);
+    CanvasTextCentered(copy.title, 82, 3, style.foreground);
+
+    const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
+    const int center_y = 183;
+    if (activation_code != nullptr) {
+        CanvasCircle(center_x, center_y, 57, style.accent, false);
+        CanvasCircle(center_x, center_y, 49, style.foreground, false);
+        CanvasTextCentered(activation_code, center_y - 12, 4, style.accent);
+    } else {
+        CanvasCircle(center_x, center_y, 53, style.accent, false);
+        CanvasCircle(center_x, center_y, 40, style.foreground, false);
+        CanvasCircle(center_x, center_y, 17, style.accent, true);
+        for (int segment = 0; segment < 7; ++segment) {
+            const int x0 = center_x - 76 + segment * 24;
+            const int amplitude = 5 + ((static_cast<int>(index) + segment) % 4) * 4;
+            CanvasLine(x0, center_y, x0 + 12, center_y - amplitude, 2,
+                       style.foreground);
+            CanvasLine(x0 + 12, center_y - amplitude, x0 + 24, center_y, 2,
+                       style.foreground);
+        }
+    }
+    CanvasRectangle(16, 273, CONFIG_VEETEE_LCD_WIDTH - 32, 1, style.accent);
+    CanvasTextCentered(copy.hint, 290, 1, style.foreground);
+}
+
+void St7789Display::RenderMonolith(app::State state,
+                                   const UiStateStyle& style,
+                                   const char* activation_code) {
+    const std::size_t index = static_cast<std::size_t>(state);
+    const ScreenCopy& copy = kScreenCopy[index];
+    CanvasFill(style.background);
+    CanvasRectangle(0, 0, 9, CONFIG_VEETEE_LCD_HEIGHT, style.accent);
+    CanvasText("VEE/TEE", 24, 20, 2, style.foreground);
+    CanvasText(copy.number, 24, 62, 4, style.accent);
+    CanvasText(copy.kicker, 24, 104, 1, style.foreground);
+    CanvasText(copy.title, 24, 126, 3, style.foreground);
+    if (activation_code != nullptr) {
+        CanvasText(activation_code, 24, 188, 4, style.accent);
+    } else {
+        for (int bar = 0; bar < 9; ++bar) {
+            const int height = 10 + ((bar + static_cast<int>(index)) % 5) * 11;
+            CanvasRectangle(24 + bar * 20, 234 - height, 11, height,
+                            bar % 2 == 0 ? style.accent : style.foreground);
+        }
+    }
+    CanvasText(copy.hint, 24, 286, 1, style.foreground);
+}
+
+void St7789Display::RenderQuiet(app::State state, const UiStateStyle& style,
+                                const char* activation_code) {
+    const std::size_t index = static_cast<std::size_t>(state);
+    const ScreenCopy& copy = kScreenCopy[index];
+    CanvasFill(style.background);
+    CanvasText("VEE TEE", 18, 18, 1, style.foreground);
+    CanvasText(copy.number, CONFIG_VEETEE_LCD_WIDTH - 42, 18, 1, style.accent);
+    const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
+    const int center_y = 150;
+    CanvasCircle(center_x, center_y, 58, style.accent, false);
+    CanvasCircle(center_x, center_y, 40, style.foreground, false);
+    if (activation_code != nullptr) {
+        CanvasTextCentered(activation_code, center_y - 10, 3, style.accent);
+    } else {
+        CanvasCircle(center_x, center_y, 11, style.accent, true);
+    }
+    CanvasTextCentered(copy.title, 229, 2, style.foreground);
+    CanvasTextCentered(copy.hint, 278, 1, style.foreground);
+}
+
+void St7789Display::CanvasFill(std::uint16_t color) {
+    if (framebuffer_ != nullptr) {
+        std::fill_n(framebuffer_, framebuffer_pixels_, color);
+    }
+}
+
+void St7789Display::CanvasRectangle(int x, int y, int width, int height,
+                                    std::uint16_t color) {
+    if (framebuffer_ == nullptr || width <= 0 || height <= 0) return;
+    const int left = std::max(0, x);
+    const int top = std::max(0, y);
+    const int right = std::min(CONFIG_VEETEE_LCD_WIDTH, x + width);
+    const int bottom = std::min(CONFIG_VEETEE_LCD_HEIGHT, y + height);
+    for (int row = top; row < bottom; ++row) {
+        std::fill(framebuffer_ + row * CONFIG_VEETEE_LCD_WIDTH + left,
+                  framebuffer_ + row * CONFIG_VEETEE_LCD_WIDTH + right, color);
+    }
+}
+
+void St7789Display::CanvasCircle(int center_x, int center_y, int radius,
+                                 std::uint16_t color, bool filled) {
+    if (radius <= 0) return;
+    const int outer_squared = radius * radius;
+    const int inner_radius = std::max(0, radius - 2);
+    const int inner_squared = inner_radius * inner_radius;
+    for (int y = center_y - radius; y <= center_y + radius; ++y) {
+        for (int x = center_x - radius; x <= center_x + radius; ++x) {
+            const int dx = x - center_x;
+            const int dy = y - center_y;
+            const int distance = dx * dx + dy * dy;
+            if (distance <= outer_squared && (filled || distance >= inner_squared)) {
+                CanvasRectangle(x, y, 1, 1, color);
+            }
+        }
+    }
+}
+
+void St7789Display::CanvasLine(int x0, int y0, int x1, int y1, int thickness,
+                               std::uint16_t color) {
+    const int dx = std::abs(x1 - x0);
+    const int step_x = x0 < x1 ? 1 : -1;
+    const int dy = -std::abs(y1 - y0);
+    const int step_y = y0 < y1 ? 1 : -1;
+    int error = dx + dy;
+    while (true) {
+        CanvasRectangle(x0 - thickness / 2, y0 - thickness / 2, thickness,
+                        thickness, color);
+        if (x0 == x1 && y0 == y1) break;
+        const int doubled = 2 * error;
+        if (doubled >= dy) {
+            error += dy;
+            x0 += step_x;
+        }
+        if (doubled <= dx) {
+            error += dx;
+            y0 += step_y;
+        }
+    }
+}
+
+void St7789Display::CanvasText(const char* text, int x, int y, int scale,
+                               std::uint16_t color) {
+    if (text == nullptr || scale <= 0) return;
+    for (const char* cursor = text; *cursor != '\0'; ++cursor) {
+        CanvasGlyph(*cursor, x, y, scale, color);
+        x += 6 * scale;
+    }
+}
+
+void St7789Display::CanvasTextCentered(const char* text, int y, int scale,
+                                       std::uint16_t color) {
+    if (text == nullptr || scale <= 0) return;
+    const int length = static_cast<int>(std::strlen(text));
+    while (scale > 1 && length * 6 * scale > CONFIG_VEETEE_LCD_WIDTH - 20) {
+        --scale;
+    }
+    const int width = std::max(0, length * 6 * scale - scale);
+    CanvasText(text, std::max(0, (CONFIG_VEETEE_LCD_WIDTH - width) / 2), y,
+               scale, color);
+}
+
+void St7789Display::CanvasGlyph(char character, int x, int y, int scale,
+                                std::uint16_t color) {
+    if (character >= 'a' && character <= 'z') {
+        character = static_cast<char>(character - 'a' + 'A');
+    }
+    if (character == ' ') return;
+    std::array<std::uint8_t, 5> glyph{};
+    if (character >= '0' && character <= '9') {
+        glyph = kFont[character - '0'];
+    } else if (character >= 'A' && character <= 'Z') {
+        glyph = kFont[10 + character - 'A'];
+    } else if (character == '-') {
+        glyph = {0x08, 0x08, 0x08, 0x08, 0x08};
+    } else if (character == '.') {
+        glyph = {0x00, 0x60, 0x60, 0x00, 0x00};
+    } else if (character == ':') {
+        glyph = {0x00, 0x36, 0x36, 0x00, 0x00};
+    } else if (character == '/') {
+        glyph = {0x40, 0x30, 0x0C, 0x03, 0x00};
+    } else {
+        return;
+    }
+    for (int column = 0; column < 5; ++column) {
+        for (int row = 0; row < 7; ++row) {
+            if ((glyph[column] & (1U << row)) != 0) {
+                CanvasRectangle(x + column * scale, y + row * scale, scale,
+                                scale, color);
+            }
+        }
+    }
+}
+
+esp_err_t St7789Display::FlushFramebuffer() {
+    if (framebuffer_ == nullptr || line_buffer_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t error = ESP_OK;
+    for (int y = 0; y < CONFIG_VEETEE_LCD_HEIGHT && error == ESP_OK;
+         y += kDrawLines) {
+        const int lines = std::min(kDrawLines, CONFIG_VEETEE_LCD_HEIGHT - y);
+        const std::size_t pixels =
+            static_cast<std::size_t>(lines) * CONFIG_VEETEE_LCD_WIDTH;
+        for (std::size_t index = 0; index < pixels; ++index) {
+            line_buffer_[index] = ToPanelEndian(
+                framebuffer_[static_cast<std::size_t>(y) *
+                                 CONFIG_VEETEE_LCD_WIDTH +
+                             index]);
+        }
+        error = DrawBitmapSync(0, y, CONFIG_VEETEE_LCD_WIDTH, y + lines,
+                               line_buffer_);
+    }
+    return error;
 }
 
 bool St7789Display::OnColorTransferDone(esp_lcd_panel_io_handle_t,

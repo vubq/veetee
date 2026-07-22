@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "vi-VN",
+  "states": {
+    "starting": {"kicker": "ĐANG KHỞI ĐỘNG", "title": "VeeTee.", "hint": "Đang kiểm tra hệ thống"},
+    "wifi_configuring": {"kicker": "CẤU HÌNH WI-FI", "title": "Kết nối mạng.", "hint": "Mở 192.168.4.1 trên điện thoại"},
+    "network_connecting": {"kicker": "ĐANG KẾT NỐI", "title": "Một chút nhé.", "hint": "Đang thử các mạng đã lưu"},
+    "activating": {"kicker": "GHÉP THIẾT BỊ", "title": "Nhập mã này.", "hint": "Mở Manager Web · mã chỉ dùng một lần"},
+    "pairing_recovery": {"kicker": "MẤT GHÉP NỐI", "title": "Cần kết nối lại.", "hint": "Giữ nút 5 giây để phục hồi"},
+    "idle": {"kicker": "SẴN SÀNG", "title": "Chào bạn.", "hint": "Bấm nút hoặc nói “Hey VeeTee”"},
+    "connecting": {"kicker": "ĐANG MỞ TRỢ LÝ", "title": "Tôi ở đây.", "hint": "Đang mở phiên hội thoại"},
+    "listening": {"kicker": "ĐANG NGHE", "title": "Bạn cứ nói.", "hint": "Nói tự nhiên · bấm để ngắt"},
+    "evaluating": {"kicker": "ĐANG ĐÁNH GIÁ", "title": "Tôi đang nghe rõ.", "hint": "Kiểm tra chất lượng và ý định"},
+    "thinking": {"kicker": "ĐANG XỬ LÝ", "title": "Một chút nhé.", "hint": "AI có thể gọi công cụ khi cần"},
+    "speaking": {"kicker": "ĐANG TRẢ LỜI", "title": "Tôi đang nói.", "hint": "Bấm nút để ngắt ngay"},
+    "aborting": {"kicker": "ĐANG DỪNG", "title": "Đã hiểu.", "hint": "Đang hủy lượt hiện tại"},
+    "closing": {"kicker": "SẮP NGỦ", "title": "Hẹn gặp lại.", "hint": "Bấm hoặc gọi để tiếp tục"}
+  }
+}

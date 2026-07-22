@@ -165,18 +165,18 @@
               <input id="uiPackFile" type="file" accept=".vtp,.bin,application/octet-stream" data-ui-pack-file>
               <span class="ui-upload-icon">↥</span>
               <b>Thả UI Pack vào đây</b>
-              <small>hoặc chạm để chọn `.vtp` / `.bin` · tối đa 4 MiB</small>
+              <small>hoặc chạm để chọn `.vtp` / `.bin` · tối đa 2 MiB</small>
             </label>
             <div class="ui-file-inspection" data-ui-file-inspection hidden>
               <div><small>Tệp</small><b data-ui-file-name>—</b></div><div><small>Kích thước</small><b data-ui-file-size>—</b></div><div><small>SHA-256</small><b data-ui-file-hash>—</b></div>
             </div>
             <div class="ui-upload-actions"><button class="button button-ghost" type="button" data-ui-clear-file disabled>Xóa lựa chọn</button><button class="button button-primary" type="button" data-ui-stage-pack disabled>Đưa vào staging</button></div>
-            <small class="audit-note">Hiện tại Web chỉ inspect file cục bộ; nút staging chỉ được mở khi Manager API hỗ trợ UI Pack ABI, signature và compatibility validation.</small>
+            <small class="audit-note">Manager API stream file vào quarantine, kiểm UI ABI/member/hash, ký Ed25519 và chỉ rollout artifact immutable đã publish.</small>
           </article>
 
           <article class="ui-delivery-panel">
             <div class="panel-heading"><div><span class="eyebrow">SAFE DELIVERY</span><h3>Từ file đến màn hình</h3></div><span class="status-pill neutral"><i></i> Chưa rollout</span></div>
-            <div class="ui-delivery-flow"><div class="ready"><span>01</span><p><b>Inspect</b><small>Loại file, kích thước, SHA-256</small></p></div><div><span>02</span><p><b>Validate &amp; sign</b><small>Manifest, UI ABI, board, firmware</small></p></div><div><span>03</span><p><b>Canary</b><small>Một thiết bị, health window</small></p></div><div><span>04</span><p><b>Activate A/B</b><small>resource_0 ↔ resource_1</small></p></div><div><span>05</span><p><b>Rollback</b><small>Tự trở lại theme built-in</small></p></div></div>
+            <div class="ui-delivery-flow"><div class="ready"><span>01</span><p><b>Inspect</b><small>Loại file, kích thước, SHA-256</small></p></div><div><span>02</span><p><b>Validate &amp; sign</b><small>Manifest, UI ABI, board, firmware</small></p></div><div><span>03</span><p><b>Canary</b><small>Một thiết bị, health window</small></p></div><div><span>04</span><p><b>Activate A/B</b><small>ui_0 ↔ ui_1</small></p></div><div><span>05</span><p><b>Rollback</b><small>Tự trở lại Signal built-in</small></p></div></div>
             <div class="ui-pack-contents"><span>UI PACK ĐƯỢC PHÉP</span><div><b>theme.json</b><b>font.bin</b><b>icons.bin</b><b>background.rgb565</b><b>strings.vi.json</b><b>sounds.opus</b></div><small>Wake model là artifact riêng; không gộp vào UI Pack dù có thể dùng chung resource partition vật lý.</small></div>
           </article>
         </div>

@@ -1,6 +1,7 @@
 #include "settings/resource_state_store.h"
 
 #include <cinttypes>
+#include <cstring>
 
 #include "esp_log.h"
 
@@ -8,7 +9,6 @@ namespace veetee::settings {
 namespace {
 
 constexpr char kTag[] = "veetee_resource_state";
-constexpr char kNamespace[] = "veetee_resource";
 constexpr char kRecordKey[] = "state";
 
 }  // namespace
@@ -18,9 +18,13 @@ ResourceStateStore::~ResourceStateStore() {
 }
 
 esp_err_t ResourceStateStore::Initialize(
-    std::uint32_t minimum_security_epoch) {
-    if (handle_ != 0) return ESP_ERR_INVALID_STATE;
-    esp_err_t error = nvs_open(kNamespace, NVS_READWRITE, &handle_);
+    std::uint32_t minimum_security_epoch, const char* nvs_namespace,
+    const char* default_version) {
+    if (handle_ != 0 || nvs_namespace == nullptr || nvs_namespace[0] == '\0' ||
+        std::strlen(nvs_namespace) > 15) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t error = nvs_open(nvs_namespace, NVS_READWRITE, &handle_);
     if (error != ESP_OK) return error;
 
     std::size_t size = sizeof(record_);
@@ -29,7 +33,8 @@ esp_err_t ResourceStateStore::Initialize(
     if (error == ESP_ERR_NVS_NOT_FOUND || size != sizeof(record_) ||
         !IsValidResourceRecord(record_)) {
         if (error == ESP_OK) ESP_LOGW(kTag, "Resetting invalid resource state record");
-        record_ = MakeDefaultResourceRecord(minimum_security_epoch);
+        record_ = MakeDefaultResourceRecord(minimum_security_epoch,
+                                            default_version);
         return Save(record_);
     }
     if (record_.security_epoch_floor < minimum_security_epoch) {

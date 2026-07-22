@@ -111,10 +111,17 @@ export class ReportedDeviceStateDto {
   @Type(() => ReportedFirmwareStateDto)
   firmware!: ReportedFirmwareStateDto;
 
+  @IsOptional()
   @IsObject()
   @ValidateNested()
   @Type(() => ReportedResourceStateDto)
-  resource!: ReportedResourceStateDto;
+  resource?: ReportedResourceStateDto;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedResourceStateDto)
+  ui?: ReportedResourceStateDto;
 }
 
 export class ReportedStateDto {
@@ -164,12 +171,19 @@ export class DevicesController {
   @UseGuards(DeviceAuthGuard)
   @Put("veetee/devices/:id/reported-state")
   async report(@Param("id") id: string, @Body() input: ReportedStateDto): Promise<DeviceRecord> {
-    if (input.state.resource.downloadedBytes > input.state.resource.expectedBytes) {
+    const artifacts = [input.state.resource, input.state.ui].filter(
+      (artifact): artifact is ReportedResourceStateDto => artifact !== undefined,
+    );
+    if (artifacts.length !== 1) {
+      throw new BadRequestException("Reported state must contain exactly one artifact subsystem");
+    }
+    const artifact = artifacts[0]!;
+    if (artifact.downloadedBytes > artifact.expectedBytes) {
       throw new BadRequestException("Reported downloadedBytes exceeds expectedBytes");
     }
-    const failure = ["failed", "rolled_back"].includes(input.state.resource.phase);
-    if (failure !== Boolean(input.state.resource.errorCode)) {
-      throw new BadRequestException("Reported resource failure state has an invalid errorCode");
+    const failure = ["failed", "rolled_back"].includes(artifact.phase);
+    if (failure !== Boolean(artifact.errorCode)) {
+      throw new BadRequestException("Reported artifact failure state has an invalid errorCode");
     }
     return this.store.updateReportedState(
       id,

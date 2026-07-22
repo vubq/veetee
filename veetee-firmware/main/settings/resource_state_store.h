@@ -12,7 +12,9 @@ class ResourceStateStore {
 public:
     ~ResourceStateStore();
 
-    esp_err_t Initialize(std::uint32_t minimum_security_epoch);
+    esp_err_t Initialize(std::uint32_t minimum_security_epoch,
+                         const char* nvs_namespace = "veetee_resource",
+                         const char* default_version = "factory-bringup");
     esp_err_t Save(const ResourceRecord& record);
 
     [[nodiscard]] const ResourceRecord& record() const { return record_; }

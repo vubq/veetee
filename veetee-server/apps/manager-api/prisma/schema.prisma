@@ -90,6 +90,7 @@ model Tenant {
   conversationEvents ConversationEvent[]
   refreshSessions    RefreshSession[]
   resourceRollouts   ResourceRollout[]
+  uiPackRollouts     UiPackRollout[]
   wakeProfiles       WakeProfile[]
 }
 
@@ -175,6 +176,7 @@ model Device {
   reportedState      DeviceReportedState?
   conversationEvents ConversationEvent[]
   resourceRollouts   ResourceRollout[]
+  uiPackRollouts     UiPackRollout[]
 
   @@index([tenantId, status])
   @@index([tenantId, agentId])
@@ -314,8 +316,8 @@ model Artifact {
   wakeProfiles        WakeProfile[]
   wakeProfileVersions WakeProfileVersion[]
   resourceRollouts    ResourceRollout[]
+  uiPackRollouts      UiPackRollout[]
 
-  @@unique([tenantId, kind, version])
   @@index([tenantId, status, createdAt])
 }
 
@@ -373,6 +375,24 @@ model ResourceRollout {
   device             Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   artifact           Artifact           @relation(fields: [artifactId], references: [id], onDelete: Restrict)
   wakeProfileVersion WakeProfileVersion @relation(fields: [wakeProfileVersionId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([deviceId, status])
+}
+
+model UiPackRollout {
+  id                  String                @id @default(uuid())
+  tenantId            String
+  deviceId            String
+  artifactId          String
+  status              ResourceRolloutStatus @default(ACTIVE)
+  desiredStateVersion Int
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  device   Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Restrict)
 
   @@index([tenantId, createdAt])
   @@index([deviceId, status])

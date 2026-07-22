@@ -12,6 +12,7 @@ import {
   providerSchema,
   resourceRolloutSchema,
   tokenResponseSchema,
+  uiPackRolloutSchema,
   wakeProfileSchema,
   type Agent,
   type Provider,
@@ -152,6 +153,8 @@ export const managerApi = {
   wakeProfiles: () => request("/api/v1/wake-profiles", z.array(wakeProfileSchema)),
   resourceRollouts: () =>
     request("/api/v1/resource-rollouts", z.array(resourceRolloutSchema)),
+  uiPackRollouts: () =>
+    request("/api/v1/ui-packs/rollouts", z.array(uiPackRolloutSchema)),
 
   async logout(): Promise<void> {
     const response = await rawRequest("/api/v1/auth/logout", { method: "POST" });
@@ -212,6 +215,28 @@ export const managerApi = {
     return request(`/api/v1/artifacts/${encodeURIComponent(id)}/publish`, artifactSchema, {
       method: "POST",
     });
+  },
+
+  stageUiPack(file: File) {
+    return request("/api/v1/ui-packs/uploads", artifactSchema, {
+      method: "POST",
+      headers: {
+        "content-type": "application/vnd.veetee.ui-pack",
+        "x-veetee-file-name": file.name,
+      },
+      body: file,
+    });
+  },
+
+  rolloutUiPack(id: string, deviceIds: string[]) {
+    return request(
+      `/api/v1/ui-packs/${encodeURIComponent(id)}/rollout`,
+      z.array(uiPackRolloutSchema),
+      {
+        method: "POST",
+        body: JSON.stringify({ deviceIds }),
+      },
+    );
   },
 
   createWakeProfile(input: {

@@ -12,6 +12,8 @@
 - OTA manifest/version/signature parser.
 - Config snapshot schema/ETag/desired-reported reconciliation.
 - Resource manifest/member hash/ABI/capability/partition budget validation.
+- UI Pack VTPACK1 header/index/member bounds, CRC32, SHA-256, required locale/theme,
+  executable/path-traversal rejection và built-in Signal fallback.
 - Restricted JCS canonicalization, detached Ed25519 vector, duplicate/NUL/trailing
   JSON rejection và trusted-key/security-epoch downgrade.
 - Apply journal and power-loss recovery parser.
@@ -76,6 +78,9 @@ E2E-21 provider secret rotate/clear -> admin response và audit không chứa ra
 E2E-22 retryable LLM failure trước output -> fallback; sau output/abort -> không fallback
 E2E-23 revoked/stale device identity -> pairing recovery -> physical hold -> code mới
 E2E-24 10 phút speaker idle/reconnect/bootstrap retry -> không startup chime lặp hoặc pop/chirp
+E2E-25 UI Pack upload -> publish -> desired `state.ui` -> inactive `ui_*` slot -> render health -> complete
+E2E-26 corrupt/incompatible UI Pack -> rollback UI journal hoặc built-in Signal, wake resource không đổi
+E2E-27 goodbye TTS slow/fail -> vẫn đóng assistant gate; button trong goodbye -> cancel và quay lại listening
 ```
 
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.
@@ -192,6 +197,8 @@ Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, 
 - Không có secret trong Git/traces/build artifacts.
 - Firmware build reproducible, artifact có SHA-256/signature/SBOM.
 - Config/resource bundle immutable, signed, capability-compatible và rollout qua canary.
+- Wake resource và UI Pack dùng partition/journal độc lập; release evidence phải chỉ
+  rõ artifact nào được apply, rollback và reported-state xác nhận.
 - Desired/reported state, apply journal và rollback evidence truy vấn được theo device.
 - Physical hardware validation được ghi rõ; build pass không thay thế test board.
 - Release evidence phải tách rõ host/build/serial pass với nghiệm thu nghe/nhìn:

@@ -10,7 +10,11 @@ inactivity và semantic reject. Phase 6 MCP đã pass firmware/voice/Manager end
 trên host. Phase 5 có auth, pairing, agent/provider config, desired/reported state,
 Manager Web theo prototype với live MCP, Realtime Lab dùng event metadata thật và
 catalog/wake rollout cơ bản. Custom `Hey VeeTee`, AEC, canary pause/resume và
-soak phần cứng vẫn phải qua benchmark trên thiết bị thật.
+soak phần cứng vẫn phải qua benchmark trên thiết bị thật. UI Pack V1 đã có builder,
+streaming quarantine/upload, immutable signing/publish, explicit-device rollout,
+firmware parser, `ui_0/ui_1` rollback độc lập và built-in Signal failsafe. Host suite
+đã pass upload/publish/rollout, corruption policy và `state.ui`; apply/rollback trực
+tiếp trên LCD vẫn chờ pairing và nghiệm thu thiết bị.
 
 ## Phase 0 - Freeze contract và board (1-2 ngày)
 
@@ -165,8 +169,10 @@ không chặn và UI không còn phát event mô phỏng. First-audio hiện tí
 Resource control plane đã đạt gate host: signed artifact registration, immutable
 artifact/wake publish, activation/interrupt profile tách riêng, stable benchmark gate,
 tenant audit và explicit-device rollout. Desired state không được coi là active;
-rollout chỉ chuyển terminal khi reported resource phase tương ứng. Upload object-store,
-percentage rollout, pause/resume và rollback command vẫn thuộc Phase 8 hardening.
+rollout chỉ chuyển terminal khi reported resource phase tương ứng. UI Pack đã có
+streaming upload local-store, immutable publish và rollout/reported-state riêng;
+generic object-store upload, percentage rollout, pause/resume và rollback command
+vẫn thuộc Phase 8 hardening.
 
 Provider control plane đã có explicit chain theo kind/locale, primary/fallback,
 priority, secret keep/rotate/clear, redacted audit, health/circuit state và internal

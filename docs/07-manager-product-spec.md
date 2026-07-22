@@ -13,7 +13,9 @@ nhận event metadata thật theo batch idempotent, retention mặc định 7 ng
 lưu transcript/audio thô. Catalog artifact đã kiểm file immutable, SHA-256,
 restricted JCS/Ed25519, board/ABI/license; wake profile activation và interrupt được
 version riêng, rollout ghi desired state và chỉ hoàn tất theo reported state. Custom
-`Hey VeeTee` vẫn chưa product-ready trước corpus benchmark thật.
+`Hey VeeTee` vẫn chưa product-ready trước corpus benchmark thật. UI Pack V1 đã có
+streaming upload vào quarantine, parser data-only, release signing, immutable
+publish, explicit-device rollout và reported-state riêng cho `state.ui`.
 
 ## 2. Data model lõi
 
@@ -202,11 +204,14 @@ Hiển thị health của voice-server, provider, Redis/Postgres, số thiết b
 - Resource bundle composer kiểm tra flash/PSRAM budget và device capability trước publish.
 - Rollout canary/percentage/pause/resume/rollback; publish không đồng nghĩa device đã apply.
 
-V1 không upload binary lớn qua Manager API. Release signer tạo directory immutable
-`manifest.json + content.bin + .complete`; endpoint `artifacts/register` chỉ catalog
-hóa sau khi stream hash content, kiểm canonical signature, target, 4 MiB slot và
-runtime ABI. Object-store scoped upload/canary percentage/pause/resume là hardening
-tiếp theo; rollout hiện chọn explicit device IDs để tránh mở rộng ngoài ý muốn.
+Wake/model release hiện vẫn được tạo ngoài request path rồi catalog bằng directory
+immutable `manifest.json + content.bin + .complete`. Riêng UI Pack V1 nhận binary
+stream tại `POST /api/v1/ui-packs/uploads`, giới hạn 2 MiB trong lúc stream, ghi vào
+quarantine, kiểm container/member/hash/data-only policy, ký manifest rồi mới rename
+atomically vào local artifact store. Manager API không buffer toàn file trong RAM.
+Object-store scoped upload, percentage rollout, pause/resume và operator rollback
+command là hardening tiếp theo; rollout hiện chọn explicit device UUID để tránh mở
+rộng ngoài ý muốn.
 
 ### Provider hub
 

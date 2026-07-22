@@ -121,20 +121,23 @@ persona or locale behavior is compiled into firmware.
 ## Local full-loop validation
 
 The host WebSocket client exercises the real wire path rather than calling
-providers directly. The MCP commands below use an untracked local WAV containing
-the Vietnamese request to set the volume to 55 percent; replace the path with an
-equivalent test utterance when reproducing the run:
+providers directly. `npm run test:voice:local-e2e` starts an isolated voice-server
+on a random loopback port with device auth disabled only for that process, runs the
+client and always stops the temporary process. It does not restart or weaken the
+LAN service on port 8000. The MCP commands below use an untracked local WAV
+containing the Vietnamese request to set the volume to 55 percent; replace the path
+with an equivalent test utterance when reproducing the run:
 
 ```bash
 cd veetee-server
 npm run test:voice:local-e2e
-uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+npm run test:voice:local-e2e -- \
   --abort-on-first-audio
-uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+npm run test:voice:local-e2e -- \
   --wav /tmp/veetee-mcp-volume.wav \
   --expect-tool self.audio_speaker.set_volume \
   --expected-volume 55
-uv run --project apps/voice-server python scripts/e2e_voice_loop.py \
+npm run test:voice:local-e2e -- \
   --wav /tmp/veetee-mcp-volume.wav \
   --abort-on-tool-call \
   --expect-tool self.audio_speaker.set_volume \

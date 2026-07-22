@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,18 @@ class FakeTts:
     async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
         if False:
             yield AudioChunk(0, 24_000, "pcm_s16le", b"", final=True)
+
+
+class SlowGoodbyeTts:
+    async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
+        await asyncio.sleep(0.15)
+        yield AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 2_880, final=True)
+
+
+class FailingGoodbyeTts:
+    async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
+        yield AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 2_880)
+        raise RuntimeError("fixture goodbye failure")
 
 
 class FakeEngine:
@@ -344,6 +357,42 @@ async def test_device_auth_header_identifier_is_ascii_and_bounded() -> None:
     assert not _valid_device_header(None)
     assert not _valid_device_header(" id-with-space ")
     assert not _valid_device_header("thiết-bị")
+
+
+@pytest.mark.parametrize("tts", [SlowGoodbyeTts(), FailingGoodbyeTts()])
+async def test_goodbye_always_emits_sleep_when_tts_is_slow_or_fails(tts: object) -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        closing_grace_seconds=0.11,
+    )
+    websocket = FakeWebSocket()
+    profile = SessionProfile.defaults(settings)
+    profile = replace(
+        profile,
+        policy=replace(profile.policy, closing_grace_seconds=0.11, tts_seconds=0.3),
+    )
+    voice_session = VoiceSession(
+        websocket,  # type: ignore[arg-type]
+        settings=settings,
+        profile=profile,
+        asr=FakeAsr(),  # type: ignore[arg-type]
+        vad_model=FakeVadModel(),  # type: ignore[arg-type]
+        tts=tts,  # type: ignore[arg-type]
+        engine_factory=lambda *_: FakeEngine(),  # type: ignore[arg-type,return-value]
+    )
+
+    await voice_session._goodbye("first_input_timeout")
+    controls = [json.loads(item) for item in websocket.sent_text]
+
+    assert controls[-1] == assistant_sleep_payload(
+        voice_session.session_id, "first_input_timeout"
+    )
+    assert {event.get("state") for event in controls if event.get("type") == "tts"} == {
+        "start",
+        "stop",
+    }
+    await voice_session.close()
 
 
 async def test_websocket_sink_wraps_audio_in_one_tts_lifecycle() -> None:

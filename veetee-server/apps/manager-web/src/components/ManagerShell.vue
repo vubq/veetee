@@ -33,6 +33,10 @@ const resourceRollouts = useQuery({
   queryKey: ["resource-rollouts"],
   queryFn: managerApi.resourceRollouts,
 });
+const uiPackRollouts = useQuery({
+  queryKey: ["ui-pack-rollouts"],
+  queryFn: managerApi.uiPackRollouts,
+});
 const activeDeviceId = computed(() => devices.data.value?.[0]?.id ?? "");
 const deviceTools = useQuery({
   queryKey: computed(() => ["device-mcp-tools", activeDeviceId.value]),
@@ -146,6 +150,18 @@ async function publishArtifact(id: string): Promise<void> {
   await refresh("artifacts");
 }
 
+async function stageUiPack(file: File) {
+  const artifact = await managerApi.stageUiPack(file);
+  await refresh("artifacts");
+  return artifact;
+}
+
+async function rolloutUiPack(id: string): Promise<void> {
+  if (!activeDeviceId.value) throw new Error("Chưa có thiết bị để rollout UI Pack.");
+  await managerApi.rolloutUiPack(id, [activeDeviceId.value]);
+  await Promise.all([refresh("ui-pack-rollouts"), refresh("devices")]);
+}
+
 async function createWakeProfile(input: Parameters<typeof managerApi.createWakeProfile>[0]) {
   await managerApi.createWakeProfile(input);
   await refresh("wake-profiles");
@@ -172,6 +188,8 @@ onMounted(async () => {
     callTool,
     registerArtifact,
     publishArtifact,
+    stageUiPack,
+    rolloutUiPack,
     createWakeProfile,
     publishWakeProfile,
     rolloutWakeProfile,

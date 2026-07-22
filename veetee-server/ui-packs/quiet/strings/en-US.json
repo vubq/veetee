@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "en-US",
+  "states": {
+    "starting": {"kicker": "WAKING UP", "title": "VeeTee", "hint": ""},
+    "wifi_configuring": {"kicker": "CONNECT", "title": "Choose Wi-Fi", "hint": "Open 192.168.4.1"},
+    "network_connecting": {"kicker": "CONNECT", "title": "One moment", "hint": ""},
+    "activating": {"kicker": "PAIR DEVICE", "title": "Your code", "hint": "Open Manager Web"},
+    "pairing_recovery": {"kicker": "RECONNECT", "title": "Hold for 5 seconds", "hint": ""},
+    "idle": {"kicker": "READY", "title": "Hello", "hint": "Press or say Hey VeeTee"},
+    "connecting": {"kicker": "I'M HERE", "title": "Connecting", "hint": ""},
+    "listening": {"kicker": "LISTENING", "title": "Go ahead", "hint": "Press to interrupt"},
+    "evaluating": {"kicker": "UNDERSTANDING", "title": "I can hear you", "hint": ""},
+    "thinking": {"kicker": "THINKING", "title": "One moment", "hint": ""},
+    "speaking": {"kicker": "RESPONDING", "title": "I'm speaking", "hint": "Press to interrupt"},
+    "aborting": {"kicker": "STOPPED", "title": "I'm listening", "hint": ""},
+    "closing": {"kicker": "SEE YOU", "title": "Good night", "hint": ""}
+  }
+}

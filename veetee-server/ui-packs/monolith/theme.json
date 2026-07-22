@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "ui_abi": 1,
+  "theme_id": "monolith",
+  "composition": "monolith",
+  "palette": {
+    "starting": {"background": "#181918", "foreground": "#f0eee6", "accent": "#ff694f"},
+    "wifi_configuring": {"background": "#151b1d", "foreground": "#f0eee6", "accent": "#69c4d0"},
+    "network_connecting": {"background": "#151b1d", "foreground": "#f0eee6", "accent": "#69c4d0"},
+    "activating": {"background": "#161b1d", "foreground": "#f0eee6", "accent": "#7bcbd5"},
+    "pairing_recovery": {"background": "#1d1514", "foreground": "#f0eee6", "accent": "#ff4f3d"},
+    "idle": {"background": "#181918", "foreground": "#f0eee6", "accent": "#ff694f"},
+    "connecting": {"background": "#151b1d", "foreground": "#f0eee6", "accent": "#69c4d0"},
+    "listening": {"background": "#151a17", "foreground": "#f0eee6", "accent": "#b8e45d"},
+    "evaluating": {"background": "#1d1a14", "foreground": "#f0eee6", "accent": "#e8b34e"},
+    "thinking": {"background": "#1d1a14", "foreground": "#f0eee6", "accent": "#e8b34e"},
+    "speaking": {"background": "#211514", "foreground": "#f0eee6", "accent": "#ff694f"},
+    "aborting": {"background": "#1d1514", "foreground": "#f0eee6", "accent": "#ff4f3d"},
+    "closing": {"background": "#171a19", "foreground": "#f0eee6", "accent": "#889492"}
+  }
+}

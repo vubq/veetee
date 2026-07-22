@@ -351,32 +351,43 @@ URL đầy đủ vào body/log.
 N16R8 có 16 MB flash và 8 MB PSRAM. Layout chính xác chỉ freeze sau khi đo app size, nhưng strategy V1 ưu tiên là:
 
 - `ota_0` + `ota_1` cho executable A/B;
-- `resource_0` + `resource_1` cho signed resource bundle A/B;
+- `resource_0` + `resource_1` cho signed wake/model resource A/B;
+- `ui_0` + `ui_1` cho signed UI Pack A/B;
 - NVS chỉ lưu identity, desired/current version, slot pointer và apply journal;
 - một vùng nhỏ cho coredump/diagnostic nếu đủ chỗ.
 
-Không lưu model lớn trong NVS. Resource slot inactive được ghi, verify toàn bộ rồi mới atomically đổi active pointer. Nếu boot/apply health check fail, rollback pointer về slot cũ.
+Không lưu model lớn trong NVS. Mỗi artifact class có namespace NVS, journal và active
+pointer riêng. Inactive slot được ghi, verify toàn bộ rồi mới atomically đổi active
+pointer. Nếu boot/apply health check fail, chỉ artifact tương ứng rollback về slot cũ.
 
 Layout V1 của prototype N16R8:
 
 ```text
-metadata/NVS/otadata/coredump    ~0.5 MB
-ota_0                            ~3.5 MB
-ota_1                            ~3.5 MB
-resource_0                        4.0 MB
-resource_1                        4.0 MB
+NVS/otadata/phy                  0x09000..0x12000
+ota_0                            0x3A0000 (3.625 MiB)
+ota_1                            0x3A0000 (3.625 MiB)
+resource_0                       0x200000 (2 MiB)
+resource_1                       0x200000 (2 MiB)
+ui_0                             0x200000 (2 MiB)
+ui_1                             0x200000 (2 MiB)
+coredump                         0x040000 (256 KiB)
 ```
 
-Nếu app thực tế lớn hơn, ưu tiên giữ executable A/B. Nếu resource bundle vượt slot sau khi đã chốt asset scope, phải mở ADR chuyển sang resource store 8 MB với immutable blobs + dual manifest journal; không tự overwrite active slot. Manager phải từ chối bundle vượt `free_resource_slot_bytes` trong device capability.
+Firmware `0.3.0` hiện khoảng `0x170370` byte, còn khoảng 60% trong OTA slot nhỏ
+nhất. Nếu wake resource hoặc UI Pack vượt 2 MiB sau khi chốt scope, phải mở ADR đổi
+layout/store; không tự overwrite active slot. Manager phải từ chối bundle vượt
+capability của đúng artifact class.
 
 ## 10. Apply transaction và rollback
 
-Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1: device-authenticated
-manifest/content pull, strict verify, Range/resume, streaming hash/write, CRC journal,
-safe-boundary reload, pending-health và rollback. Manager API stream file immutable
-trực tiếp, trả `206`/`Content-Range`, không buffer artifact trong process. Chưa được
-coi production-ready cho tới khi power-loss/corruption/rollback matrix pass trên board
-và firmware report apply result về Manager.
+Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1 và UI Pack V1:
+device-authenticated manifest/content pull, strict verify, Range/resume, streaming
+hash/write, CRC journal, safe-boundary reload, pending-health và rollback. Manager
+API stream file immutable trực tiếp, trả `206`/`Content-Range`, không buffer artifact
+trong process. UI Pack upload dùng bounded streaming quarantine và atomic immutable
+publish. Chưa được coi production-ready cho tới khi power-loss/corruption/rollback
+matrix pass trên board; reported-state host/live simulation đã pass nhưng LCD apply
+cần nghiệm thu thực tế.
 
 Device áp dụng config/resource theo transaction:
 

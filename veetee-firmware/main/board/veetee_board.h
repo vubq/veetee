@@ -29,6 +29,8 @@ public:
                          PlaybackFinishedSink playback_finished_sink,
                          const char* active_resource_partition,
                          const char* fallback_resource_partition,
+                         const char* active_ui_partition,
+                         const char* fallback_ui_partition,
                          void* context);
     esp_err_t StartAudio(bool play_boot_chime);
     esp_err_t ReloadWakeResource(const char* partition_label);
@@ -37,6 +39,14 @@ public:
         return loaded_wake_partition_[0] == '\0'
                    ? nullptr
                    : loaded_wake_partition_.data();
+    }
+    esp_err_t ReloadUiPack(const char* partition_label);
+    void UseBuiltInSignal();
+    [[nodiscard]] bool UiPackHealthy() const;
+    [[nodiscard]] const char* loaded_ui_partition() const {
+        return display_.loaded_ui_partition()[0] == '\0'
+                   ? nullptr
+                   : display_.loaded_ui_partition();
     }
     esp_err_t ShowActivationCode(const char* code);
     esp_err_t ShowStandby();
@@ -71,6 +81,7 @@ private:
     app::State state_ = app::State::kStarting;
     std::array<char, 17> loaded_wake_partition_{};
     QueueHandle_t display_queue_ = nullptr;
+    SemaphoreHandle_t display_mutex_ = nullptr;
     TaskHandle_t display_task_ = nullptr;
 };
 

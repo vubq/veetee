@@ -9,6 +9,8 @@ const principal = {
   displayName: "Veetee Owner",
 };
 
+const deviceId = "b72559f9-8a1c-47fa-b2af-7c2a85098b2f";
+
 async function mockManagerApi(
   page: Page,
   options: {
@@ -19,6 +21,8 @@ async function mockManagerApi(
     toolCalls?: unknown[];
     agentPatches?: unknown[];
     providerPatches?: unknown[];
+    uiUploads?: unknown[];
+    uiRollouts?: unknown[];
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
@@ -46,7 +50,7 @@ async function mockManagerApi(
         options.withDevice
           ? [
               {
-                id: "device-1",
+                id: deviceId,
                 hardwareId: "A1B2C3D4E5F6",
                 name: "Veetee Lab",
                 status: "online",
@@ -176,6 +180,72 @@ async function mockManagerApi(
         },
       ]);
     }
+    if (url.pathname === "/api/v1/ui-packs/rollouts" && request.method() === "GET") {
+      return json([]);
+    }
+    if (url.pathname === "/api/v1/ui-packs/uploads" && request.method() === "POST") {
+      options.uiUploads?.push({
+        fileName: request.headers()["x-veetee-file-name"],
+        contentType: request.headers()["content-type"],
+        bytes: request.postDataBuffer()?.length,
+      });
+      return json({
+        id: "ui-signal-1.0.0",
+        kind: "display_assets",
+        version: "1.0.0",
+        channel: "stable",
+        sizeBytes: request.postDataBuffer()?.length ?? 0,
+        sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+        contentType: "application/vnd.veetee.ui-pack",
+        runtime: "veetee-ui",
+        runtimeAbi: 1,
+        license: "MIT",
+        board: "veetee-s3-n16r8",
+        minFirmware: "0.3.0",
+        maxFirmware: "0.4.0",
+        signatureKeyId: "veetee-dev-release-2026-01",
+        securityEpoch: 1,
+        benchmarkStatus: "not_run",
+        status: "validated",
+        createdAt: "2026-07-22T03:44:00.000Z",
+      });
+    }
+    if (url.pathname === "/api/v1/artifacts/ui-signal-1.0.0/publish") {
+      return json({
+        id: "ui-signal-1.0.0",
+        kind: "display_assets",
+        version: "1.0.0",
+        channel: "stable",
+        sizeBytes: 19,
+        sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+        contentType: "application/vnd.veetee.ui-pack",
+        runtime: "veetee-ui",
+        runtimeAbi: 1,
+        license: "MIT",
+        board: "veetee-s3-n16r8",
+        minFirmware: "0.3.0",
+        maxFirmware: "0.4.0",
+        signatureKeyId: "veetee-dev-release-2026-01",
+        securityEpoch: 1,
+        benchmarkStatus: "not_run",
+        status: "published",
+        publishedAt: "2026-07-22T03:45:00.000Z",
+        createdAt: "2026-07-22T03:44:00.000Z",
+      });
+    }
+    if (url.pathname === "/api/v1/ui-packs/ui-signal-1.0.0/rollout") {
+      options.uiRollouts?.push(request.postDataJSON());
+      return json([
+        {
+          id: "76d98993-d0b3-45a8-a2e7-6f00942c6fd7",
+          deviceId,
+          artifactId: "ui-signal-1.0.0",
+          status: "active",
+          desiredStateVersion: 3,
+          createdAt: "2026-07-22T03:50:00.000Z",
+        },
+      ]);
+    }
     if (url.pathname === "/api/v1/agents") {
       return json([
         {
@@ -289,7 +359,7 @@ async function mockManagerApi(
         },
       ]);
     }
-    if (url.pathname === "/api/v1/devices/device-1/mcp/tools") {
+    if (url.pathname === `/api/v1/devices/${deviceId}/mcp/tools`) {
       return json([
         {
           name: "self.audio_speaker.set_volume",
@@ -310,7 +380,7 @@ async function mockManagerApi(
     }
     if (
       url.pathname ===
-      "/api/v1/devices/device-1/mcp/tools/self.audio_speaker.set_volume/call"
+      `/api/v1/devices/${deviceId}/mcp/tools/self.audio_speaker.set_volume/call`
     ) {
       options.toolCalls?.push(request.postDataJSON());
       return json({ tool: "self.audio_speaker.set_volume", result: { isError: false } });
@@ -349,7 +419,9 @@ test("keeps the approved mobile navigation", async ({ page }) => {
 });
 
 test("previews all built-in device themes and inspects a UI Pack locally", async ({ page }) => {
-  await mockManagerApi(page);
+  const uiUploads: unknown[] = [];
+  const uiRollouts: unknown[] = [];
+  await mockManagerApi(page, { withDevice: true, uiUploads, uiRollouts });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
@@ -373,7 +445,23 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   });
   await expect(page.locator("[data-ui-upload-status]")).toHaveText("Hợp lệ để staging");
   await expect(page.locator("[data-ui-file-name]")).toHaveText("veetee-signal.vtp");
-  await expect(page.locator("[data-ui-stage-pack]")).toBeDisabled();
+  const action = page.locator("[data-ui-stage-pack]");
+  await expect(action).toBeEnabled();
+  await action.click();
+  await expect(action).toHaveText("Publish UI Pack");
+  await action.click();
+  await expect(action).toHaveText("Rollout lên thiết bị");
+  await expect(action).toBeEnabled();
+  await action.click();
+  await expect(action).toHaveText("Đã tạo rollout");
+  await expect.poll(() => uiUploads).toEqual([
+    {
+      fileName: "veetee-signal.vtp",
+      contentType: "application/vnd.veetee.ui-pack",
+      bytes: 19,
+    },
+  ]);
+  await expect.poll(() => uiRollouts).toEqual([{ deviceIds: [deviceId] }]);
 });
 
 test("edits provider routing and rotates secrets without reading the old secret", async ({
@@ -493,7 +581,7 @@ test("shows signed wake resources and creates desired rollout without claiming a
   await expect.poll(() => rolloutCalls).toEqual([
     {
       wakeProfileId: "a9dc1d82-e265-47cc-a6a0-73f938dcf3b8",
-      deviceIds: ["device-1"],
+      deviceIds: [deviceId],
     },
   ]);
   await expect(page.locator("#toast")).toContainText("chờ reported state");

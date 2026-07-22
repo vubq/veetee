@@ -48,6 +48,8 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
                                   PlaybackFinishedSink playback_finished_sink,
                                   const char* active_resource_partition,
                                   const char* fallback_resource_partition,
+                                  const char* active_ui_partition,
+                                  const char* fallback_ui_partition,
                                   void* context) {
     gpio_config_t led = {};
     led.pin_bit_mask = 1ULL << kStatusLed;
@@ -61,13 +63,32 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
     }
     gpio_set_level(kStatusLed, 0);
 
-    if ((error = display_.Initialize()) != ESP_OK ||
-        (error = display_.DrawState(app::State::kStarting)) != ESP_OK) {
+    if ((error = display_.Initialize()) != ESP_OK) {
+        return error;
+    }
+    display_mutex_ = xSemaphoreCreateMutex();
+    if (display_mutex_ == nullptr) return ESP_ERR_NO_MEM;
+    if (active_ui_partition != nullptr) {
+        error = display_.ReloadUiPack(active_ui_partition);
+        if (error != ESP_OK && fallback_ui_partition != nullptr &&
+            !SamePartition(active_ui_partition, fallback_ui_partition)) {
+            ESP_LOGW(kTag, "Active UI Pack %s failed: %s; trying %s",
+                     active_ui_partition, esp_err_to_name(error),
+                     fallback_ui_partition);
+            error = display_.ReloadUiPack(fallback_ui_partition);
+        }
+        if (error != ESP_OK) {
+            ESP_LOGW(kTag, "No UI Pack loaded: %s; using built-in Signal",
+                     esp_err_to_name(error));
+            display_.UseBuiltInSignal();
+        }
+    }
+    if ((error = display_.DrawState(app::State::kStarting)) != ESP_OK) {
         return error;
     }
     display_queue_ = xQueueCreate(1, sizeof(DisplayCommand));
     if (display_queue_ == nullptr ||
-        xTaskCreate(&VeeteeBoard::DisplayTaskEntry, "veetee_display", 4096,
+        xTaskCreate(&VeeteeBoard::DisplayTaskEntry, "veetee_display", 6144,
                     this, 3, &display_task_) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
@@ -157,6 +178,31 @@ bool VeeteeBoard::WakeResourceHealthy() const {
     return wake_detector_.healthy();
 }
 
+esp_err_t VeeteeBoard::ReloadUiPack(const char* partition_label) {
+    if (display_mutex_ == nullptr) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(display_mutex_, portMAX_DELAY);
+    esp_err_t error = display_.ReloadUiPack(partition_label);
+    if (error == ESP_OK) error = display_.DrawState(state_);
+    xSemaphoreGive(display_mutex_);
+    return error;
+}
+
+void VeeteeBoard::UseBuiltInSignal() {
+    if (display_mutex_ == nullptr) return;
+    xSemaphoreTake(display_mutex_, portMAX_DELAY);
+    display_.UseBuiltInSignal();
+    const esp_err_t error = display_.DrawState(state_);
+    xSemaphoreGive(display_mutex_);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Built-in Signal render failed: %s",
+                 esp_err_to_name(error));
+    }
+}
+
+bool VeeteeBoard::UiPackHealthy() const {
+    return display_.UiPackHealthy();
+}
+
 esp_err_t VeeteeBoard::ShowActivationCode(const char* code) {
     if (code == nullptr || std::strlen(code) != 6) return ESP_ERR_INVALID_ARG;
     DisplayCommand command{.kind = DisplayCommandKind::kActivationCode,
@@ -205,10 +251,12 @@ void VeeteeBoard::DisplayTaskEntry(void* context) {
 void VeeteeBoard::RunDisplay() {
     DisplayCommand command{};
     while (xQueueReceive(display_queue_, &command, portMAX_DELAY) == pdTRUE) {
+        xSemaphoreTake(display_mutex_, portMAX_DELAY);
         const esp_err_t error =
             command.kind == DisplayCommandKind::kActivationCode
                 ? display_.DrawActivationCode(command.activation_code)
                 : display_.DrawState(command.state);
+        xSemaphoreGive(display_mutex_);
         if (error != ESP_OK) {
             ESP_LOGE(kTag, "Display command failed: %s", esp_err_to_name(error));
         }

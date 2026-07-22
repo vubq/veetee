@@ -18,6 +18,11 @@
 
 namespace veetee::ota {
 
+enum class ResourceClass : std::uint8_t {
+    kWakeModel,
+    kUiPack,
+};
+
 enum class ResourceReconcileEvent : std::uint8_t {
     kDownloading,
     kVerifying,
@@ -30,6 +35,7 @@ enum class ResourceReconcileEvent : std::uint8_t {
 
 struct ResourceReconcileNotification {
     ResourceReconcileEvent event;
+    ResourceClass resource_class = ResourceClass::kWakeModel;
     char desired_version[33] = {};
     char bundle_version[33] = {};
     char error_code[33] = {};
@@ -47,7 +53,8 @@ public:
                                void* context);
 
     esp_err_t Initialize(settings::DeviceSettings* settings, EventSink sink,
-                         void* context);
+                         void* context,
+                         ResourceClass resource_class = ResourceClass::kWakeModel);
     bool Schedule(const char* desired_version, const char* manifest_url);
     void Cancel();
     [[nodiscard]] const char* ActivePartitionLabel() const;
@@ -95,8 +102,10 @@ private:
     bool EmitWithRetry(ResourceReconcileEvent event, const Target& target,
                        const char* bundle_version, const char* error_code) const;
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;
+    [[nodiscard]] const char* PartitionLabel(std::uint8_t slot) const;
 
     settings::DeviceSettings* settings_ = nullptr;
+    ResourceClass resource_class_ = ResourceClass::kWakeModel;
     EventSink sink_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t queue_ = nullptr;

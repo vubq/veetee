@@ -116,6 +116,8 @@ export type DeviceBootstrapResult =
       configVersion: number;
       resourceVersion?: string;
       resourceManifestId?: string;
+      uiVersion?: string;
+      uiManifestId?: string;
     };
 
 export interface DeviceActivationResult {
@@ -233,6 +235,8 @@ export class ControlPlaneStore {
     const desired = (device.desiredState?.state ?? {}) as Record<string, unknown>;
     const resourceVersion = desired.resourceBundleVersion;
     const resourceManifestId = desired.resourceManifestId;
+    const uiVersion = desired.uiPackVersion;
+    const uiManifestId = desired.uiManifestId;
     return {
       state: "active",
       deviceId: device.id,
@@ -240,6 +244,8 @@ export class ControlPlaneStore {
       configVersion: device.agent?.publishedVersion ?? 0,
       ...(typeof resourceVersion === "string" ? { resourceVersion } : {}),
       ...(typeof resourceManifestId === "string" ? { resourceManifestId } : {}),
+      ...(typeof uiVersion === "string" ? { uiVersion } : {}),
+      ...(typeof uiManifestId === "string" ? { uiManifestId } : {}),
     };
   }
 
@@ -496,6 +502,32 @@ export class ControlPlaneStore {
                   : undefined;
           if (rolloutStatus) {
             await transaction.resourceRollout.updateMany({
+              where: {
+                deviceId: id,
+                status: ResourceRolloutStatus.ACTIVE,
+                ...(desiredVersion
+                  ? { artifact: { is: { version: desiredVersion } } }
+                  : {}),
+              },
+              data: { status: rolloutStatus },
+            });
+          }
+        }
+        const ui = state.ui;
+        if (ui && typeof ui === "object" && !Array.isArray(ui)) {
+          const report = ui as Record<string, unknown>;
+          const desiredVersion =
+            typeof report.desiredVersion === "string" ? report.desiredVersion : undefined;
+          const rolloutStatus =
+            report.phase === "active"
+              ? ResourceRolloutStatus.COMPLETE
+              : report.phase === "failed"
+                ? ResourceRolloutStatus.FAILED
+                : report.phase === "rolled_back"
+                  ? ResourceRolloutStatus.ROLLED_BACK
+                  : undefined;
+          if (rolloutStatus) {
+            await transaction.uiPackRollout.updateMany({
               where: {
                 deviceId: id,
                 status: ResourceRolloutStatus.ACTIVE,

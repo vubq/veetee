@@ -35,7 +35,9 @@ struct ResourceRecord {
     std::uint32_t crc32 = 0;
 };
 
-ResourceRecord MakeDefaultResourceRecord(std::uint32_t minimum_security_epoch);
+ResourceRecord MakeDefaultResourceRecord(
+    std::uint32_t minimum_security_epoch,
+    const char* default_version = "factory-bringup");
 void SealResourceRecord(ResourceRecord* record);
 bool IsValidResourceRecord(const ResourceRecord& record);
 

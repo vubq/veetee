@@ -151,7 +151,7 @@ menu "Veetee hardware bring-up"
 
     config VEETEE_FIRMWARE_COMPAT_VERSION
         string "Semantic firmware compatibility version"
-        default "0.2.0"
+        default "0.3.0"
         help
             SemVer used only for signed config/resource compatibility checks.
             Git revision remains the diagnostic app version.

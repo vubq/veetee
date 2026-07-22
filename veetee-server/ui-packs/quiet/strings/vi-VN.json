@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "vi-VN",
+  "states": {
+    "starting": {"kicker": "ĐANG THỨC DẬY", "title": "VeeTee", "hint": ""},
+    "wifi_configuring": {"kicker": "KẾT NỐI", "title": "Chọn Wi-Fi", "hint": "Mở 192.168.4.1"},
+    "network_connecting": {"kicker": "KẾT NỐI", "title": "Đợi một chút", "hint": ""},
+    "activating": {"kicker": "GHÉP THIẾT BỊ", "title": "Mã của bạn", "hint": "Mở Manager Web"},
+    "pairing_recovery": {"kicker": "CẦN KẾT NỐI LẠI", "title": "Giữ nút 5 giây", "hint": ""},
+    "idle": {"kicker": "SẴN SÀNG", "title": "Chào bạn", "hint": "Bấm nút hoặc nói Hey VeeTee"},
+    "connecting": {"kicker": "TÔI Ở ĐÂY", "title": "Đang kết nối", "hint": ""},
+    "listening": {"kicker": "ĐANG NGHE", "title": "Bạn cứ nói", "hint": "Bấm để ngắt"},
+    "evaluating": {"kicker": "ĐANG HIỂU", "title": "Tôi đang nghe rõ", "hint": ""},
+    "thinking": {"kicker": "ĐANG NGHĨ", "title": "Một chút nhé", "hint": ""},
+    "speaking": {"kicker": "ĐANG TRẢ LỜI", "title": "Tôi đang nói", "hint": "Bấm để ngắt"},
+    "aborting": {"kicker": "ĐÃ DỪNG", "title": "Tôi đang nghe", "hint": ""},
+    "closing": {"kicker": "HẸN GẶP LẠI", "title": "Ngủ ngon", "hint": ""}
+  }
+}

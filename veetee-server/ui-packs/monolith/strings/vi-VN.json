@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "locale": "vi-VN",
+  "states": {
+    "starting": {"kicker": "SYSTEM / BOOT", "title": "VEE/TEE", "hint": "Khởi tạo phần cứng"},
+    "wifi_configuring": {"kicker": "NETWORK / CONFIG", "title": "WI-FI", "hint": "192.168.4.1"},
+    "network_connecting": {"kicker": "NETWORK / LINK", "title": "CONNECT", "hint": "Đang thử profile mạng"},
+    "activating": {"kicker": "DEVICE / PAIR", "title": "PAIRING", "hint": "Nhập mã trên Manager"},
+    "pairing_recovery": {"kicker": "DEVICE / RECOVERY", "title": "PAIRING LOST", "hint": "Giữ nút 5 giây"},
+    "idle": {"kicker": "ASSISTANT / READY", "title": "STANDBY", "hint": "BUTTON / HEY VEETEE"},
+    "connecting": {"kicker": "SESSION / OPEN", "title": "CONNECT", "hint": "Đang mở kênh thoại"},
+    "listening": {"kicker": "AUDIO / INPUT", "title": "LISTEN", "hint": "Bấm để ngắt"},
+    "evaluating": {"kicker": "INPUT / ADMISSION", "title": "EVALUATE", "hint": "Kiểm tra tín hiệu và ý định"},
+    "thinking": {"kicker": "AI / EXECUTION", "title": "THINK", "hint": "MODEL + MCP"},
+    "speaking": {"kicker": "AUDIO / OUTPUT", "title": "SPEAK", "hint": "Bấm để ngắt ngay"},
+    "aborting": {"kicker": "TURN / CANCEL", "title": "ABORT", "hint": "Đang xóa audio cũ"},
+    "closing": {"kicker": "SESSION / CLOSE", "title": "STANDBY", "hint": "Có thể gọi lại trong lúc chào"}
+  }
+}

@@ -42,10 +42,10 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Voice server | Python 3.12 + Starlette/FastAPI + Uvicorn trong một ASGI process. | Chỉ tách standalone WebSocket nếu benchmark connection/frame path yêu cầu. |
 | Manager API | NestJS + Fastify + PostgreSQL + Redis. | Đổi nếu team đã có nền tảng Java/Spring bắt buộc. |
 | Manager Web | Vue 3 + TypeScript + Vite + TanStack Vue Query + Zod. | Giữ visual prototype hiện tại, bổ sung artifact/security/privacy screens. |
-| Device UI | Giữ Signal, Monolith và Quiet; Signal là built-in default. UI Pack data-only được preview/upload từ Manager, phân phối qua signed resource A/B. | UI Pack ABI V2 phải hoàn tất trước khi staging/rollout được mở. |
+| Device UI | Giữ Signal, Monolith và Quiet; Signal là built-in default/failsafe. UI Pack data-only được preview/upload từ Manager và phân phối qua signed `ui_0/ui_1`. | UI ABI 1/resource ABI 2 đã triển khai cho palette/composition; font/icon/background/string rendering mở rộng phải giữ cùng data-only policy. |
 | Device edge | Dev single-node gộp admin + device routes trong manager-api port 8001; production có thể tách Caddy/Nginx listener 8003. | Không tạo business data source hoặc branded alias thứ hai. |
 | Object storage | Local filesystem adapter cho dev; MinIO cho rollout/Range/multi-node. | Không để manager-api buffer artifact lớn trong RAM. |
-| Resource layout | Executable A/B + resource A/B sau size probe; ưu tiên đơn giản/recover cho V1. | Mở ADR resource store 8 MB nếu model/assets vượt slot. |
+| Resource layout | Executable A/B 3.625 MiB; wake `resource_0/1` 2 MiB; UI `ui_0/1` 2 MiB; journal/rollback độc lập. | Mở ADR nếu app hoặc artifact vượt slot đã freeze. |
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
 | ASR | Zipformer Vietnamese 30M INT8 primary; ChunkFormer-CTC-Large-Vie fallback có điều kiện. | Có thể tạm Zipformer-only trong bring-up nếu server chưa đủ tài nguyên. |
 | LLM | `openai-compatible-9router` cho dev/LAN; adapter giữ tương thích Chat Completions/Responses, SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu 9router không đạt contract hoặc không phù hợp quyền sử dụng. |
@@ -68,8 +68,8 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 ### Runtime và resource
 
 1. Chấp thuận ESP-SR WakeNet/MultiNet cho V1.
-2. Scope asset V1: `srmodels.bin`, font Việt, icon, chime hay thêm animation/GIF.
-3. Chọn resource A/B V1 hay chấp nhận ADR resource store 8 MB nếu size probe vượt slot.
+2. Scope asset mở rộng sau UI ABI 1: font Việt, icon, background, chime hay animation bounded.
+3. Layout A/B đã chốt; chỉ mở ADR mới nếu wake/UI artifact vượt 2 MiB.
 4. Chấp thuận model pack không cho upload native runtime/operator.
 5. Xác nhận custom wake V1 chỉ upload/chọn model đã build; training service để phase sau.
 

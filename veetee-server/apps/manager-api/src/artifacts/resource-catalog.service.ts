@@ -75,6 +75,15 @@ export interface ResourceRolloutRecord {
   createdAt: string;
 }
 
+export interface UiPackRolloutRecord {
+  id: string;
+  deviceId: string;
+  artifactId: string;
+  status: "active" | "complete" | "failed" | "rolled_back";
+  desiredStateVersion: number;
+  createdAt: string;
+}
+
 export interface WakeProfileInput {
   artifactId: string;
   name: string;
@@ -370,6 +379,85 @@ export class ResourceCatalogService {
     return rollouts.map((rollout) => this.rolloutRecord(rollout));
   }
 
+  async listUiPackRollouts(tenantId: string): Promise<UiPackRolloutRecord[]> {
+    const rollouts = await this.prisma.uiPackRollout.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    return rollouts.map((rollout) => this.uiPackRolloutRecord(rollout));
+  }
+
+  async rolloutUiPack(
+    artifactId: string,
+    deviceIds: string[],
+    context: MutationContext,
+  ): Promise<UiPackRolloutRecord[]> {
+    const artifact = await this.prisma.artifact.findFirst({
+      where: { id: artifactId, tenantId: context.principal.tenantId },
+    });
+    if (!artifact || artifact.kind !== ArtifactKind.DISPLAY_ASSETS) {
+      throw new NotFoundException("UI Pack artifact not found");
+    }
+    if (artifact.status !== ArtifactStatus.PUBLISHED) {
+      throw new ConflictException("UI Pack must be published before rollout");
+    }
+    const devices = await this.prisma.device.findMany({
+      where: { id: { in: deviceIds }, tenantId: context.principal.tenantId },
+      include: { desiredState: true },
+    });
+    if (devices.length !== new Set(deviceIds).size) {
+      throw new NotFoundException("One or more rollout devices were not found");
+    }
+    for (const device of devices) this.assertUiPackCompatibility(device, artifact);
+
+    return this.prisma.$transaction(async (transaction) => {
+      const output: UiPackRolloutRecord[] = [];
+      for (const device of devices) {
+        const desiredStateVersion = (device.desiredState?.version ?? 0) + 1;
+        const current = (device.desiredState?.state ?? {}) as Record<string, unknown>;
+        const next = {
+          ...current,
+          uiPackVersion: artifact.version,
+          uiManifestId: artifact.id,
+        };
+        await transaction.deviceDesiredState.upsert({
+          where: { deviceId: device.id },
+          create: {
+            deviceId: device.id,
+            version: desiredStateVersion,
+            state: next as Prisma.InputJsonValue,
+          },
+          update: { version: desiredStateVersion, state: next as Prisma.InputJsonValue },
+        });
+        const rollout = await transaction.uiPackRollout.create({
+          data: {
+            tenantId: context.principal.tenantId,
+            deviceId: device.id,
+            artifactId: artifact.id,
+            desiredStateVersion,
+          },
+        });
+        await this.audit.record(
+          {
+            tenantId: context.principal.tenantId,
+            actorUserId: context.principal.userId,
+            action: "ui_pack.rollout",
+            targetType: "device",
+            targetId: device.id,
+            requestId: context.requestId,
+            before: current,
+            after: next,
+            details: { rolloutId: rollout.id, artifactId: artifact.id },
+          },
+          transaction,
+        );
+        output.push(this.uiPackRolloutRecord(rollout));
+      }
+      return output;
+    });
+  }
+
   async rollout(
     wakeProfileId: string,
     version: number | undefined,
@@ -473,7 +561,7 @@ export class ResourceCatalogService {
       artifact.board !== "veetee-s3-n16r8" ||
       artifact.runtime !== "esp-sr" ||
       artifact.runtimeAbi !== 1 ||
-      artifact.sizeBytes > 4 * 1024 * 1024
+      artifact.sizeBytes > 2 * 1024 * 1024
     ) {
       throw new ConflictException("Artifact is outside the V1 board capability bounds");
     }
@@ -485,6 +573,36 @@ export class ResourceCatalogService {
       compareSemver(device.firmwareVersion, artifact.maxFirmware) >= 0
     ) {
       throw new ConflictException("Device firmware is incompatible with the artifact");
+    }
+  }
+
+  private assertUiPackCompatibility(
+    device: { firmwareVersion: string | null },
+    artifact: {
+      board: string;
+      runtime: string;
+      runtimeAbi: number;
+      sizeBytes: number;
+      minFirmware: string;
+      maxFirmware: string;
+    },
+  ): void {
+    if (
+      artifact.board !== "veetee-s3-n16r8" ||
+      artifact.runtime !== "veetee-ui" ||
+      artifact.runtimeAbi !== 1 ||
+      artifact.sizeBytes > 2 * 1024 * 1024
+    ) {
+      throw new ConflictException("UI Pack is outside the device capability bounds");
+    }
+    if (!device.firmwareVersion || !semver.test(device.firmwareVersion)) {
+      throw new ConflictException("Device firmware capability is unknown");
+    }
+    if (
+      compareSemver(device.firmwareVersion, artifact.minFirmware) < 0 ||
+      compareSemver(device.firmwareVersion, artifact.maxFirmware) >= 0
+    ) {
+      throw new ConflictException("Device firmware is incompatible with the UI Pack");
     }
   }
 
@@ -607,6 +725,24 @@ export class ResourceCatalogService {
       artifactId: rollout.artifactId,
       wakeProfileVersion: rollout.wakeProfileVersion.version,
       status: rollout.status.toLowerCase() as ResourceRolloutRecord["status"],
+      desiredStateVersion: rollout.desiredStateVersion,
+      createdAt: rollout.createdAt.toISOString(),
+    };
+  }
+
+  private uiPackRolloutRecord(rollout: {
+    id: string;
+    deviceId: string;
+    artifactId: string;
+    status: ResourceRolloutStatus;
+    desiredStateVersion: number;
+    createdAt: Date;
+  }): UiPackRolloutRecord {
+    return {
+      id: rollout.id,
+      deviceId: rollout.deviceId,
+      artifactId: rollout.artifactId,
+      status: rollout.status.toLowerCase() as UiPackRolloutRecord["status"],
       desiredStateVersion: rollout.desiredStateVersion,
       createdAt: rollout.createdAt.toISOString(),
     };

@@ -29,10 +29,13 @@ struct SupportedResourceRuntime {
 };
 
 struct DeviceResourceCapability {
+    const char* manifest_kind;
+    const char* content_type;
     const char* board;
     const char* chip;
     const char* firmware_version;
     std::uint32_t resource_abi;
+    std::uint32_t ui_abi;
     std::uint64_t flash_bytes;
     std::uint64_t psram_bytes;
     std::uint64_t resource_slot_bytes;

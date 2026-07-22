@@ -7,13 +7,13 @@
 #include <cstring>
 
 #include "cJSON.h"
-#include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "network/endpoint_url.h"
+#include "sdkconfig.h"
 
 namespace veetee::telemetry {
 namespace {
@@ -276,16 +276,20 @@ bool ReportedStateReporter::BuildBody(
     cJSON* firmware = reported == nullptr
                           ? nullptr
                           : cJSON_AddObjectToObject(reported, "firmware");
+    const char* artifact_name =
+        state.artifact_kind == settings::ReportedArtifactKind::kUiPack
+            ? "ui"
+            : "resource";
     cJSON* resource = reported == nullptr
                           ? nullptr
-                          : cJSON_AddObjectToObject(reported, "resource");
+                          : cJSON_AddObjectToObject(reported, artifact_name);
     const char* phase = settings::ReportedResourcePhaseName(state.phase);
     const bool valid = root != nullptr && reported != nullptr && firmware != nullptr &&
                        resource != nullptr && AddNumber(root, "version", version) &&
                        AddString(root, "bootId", boot_id_.data()) &&
                        AddNumber(reported, "schemaVersion", 1) &&
                        AddString(firmware, "version",
-                                 esp_app_get_description()->version) &&
+                                 CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION) &&
                        AddString(resource, "phase", phase) &&
                        AddString(resource, "currentVersion",
                                  state.current_version) &&

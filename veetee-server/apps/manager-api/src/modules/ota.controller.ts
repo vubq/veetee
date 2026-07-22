@@ -29,6 +29,7 @@ interface BootstrapResponse {
   firmware: { version: string; url: string };
   config?: { version: number; etag: string; url: string };
   resources?: { version: string; manifest_url: string };
+  ui?: { version: string; manifest_url: string };
 }
 
 @Public()
@@ -103,6 +104,12 @@ export class OtaController {
       response.resources = {
         version: state.resourceVersion ?? process.env.VEETEE_RESOURCE_VERSION ?? "0.0.0",
         manifest_url: this.httpUrl(manifestUrl, "VEETEE_RESOURCE_MANIFEST_URL"),
+      };
+    }
+    if (state.uiManifestId) {
+      response.ui = {
+        version: state.uiVersion ?? "0.0.0",
+        manifest_url: `${managerUrl}/veetee/artifacts/manifests/${encodeURIComponent(state.uiManifestId)}`,
       };
     }
     return response;

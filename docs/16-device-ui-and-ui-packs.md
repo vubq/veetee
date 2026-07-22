@@ -2,93 +2,86 @@
 
 ## 1. Quyết định sản phẩm
 
-Veetee giữ ba giao diện built-in cho ST7789 dọc `240x320`:
+Veetee giữ ba visual direction cho ST7789 dọc `240x320`:
 
-| ID | Tên | Vai trò |
-|---|---|---|
-| `signal` | 01 / Signal | Mặc định; đồng bộ navy/lime/coral với Manager Web. |
-| `monolith` | 02 / Monolith | Tương phản cao, thiên về thiết bị AI công nghiệp. |
-| `quiet` | 03 / Quiet | Nền sáng, chuyển động nhẹ, phù hợp không gian sống. |
+| ID | Tên | Phân phối | Vai trò |
+|---|---|---|---|
+| `signal` | 01 / Signal | Có sẵn trong firmware và có standard pack | Mặc định, failsafe, navy/lime/coral. |
+| `monolith` | 02 / Monolith | Standard UI Pack | Tương phản cao, thiên về thiết bị AI công nghiệp. |
+| `quiet` | 03 / Quiet | Standard UI Pack | Nền sáng, ít kích thích, phù hợp không gian sống. |
 
-Manager Web có trang `Giao diện thiết bị` để preview cùng một state contract trên
-cả ba theme. Việc chọn theme chỉ đổi presentation; không được thay TurnArbiter,
-state machine, admission policy, MCP permission hoặc logic hội thoại.
+Manager Web preview cả ba bằng cùng state contract. Theme chỉ được đổi
+presentation; UI Pack không có quyền thay TurnArbiter, state machine, admission
+policy, provider routing, MCP permission hoặc executable behavior.
 
-Signal là fallback sản phẩm mặc định. Firmware vẫn phải chứa một fallback tối
-thiểu để boot, provisioning, pairing code, pairing recovery và lỗi resource có
-thể hiển thị ngay cả khi hai resource slot đều hỏng.
+Signal tối thiểu luôn nằm trong executable để boot, provisioning, pairing code,
+pairing recovery và lỗi artifact vẫn hiển thị nếu cả hai UI slot đều hỏng. Monolith
+và Quiet không cần compile vào firmware; source chuẩn của ba pack nằm trong
+`veetee-server/ui-packs/` để build reproducible.
 
-## 2. Bài học giữ lại từ Xiaozhi
+## 2. Kiến trúc lưu trữ
 
-Xiaozhi có partition `assets`, tải `assets.bin` qua HTTP, verify checksum, mmap và
-đọc `index.json`. Gói có thể chứa ESP-SR model, font CBIN, emoji/image, màu theme,
-background và một số layout resource. Cơ chế này chứng minh việc đổi font/theme/
-wake model độc lập firmware là khả thi trên ESP32-S3.
+Ý tưởng data asset tải độc lập firmware được giữ từ Xiaozhi, nhưng Veetee không dùng
+mutable single-slot và không ghép wake model với giao diện. Partition N16R8 hiện là:
 
-Veetee giữ các ý tưởng tốt:
+```text
+resource_0 / resource_1    wake/model A/B, 2 MiB mỗi slot
+ui_0 / ui_1                UI Pack A/B, 2 MiB mỗi slot
+```
 
-- binary data nằm ngoài executable;
-- manifest/index versioned;
-- tải qua HTTP thay vì WebSocket audio;
-- kiểm size/integrity trước apply;
-- font, hình và model có thể thay độc lập firmware;
-- có built-in fallback khi asset không hợp lệ.
+Hai artifact class có NVS namespace, apply journal, active pointer, health window và
+rollback riêng. Thay giao diện không restart hoặc rollback WakeNet; thay wake model
+không thể âm thầm đổi UI. Mọi release vẫn đi qua signed external manifest, SHA-256,
+compatibility gate, inactive-slot staging và desired/reported state.
 
-Veetee không copy nguyên luồng mutable single-slot. N16R8 đã có `resource_0` và
-`resource_1`, mỗi slot 4 MiB. Mọi release đi qua inactive slot, SHA-256, Ed25519,
-compatibility gate, health window, desired/reported state và rollback. Checksum
-nhanh trong container chỉ phát hiện corruption; nó không thay chữ ký release.
+## 3. Container VTPACK1
 
-## 3. Tên và phạm vi artifact
-
-Tên sản phẩm là **UI Pack**, extension thân thiện là `.vtp`. Manager vẫn có thể
-nhận `.bin` để import từ toolchain, nhưng không suy luận an toàn từ extension.
-Content type dự kiến:
+Tên sản phẩm là **UI Pack**, extension chuẩn `.vtp`, content type:
 
 ```text
 application/vnd.veetee.ui-pack
 ```
 
-UI Pack được phép chứa data-only:
+Manager có thể nhận tên `.bin` để hỗ trợ toolchain, nhưng an toàn luôn được quyết
+định bằng magic/parser, không bằng extension. Resource ABI 2/UI ABI 1 đã freeze:
+
+- magic `VTPACK1\0`;
+- header cố định 64 byte;
+- entry cố định 128 byte;
+- tối đa 32 member và 2 MiB/container;
+- payload/member căn 16 byte;
+- CRC32 cho index;
+- SHA-256 riêng cho mọi member;
+- offset tăng đơn điệu, không overlap, không path traversal, không duplicate;
+- flags/reserved byte bắt buộc bằng 0 để giữ forward compatibility rõ ràng.
+
+Member allowlist data-only:
 
 ```text
 manifest.json
 theme.json
-fonts/*.bin
-icons/*.bin
+strings/*.json
+fonts/*.vfont
+icons/*.vicon
 backgrounds/*.rgb565
-strings/vi-VN.json
-strings/en-US.json
 sounds/*.opus
 ```
 
-UI Pack không được chứa:
+`manifest.json`, `theme.json` và `strings/vi-VN.json` là bắt buộc. Script, WASM,
+ELF, shared library, native operator, GPIO/partition config, prompt, provider secret,
+MCP policy và state-transition expression đều bị từ chối.
 
-- native executable, shared library, WASM hoặc script chạy trên ESP32;
-- GPIO/partition/driver configuration;
-- prompt, persona, provider secret hoặc MCP permission;
-- state transition hay expression quyết định từ semantic text;
-- wake model hoặc admission model không khai báo đúng artifact kind.
-
-Wake/model pack và UI Pack là hai logical artifact riêng dù có thể dùng chung một
-physical resource slot. Nhờ vậy thay hình nền không buộc benchmark lại wake word,
-và thay wake model không thể âm thầm thay UI.
-
-## 4. UI Pack ABI dự kiến
-
-Resource ABI V1 hiện chỉ nhận raw ESP-SR model pack. UI Pack cần resource ABI V2
-multi-member. Header/index chỉ chứa offset, length, alignment, kind và hash; mọi
-member vẫn bị giới hạn trong slot 4 MiB.
-
-Manifest tối thiểu:
+Manifest trong container hiện dùng schema:
 
 ```json
 {
-  "manifest_version": 1,
+  "schema_version": 1,
   "kind": "ui_pack",
-  "id": "ui:signal:1.0.0",
+  "id": "ui-signal-1.0.0",
   "version": "1.0.0",
   "theme_id": "signal",
+  "channel": "stable",
+  "license": "MIT",
   "target": {
     "board": "veetee-s3-n16r8",
     "display": "st7789-240x320-rgb565"
@@ -100,109 +93,131 @@ Manifest tối thiểu:
     "max_firmware_exclusive": "0.4.0"
   },
   "locales": ["vi-VN", "en-US"],
-  "fallback_theme_id": "signal",
-  "apply": {
-    "mode": "when_standby",
-    "requires_reboot": false,
-    "rollback_allowed": true
-  },
-  "payload": {
-    "bytes": 734003,
-    "sha256": "<64 hex>",
-    "content_type": "application/vnd.veetee.ui-pack"
-  },
-  "signature": {
-    "algorithm": "ed25519",
-    "key_id": "veetee-release-2026-01",
-    "security_epoch": 1,
-    "value": "<base64>"
-  }
+  "fallback_theme_id": "signal"
 }
 ```
 
-`theme.json` chỉ được dùng token/layout primitive đã biết bởi firmware:
+External artifact manifest do Manager ký vẫn chứa target flash/PSRAM, firmware
+range, payload URL/size/hash/content type, apply policy, member runtime và Ed25519
+signature/security epoch. Container CRC/hash không thay thế release signature.
+
+## 4. UI ABI 1
+
+`theme.json` chỉ chọn một composition đã compile và palette theo 13 state ổn định:
 
 ```json
 {
+  "schema_version": 1,
   "ui_abi": 1,
+  "theme_id": "signal",
+  "composition": "signal",
   "palette": {
-    "idle.background": "#112f3b",
-    "idle.foreground": "#f4f2e8",
-    "idle.accent": "#c9ed7c"
-  },
-  "states": {
-    "idle": {"composition": "signal_orb", "motion": "breathe"},
-    "listening": {"composition": "signal_orb", "motion": "listen_rings"},
-    "speaking": {"composition": "signal_wave", "motion": "audio_level"}
+    "idle": {
+      "background": "#112f3b",
+      "foreground": "#f4f2e8",
+      "accent": "#c9ed7c"
+    }
   }
 }
 ```
 
-`composition` và `motion` là enum renderer đã compile và bounded, không phải code.
-Biên độ animation khi listening/speaking lấy từ audio/VAD state thật, không phát
-random để giả rằng robot đang nghe hoặc nói.
+Composition allowlist là `signal`, `monolith`, `quiet`. Firmware dùng framebuffer
+RGB565 trong PSRAM và DMA stripe buffer để flush ST7789. Renderer có rings/core,
+waveform, state number, header/footer và activation-code layout; không chạy layout
+script từ pack.
 
-## 5. Upload và rollout trên Manager Web
+UI ABI 1 hiện áp dụng composition và palette từ pack. Parser bắt buộc kiểm cấu trúc
+chuỗi `vi-VN`, nhưng renderer firmware vẫn dùng operational ASCII copy tích hợp để
+không phụ thuộc font pack trong boot/recovery. Áp dụng localized strings, `.vfont`,
+icon/background và product earcon là phần mở rộng kế tiếp của cùng data-only ABI;
+không được quảng bá là đã render đầy đủ tiếng Việt có dấu trước hardware/font test.
 
-Luồng đầy đủ:
+## 5. Manager upload, publish và rollout
+
+Luồng đã triển khai:
 
 ```text
 select/drop file
-  -> local extension/size/hash inspection
-  -> Manager API stream upload vào quarantine
-  -> parse container + validate manifest/member bounds
-  -> malware/data-only policy + compatibility validation
-  -> release signer ký manifest immutable
-  -> publish development/canary/stable
-  -> desired state cho một hoặc nhiều device
-  -> device Range download vào inactive resource slot
-  -> SHA-256 + Ed25519 + member validation
-  -> apply khi standby
-  -> reported state + health window
-  -> active hoặc rollback về slot cũ/built-in Signal
+  -> browser kiểm extension/2 MiB/hash nếu Web Crypto khả dụng
+  -> POST /api/v1/ui-packs/uploads
+  -> stream bounded vào private quarantine
+  -> parse container/member/hash/data-only/compatibility
+  -> tạo signed external manifest
+  -> atomic rename vào immutable local artifact store
+  -> POST /api/v1/artifacts/:id/publish
+  -> POST /api/v1/ui-packs/:id/rollout với explicit device UUID
+  -> desired state.ui
+  -> device download/apply/report
+  -> GET /api/v1/ui-packs/rollouts hiển thị tiến độ
 ```
 
-Trạng thái hiện tại của Web:
+Manager API không buffer toàn pack trong RAM và không tin hash browser. Upload yêu
+cầu ADMIN; rollout yêu cầu OPERATOR; mutation có tenant scope và audit/request ID.
+Publish không có nghĩa device đã apply. Rollout chỉ terminal khi reported `state.ui`
+xác nhận `active`, `failed` hoặc `rolled_back`.
 
-- đã tích hợp preview Signal/Monolith/Quiet;
-- Signal là default;
-- chọn hoặc drag/drop `.vtp`/`.bin`;
-- kiểm extension, giới hạn 4 MiB và SHA-256 nếu Web Crypto khả dụng;
-- staging bị khóa có chủ ý cho đến khi API/UI ABI V2 hoàn tất.
+Ba standard pack `ui-signal-1.0.0`, `ui-monolith-1.0.0` và `ui-quiet-1.0.0` đã build,
+inspect, ký và publish trong local artifact store; binary generated không commit Git.
+Không có domain không chặn luồng LAN. HTTP/IP có thể làm Web Crypto browser không
+khả dụng, nhưng server-side stream/hash/signature vẫn là authority.
 
-Không có domain không chặn phát triển LAN. Tuy nhiên Web Crypto có thể không khả
-dụng trên origin HTTP dùng IP LAN; Manager API vẫn phải tự stream SHA-256 và không
-bao giờ tin hash từ browser. Khi mở truy cập ngoài LAN, upload bắt buộc HTTPS,
-authentication, RBAC, CSRF/origin policy, rate limit và audit log.
+## 6. Firmware apply lifecycle
 
-## 6. Những phần bắt buộc hard-code
+```text
+bootstrap desired ui
+  -> verify signed external manifest
+  -> download inactive ui slot, có Range/resume
+  -> verify payload hash và VTPACK1 member hashes
+  -> parse manifest/theme/vi-VN structure
+  -> chờ standby
+  -> synchronous render smoke test
+  -> activate UI journal
+  -> health window
+  -> confirm hoặc rollback previous slot
+  -> built-in Signal nếu cả hai slot đều fail
+```
 
-AI-first không có nghĩa loại bỏ mọi invariant. Các phần sau phải compile-time hoặc
-được ký bởi trust root:
+Firmware report `state.resource` và `state.ui` độc lập; một request reported-state
+chỉ chứa đúng một artifact subsystem để retry/idempotency không trộn hai journal.
+Firmware compatibility quảng bá cho bootstrap/reported state là `0.3.0`, không dùng
+Git describe `*-dirty` làm SemVer capability.
 
-- partition label/size và resource A/B journal;
-- public key/trust epoch tối thiểu;
-- parser/header/UI ABI và mọi bound chống overflow;
+## 7. Invariant bắt buộc hard-code
+
+AI-first không có nghĩa loại bỏ invariant an toàn. Các phần sau phải nằm trong code
+hoặc trust root:
+
+- partition label/size, parser bounds, ABI và safe path rules;
+- public key, minimum security epoch và signature algorithm;
 - mapping state machine sang stable state ID;
-- renderer primitive được phép;
-- boot/provisioning/pairing/recovery fallback tối thiểu;
-- Signal fallback palette/font đủ hiển thị tiếng Việt cơ bản;
-- nút vật lý vẫn hoạt động khi UI Pack lỗi.
+- renderer primitive/composition allowlist;
+- boot/provisioning/pairing/recovery copy tối thiểu;
+- Signal fallback palette/font tối thiểu;
+- nút vật lý và cancellation vẫn hoạt động khi UI Pack lỗi.
 
-Nội dung persona, câu trả lời AI, provider routing, theme token, locale pack, font,
-icon, background và earcon sản phẩm không cần hard-code. Firmware không được phân
-nhánh theo exact text như `dừng lại` để chọn animation; nó chỉ render state/event đã
-được TurnArbiter và conversation pipeline xác nhận.
+Persona, câu trả lời AI, provider routing, theme token, locale pack, font, icon,
+background và earcon sản phẩm có thể cấu hình hoặc phân phối dưới dạng data đã ký.
+Firmware không phân nhánh theo exact phrase như `dừng lại` để chọn UI hay behavior.
 
-## 7. Kế hoạch triển khai
+## 8. Validation và phần còn lại
 
-1. Freeze `ui_abi=1`, state token và budget RAM/PSRAM/SPI cho Signal.
-2. Chuyển renderer sang LVGL hoặc retained lightweight scene graph; benchmark cả
-   hai trước khi freeze. Full-frame không đặt mục tiêu 30 FPS ở SPI 10 MHz; chỉ
-   redraw vùng động 15-30 FPS.
-3. Thêm Resource ABI V2 multi-member và tool tạo `.vtp` reproducible.
-4. Thêm Manager API streaming upload/quarantine/inspect/sign endpoints.
-5. Thêm UI Pack catalog, preview, channel, canary, rollout và drift/report view.
-6. Thêm firmware loader cho font/theme/icon/locale, apply ở standby và rollback.
-7. Chạy corruption, power-loss, oversized member, signature, downgrade, font lỗi,
-   missing locale và repeated rollout soak trên board thật.
+Đã pass trên host/build:
+
+- deterministic build/inspect cho Signal, Monolith và Quiet;
+- corruption, executable member và path traversal rejection;
+- Manager upload/publish/rollout E2E;
+- simulated firmware `0.3.0` bootstrap + `state.ui` complete;
+- firmware host tests và ESP-IDF 6.0.2 production build;
+- built-in Signal render path đã chạy trên ESP32 mà không crash.
+
+Vẫn cần người dùng nghiệm thu trên board:
+
+- orientation, color, brightness và visual Signal thực tế;
+- rollout Monolith -> Quiet -> Signal qua hai UI slot;
+- reboot persistence, corrupt-pack rollback và built-in Signal fallback;
+- SPI/render soak không tăng button abort latency;
+- font/chuỗi tiếng Việt có dấu trước khi mở dynamic localized-copy apply;
+- power-loss matrix trong download, activate và health window.
+
+Sau V1 mới bổ sung percentage rollout, pause/resume/operator rollback, MinIO/multi-
+node, `.vfont`/icon/background/earcon renderer và animation bounded theo benchmark.

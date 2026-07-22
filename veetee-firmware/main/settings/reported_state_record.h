@@ -18,11 +18,16 @@ enum class ReportedResourcePhase : std::uint8_t {
     kRolledBack = 7,
 };
 
+enum class ReportedArtifactKind : std::uint8_t {
+    kWakeResource = 0,
+    kUiPack = 1,
+};
+
 struct ReportedResourceState {
     ReportedResourcePhase phase = ReportedResourcePhase::kChecking;
     std::uint8_t active_slot = 0;
     std::uint8_t target_slot = 0;
-    std::uint8_t reserved = 0;
+    ReportedArtifactKind artifact_kind = ReportedArtifactKind::kWakeResource;
     std::uint32_t expected_bytes = 0;
     std::uint32_t downloaded_bytes = 0;
     std::uint32_t security_epoch = 0;

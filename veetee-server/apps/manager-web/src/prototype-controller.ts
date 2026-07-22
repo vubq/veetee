@@ -81,6 +81,8 @@ interface PrototypeCallbacks {
   ): Promise<Record<string, unknown>>;
   registerArtifact(artifactId: string, license: string): Promise<void>;
   publishArtifact(id: string): Promise<void>;
+  stageUiPack(file: File): Promise<Artifact>;
+  rolloutUiPack(id: string): Promise<void>;
   createWakeProfile(input: WakeProfileDraftInput): Promise<void>;
   publishWakeProfile(id: string): Promise<void>;
   rolloutWakeProfile(id: string, deviceIds: string[]): Promise<void>;
@@ -772,12 +774,19 @@ export function initializePrototype(
   const uiInspection = query<HTMLElement>(root, "[data-ui-file-inspection]");
   const uiClearFile = query<HTMLButtonElement>(root, "[data-ui-clear-file]");
   const uiStagePack = query<HTMLButtonElement>(root, "[data-ui-stage-pack]");
+  let selectedUiPack: File | undefined;
+  let stagedUiArtifact: Artifact | undefined;
+  let uiPackAction: "stage" | "publish" | "rollout" = "stage";
 
   const clearUiPack = (): void => {
     if (uiPackInput) uiPackInput.value = "";
     if (uiInspection) uiInspection.hidden = true;
     if (uiClearFile) uiClearFile.disabled = true;
     if (uiStagePack) uiStagePack.disabled = true;
+    if (uiStagePack) uiStagePack.textContent = "Đưa vào staging";
+    selectedUiPack = undefined;
+    stagedUiArtifact = undefined;
+    uiPackAction = "stage";
     const status = query<HTMLElement>(root, "[data-ui-upload-status]");
     if (status) status.textContent = "Chưa chọn file";
   };
@@ -788,16 +797,16 @@ export function initializePrototype(
     const fileSize = query<HTMLElement>(root, "[data-ui-file-size]");
     const fileHash = query<HTMLElement>(root, "[data-ui-file-hash]");
     const extensionValid = /\.(?:vtp|bin)$/i.test(file.name);
-    const sizeValid = file.size > 0 && file.size <= 4 * 1024 * 1024;
+    const sizeValid = file.size > 0 && file.size <= 2 * 1024 * 1024;
     if (uiInspection) uiInspection.hidden = false;
     if (fileName) fileName.textContent = file.name;
     if (fileSize) fileSize.textContent = `${(file.size / 1024).toFixed(file.size < 1024 * 1024 ? 1 : 0)} KiB`;
     if (uiClearFile) uiClearFile.disabled = false;
     if (!extensionValid || !sizeValid) {
-      if (status) status.textContent = !extensionValid ? "Sai định dạng" : "Vượt quá 4 MiB";
+      if (status) status.textContent = !extensionValid ? "Sai định dạng" : "Vượt quá 2 MiB";
       if (fileHash) fileHash.textContent = "Không tính";
       if (uiStagePack) uiStagePack.disabled = true;
-      toast(!extensionValid ? "UI Pack phải là file .vtp hoặc .bin." : "UI Pack không được vượt quá 4 MiB.");
+      toast(!extensionValid ? "UI Pack phải là file .vtp hoặc .bin." : "UI Pack không được vượt quá 2 MiB.");
       return;
     }
     if (status) status.textContent = "Đang inspect…";
@@ -817,8 +826,13 @@ export function initializePrototype(
       if (fileHash) fileHash.textContent = "Tính khi staging";
     }
     if (status) status.textContent = "Hợp lệ để staging";
-    // Staging remains deliberately disabled until the signed UI Pack API exists.
-    if (uiStagePack) uiStagePack.disabled = true;
+    selectedUiPack = file;
+    stagedUiArtifact = undefined;
+    uiPackAction = "stage";
+    if (uiStagePack) {
+      uiStagePack.disabled = false;
+      uiStagePack.textContent = "Đưa vào staging";
+    }
   };
 
   listen(uiPackInput, "change", (async () => {
@@ -995,6 +1009,39 @@ export function initializePrototype(
     }
     if (target.closest("[data-ui-clear-file]")) {
       clearUiPack();
+      return;
+    }
+    if (target.closest("[data-ui-stage-pack]")) {
+      if (!uiStagePack || !selectedUiPack) return;
+      uiStagePack.disabled = true;
+      const status = query<HTMLElement>(root, "[data-ui-upload-status]");
+      try {
+        if (uiPackAction === "stage") {
+          if (status) status.textContent = "Đang upload & kiểm tra…";
+          stagedUiArtifact = await callbacks.stageUiPack(selectedUiPack);
+          uiPackAction = "publish";
+          uiStagePack.textContent = "Publish UI Pack";
+          if (status) status.textContent = `Staging · ${stagedUiArtifact.id}`;
+          toast("UI Pack đã được kiểm container, ký và đưa vào catalog immutable.");
+        } else if (uiPackAction === "publish" && stagedUiArtifact) {
+          await callbacks.publishArtifact(stagedUiArtifact.id);
+          stagedUiArtifact = { ...stagedUiArtifact, status: "published" };
+          uiPackAction = "rollout";
+          uiStagePack.textContent = "Rollout lên thiết bị";
+          if (status) status.textContent = "Published · chờ rollout";
+          toast("UI Pack đã publish; thiết bị chưa đổi cho tới khi rollout.");
+        } else if (uiPackAction === "rollout" && stagedUiArtifact) {
+          await callbacks.rolloutUiPack(stagedUiArtifact.id);
+          if (status) status.textContent = "Rollout · chờ thiết bị apply";
+          uiStagePack.textContent = "Đã tạo rollout";
+          toast("Desired UI đã cập nhật; chờ ESP32 verify, activate và report.");
+          return;
+        }
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Không thể xử lý UI Pack.");
+      } finally {
+        uiStagePack.disabled = uiPackAction === "rollout" && uiStagePack.textContent === "Đã tạo rollout";
+      }
       return;
     }
     if (target.closest("[data-open-pair]")) return openPairing();

@@ -12,7 +12,7 @@ const allowedChannels = new Set(["development", "canary", "stable"]);
 
 export interface ValidatedResourceManifest {
   artifactId: string;
-  kind: "resource_bundle";
+  kind: "resource_bundle" | "display_assets";
   version: string;
   channel: string;
   sizeBytes: number;
@@ -39,9 +39,9 @@ export class ResourceManifestService {
     integer(manifest.manifest_version, "manifest_version", 1, 1);
     const bundleId = string(manifest.bundle_id, "bundle_id", safeId);
     if (bundleId.length < 1) throw new BadRequestException("bundle_id is invalid");
-    const kind = string(manifest.kind, "kind");
-    if (kind !== "resource_bundle") {
-      throw new BadRequestException("Only resource_bundle manifests are supported in ABI V1");
+    const manifestKind = string(manifest.kind, "kind");
+    if (manifestKind !== "resource_bundle" && manifestKind !== "ui_pack") {
+      throw new BadRequestException("Artifact manifest kind is unsupported");
     }
     const version = string(manifest.version, "version", semver);
     const channel = string(manifest.channel, "channel");
@@ -62,7 +62,15 @@ export class ResourceManifestService {
       "compatibility.max_firmware_exclusive",
       semver,
     );
-    integer(compatibility.resource_abi, "compatibility.resource_abi", 1, 1);
+    const resourceAbi = integer(
+      compatibility.resource_abi,
+      "compatibility.resource_abi",
+      manifestKind === "ui_pack" ? 2 : 1,
+      manifestKind === "ui_pack" ? 2 : 1,
+    );
+    if (manifestKind === "ui_pack") {
+      integer(compatibility.ui_abi, "compatibility.ui_abi", 1, 1);
+    }
 
     const payload = object(manifest.payload, "payload");
     const payloadUrl = new URL(string(payload.url, "payload.url"));
@@ -74,29 +82,53 @@ export class ResourceManifestService {
     ) {
       throw new BadRequestException("Artifact payload URL is outside the canonical route");
     }
-    const sizeBytes = integer(payload.size, "payload.size", 1, 4 * 1024 * 1024);
+    const sizeBytes = integer(
+      payload.size,
+      "payload.size",
+      1,
+      manifestKind === "ui_pack" ? 2 * 1024 * 1024 : 2 * 1024 * 1024,
+    );
     const payloadHash = string(payload.sha256, "payload.sha256", sha256);
     if (sizeBytes !== inspected.sizeBytes || payloadHash !== inspected.sha256) {
       throw new BadRequestException("Artifact payload size or SHA-256 does not match storage");
     }
     const contentType = string(payload.content_type, "payload.content_type");
-    if (contentType !== "application/vnd.veetee.esp-sr-model-pack") {
+    const expectedContentType =
+      manifestKind === "ui_pack"
+        ? "application/vnd.veetee.ui-pack"
+        : "application/vnd.veetee.esp-sr-model-pack";
+    if (contentType !== expectedContentType) {
       throw new BadRequestException("Artifact content type is unsupported");
     }
 
     const members = array(manifest.members, "members");
-    if (members.length !== 1) {
-      throw new BadRequestException("Resource ABI V1 requires exactly one member");
-    }
+    if (members.length !== 1) throw new BadRequestException("Artifact requires one payload member");
     const member = object(members[0], "members[0]");
-    if (member.kind !== "model_pack") {
-      throw new BadRequestException("Resource ABI V1 only accepts a data model_pack");
+    const expectedMemberKind = manifestKind === "ui_pack" ? "display_assets" : "model_pack";
+    if (member.kind !== expectedMemberKind) {
+      throw new BadRequestException("Artifact member kind is unsupported");
     }
     const runtime = string(member.runtime, "members[0].runtime", safeId);
+    const expectedRuntime = manifestKind === "ui_pack" ? "veetee-ui" : "esp-sr";
+    if (runtime !== expectedRuntime) throw new BadRequestException("Artifact runtime is unsupported");
     const runtimeAbi = integer(member.runtime_abi, "members[0].runtime_abi", 1, 1);
     integer(member.format_version, "members[0].format_version", 1, 1);
     if (member.bytes !== sizeBytes || member.sha256 !== payloadHash) {
       throw new BadRequestException("Artifact member does not match the signed payload");
+    }
+
+    if (manifestKind === "ui_pack") {
+      const pack = await this.files.inspectUiPackRelease(artifactId);
+      if (
+        pack.manifest.id !== artifactId ||
+        pack.manifest.version !== version ||
+        pack.manifest.channel !== channel ||
+        pack.manifest.compatibility.resource_abi !== resourceAbi ||
+        pack.manifest.compatibility.min_firmware !== minFirmware ||
+        pack.manifest.compatibility.max_firmware_exclusive !== maxFirmware
+      ) {
+        throw new BadRequestException("Signed UI Pack manifest does not match its container");
+      }
     }
 
     const signature = object(manifest.signature, "signature");
@@ -137,7 +169,7 @@ export class ResourceManifestService {
 
     return {
       artifactId,
-      kind,
+      kind: manifestKind === "ui_pack" ? "display_assets" : "resource_bundle",
       version,
       channel,
       sizeBytes,

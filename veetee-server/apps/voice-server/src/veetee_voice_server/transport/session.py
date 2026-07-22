@@ -704,7 +704,7 @@ class VoiceSession:
             f"goodbye:{uuid4().hex}",
             self.arbiter.snapshot.generation,
             token,
-            monotonic() + self.profile.policy.closing_grace_seconds,
+            monotonic() + self.profile.policy.tts_seconds,
         )
         started = False
         try:
@@ -730,6 +730,24 @@ class VoiceSession:
                         audio=audio,
                     )
                 )
+        except Exception as error:
+            # A failed goodbye must not leave the assistant gate stuck open. Task
+            # cancellation still propagates because asyncio.CancelledError is a BaseException.
+            self._telemetry.record(
+                self.session_id,
+                "error",
+                generation=context.generation,
+                payload={
+                    "code": "goodbye_tts_failed",
+                    "stage": "goodbye_tts",
+                    "error_type": type(error).__name__,
+                },
+            )
+            logger.warning(
+                "goodbye_tts_failed",
+                session_id=self.session_id,
+                error=type(error).__name__,
+            )
         finally:
             if started:
                 await self.sink.emit(

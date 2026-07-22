@@ -7,6 +7,7 @@ set(VEETEE_SRCS
     "board/veetee_board.cpp"
     "display/st7789_display.cpp"
     "display/state_visual.cpp"
+    "display/ui_pack.cpp"
     "input/button.cpp"
     "mcp/device_mcp.cpp"
     "network/endpoint_url.cpp"

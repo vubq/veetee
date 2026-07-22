@@ -7,6 +7,8 @@ import { ArtifactsController } from "./artifacts/artifacts.controller.js";
 import { ResourceCatalogController } from "./artifacts/resource-catalog.controller.js";
 import { ResourceCatalogService } from "./artifacts/resource-catalog.service.js";
 import { ResourceManifestService } from "./artifacts/resource-manifest.service.js";
+import { UiPackUploadService } from "./artifacts/ui-pack-upload.service.js";
+import { UiPacksController } from "./artifacts/ui-packs.controller.js";
 import { AuthController } from "./auth/auth.controller.js";
 import { AuthGuard } from "./auth/auth.guard.js";
 import { AuthService } from "./auth/auth.service.js";
@@ -35,6 +37,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     AuthController,
     ArtifactsController,
     ResourceCatalogController,
+    UiPacksController,
     HealthController,
     OtaController,
     PairingController,
@@ -53,6 +56,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     ArtifactFilesService,
     ResourceManifestService,
     ResourceCatalogService,
+    UiPackUploadService,
     AuthService,
     PairingService,
     VoiceMcpService,

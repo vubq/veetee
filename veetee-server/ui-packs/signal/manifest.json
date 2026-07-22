@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "ui_pack",
+  "id": "ui-signal-1.0.0",
+  "version": "1.0.0",
+  "theme_id": "signal",
+  "channel": "stable",
+  "license": "MIT",
+  "target": {
+    "board": "veetee-s3-n16r8",
+    "display": "st7789-240x320-rgb565"
+  },
+  "compatibility": {
+    "resource_abi": 2,
+    "ui_abi": 1,
+    "min_firmware": "0.3.0",
+    "max_firmware_exclusive": "0.4.0"
+  },
+  "locales": ["vi-VN", "en-US"],
+  "fallback_theme_id": "signal"
+}

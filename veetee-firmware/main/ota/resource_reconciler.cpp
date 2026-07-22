@@ -29,10 +29,56 @@ constexpr std::size_t kDownloadBufferBytes = 8192;
 constexpr std::uint32_t kEraseChunkBytes = 64U * 1024U;
 constexpr std::uint32_t kProgressCheckpointBytes = 256U * 1024U;
 constexpr std::uint64_t kBoardFlashBytes = 16ULL * 1024ULL * 1024ULL;
-constexpr std::uint32_t kResourceAbi = 1;
-constexpr SupportedResourceRuntime kSupportedRuntimes[] = {
+constexpr SupportedResourceRuntime kWakeSupportedRuntimes[] = {
     {.kind = "model_pack", .runtime = "esp-sr", .runtime_abi = 1},
 };
+constexpr SupportedResourceRuntime kUiSupportedRuntimes[] = {
+    {.kind = "display_assets", .runtime = "veetee-ui", .runtime_abi = 1},
+};
+
+struct ResourceProfile {
+    const char* manifest_kind;
+    const char* content_type;
+    const char* partition_prefix;
+    const char* nvs_namespace;
+    const char* default_version;
+    const char* task_name;
+    std::uint8_t partition_subtype_base;
+    std::uint32_t resource_abi;
+    std::uint32_t ui_abi;
+    const SupportedResourceRuntime* runtimes;
+    std::size_t runtime_count;
+};
+
+const ResourceProfile& Profile(ResourceClass resource_class) {
+    static constexpr ResourceProfile kWake = {
+        .manifest_kind = "resource_bundle",
+        .content_type = "application/vnd.veetee.esp-sr-model-pack",
+        .partition_prefix = "resource_",
+        .nvs_namespace = "veetee_resource",
+        .default_version = "factory-bringup",
+        .task_name = "veetee_resources",
+        .partition_subtype_base = 0x40,
+        .resource_abi = 1,
+        .ui_abi = 0,
+        .runtimes = kWakeSupportedRuntimes,
+        .runtime_count = std::size(kWakeSupportedRuntimes),
+    };
+    static constexpr ResourceProfile kUi = {
+        .manifest_kind = "ui_pack",
+        .content_type = "application/vnd.veetee.ui-pack",
+        .partition_prefix = "ui_",
+        .nvs_namespace = "veetee_ui",
+        .default_version = "factory-signal",
+        .task_name = "veetee_ui_pack",
+        .partition_subtype_base = 0x42,
+        .resource_abi = 2,
+        .ui_abi = 1,
+        .runtimes = kUiSupportedRuntimes,
+        .runtime_count = std::size(kUiSupportedRuntimes),
+    };
+    return resource_class == ResourceClass::kUiPack ? kUi : kWake;
+}
 
 int HexNibble(char character) {
     if (character >= '0' && character <= '9') return character - '0';
@@ -52,10 +98,6 @@ bool DecodePublicKey(const char* encoded, std::array<std::uint8_t, 32>* key) {
         (*key)[index] = static_cast<std::uint8_t>((high << 4U) | low);
     }
     return true;
-}
-
-const char* PartitionLabel(std::uint8_t slot) {
-    return slot == 0 ? "resource_0" : slot == 1 ? "resource_1" : nullptr;
 }
 
 void HashToHex(const std::array<std::uint8_t, 32>& hash, char output[65]) {
@@ -91,7 +133,8 @@ bool ParseContentRange(const char* value, std::uint64_t* first,
 }  // namespace
 
 esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
-                                         EventSink sink, void* context) {
+                                         EventSink sink, void* context,
+                                         ResourceClass resource_class) {
     if (settings == nullptr || sink == nullptr ||
         CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID[0] == '\0' ||
         !DecodePublicKey(CONFIG_VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX,
@@ -100,6 +143,7 @@ esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
     }
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     settings_ = settings;
+    resource_class_ = resource_class;
     sink_ = sink;
     sink_context_ = context;
     trusted_key_.key_id = CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID;
@@ -109,11 +153,14 @@ esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
     std::snprintf(hardware_id_, sizeof(hardware_id_),
                   "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
                   mac[3], mac[4], mac[5]);
+    const ResourceProfile& profile = Profile(resource_class_);
     resource_partitions_[0] = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, static_cast<esp_partition_subtype_t>(0x40),
+        ESP_PARTITION_TYPE_DATA,
+        static_cast<esp_partition_subtype_t>(profile.partition_subtype_base),
         PartitionLabel(0));
     resource_partitions_[1] = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, static_cast<esp_partition_subtype_t>(0x41),
+        ESP_PARTITION_TYPE_DATA,
+        static_cast<esp_partition_subtype_t>(profile.partition_subtype_base + 1U),
         PartitionLabel(1));
     if (resource_partitions_[0] == nullptr || resource_partitions_[1] == nullptr) {
         return ESP_ERR_NOT_FOUND;
@@ -125,7 +172,8 @@ esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
     state_mutex_ = xSemaphoreCreateMutex();
     if (state_mutex_ == nullptr) return ESP_ERR_NO_MEM;
     esp_err_t error = resource_state_.Initialize(
-        CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH);
+        CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH, profile.nvs_namespace,
+        profile.default_version);
     if (error != ESP_OK) {
         vSemaphoreDelete(state_mutex_);
         state_mutex_ = nullptr;
@@ -141,7 +189,7 @@ esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
         state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&ResourceReconciler::TaskEntry, "veetee_resources", 12288,
+    if (xTaskCreate(&ResourceReconciler::TaskEntry, profile.task_name, 12288,
                     this, 4, &task_) != pdPASS) {
         vQueueDelete(queue_);
         queue_ = nullptr;
@@ -183,6 +231,13 @@ void ResourceReconciler::Cancel() {
 
 const char* ResourceReconciler::ActivePartitionLabel() const {
     return PartitionLabel(RecordSnapshot().active_slot);
+}
+
+const char* ResourceReconciler::PartitionLabel(std::uint8_t slot) const {
+    if (slot > 1) return nullptr;
+    return resource_class_ == ResourceClass::kUiPack
+               ? (slot == 0 ? "ui_0" : "ui_1")
+               : (slot == 0 ? "resource_0" : "resource_1");
 }
 
 const char* ResourceReconciler::PreviousPartitionLabel() const {
@@ -273,16 +328,20 @@ void ResourceReconciler::Reconcile(const Target& target) {
         return;
     }
 
+    const ResourceProfile& profile = Profile(resource_class_);
     const DeviceResourceCapability capability = {
+        .manifest_kind = profile.manifest_kind,
+        .content_type = profile.content_type,
         .board = board::kBoardName,
         .chip = "esp32s3",
         .firmware_version = CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION,
-        .resource_abi = kResourceAbi,
+        .resource_abi = profile.resource_abi,
+        .ui_abi = profile.ui_abi,
         .flash_bytes = kBoardFlashBytes,
         .psram_bytes = esp_psram_is_initialized() ? esp_psram_get_size() : 0,
         .resource_slot_bytes = resource_slot_bytes_,
-        .supported_runtimes = kSupportedRuntimes,
-        .supported_runtime_count = std::size(kSupportedRuntimes),
+        .supported_runtimes = profile.runtimes,
+        .supported_runtime_count = profile.runtime_count,
     };
     VerifiedResourceManifest manifest{};
     TrustedReleaseKey active_key = trusted_key_;
@@ -712,7 +771,8 @@ esp_err_t ResourceReconciler::StageDownload(const Target& target) {
 settings::ResourceRecord ResourceReconciler::RecordSnapshot() const {
     if (state_mutex_ == nullptr) {
         return settings::MakeDefaultResourceRecord(
-            CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH);
+            CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH,
+            Profile(resource_class_).default_version);
     }
     xSemaphoreTake(state_mutex_, portMAX_DELAY);
     const settings::ResourceRecord record = resource_state_.record();
@@ -839,7 +899,10 @@ bool ResourceReconciler::Emit(ResourceReconcileEvent event,
                               const Target& target, const char* bundle_version,
                               const char* error_code) const {
     if (!IsCurrent(target.generation) || sink_ == nullptr) return false;
-    ResourceReconcileNotification notification{.event = event};
+    ResourceReconcileNotification notification{
+        .event = event,
+        .resource_class = resource_class_,
+    };
     std::snprintf(notification.desired_version,
                   sizeof(notification.desired_version), "%s",
                   target.desired_version);

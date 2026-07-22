@@ -40,10 +40,13 @@ veetee::ota::DeviceResourceCapability Capability() {
         {.kind = "model_pack", .runtime = "esp-sr", .runtime_abi = 1},
     };
     return {
+        .manifest_kind = "resource_bundle",
+        .content_type = "application/vnd.veetee.esp-sr-model-pack",
         .board = "veetee-s3-n16r8",
         .chip = "esp32s3",
         .firmware_version = "0.2.0",
         .resource_abi = 1,
+        .ui_abi = 0,
         .flash_bytes = 16777216,
         .psram_bytes = 8388608,
         .resource_slot_bytes = 4194304,

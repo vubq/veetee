@@ -112,11 +112,19 @@ bool HasValidPhasePayload(const ResourceRecord& record) {
 
 }  // namespace
 
-ResourceRecord MakeDefaultResourceRecord(std::uint32_t minimum_security_epoch) {
+ResourceRecord MakeDefaultResourceRecord(std::uint32_t minimum_security_epoch,
+                                         const char* default_version) {
     ResourceRecord record{};
     record.active_security_epoch = std::max<std::uint32_t>(1, minimum_security_epoch);
     record.previous_security_epoch = record.active_security_epoch;
     record.security_epoch_floor = record.active_security_epoch;
+    if (default_version != nullptr && default_version[0] != '\0' &&
+        std::strlen(default_version) < sizeof(record.active_version)) {
+        std::snprintf(record.active_version, sizeof(record.active_version), "%s",
+                      default_version);
+        std::snprintf(record.previous_version,
+                      sizeof(record.previous_version), "%s", default_version);
+    }
     SealResourceRecord(&record);
     return record;
 }

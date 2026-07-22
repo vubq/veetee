@@ -218,7 +218,9 @@ ResourceManifestError VerifyResourceManifest(
     std::string_view document, const DeviceResourceCapability& capability,
     const TrustedReleaseKey* trusted_keys, std::size_t trusted_key_count,
     VerifiedResourceManifest* manifest) {
-    if (manifest == nullptr || document.empty() || capability.board == nullptr ||
+    if (manifest == nullptr || document.empty() ||
+        capability.manifest_kind == nullptr || capability.content_type == nullptr ||
+        capability.board == nullptr ||
         capability.chip == nullptr || capability.firmware_version == nullptr ||
         document.size() > kMaximumManifestBytes) {
         return ResourceManifestError::kInvalidSchema;
@@ -243,6 +245,7 @@ ResourceManifestError VerifyResourceManifest(
 
     std::uint32_t manifest_version = 0;
     std::uint32_t resource_abi = 0;
+    std::uint32_t ui_abi = 0;
     std::uint64_t target_flash = 0;
     std::uint64_t target_psram = 0;
     char target_board[65] = {};
@@ -263,7 +266,7 @@ ResourceManifestError VerifyResourceManifest(
                                  "compatibility", "payload", "apply", "members",
                                  "created_at", "signature"}) &&
         ReadU32(root, "manifest_version", &manifest_version) && manifest_version == 1 &&
-        Equals(root, "kind", "resource_bundle") &&
+        Equals(root, "kind", capability.manifest_kind) &&
         CopyString(root, "bundle_id", candidate.bundle_id,
                    sizeof(candidate.bundle_id)) &&
         CopyString(root, "version", candidate.version, sizeof(candidate.version)) &&
@@ -275,9 +278,14 @@ ResourceManifestError VerifyResourceManifest(
         CopyString(target, "chip", target_chip, sizeof(target_chip)) &&
         ReadU64(target, "flash_bytes", &target_flash) &&
         ReadU64(target, "psram_bytes", &target_psram) &&
-        HasOnlyProperties(compatibility,
-                          {"min_firmware", "max_firmware_exclusive",
-                           "resource_abi"}) &&
+        HasOnlyProperties(
+            compatibility,
+            capability.ui_abi == 0
+                ? std::initializer_list<const char*>{
+                      "min_firmware", "max_firmware_exclusive", "resource_abi"}
+                : std::initializer_list<const char*>{
+                      "min_firmware", "max_firmware_exclusive", "resource_abi",
+                      "ui_abi"}) &&
         CopyString(compatibility, "min_firmware", minimum_firmware,
                    sizeof(minimum_firmware)) &&
         CopyString(compatibility, "max_firmware_exclusive", maximum_firmware,
@@ -292,8 +300,7 @@ ResourceManifestError VerifyResourceManifest(
                    sizeof(candidate.payload_sha256)) &&
         IsSha256(candidate.payload_sha256) &&
         CopyString(payload, "content_type", content_type, sizeof(content_type)) &&
-        std::strcmp(content_type,
-                    "application/vnd.veetee.esp-sr-model-pack") == 0 &&
+        std::strcmp(content_type, capability.content_type) == 0 &&
         HasOnlyProperties(apply,
                           {"mode", "requires_reboot", "rollback_allowed"}) &&
         CopyString(apply, "mode", apply_mode, sizeof(apply_mode)) &&
@@ -309,6 +316,12 @@ ResourceManifestError VerifyResourceManifest(
     if (!schema_valid || std::strcmp(algorithm, "ed25519") != 0) {
         cJSON_Delete(root);
         return error;
+    }
+    if (capability.ui_abi != 0 &&
+        (!ReadU32(compatibility, "ui_abi", &ui_abi) ||
+         ui_abi != capability.ui_abi)) {
+        cJSON_Delete(root);
+        return ResourceManifestError::kResourceAbiMismatch;
     }
     const ResourceManifestError member_error =
         ValidateMembers(members, candidate.payload_bytes, capability);

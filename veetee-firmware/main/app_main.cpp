@@ -46,6 +46,8 @@ struct AppMessage {
     char activation_code[7] = {};
     char* control_payload = nullptr;
     std::size_t control_length = 0;
+    veetee::ota::ResourceClass resource_class =
+        veetee::ota::ResourceClass::kWakeModel;
     veetee::ota::ResourceReconcileNotification resource_notification{};
 };
 
@@ -57,12 +59,16 @@ veetee::settings::DeviceSettings g_settings;
 veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
 veetee::ota::ResourceReconciler g_resources;
+veetee::ota::ResourceReconciler g_ui_resources;
 veetee::telemetry::ReportedStateReporter g_reporter;
 veetee::transport::WebSocketTransport g_transport;
 veetee::mcp::DeviceMcp g_mcp;
 esp_timer_handle_t g_resource_apply_timer = nullptr;
 esp_timer_handle_t g_resource_health_timer = nullptr;
+esp_timer_handle_t g_ui_apply_timer = nullptr;
+esp_timer_handle_t g_ui_health_timer = nullptr;
 bool g_resource_apply_pending = false;
+bool g_ui_apply_pending = false;
 
 bool PostMessage(const AppMessage& message) {
     if (g_event_queue == nullptr ||
@@ -83,16 +89,38 @@ bool PostMessage(const AppMessage& message) {
 }
 
 void OnResourceApplyTimer(void*) {
-    if (!PostMessage(AppMessage{.kind = AppMessageKind::kResourceApply}) &&
+    if (!PostMessage(AppMessage{
+            .kind = AppMessageKind::kResourceApply,
+            .resource_class = veetee::ota::ResourceClass::kWakeModel}) &&
         g_resource_apply_timer != nullptr) {
         esp_timer_start_once(g_resource_apply_timer, kResourceApplyDelayUs);
     }
 }
 
 void OnResourceHealthTimer(void*) {
-    if (!PostMessage(AppMessage{.kind = AppMessageKind::kResourceHealthCheck}) &&
+    if (!PostMessage(AppMessage{
+            .kind = AppMessageKind::kResourceHealthCheck,
+            .resource_class = veetee::ota::ResourceClass::kWakeModel}) &&
         g_resource_health_timer != nullptr) {
         esp_timer_start_once(g_resource_health_timer, kResourceApplyDelayUs);
+    }
+}
+
+void OnUiApplyTimer(void*) {
+    if (!PostMessage(AppMessage{
+            .kind = AppMessageKind::kResourceApply,
+            .resource_class = veetee::ota::ResourceClass::kUiPack}) &&
+        g_ui_apply_timer != nullptr) {
+        esp_timer_start_once(g_ui_apply_timer, kResourceApplyDelayUs);
+    }
+}
+
+void OnUiHealthTimer(void*) {
+    if (!PostMessage(AppMessage{
+            .kind = AppMessageKind::kResourceHealthCheck,
+            .resource_class = veetee::ota::ResourceClass::kUiPack}) &&
+        g_ui_health_timer != nullptr) {
+        esp_timer_start_once(g_ui_health_timer, kResourceApplyDelayUs);
     }
 }
 
@@ -122,10 +150,13 @@ bool ScheduleResourceReport(
     veetee::settings::ReportedResourcePhase phase,
     const veetee::settings::ResourceRecord& current,
     const char* desired_override = nullptr, const char* error_code = nullptr,
-    const veetee::settings::ResourceRecord* operation = nullptr) {
+    const veetee::settings::ResourceRecord* operation = nullptr,
+    veetee::settings::ReportedArtifactKind artifact_kind =
+        veetee::settings::ReportedArtifactKind::kWakeResource) {
     const auto& source = operation == nullptr ? current : *operation;
     veetee::settings::ReportedResourceState report{};
     report.phase = phase;
+    report.artifact_kind = artifact_kind;
     report.active_slot = current.active_slot;
     report.target_slot = phase == veetee::settings::ReportedResourcePhase::kActive
                              ? current.active_slot
@@ -160,7 +191,11 @@ bool ScheduleResourceNotificationReport(
     veetee::settings::ReportedResourcePhase phase,
     const veetee::ota::ResourceReconcileNotification& notification,
     const char* error_code = nullptr) {
-    veetee::settings::ResourceRecord current = g_resources.Snapshot();
+    const bool is_ui = notification.resource_class ==
+                       veetee::ota::ResourceClass::kUiPack;
+    veetee::ota::ResourceReconciler& reconciler =
+        is_ui ? g_ui_resources : g_resources;
+    veetee::settings::ResourceRecord current = reconciler.Snapshot();
     veetee::settings::ResourceRecord operation = current;
     operation.active_slot = notification.active_slot;
     operation.target_slot = notification.target_slot;
@@ -173,7 +208,10 @@ bool ScheduleResourceNotificationReport(
     }
     return ScheduleResourceReport(phase, current,
                                   notification.desired_version, error_code,
-                                  &operation);
+                                  &operation,
+                                  is_ui
+                                      ? veetee::settings::ReportedArtifactKind::kUiPack
+                                      : veetee::settings::ReportedArtifactKind::kWakeResource);
 }
 
 void ScheduleResourceApply() {
@@ -183,6 +221,17 @@ void ScheduleResourceApply() {
         esp_timer_start_once(g_resource_apply_timer, kResourceApplyDelayUs);
     if (error != ESP_OK) {
         ESP_LOGE(kTag, "Unable to schedule resource apply: %s",
+                 esp_err_to_name(error));
+    }
+}
+
+void ScheduleUiApply() {
+    if (!g_ui_apply_pending || g_ui_apply_timer == nullptr) return;
+    esp_timer_stop(g_ui_apply_timer);
+    const esp_err_t error =
+        esp_timer_start_once(g_ui_apply_timer, kResourceApplyDelayUs);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to schedule UI apply: %s",
                  esp_err_to_name(error));
     }
 }
@@ -284,6 +333,113 @@ void CheckActiveWakeResourceHealth() {
                          "health_check_failed");
 }
 
+bool IsFactorySignalVersion(const char* version) {
+    return version != nullptr && std::strcmp(version, "factory-signal") == 0;
+}
+
+void RollbackUiPack(const char* fallback_partition, const char* reason) {
+    const veetee::settings::ResourceRecord attempted = g_ui_resources.Snapshot();
+    const bool previous_partition =
+        SamePartition(fallback_partition, g_ui_resources.PreviousPartitionLabel());
+    const char* fallback_version = previous_partition
+                                       ? attempted.previous_version
+                                       : attempted.active_version;
+    if (fallback_partition == nullptr || IsFactorySignalVersion(fallback_version)) {
+        g_board.UseBuiltInSignal();
+    } else {
+        const esp_err_t reload_error = g_board.ReloadUiPack(fallback_partition);
+        if (reload_error != ESP_OK) {
+            ESP_LOGE(kTag, "UI fallback %s failed: %s; using built-in Signal",
+                     fallback_partition, esp_err_to_name(reload_error));
+            g_board.UseBuiltInSignal();
+        }
+    }
+    const esp_err_t rollback_error = g_ui_resources.Rollback();
+    if (rollback_error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to rollback UI state reason=%s: %s", reason,
+                 esp_err_to_name(rollback_error));
+        return;
+    }
+    const char* desired = attempted.desired_version[0] != '\0'
+                              ? attempted.desired_version
+                              : attempted.active_version;
+    ScheduleResourceReport(
+        veetee::settings::ReportedResourcePhase::kRolledBack,
+        g_ui_resources.Snapshot(), desired, reason, &attempted,
+        veetee::settings::ReportedArtifactKind::kUiPack);
+}
+
+void ApplyStagedUiPack() {
+    if (!g_ui_apply_pending ||
+        g_state_machine.state() != veetee::app::State::kIdle) {
+        return;
+    }
+    const char* staged_partition = g_ui_resources.StagedPartitionLabel();
+    const char* active_partition = g_ui_resources.ActivePartitionLabel();
+    if (staged_partition == nullptr) {
+        g_ui_apply_pending = false;
+        return;
+    }
+    ESP_LOGI(kTag, "Applying staged UI Pack partition=%s", staged_partition);
+    ScheduleResourceReport(
+        veetee::settings::ReportedResourcePhase::kApplying,
+        g_ui_resources.Snapshot(), nullptr, nullptr, nullptr,
+        veetee::settings::ReportedArtifactKind::kUiPack);
+    esp_err_t error = g_board.ReloadUiPack(staged_partition);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Staged UI Pack load failed: %s",
+                 esp_err_to_name(error));
+        RollbackUiPack(active_partition, "staged_load_failed");
+        g_ui_apply_pending = false;
+        return;
+    }
+    error = g_ui_resources.ActivateStaged();
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to activate UI journal: %s",
+                 esp_err_to_name(error));
+        RollbackUiPack(active_partition, "activation_journal_failed");
+        g_ui_apply_pending = false;
+        return;
+    }
+    g_ui_apply_pending = false;
+    esp_timer_stop(g_ui_health_timer);
+    error = esp_timer_start_once(g_ui_health_timer, kResourceHealthWindowUs);
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Unable to schedule UI health check: %s",
+                 esp_err_to_name(error));
+        PostMessage(AppMessage{
+            .kind = AppMessageKind::kResourceHealthCheck,
+            .resource_class = veetee::ota::ResourceClass::kUiPack});
+    }
+}
+
+void CheckActiveUiPackHealth() {
+    if (g_ui_resources.phase() !=
+        veetee::settings::ResourceRecordPhase::kPendingHealth) {
+        return;
+    }
+    const char* active_partition = g_ui_resources.ActivePartitionLabel();
+    if (g_board.UiPackHealthy() &&
+        SamePartition(g_board.loaded_ui_partition(), active_partition)) {
+        const veetee::settings::ResourceRecord activated =
+            g_ui_resources.Snapshot();
+        const esp_err_t error = g_ui_resources.ConfirmActive();
+        if (error == ESP_OK) {
+            ESP_LOGI(kTag, "UI Pack health confirmed active=%s",
+                     active_partition);
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kActive,
+                g_ui_resources.Snapshot(), activated.active_version, nullptr,
+                &activated, veetee::settings::ReportedArtifactKind::kUiPack);
+            return;
+        }
+        ESP_LOGE(kTag, "Unable to confirm UI Pack health: %s",
+                 esp_err_to_name(error));
+    }
+    RollbackUiPack(g_ui_resources.PreviousPartitionLabel(),
+                   "health_check_failed");
+}
+
 bool PostEvent(veetee::app::Event event) {
     return PostMessage(
         AppMessage{.kind = AppMessageKind::kStateEvent, .event = event});
@@ -362,6 +518,21 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
                 veetee::settings::ReportedResourcePhase::kFailed,
                 g_resources.Snapshot(), notification.resource_version,
                 "schedule_rejected");
+            return true;
+        case veetee::ota::BootstrapEvent::kUiPackDesired:
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kChecking,
+                g_ui_resources.Snapshot(), notification.ui_version, nullptr,
+                nullptr, veetee::settings::ReportedArtifactKind::kUiPack);
+            if (g_ui_resources.Schedule(notification.ui_version,
+                                        notification.ui_manifest_url)) {
+                return true;
+            }
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kFailed,
+                g_ui_resources.Snapshot(), notification.ui_version,
+                "schedule_rejected", nullptr,
+                veetee::settings::ReportedArtifactKind::kUiPack);
             return true;
     }
     return PostMessage(message);
@@ -466,11 +637,19 @@ void RunApplication(void*) {
             continue;
         }
         if (message.kind == AppMessageKind::kResourceApply) {
-            ApplyStagedWakeResource();
+            if (message.resource_class == veetee::ota::ResourceClass::kUiPack) {
+                ApplyStagedUiPack();
+            } else {
+                ApplyStagedWakeResource();
+            }
             continue;
         }
         if (message.kind == AppMessageKind::kResourceHealthCheck) {
-            CheckActiveWakeResourceHealth();
+            if (message.resource_class == veetee::ota::ResourceClass::kUiPack) {
+                CheckActiveUiPackHealth();
+            } else {
+                CheckActiveWakeResourceHealth();
+            }
             continue;
         }
         if (message.kind == AppMessageKind::kResourceReconcile) {
@@ -491,16 +670,31 @@ void RunApplication(void*) {
                          "Resource payload staged desired=%s bundle=%s; apply pending",
                          notification.desired_version,
                          notification.bundle_version);
-                g_resource_apply_pending = true;
+                const bool is_ui = notification.resource_class ==
+                                   veetee::ota::ResourceClass::kUiPack;
+                if (is_ui) {
+                    g_ui_apply_pending = true;
+                } else {
+                    g_resource_apply_pending = true;
+                }
                 ScheduleResourceNotificationReport(
                     veetee::settings::ReportedResourcePhase::kStaged,
                     notification);
-                ScheduleResourceApply();
+                if (is_ui) {
+                    ScheduleUiApply();
+                } else {
+                    ScheduleResourceApply();
+                }
             } else if (notification.event ==
                        veetee::ota::ResourceReconcileEvent::kAlreadyActive) {
                 ESP_LOGI(kTag, "Resource already active desired=%s",
                          notification.desired_version);
-                g_resource_apply_pending = false;
+                if (notification.resource_class ==
+                    veetee::ota::ResourceClass::kUiPack) {
+                    g_ui_apply_pending = false;
+                } else {
+                    g_resource_apply_pending = false;
+                }
                 ScheduleResourceNotificationReport(
                     veetee::settings::ReportedResourcePhase::kActive,
                     notification);
@@ -538,6 +732,7 @@ void RunApplication(void*) {
             g_transport.Close();
             g_bootstrap.Cancel();
             g_resources.Cancel();
+            g_ui_resources.Cancel();
             if (event == veetee::app::Event::kEnterWifiConfig) {
                 if (result.from == veetee::app::State::kPairingRecovery) {
                     const esp_err_t identity_error =
@@ -565,6 +760,7 @@ void RunApplication(void*) {
             g_transport.Close();
             g_bootstrap.Cancel();
             g_resources.Cancel();
+            g_ui_resources.Cancel();
             const esp_err_t error = g_wifi.StartStation();
             if (error != ESP_OK) {
                 ESP_LOGE(kTag, "Unable to start station: %s; opening setup portal",
@@ -594,6 +790,10 @@ void RunApplication(void*) {
             ScheduleResourceReport(
                 veetee::settings::ReportedResourcePhase::kActive,
                 g_resources.Snapshot());
+            ScheduleResourceReport(
+                veetee::settings::ReportedResourcePhase::kActive,
+                g_ui_resources.Snapshot(), nullptr, nullptr, nullptr,
+                veetee::settings::ReportedArtifactKind::kUiPack);
         } else if (result.to == veetee::app::State::kConnecting) {
             const veetee::transport::WakeSource source =
                 event == veetee::app::Event::kActivationWakeDetected
@@ -635,6 +835,9 @@ void RunApplication(void*) {
         if (result.to == veetee::app::State::kIdle &&
             g_resource_apply_pending) {
             ScheduleResourceApply();
+        }
+        if (result.to == veetee::app::State::kIdle && g_ui_apply_pending) {
+            ScheduleUiApply();
         }
     }
 }
@@ -690,15 +893,34 @@ extern "C" void app_main() {
         .name = "resource_health",
         .skip_unhandled_events = false,
     };
+    const esp_timer_create_args_t ui_apply_timer_args = {
+        .callback = &OnUiApplyTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ui_apply",
+        .skip_unhandled_events = false,
+    };
+    const esp_timer_create_args_t ui_health_timer_args = {
+        .callback = &OnUiHealthTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ui_health",
+        .skip_unhandled_events = false,
+    };
     ESP_ERROR_CHECK(
         esp_timer_create(&apply_timer_args, &g_resource_apply_timer));
     ESP_ERROR_CHECK(
         esp_timer_create(&health_timer_args, &g_resource_health_timer));
+    ESP_ERROR_CHECK(esp_timer_create(&ui_apply_timer_args, &g_ui_apply_timer));
+    ESP_ERROR_CHECK(esp_timer_create(&ui_health_timer_args, &g_ui_health_timer));
 
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
     ESP_ERROR_CHECK(g_resources.Initialize(&g_settings,
                                            &OnResourceReconcileEvent, nullptr));
+    ESP_ERROR_CHECK(g_ui_resources.Initialize(
+        &g_settings, &OnResourceReconcileEvent, nullptr,
+        veetee::ota::ResourceClass::kUiPack));
     ESP_ERROR_CHECK(g_reporter.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
@@ -708,7 +930,14 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(g_board.Initialize(
         &OnButtonEvent, &OnDetectorEvent, &OnEncodedAudio,
         &OnPlaybackFinished, g_resources.ActivePartitionLabel(),
-        g_resources.PreviousPartitionLabel(), nullptr));
+        g_resources.PreviousPartitionLabel(),
+        IsFactorySignalVersion(g_ui_resources.Snapshot().active_version)
+            ? nullptr
+            : g_ui_resources.ActivePartitionLabel(),
+        IsFactorySignalVersion(g_ui_resources.Snapshot().previous_version)
+            ? nullptr
+            : g_ui_resources.PreviousPartitionLabel(),
+        nullptr));
     ESP_ERROR_CHECK(g_board.StartAudio(ShouldPlayBootChime(reset_reason)));
 
     const auto resource_phase = g_resources.phase();
@@ -734,13 +963,34 @@ extern "C" void app_main() {
                veetee::settings::ResourceRecordPhase::kStaged) {
         g_resource_apply_pending = true;
     }
+    const auto ui_phase = g_ui_resources.phase();
+    if (ui_phase == veetee::settings::ResourceRecordPhase::kPendingHealth) {
+        if (SamePartition(g_board.loaded_ui_partition(),
+                          g_ui_resources.ActivePartitionLabel())) {
+            ESP_ERROR_CHECK(esp_timer_start_once(g_ui_health_timer,
+                                                 kResourceHealthWindowUs));
+        } else {
+            RollbackUiPack(g_ui_resources.PreviousPartitionLabel(),
+                           "boot_active_load_failed");
+        }
+    } else if (ui_phase == veetee::settings::ResourceRecordPhase::kStable) {
+        const auto ui_record = g_ui_resources.Snapshot();
+        if (!IsFactorySignalVersion(ui_record.active_version) &&
+            !SamePartition(g_board.loaded_ui_partition(),
+                           g_ui_resources.ActivePartitionLabel())) {
+            RollbackUiPack(g_ui_resources.PreviousPartitionLabel(),
+                           "boot_active_load_failed");
+        }
+    } else if (ui_phase == veetee::settings::ResourceRecordPhase::kStaged) {
+        g_ui_apply_pending = true;
+    }
     if (!g_mcp.Initialize(&ReadDeviceStatus, &SetSpeakerVolume,
                           &SendMcpResponse, nullptr)) {
         ESP_LOGE(kTag, "Unable to initialize device MCP");
         abort();
     }
 
-    if (xTaskCreate(&RunApplication, "veetee_app", 6144, nullptr, 6, nullptr) != pdPASS) {
+    if (xTaskCreate(&RunApplication, "veetee_app", 12288, nullptr, 6, nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Unable to create application task");
         abort();
     }

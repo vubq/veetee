@@ -398,10 +398,12 @@ Container nhiều member dành cho resource ABI V2. Resource chỉ chứa model/
 code native, model operator hoặc runtime mới phải cập nhật bằng signed firmware OTA.
 NVS không dùng để chứa binary model lớn.
 
-Partition V1 đã freeze cho prototype N16R8 với executable A/B và hai resource slot
-4 MiB. Nếu resource vượt slot sau khi chốt asset scope, phải mở ADR chọn store 8 MiB
-hoặc giảm scope; không tự đổi layout. Manager và firmware đều từ chối payload vượt
-inactive slot.
+Partition V1 đã freeze cho prototype N16R8 với executable A/B, wake-model A/B và
+UI Pack A/B độc lập. `resource_0/resource_1` và `ui_0/ui_1` đều có kích thước 2 MiB;
+hai loại artifact có journal, active pointer và rollback riêng nên đổi giao diện
+không chiếm hoặc làm rollback wake model. Manager và firmware đều từ chối payload
+vượt inactive slot. Nếu một artifact vượt 2 MiB sau khi chốt scope, phải mở ADR đổi
+layout hoặc giảm scope; không tự ghi đè slot đang active.
 
 ## 9. Audio/realtime defaults
 
@@ -452,5 +454,7 @@ inactive slot.
 - ST7789 hiển thị locale Việt, UTF-8 fallback hợp lý.
 - State UI render bất đồng bộ, đúng orientation/visibility trên board và không làm
   tăng abort latency; MAX98357A idle không pop/chirp liên tục sau mitigation clock.
+- Signal luôn có trong executable làm default/failsafe; UI Pack chỉ đổi presentation
+  qua `ui_0/ui_1`, smoke-render trước activate và rollback độc lập wake model.
 - MCP `initialize/tools/list/tools/call` pass với ít nhất 3 device tools.
 - OTA signed artifact update và rollback test pass trên board thật.

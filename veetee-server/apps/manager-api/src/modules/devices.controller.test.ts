@@ -33,6 +33,20 @@ describe("DevicesController reported state", () => {
     ).resolves.toEqual([]);
   });
 
+  it("accepts a UI Pack subsystem report without a wake-resource report", async () => {
+    const input = plainToInstance(ReportedStateDto, {
+      ...validReport,
+      state: {
+        ...validReport.state,
+        resource: undefined,
+        ui: { ...validReport.state.resource, currentVersion: "factory-signal" },
+      },
+    });
+    await expect(
+      validate(input, { whitelist: true, forbidNonWhitelisted: true }),
+    ).resolves.toEqual([]);
+  });
+
   it("rejects invalid progress and failure semantics", async () => {
     const store = {
       updateReportedState: vi.fn(),
@@ -61,6 +75,14 @@ describe("DevicesController reported state", () => {
     });
     await expect(controller.report("device-1", missingError)).rejects.toThrow(
       /errorCode/,
+    );
+
+    const ambiguous = plainToInstance(ReportedStateDto, {
+      ...validReport,
+      state: { ...validReport.state, ui: validReport.state.resource },
+    });
+    await expect(controller.report("device-1", ambiguous)).rejects.toThrow(
+      /exactly one artifact subsystem/,
     );
   });
 

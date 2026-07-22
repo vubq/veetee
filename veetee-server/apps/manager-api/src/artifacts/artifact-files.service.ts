@@ -14,6 +14,11 @@ import {
   PayloadTooLargeException,
 } from "@nestjs/common";
 
+import {
+  inspectUiPackReader,
+  type InspectedUiPack,
+} from "../../../../scripts/lib/ui-pack.mjs";
+
 const manifestFileName = "manifest.json";
 const contentFileName = "content.bin";
 const completeMarkerFileName = ".complete";
@@ -71,11 +76,12 @@ export class ArtifactFilesService {
   assertDeviceAccess(manifestId: string, desiredState: Record<string, unknown>): void {
     this.validateId(manifestId);
     const desiredManifestId = desiredState.resourceManifestId;
+    const desiredUiManifestId = desiredState.uiManifestId;
     const expected =
       typeof desiredManifestId === "string"
         ? desiredManifestId
         : process.env.VEETEE_RESOURCE_MANIFEST_ID ?? this.manifestIdFromUrl();
-    if (!expected || expected !== manifestId) {
+    if (expected !== manifestId && desiredUiManifestId !== manifestId) {
       throw new ForbiddenException("Artifact is outside the device rollout scope");
     }
   }
@@ -133,6 +139,27 @@ export class ArtifactFilesService {
       throw new BadRequestException("Artifact manifest is not valid JSON");
     }
     return { manifest, sizeBytes: stat.size, sha256: hash.digest("hex") };
+  }
+
+  async inspectUiPackRelease(artifactId: string): Promise<InspectedUiPack> {
+    const contentFile = await this.openArtifactFile(artifactId, contentFileName);
+    try {
+      const stat = await contentFile.stat();
+      if (!stat.isFile()) throw new BadRequestException("UI Pack content is not a file");
+      return await inspectUiPackReader(async (offset, length) => {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await contentFile.read(buffer, 0, length, offset);
+        if (bytesRead !== length) throw new Error("UI Pack ended unexpectedly");
+        return buffer;
+      }, stat.size);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(
+        error instanceof Error ? error.message : "UI Pack validation failed",
+      );
+    } finally {
+      await contentFile.close();
+    }
   }
 
   async openContent(
