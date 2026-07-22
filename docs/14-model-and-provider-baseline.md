@@ -294,6 +294,11 @@ chỉ hỗ trợ batch, sentence chunking vẫn cho UX incremental nhưng latenc
 không giả định “Turbo” tự động có streaming. Adapter phải có `cancel()` và trả
 sample-rate/format rõ ràng.
 
+Giọng production mặc định là Trúc Ly với tempo `1.2`. Voice server dùng WSOLA
+streaming để rút ngắn thời lượng mà giữ nguyên cao độ; không tăng sample rate giả
+vì cách đó làm giọng nữ cao và trẻ con hơn. Tempo là cấu hình server, không thay
+đổi giao thức PCM/Opus 24 kHz với firmware.
+
 Đã benchmark lại trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB)
 bằng năm lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first
 audio median/p95 khoảng 521/596 ms và RTF 1.124/1.202. CUDA 12 với ONNX Runtime

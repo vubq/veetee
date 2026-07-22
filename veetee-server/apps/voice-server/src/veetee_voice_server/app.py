@@ -355,6 +355,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tts = VieNeuTtsProvider(
                 resolved_settings.models_root / "vieneu-v3-turbo",
                 voice=resolved_settings.tts_voice,
+                speed=resolved_settings.tts_speed,
                 output_sample_rate=resolved_settings.tts_output_sample_rate,
                 num_threads=resolved_settings.tts_threads,
                 apply_watermark=resolved_settings.tts_apply_watermark,

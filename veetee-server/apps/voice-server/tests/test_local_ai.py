@@ -74,6 +74,33 @@ async def test_vieneu_provider_streams_resampled_pcm() -> None:
     assert len(b"".join(chunk.data for chunk in chunks)) > 4_000
 
 
+class ToneTtsEngine:
+    def infer_stream(self, text: str, **kwargs: Any) -> Iterator[np.ndarray[Any, Any]]:
+        del text, kwargs
+        sample_rate = 48_000
+        samples = np.arange(sample_rate * 2, dtype=np.float32)
+        yield (0.25 * np.sin(2 * np.pi * 220 * samples / sample_rate)).astype(np.float32)
+
+
+async def test_vieneu_provider_accelerates_tempo_without_raising_pitch() -> None:
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        speed=1.2,
+        output_sample_rate=24_000,
+        engine=ToneTtsEngine(),
+    )
+
+    chunks = [chunk async for chunk in provider.synthesize("Xin chào", "vi-VN", context())]
+    pcm = np.frombuffer(b"".join(chunk.data for chunk in chunks), dtype="<i2")
+    duration = len(pcm) / 24_000
+    spectrum = np.abs(np.fft.rfft(pcm.astype(np.float32)))
+    peak_hz = np.fft.rfftfreq(len(pcm), 1 / 24_000)[int(np.argmax(spectrum))]
+
+    assert 1.55 < duration < 1.75
+    assert peak_hz == pytest.approx(220, abs=3)
+
+
 class FakeVadModel:
     def __init__(self, probabilities: list[float]) -> None:
         self._probabilities = iter(probabilities)

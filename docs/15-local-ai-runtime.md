@@ -25,7 +25,7 @@ uses them.
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
 | ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, streaming codec | best measured p95/RTF balance, lower thermal load, incremental audio and cancellation |
+| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at 1.2x WSOLA tempo | lower thermal load, pitch-preserving speech acceleration, incremental audio and cancellation |
 | TTS benchmark option | VieNeu-TTS.cpp native CPU | llama.cpp native SIMD + ONNX MOSS codec | faster complete synthesis on this host, but the current C ABI is batch-only |
 
 The default TTS remains the ONNX path even though the native benchmark is faster
@@ -52,6 +52,11 @@ resident and do not load ChunkFormer on the normal path.
 
 ### TTS
 
+The CPU/GPU comparison below uses neutral tempo `1.0` so it measures inference
+placement rather than post-processing. Production uses the same CPU provider
+with Trúc Ly and a streaming WSOLA tempo of `1.2`; WSOLA keeps pitch unchanged
+and adds about 5 ms processing per 320 ms source chunk on this host.
+
 | Backend | Threads | First audio median / p95 | Complete median / p95 | RTF median / p95 |
 | --- | ---: | ---: | ---: | ---: |
 | VieNeu ONNX INT8 CPU | 2 | 521 / 596 ms | 3.68 / 3.94 s | 1.124 / 1.202 |
@@ -62,6 +67,13 @@ The CUDA graph produced many CPU/GPU copy boundaries, used only about 4--10% GPU
 and peaked near 1 GiB VRAM during the sampled run. The current VieNeu INT8 export
 is therefore kept on CPU. Revisit CUDA only with a GPU-oriented FP16/FP32 export
 or a newer engine that keeps the recurrent decode path on the GPU.
+
+A three-run production-speed check measured first audio at 574 ms median, 648 ms
+p95 and shortened the generated sentence to 2.77 seconds. Complete synthesis
+still took 3.72 seconds median because tempo processing changes playback duration,
+not the autoregressive model's generation speed. The paced device transport and
+real hardware jitter buffer therefore remain part of the acceptance test for
+long sentences; the LLM should continue emitting short spoken sentences.
 
 The native run used a 630 MiB model pack and peaked at about 959 MiB RSS. A
 one-shot CLI process took about 5.4 s wall time because model loading dominates;
@@ -94,6 +106,7 @@ VEETEE_MODELS_ROOT=models
 VEETEE_ASR_THREADS=2
 VEETEE_TTS_THREADS=2
 VEETEE_TTS_VOICE="Trúc Ly"
+VEETEE_TTS_SPEED=1.2
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
 VEETEE_LLM_PREWARM=true
@@ -121,7 +134,8 @@ The benchmark accepts separate controls, for example:
 
 ```bash
 uv run --project apps/voice-server python scripts/benchmark_local_ai.py \
-  --asr-threads 2 --tts-threads 2 --watermark --runs 5 --seed 20260722
+  --asr-threads 2 --tts-threads 2 --voice "Trúc Ly" --speed 1.2 \
+  --watermark --runs 5 --seed 20260722
 ```
 
 `VEETEE_DEFAULT_PERSONA` is only the configurable fallback when Manager auth is

@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 import soxr  # type: ignore[import-untyped]
+from audiotsm import wsola  # type: ignore[import-untyped]
+from audiotsm.io.array import ArrayReader, ArrayWriter  # type: ignore[import-untyped]
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.types import AudioChunk
@@ -22,6 +24,7 @@ class VieNeuTtsProvider:
         model_dir: Path,
         *,
         voice: str,
+        speed: float = 1.0,
         output_sample_rate: int = 24_000,
         num_threads: int = 4,
         apply_watermark: bool = True,
@@ -29,6 +32,9 @@ class VieNeuTtsProvider:
     ) -> None:
         self._model_dir = model_dir
         self._voice = voice
+        if speed <= 0:
+            raise ValueError("TTS speed must be greater than zero")
+        self._speed = speed
         self._output_sample_rate = output_sample_rate
         self._num_threads = num_threads
         self._apply_watermark = apply_watermark
@@ -61,6 +67,7 @@ class VieNeuTtsProvider:
                 dtype="float32",
                 quality="HQ",
             )
+            tempo = _StreamingTempo(self._speed) if self._speed != 1.0 else None
             sequence = 0
             while True:
                 has_chunk, source = await asyncio.to_thread(self._next_chunk, stream)
@@ -68,6 +75,10 @@ class VieNeuTtsProvider:
                     break
                 context.checkpoint()
                 assert source is not None
+                if tempo is not None:
+                    source = tempo.process(source)
+                    if source.size == 0:
+                        continue
                 resampled = resampler.resample_chunk(source, last=False)
                 pcm = self._float_to_pcm(resampled)
                 if pcm:
@@ -78,6 +89,19 @@ class VieNeuTtsProvider:
                         data=pcm,
                     )
                     sequence += 1
+            if tempo is not None:
+                source = tempo.process(np.empty(0, dtype=np.float32), final=True)
+                if source.size:
+                    resampled = resampler.resample_chunk(source, last=False)
+                    pcm = self._float_to_pcm(resampled)
+                    if pcm:
+                        yield AudioChunk(
+                            sequence=sequence,
+                            sample_rate=self._output_sample_rate,
+                            encoding="pcm_s16le",
+                            data=pcm,
+                        )
+                        sequence += 1
             tail = resampler.resample_chunk(np.empty(0, dtype=np.float32), last=True)
             tail_pcm = self._float_to_pcm(tail)
             if tail_pcm:
@@ -141,6 +165,19 @@ class VieNeuTtsProvider:
             return b""
         clipped = np.clip(samples, -1.0, 1.0)
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
+
+
+class _StreamingTempo:
+    def __init__(self, speed: float) -> None:
+        self._processor = wsola(channels=1, speed=speed)
+
+    def process(
+        self, samples: np.ndarray[Any, Any], *, final: bool = False
+    ) -> np.ndarray[Any, np.dtype[np.float32]]:
+        source = np.asarray(samples, dtype=np.float32).reshape(1, -1)
+        writer = ArrayWriter(1)
+        self._processor.run(ArrayReader(source), writer, flush=final)
+        return np.asarray(writer.data[0], dtype=np.float32)
 
 
 class _LocalStreamingV3Engine:

@@ -31,6 +31,7 @@ async def benchmark(
     text: str,
     voice: str,
     *,
+    speed: float,
     asr_threads: int,
     tts_threads: int,
     apply_watermark: bool,
@@ -43,6 +44,7 @@ async def benchmark(
     tts = VieNeuTtsProvider(
         tts_path,
         voice=voice,
+        speed=speed,
         num_threads=tts_threads,
         apply_watermark=apply_watermark,
     )
@@ -116,6 +118,7 @@ async def benchmark(
             "rtf_p95": round(percentile(rtf_runs, 0.95), 3) if rtf_runs else None,
             "device": "cpu",
             "voice": voice,
+            "speed": speed,
             "threads": tts_threads,
             "watermark": apply_watermark,
             "runs": runs,
@@ -127,8 +130,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--text", default="Xin chào, tôi là Veetee. Tôi có thể giúp gì cho bạn?")
     parser.add_argument("--voice", default="Trúc Ly")
+    parser.add_argument("--speed", type=float, default=1.2)
     parser.add_argument("--asr-threads", type=int, default=2, choices=range(1, 9))
-    parser.add_argument("--tts-threads", type=int, default=6, choices=range(1, 9))
+    parser.add_argument("--tts-threads", type=int, default=2, choices=range(1, 9))
     parser.add_argument("--watermark", action="store_true")
     parser.add_argument("--runs", type=int, default=1, choices=range(1, 11))
     parser.add_argument("--seed", type=int, default=20_260_722)
@@ -139,6 +143,7 @@ def main() -> None:
                 benchmark(
                     args.text,
                     args.voice,
+                    speed=args.speed,
                     asr_threads=args.asr_threads,
                     tts_threads=args.tts_threads,
                     apply_watermark=args.watermark,

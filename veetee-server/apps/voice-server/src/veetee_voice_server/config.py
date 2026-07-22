@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     asr_threads: int = Field(default=2, ge=1, le=8)
     tts_threads: int = Field(default=2, ge=1, le=8)
     tts_voice: str = "Trúc Ly"
+    tts_speed: float = Field(default=1.2, ge=0.5, le=2.0)
     tts_output_sample_rate: int = Field(default=24_000, ge=16_000, le=48_000)
     tts_apply_watermark: bool = True
     default_locale: str = "vi-VN"
