@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 
-import type { Agent, AgentPromptCatalog, Provider } from "../../api/schemas";
+import type { Agent, AgentPromptCatalog, PersonalityPreset, Provider } from "../../api/schemas";
 import type { AgentDraftInput } from "../../types/manager";
 import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect, VtTextarea } from "../ui";
 
@@ -11,6 +11,8 @@ const props = defineProps<{
   promptCatalog: AgentPromptCatalog | undefined;
   publishAgent: (input: AgentDraftInput) => Promise<void>;
   createAgent: (input: { name: string; defaultLocale: string; interactionMode: Agent["interactionMode"]; persona: string; draftConfig?: Record<string, unknown> }) => Promise<Agent>;
+  createPersonalityPreset: (input: { label: string; summary: string; accent: string; instructions: string }) => Promise<PersonalityPreset>;
+  deletePersonalityPreset: (id: string) => Promise<void>;
 }>();
 
 interface PromptDraft {
@@ -31,6 +33,15 @@ const error = ref("");
 const createOpen = ref(false);
 const createBusy = ref(false);
 const createError = ref("");
+const personalityOpen = ref(false);
+const personalityBusy = ref(false);
+const personalityError = ref("");
+const deletePersonalityOpen = ref(false);
+const deletePersonalityBusy = ref(false);
+const deletePersonalityError = ref("");
+const personalityToDelete = ref<PersonalityPreset | null>(null);
+const localPersonalityPresets = ref<PersonalityPreset[]>([]);
+const deletedPersonalityIds = ref(new Set<string>());
 const createForm = reactive({
   name: "",
   locale: "vi-VN",
@@ -39,6 +50,21 @@ const createForm = reactive({
   persona: "",
   personalityPresetId: "warm-empathetic",
 });
+const personalityForm = reactive({
+  label: "",
+  summary: "",
+  accent: "coral",
+  instructions: "",
+});
+const personalityAccents = [
+  { id: "coral", label: "San hô", color: "#e06b51" },
+  { id: "sun", label: "Nắng", color: "#c99324" },
+  { id: "cyan", label: "Biển", color: "#287f8e" },
+  { id: "lime", label: "Mầm xanh", color: "#7e9b2f" },
+  { id: "violet", label: "Tím khói", color: "#735b91" },
+  { id: "navy", label: "Xanh đậm", color: "#173e49" },
+  { id: "pink", label: "Hồng đất", color: "#c25973" },
+] as const;
 const form = reactive({
   name: "", locale: "vi-VN", mode: "auto" as Agent["interactionMode"], persona: "",
   language: "Tiếng Việt", timeZone: browserTimeZone(), timeZoneSource: "device" as "device" | "fixed",
@@ -50,8 +76,22 @@ const form = reactive({
 });
 
 const selected = computed(() => props.agents.find((agent) => agent.id === selectedId.value) ?? props.agents[0]);
-const personalityPresets = computed(() => props.promptCatalog?.personalityPresets ?? []);
+const personalityPresets = computed(() => {
+  const serverPresets = (props.promptCatalog?.personalityPresets ?? []).filter(
+    (preset) => !deletedPersonalityIds.value.has(preset.id),
+  );
+  const serverIds = new Set(serverPresets.map((preset) => preset.id));
+  return [
+    ...serverPresets,
+    ...localPersonalityPresets.value.filter(
+      (preset) => !serverIds.has(preset.id) && !deletedPersonalityIds.value.has(preset.id),
+    ),
+  ];
+});
 const selectedPersonality = computed(() => personalityPresets.value.find((preset) => preset.id === form.personalityPresetId));
+const selectedPersonalityAccent = computed(
+  () => personalityAccents.find((accent) => accent.id === personalityForm.accent) ?? personalityAccents[0],
+);
 const enabledProviders = (kind: Provider["kind"]) => props.providers.filter((provider) => provider.kind === kind && provider.enabled);
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -72,9 +112,9 @@ function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function defaultPersonalityId(): string {
-  return personalityPresets.value.find((preset) => preset.id === "warm-empathetic")?.id
-    ?? personalityPresets.value[0]?.id
+function defaultPersonalityId(excludeId = ""): string {
+  return personalityPresets.value.find((preset) => preset.id === "warm-empathetic" && preset.id !== excludeId)?.id
+    ?? personalityPresets.value.find((preset) => preset.id !== excludeId)?.id
     ?? "warm-empathetic";
 }
 
@@ -226,6 +266,84 @@ async function create(): Promise<void> {
   }
 }
 
+function openPersonalityCreate(): void {
+  personalityForm.label = "";
+  personalityForm.summary = "";
+  personalityForm.accent = "coral";
+  personalityForm.instructions = "";
+  personalityError.value = "";
+  personalityOpen.value = true;
+}
+
+async function createPersonality(): Promise<void> {
+  if (
+    !personalityForm.label.trim() ||
+    !personalityForm.summary.trim() ||
+    !personalityForm.instructions.trim()
+  ) {
+    personalityError.value = "Tên, mô tả ngắn và hướng dẫn tính cách là bắt buộc.";
+    return;
+  }
+  personalityBusy.value = true;
+  personalityError.value = "";
+  try {
+    const preset = await props.createPersonalityPreset({
+      label: personalityForm.label.trim(),
+      summary: personalityForm.summary.trim(),
+      accent: personalityForm.accent,
+      instructions: personalityForm.instructions.trim(),
+    });
+    localPersonalityPresets.value = [...localPersonalityPresets.value, preset];
+    deletedPersonalityIds.value.delete(preset.id);
+    personalityOpen.value = false;
+    await nextTick();
+    form.personalityPresetId = preset.id;
+    createForm.personalityPresetId = preset.id;
+  } catch (exception) {
+    personalityError.value =
+      exception instanceof Error ? exception.message : "Không thể tạo tính cách.";
+  } finally {
+    personalityBusy.value = false;
+  }
+}
+
+function askDeletePersonality(preset: PersonalityPreset): void {
+  if (!preset.deletable || preset.builtIn) return;
+  personalityToDelete.value = preset;
+  deletePersonalityError.value = "";
+  deletePersonalityOpen.value = true;
+}
+
+async function deletePersonality(): Promise<void> {
+  const preset = personalityToDelete.value;
+  if (!preset) return;
+  deletePersonalityBusy.value = true;
+  deletePersonalityError.value = "";
+  try {
+    await props.deletePersonalityPreset(preset.id);
+    deletedPersonalityIds.value.add(preset.id);
+    localPersonalityPresets.value = localPersonalityPresets.value.filter(
+      (candidate) => candidate.id !== preset.id,
+    );
+    await nextTick();
+    if (form.personalityPresetId === preset.id) {
+      form.personalityPresetId = defaultPersonalityId(preset.id);
+    }
+    if (createForm.personalityPresetId === preset.id) {
+      createForm.personalityPresetId = defaultPersonalityId(preset.id);
+    }
+    deletePersonalityOpen.value = false;
+    personalityToDelete.value = null;
+  } catch (exception) {
+    deletePersonalityError.value =
+      exception instanceof Error
+        ? exception.message
+        : "Không thể xóa tính cách này.";
+  } finally {
+    deletePersonalityBusy.value = false;
+  }
+}
+
 function addVariable(name: string): void {
   const token = `{{${name}}}`;
   const separator = form.promptTemplate && !form.promptTemplate.endsWith("\n") ? "\n" : "";
@@ -338,27 +456,45 @@ const promptPreview = computed(() => {
           <header class="agent-section-header">
             <span class="agent-section-index">02</span>
             <div><span class="vt-kicker">VOICE & STANCE</span><h2>Tính cách</h2><p>Preset là dữ liệu prompt, không tạo nhánh logic trong runtime. An toàn, quyền tool và sự thật luôn được giữ riêng.</p></div>
+            <VtButton type="button" variant="quiet" size="sm" data-testid="create-personality" @click="openPersonalityCreate"><VtIcon name="plus" :size="15" /> Thêm tính cách</VtButton>
           </header>
           <div class="agent-section-content">
           <div v-if="selectedPersonality" class="personality-feature">
             <span class="personality-feature-mark">{{ selectedPersonality.label.slice(0, 1) }}</span>
-            <div><span class="personality-feature-kicker">ĐANG CHỌN</span><h3>{{ selectedPersonality.label }}</h3><p>{{ selectedPersonality.summary }}</p></div>
-            <VtBadge tone="success" dot>Đóng băng khi publish</VtBadge>
+            <div><span class="personality-feature-kicker">{{ selectedPersonality.builtIn ? "PRESET THƯ VIỆN" : "PRESET TÙY CHỈNH" }}</span><h3>{{ selectedPersonality.label }}</h3><p>{{ selectedPersonality.summary }}</p></div>
+            <span class="personality-feature-state"><VtIcon name="check" :size="14" /> ĐANG CHỌN</span>
           </div>
           <div class="personality-grid" role="radiogroup" aria-label="Chọn tính cách">
-            <button
+            <div
               v-for="preset in personalityPresets"
               :key="preset.id"
-              type="button"
-              role="radio"
-              :aria-checked="form.personalityPresetId === preset.id"
               :class="['personality-card', `accent-${preset.accent}`, { active: form.personalityPresetId === preset.id }]"
-              @click="form.personalityPresetId = preset.id"
             >
-              <span class="personality-mark" aria-hidden="true">{{ preset.label.slice(0, 1) }}</span>
-              <span class="personality-copy"><b>{{ preset.label }}</b><small>{{ preset.summary }}</small></span>
-              <i v-if="form.personalityPresetId === preset.id" class="personality-selected" aria-hidden="true"><VtIcon name="check" :size="13" /></i>
-            </button>
+              <button
+                type="button"
+                class="personality-choice"
+                role="radio"
+                :aria-checked="form.personalityPresetId === preset.id"
+                @click="form.personalityPresetId = preset.id"
+              >
+                <span class="personality-mark" aria-hidden="true">{{ preset.label.slice(0, 1) }}</span>
+                <span class="personality-copy">
+                  <span class="personality-card-meta">{{ preset.builtIn ? "THƯ VIỆN" : "TÙY CHỈNH" }}</span>
+                  <b>{{ preset.label }}</b>
+                  <small>{{ preset.summary }}</small>
+                </span>
+                <i v-if="form.personalityPresetId === preset.id" class="personality-selected" aria-hidden="true"><VtIcon name="check" :size="13" /></i>
+              </button>
+              <button
+                v-if="preset.deletable && !preset.builtIn"
+                type="button"
+                class="personality-delete"
+                :aria-label="`Xóa tính cách ${preset.label}`"
+                @click.stop="askDeletePersonality(preset)"
+              >
+                <VtIcon name="trash" :size="14" />
+              </button>
+            </div>
           </div>
           <div class="form-grid two personality-details">
             <VtField label="Tính cách / persona" hint="Nội dung cho {{persona}}: chuyên môn, mục tiêu và giới hạn của trợ lý." required><VtTextarea v-model="form.persona" rows="5" required /></VtField>
@@ -393,11 +529,17 @@ const promptPreview = computed(() => {
             </div>
           </div>
           <div class="prompt-editor-grid">
-            <VtField label="Template bản nháp" hint="Bắt buộc có {{agent_name}}, {{language}}, {{persona}} và {{personality}}." required><VtTextarea v-model="form.promptTemplate" class="prompt-template-input" rows="22" maxlength="20000" spellcheck="false" required /></VtField>
-            <div class="prompt-render-preview">
-              <header><span>LIVE PREVIEW</span><small>Ví dụ render với dữ liệu trợ lý hiện tại</small></header>
+            <section class="prompt-workbench-pane">
+              <header class="prompt-pane-header">
+                <div><span class="prompt-pane-kicker">SOURCE / DRAFT</span><b>Template bản nháp</b><small>Bắt buộc có &#123;&#123;agent_name&#125;&#125;, &#123;&#123;language&#125;&#125;, &#123;&#123;persona&#125;&#125; và &#123;&#123;personality&#125;&#125;.</small></div>
+                <VtBadge tone="warning">Chưa publish</VtBadge>
+              </header>
+              <VtTextarea v-model="form.promptTemplate" class="prompt-template-input" aria-label="Template bản nháp" rows="18" maxlength="20000" spellcheck="false" required />
+            </section>
+            <section class="prompt-render-preview">
+              <header><div><span>LIVE PREVIEW</span><small>Render với dữ liệu agent hiện tại</small></div><VtBadge tone="success">Token safe</VtBadge></header>
               <pre>{{ promptPreview }}</pre>
-            </div>
+            </section>
           </div>
           </div>
         </article>
@@ -447,6 +589,56 @@ const promptPreview = computed(() => {
         <p v-if="createError" class="inline-error" role="alert">{{ createError }}</p>
       </form>
       <template #footer><VtButton variant="quiet" @click="createOpen = false">Hủy</VtButton><VtButton form="create-agent-form" type="submit" :busy="createBusy"><VtIcon name="plus" :size="16" /> Tạo draft</VtButton></template>
+    </VtDialog>
+
+    <VtDialog :open="personalityOpen" title="Thêm tính cách riêng" eyebrow="VOICE & STANCE / CUSTOM" icon="agent" description="Tạo một preset dữ liệu dùng lại cho agent, Realtime Lab và snapshot thiết bị." width="md" @close="personalityOpen = false">
+      <form id="create-personality-form" class="form-stack" @submit.prevent="createPersonality">
+        <VtField label="Tên tính cách" hint="Tên ngắn, dễ nhận ra trong thư viện." required><VtInput v-model="personalityForm.label" maxlength="80" placeholder="Ví dụ: Cà khịa vui" required /></VtField>
+        <VtField label="Mô tả ngắn" hint="Hiển thị trên thẻ chọn tính cách." required><VtInput v-model="personalityForm.summary" maxlength="240" placeholder="Trêu nhẹ, sắc nhưng biết dừng đúng lúc." required /></VtField>
+        <fieldset class="personality-accent-field">
+          <legend>Màu nhận diện</legend>
+          <div class="personality-accent-picker" role="radiogroup" aria-label="Màu nhận diện">
+            <button
+              v-for="accent in personalityAccents"
+              :key="accent.id"
+              type="button"
+              role="radio"
+              :aria-checked="personalityForm.accent === accent.id"
+              :class="{ active: personalityForm.accent === accent.id }"
+              :style="{ '--accent-swatch': accent.color }"
+              @click="personalityForm.accent = accent.id"
+            >
+              <i aria-hidden="true"></i>
+              <span>{{ accent.label }}</span>
+              <VtIcon v-if="personalityForm.accent === accent.id" name="check" :size="12" />
+            </button>
+          </div>
+        </fieldset>
+        <VtField label="Hướng dẫn cho AI" hint="Chỉ mô tả tone và stance; safety, quyền tool và sự thật vẫn do policy riêng." required><VtTextarea v-model="personalityForm.instructions" rows="7" maxlength="4000" placeholder="Giữ giọng lém lỉnh..., phản biện lập luận thay vì công kích người dùng..." required /></VtField>
+        <section
+          class="personality-create-preview"
+          :style="{ '--preview-accent': selectedPersonalityAccent.color }"
+          aria-label="Xem trước thẻ tính cách"
+        >
+          <span class="personality-create-preview-mark">{{ personalityForm.label.trim().slice(0, 1) || "T" }}</span>
+          <div>
+            <small>PRESET TÙY CHỈNH · XEM TRƯỚC</small>
+            <b>{{ personalityForm.label.trim() || "Tên tính cách" }}</b>
+            <p>{{ personalityForm.summary.trim() || "Mô tả ngắn sẽ xuất hiện ở đây." }}</p>
+          </div>
+        </section>
+        <p v-if="personalityError" class="inline-error" role="alert">{{ personalityError }}</p>
+      </form>
+      <template #footer><VtButton variant="quiet" @click="personalityOpen = false">Hủy</VtButton><VtButton form="create-personality-form" type="submit" :busy="personalityBusy"><VtIcon name="plus" :size="16" /> Lưu tính cách</VtButton></template>
+    </VtDialog>
+
+    <VtDialog :open="deletePersonalityOpen" title="Xóa tính cách riêng?" eyebrow="VOICE & STANCE / REMOVE" icon="warning" description="Preset mặc định luôn được bảo vệ. Snapshot đã publish không bị thay đổi." width="sm" @close="deletePersonalityOpen = false">
+      <div class="delete-personality-confirm">
+        <span class="delete-personality-mark"><VtIcon name="trash" :size="19" /></span>
+        <div><b>{{ personalityToDelete?.label }}</b><p>Chỉ xóa được khi không còn agent draft nào đang tham chiếu preset này. Bạn có thể đổi preset và publish trước nếu API báo đang được dùng.</p></div>
+      </div>
+      <p v-if="deletePersonalityError" class="inline-error" role="alert">{{ deletePersonalityError }}</p>
+      <template #footer><VtButton variant="quiet" @click="deletePersonalityOpen = false">Hủy</VtButton><VtButton variant="danger" :busy="deletePersonalityBusy" @click="deletePersonality"><VtIcon name="trash" :size="16" /> Xóa preset</VtButton></template>
     </VtDialog>
   </section>
 </template>
@@ -922,19 +1114,420 @@ const promptPreview = computed(() => {
   font-size: 18px;
 }
 
-@media (max-width: 1240px) {
-  .personality-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+/* The personality library and prompt workbench share the same two-level surface. */
+.personality-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.personality-card {
+  position: relative;
+  display: block;
+  min-width: 0;
+  min-height: 112px;
+  gap: 0;
+  align-items: normal;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 0;
+  background: #fbfcf9;
+  box-shadow: none;
+}
+
+.personality-card::after {
+  display: block;
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--personality-accent);
+  content: "";
+}
+
+.personality-card.active {
+  border-color: var(--personality-accent);
+  background: color-mix(in srgb, var(--personality-accent) 6%, white);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--personality-accent) 14%, transparent);
+}
+
+.personality-choice {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: 32px minmax(0, 1fr) 18px;
+  align-items: start;
+  gap: 10px;
+  border: 0;
+  padding: 14px 13px 30px 17px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.personality-choice:hover,
+.personality-choice:focus-visible {
+  background: rgba(255, 255, 255, .62);
+}
+
+.personality-choice:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: -3px;
+}
+
+.personality-card > .personality-choice .personality-mark {
+  position: static;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: color-mix(in srgb, var(--personality-accent) 78%, var(--navy));
+  background: color-mix(in srgb, var(--personality-accent) 14%, white);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.personality-card > .personality-choice .personality-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.personality-card-meta {
+  color: var(--personality-accent);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.personality-card b {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.personality-card small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.personality-selected {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  margin-top: 14px;
+  border-radius: 50%;
+  color: white;
+  background: var(--orange);
+}
+
+.personality-delete {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid #efc9c0;
+  border-radius: 7px;
+  color: #b65342;
+  background: #fff7f4;
+}
+
+.personality-delete:hover,
+.personality-delete:focus-visible {
+  border-color: #c45e4b;
+  color: white;
+  background: #c45e4b;
+}
+
+.personality-feature-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #cfe2d5;
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: var(--success);
+  background: rgba(255, 255, 255, .62);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.prompt-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, .92fr);
+  align-items: stretch;
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.prompt-workbench-pane,
+.prompt-render-preview {
+  display: grid;
+  min-width: 0;
+  height: 430px;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #f7f9f5;
+  box-shadow: none;
+}
+
+.prompt-workbench-pane {
+  padding: 0 12px 12px;
+}
+
+.prompt-pane-header,
+.prompt-render-preview > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 2px 11px;
+}
+
+.prompt-pane-header > div,
+.prompt-render-preview > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.prompt-pane-kicker,
+.prompt-render-preview > header span {
+  color: var(--orange-dark);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.prompt-pane-header b {
+  font-size: 11px;
+}
+
+.prompt-pane-header small,
+.prompt-render-preview > header small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.prompt-workbench-pane .prompt-template-input {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  resize: vertical;
+  border-color: var(--line);
+  border-radius: 11px;
+  background: var(--paper-strong);
+}
+
+.prompt-render-preview > header {
+  border-bottom: 1px solid var(--line);
+  padding-inline: 14px;
+  background: linear-gradient(180deg, #fffdfa, #f3f7f2);
+}
+
+.prompt-render-preview > header span {
+  color: var(--orange);
+}
+
+.prompt-render-preview pre {
+  min-height: 0;
+  max-height: none;
+  margin: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 13px;
+  color: var(--ink-2);
+  background: #eef2ec;
+}
+
+.delete-personality-confirm {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  border: 1px solid #f0d0c8;
+  border-radius: 14px;
+  padding: 14px;
+  background: #fff7f4;
+}
+
+.delete-personality-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  color: #b65342;
+  background: #fbe2db;
+}
+
+.delete-personality-confirm b {
+  font-size: 13px;
+}
+
+.delete-personality-confirm p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.personality-accent-field {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.personality-accent-field legend {
+  margin-bottom: 9px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.personality-accent-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.personality-accent-picker button {
+  display: grid;
+  min-width: 0;
+  min-height: 52px;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 9px;
+  color: var(--muted);
+  background: var(--paper-strong);
+  text-align: left;
+}
+
+.personality-accent-picker button:hover,
+.personality-accent-picker button:focus-visible {
+  border-color: var(--accent-swatch);
+  color: var(--ink);
+}
+
+.personality-accent-picker button.active {
+  border-color: var(--accent-swatch);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent-swatch) 7%, white);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-swatch) 13%, transparent);
+}
+
+.personality-accent-picker i {
+  width: 16px;
+  height: 16px;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: var(--accent-swatch);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-swatch) 45%, var(--line));
+}
+
+.personality-accent-picker span {
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personality-accent-picker .vt-icon {
+  color: var(--accent-swatch);
+}
+
+.personality-create-preview {
+  --preview-accent: #e06b51;
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--preview-accent) 45%, var(--line));
+  border-radius: 14px;
+  padding: 12px 14px 12px 17px;
+  background: color-mix(in srgb, var(--preview-accent) 6%, white);
+}
+
+.personality-create-preview::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--preview-accent);
+  content: "";
+}
+
+.personality-create-preview-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 12px;
+  color: color-mix(in srgb, var(--preview-accent) 76%, var(--navy));
+  background: color-mix(in srgb, var(--preview-accent) 15%, white);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.personality-create-preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.personality-create-preview small {
+  color: var(--preview-accent);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.personality-create-preview b {
+  font-size: 12px;
+}
+
+.personality-create-preview p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 960px) {
   .agent-runtime-grid {
     grid-template-columns: 1fr;
-  }
-
-  .personality-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -985,10 +1578,6 @@ const promptPreview = computed(() => {
     justify-self: start;
   }
 
-  .personality-grid {
-    grid-template-columns: 1fr;
-  }
-
   .prompt-editor-grid {
     grid-template-columns: 1fr;
   }
@@ -1000,6 +1589,11 @@ const promptPreview = computed(() => {
 
   .prompt-render-preview pre {
     max-height: 330px;
+  }
+
+  .prompt-workbench-pane,
+  .prompt-render-preview {
+    height: 390px;
   }
 
   .sticky-publish {
@@ -1021,6 +1615,26 @@ const promptPreview = computed(() => {
   .sticky-publish > :deep(.vt-button) {
     grid-column: 1 / -1;
     width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .personality-feature {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .personality-feature-state {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .prompt-workbench-pane,
+  .prompt-render-preview {
+    height: 360px;
+  }
+
+  .personality-accent-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

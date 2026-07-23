@@ -78,6 +78,59 @@ describe("agent prompt policy", () => {
     expect(prompt.personality).toContain("Bắt bẻ vui");
   });
 
+  it("accepts a tenant preset and freezes its instructions into the snapshot", () => {
+    const customPreset = {
+      id: "preset-cafe",
+      label: "Cà khịa vui",
+      summary: "Trêu nhẹ nhưng biết dừng.",
+      accent: "coral",
+      instructions: "Trêu nhẹ theo ngữ cảnh, phản biện lập luận và luôn giữ tôn trọng.",
+    };
+    const catalog = agentPromptCatalog([customPreset]);
+    expect(catalog.personalityPresets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "preset-cafe",
+          builtIn: false,
+          deletable: true,
+        }),
+      ]),
+    );
+    expect(() =>
+      validateAgentPromptDraft({
+        schemaVersion: 1,
+        template: DEFAULT_AGENT_BASE_PROMPT,
+        language: "Tiếng Việt",
+        timeZone: "Asia/Bangkok",
+        timeZoneSource: "device",
+        personalityPresetId: customPreset.id,
+        customPersonality: "",
+        responseStyle: "",
+        userAddress: "",
+      }, [...PERSONALITY_PRESETS, customPreset]),
+    ).not.toThrow();
+    const prompt = normalizePublishedAgentPrompt(
+      {
+        schemaVersion: 1,
+        template: DEFAULT_AGENT_BASE_PROMPT,
+        language: "Tiếng Việt",
+        timeZone: "Asia/Bangkok",
+        timeZoneSource: "device",
+        personalityPresetId: customPreset.id,
+        customPersonality: "",
+        responseStyle: "",
+        userAddress: "",
+      },
+      { locale: "vi-VN" },
+      [...PERSONALITY_PRESETS, customPreset],
+    );
+    expect(prompt).toMatchObject({
+      personalityPresetId: "preset-cafe",
+      personalityLabel: "Cà khịa vui",
+    });
+    expect(prompt.personality).toContain(customPreset.instructions);
+  });
+
   it.each([
     ["unknown preset", { personalityPresetId: "does-not-exist" }],
     ["invalid time zone", { timeZone: "Moon/Sea-of-Tranquility" }],

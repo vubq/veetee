@@ -97,6 +97,14 @@ cứng vẫn nằm ở deterministic runtime/policy plane.
 Operator có thể thêm `customPersonality` để tinh chỉnh preset. Tinh chỉnh không thay
 thế safety/tool policy và không tạo `if personality == ...` trong voice-server.
 
+Ngoài thư viện built-in, operator có thể tạo preset dùng lại theo tenant gồm tên,
+mô tả ngắn, accent hiển thị và instruction. Preset tùy chỉnh dùng cùng validation
+và publish flow với preset mặc định; khi publish, label/instruction tiếp tục được
+đóng băng vào immutable snapshot để Realtime Lab và thiết bị nhận đúng một behavior.
+Preset built-in không thể xóa. Preset tùy chỉnh chỉ được xóa khi không còn agent
+draft nào tham chiếu; API trả `409` để operator đổi preset trước, còn các version đã
+publish vẫn giữ nội dung đã đóng băng và không bị mutate.
+
 ## 5. Luồng UI và publish
 
 1. Mở `Trợ lý` trong Manager Web.

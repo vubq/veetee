@@ -25,7 +25,13 @@ import {
   validateAgentDraftConfig,
   type ProviderPolicyBinding,
 } from "../config/agent-config.policy.js";
-import { normalizePublishedAgentPrompt } from "../config/agent-prompt.policy.js";
+import {
+  PERSONALITY_PRESETS,
+  agentPromptCatalog,
+  normalizePublishedAgentPrompt,
+  type AgentPromptCatalog,
+  type PersonalityPreset,
+} from "../config/agent-prompt.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
@@ -57,6 +63,13 @@ export interface AgentRecord {
   draftConfig: Record<string, unknown>;
   version: number;
   publishedVersion: number;
+}
+
+export interface PersonalityPresetInput {
+  label: string;
+  summary: string;
+  accent: string;
+  instructions: string;
 }
 
 export interface ProviderRecord {
@@ -929,9 +942,102 @@ export class ControlPlaneStore {
     return agents.map((agent) => this.toAgentRecord(agent));
   }
 
-  async createAgent(input: AgentInput, context: MutationContext): Promise<AgentRecord> {
-    validateAgentDraftConfig(input.draftConfig ?? {});
+  async getAgentPromptCatalog(tenantId: string): Promise<AgentPromptCatalog> {
+    const presets = await this.prisma.personalityPreset.findMany({
+      where: { tenantId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    return agentPromptCatalog(presets.map((preset) => this.toPersonalityPreset(preset)));
+  }
+
+  async createPersonalityPreset(
+    input: PersonalityPresetInput,
+    context: MutationContext,
+  ): Promise<PersonalityPreset> {
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const preset = await transaction.personalityPreset.create({
+          data: {
+            tenantId: context.principal.tenantId,
+            label: input.label.trim(),
+            summary: input.summary.trim(),
+            accent: input.accent,
+            instructions: input.instructions.trim(),
+          },
+        });
+        const record = this.toPersonalityPreset(preset);
+        await this.audit.record(
+          {
+            tenantId: context.principal.tenantId,
+            actorUserId: context.principal.userId,
+            action: "agent.personality_preset.create",
+            targetType: "personality_preset",
+            targetId: preset.id,
+            requestId: context.requestId,
+            after: record,
+          },
+          transaction,
+        );
+        return record;
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new ConflictException("A personality preset with this label already exists");
+      }
+      throw error;
+    }
+  }
+
+  async deletePersonalityPreset(
+    id: string,
+    context: MutationContext,
+  ): Promise<PersonalityPreset> {
+    if (PERSONALITY_PRESETS.some((preset) => preset.id === id)) {
+      throw new BadRequestException("Built-in personality presets cannot be deleted");
+    }
     return this.prisma.$transaction(async (transaction) => {
+      const preset = await transaction.personalityPreset.findFirst({
+        where: { id, tenantId: context.principal.tenantId },
+      });
+      if (!preset) throw new NotFoundException("Personality preset not found");
+      const agents = await transaction.agent.findMany({
+        where: { tenantId: context.principal.tenantId },
+        select: { id: true, name: true, draftConfig: true },
+      });
+      const referencedBy = agents.filter((agent) => {
+        const prompt = recordValue(recordValue(agent.draftConfig).prompt);
+        return prompt.personalityPresetId === id;
+      });
+      if (referencedBy.length) {
+        throw new ConflictException(
+          `Personality preset is used by agent draft: ${referencedBy.map(({ name }) => name).join(", ")}`,
+        );
+      }
+      await transaction.personalityPreset.delete({ where: { id } });
+      const record = this.toPersonalityPreset(preset);
+      await this.audit.record(
+        {
+          tenantId: context.principal.tenantId,
+          actorUserId: context.principal.userId,
+          action: "agent.personality_preset.delete",
+          targetType: "personality_preset",
+          targetId: preset.id,
+          requestId: context.requestId,
+          before: record,
+        },
+        transaction,
+      );
+      return record;
+    });
+  }
+
+  async createAgent(input: AgentInput, context: MutationContext): Promise<AgentRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const personalityPresets = await this.availablePersonalityPresets(
+        transaction,
+        context.principal.tenantId,
+      );
+      validateAgentDraftConfig(input.draftConfig ?? {}, personalityPresets);
       const agent = await transaction.agent.create({
         data: {
           tenantId: context.principal.tenantId,
@@ -963,12 +1069,18 @@ export class ControlPlaneStore {
     input: AgentPatch,
     context: MutationContext,
   ): Promise<AgentRecord> {
-    if (input.draftConfig !== undefined) validateAgentDraftConfig(input.draftConfig);
     return this.prisma.$transaction(async (transaction) => {
       const agent = await transaction.agent.findFirst({
         where: { id, tenantId: context.principal.tenantId },
       });
       if (!agent) throw new NotFoundException("Agent not found");
+      if (input.draftConfig !== undefined) {
+        const personalityPresets = await this.availablePersonalityPresets(
+          transaction,
+          context.principal.tenantId,
+        );
+        validateAgentDraftConfig(input.draftConfig, personalityPresets);
+      }
       const updated = await transaction.agent.update({
         where: { id },
         data: {
@@ -1008,7 +1120,14 @@ export class ControlPlaneStore {
         where: { id, tenantId: context.principal.tenantId },
       });
       if (!agent) throw new NotFoundException("Agent not found");
-      validateAgentDraftConfig(agent.draftConfig as Record<string, unknown>);
+      const personalityPresets = await this.availablePersonalityPresets(
+        transaction,
+        context.principal.tenantId,
+      );
+      validateAgentDraftConfig(
+        agent.draftConfig as Record<string, unknown>,
+        personalityPresets,
+      );
       const providers = await transaction.providerBinding.findMany({
         where: { tenantId: context.principal.tenantId, enabled: true },
         orderBy: [{ kind: "asc" }, { priority: "asc" }, { createdAt: "asc" }],
@@ -1026,6 +1145,7 @@ export class ControlPlaneStore {
       const prompt = normalizePublishedAgentPrompt(
         (agent.draftConfig as Record<string, unknown>).prompt,
         { locale: agent.defaultLocale },
+        personalityPresets,
       );
       const snapshot = {
         ...(agent.draftConfig as Record<string, unknown>),
@@ -1306,6 +1426,38 @@ export class ControlPlaneStore {
       version: agent.version,
       publishedVersion: agent.publishedVersion,
     };
+  }
+
+  private toPersonalityPreset(preset: {
+    id: string;
+    label: string;
+    summary: string;
+    accent: string;
+    instructions: string;
+  }): PersonalityPreset {
+    return {
+      id: preset.id,
+      label: preset.label,
+      summary: preset.summary,
+      accent: preset.accent,
+      instructions: preset.instructions,
+      builtIn: false,
+      deletable: true,
+    };
+  }
+
+  private async availablePersonalityPresets(
+    database: Pick<Prisma.TransactionClient, "personalityPreset">,
+    tenantId: string,
+  ): Promise<PersonalityPreset[]> {
+    const customPresets = await database.personalityPreset.findMany({
+      where: { tenantId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    return [
+      ...PERSONALITY_PRESETS.map((preset) => ({ ...preset })),
+      ...customPresets.map((preset) => this.toPersonalityPreset(preset)),
+    ];
   }
 
   private firmwareBucket(value: string): number {

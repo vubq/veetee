@@ -17,6 +17,7 @@ import {
   principalSchema,
   providerSchema,
   operationsProfileSchema,
+  personalityPresetSchema,
   resourceRolloutSchema,
   tokenResponseSchema,
   uiPackRolloutSchema,
@@ -145,6 +146,22 @@ export const managerApi = {
   devices: () => request("/api/v1/devices", z.array(deviceSchema)),
   agents: () => request("/api/v1/agents", z.array(agentSchema)),
   agentPromptCatalog: () => request("/api/v1/agents/prompt-catalog", agentPromptCatalogSchema),
+  createPersonalityPreset: (input: {
+    label: string;
+    summary: string;
+    accent: string;
+    instructions: string;
+  }) =>
+    request("/api/v1/agents/personality-presets", personalityPresetSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  deletePersonalityPreset: (id: string) =>
+    request(
+      `/api/v1/agents/personality-presets/${encodeURIComponent(id)}`,
+      personalityPresetSchema,
+      { method: "DELETE" },
+    ),
   providers: () => request("/api/v1/providers", z.array(providerSchema)),
   mcpTools: () => request("/api/v1/mcp/tools", z.array(mcpToolSchema)),
   deviceMcpTools: (deviceId: string) =>

@@ -29,6 +29,8 @@ async function mockManagerApi(
     agentCreates?: unknown[];
     deviceAgentAssignments?: unknown[];
     firmwareRolloutCalls?: unknown[];
+    personalityCreates?: unknown[];
+    personalityDeletes?: string[];
     withFirmware?: boolean;
     withSecondAgent?: boolean;
     primaryAgentPublishedVersion?: number;
@@ -39,6 +41,7 @@ async function mockManagerApi(
   let assignedDeviceAgentId = "agent-1";
   let desiredDeviceAgentVersion = options.deviceAgentConfigVersion ?? 1;
   let createdAgent: Record<string, unknown> | undefined;
+  let customPersonalityPresets: Record<string, unknown>[] = [];
   await page.route("http://127.0.0.1:8001/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -82,9 +85,40 @@ async function mockManagerApi(
           { name: "available_tools", label: "Tools", description: "Tools", required: false, dynamic: true },
         ],
         personalityPresets: [
-          { id: "warm-empathetic", label: "Ấm áp, đồng cảm", summary: "Lắng nghe", accent: "coral", instructions: "Ấm áp và đồng cảm." },
-          { id: "stubborn-reasoned", label: "Ngang bướng có lý", summary: "Có chính kiến", accent: "ember", instructions: "Có chính kiến và nêu lý do." },
+          { id: "warm-empathetic", label: "Ấm áp, đồng cảm", summary: "Lắng nghe", accent: "coral", instructions: "Ấm áp và đồng cảm.", builtIn: true, deletable: false },
+          { id: "stubborn-reasoned", label: "Ngang bướng có lý", summary: "Có chính kiến", accent: "ember", instructions: "Có chính kiến và nêu lý do.", builtIn: true, deletable: false },
+          ...customPersonalityPresets,
         ],
+      });
+    }
+    if (url.pathname === "/api/v1/agents/personality-presets" && request.method() === "POST") {
+      const input = request.postDataJSON() as Record<string, unknown>;
+      options.personalityCreates?.push(input);
+      const preset = {
+        id: "custom-personality-1",
+        ...input,
+        builtIn: false,
+        deletable: true,
+      };
+      customPersonalityPresets = [...customPersonalityPresets, preset];
+      return json(preset);
+    }
+    const personalityDeleteMatch = url.pathname.match(
+      /^\/api\/v1\/agents\/personality-presets\/([^/]+)$/,
+    );
+    if (personalityDeleteMatch && request.method() === "DELETE") {
+      const id = decodeURIComponent(personalityDeleteMatch[1]!);
+      options.personalityDeletes?.push(id);
+      const deleted = customPersonalityPresets.find((preset) => preset.id === id);
+      customPersonalityPresets = customPersonalityPresets.filter((preset) => preset.id !== id);
+      return json(deleted ?? {
+        id,
+        label: "Tính cách tùy chỉnh",
+        summary: "Đã xóa",
+        accent: "coral",
+        instructions: "Đã xóa",
+        builtIn: false,
+        deletable: true,
       });
     }
     if (url.pathname === "/api/v1/operations/profile") {
@@ -1099,6 +1133,13 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   await promptSection.scrollIntoViewIfNeeded();
   await expect(promptSection).toBeInViewport();
 
+  await page.setViewportSize({ width: 1100, height: 900 });
+  const intermediateCards = await page.locator(".personality-card").evaluateAll((cards) =>
+    cards.slice(0, 2).map((card) => card.getBoundingClientRect().width),
+  );
+  expect(intermediateCards).toHaveLength(2);
+  expect(Math.min(...intermediateCards)).toBeGreaterThanOrEqual(200);
+
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileOverflow = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
@@ -1107,6 +1148,42 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   expect(mobileOverflow.documentWidth).toBeLessThanOrEqual(mobileOverflow.viewportWidth);
   await expect(page.locator(".agent-config-nav")).toBeVisible();
   await expect(page.locator(".sticky-publish")).toContainText("Publish tạo version mới");
+});
+
+test("creates and removes a custom personality without exposing built-in delete actions", async ({ page }) => {
+  const personalityCreates: unknown[] = [];
+  const personalityDeletes: string[] = [];
+  await mockManagerApi(page, { personalityCreates, personalityDeletes });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="agents"]').first().click();
+
+  await expect(page.locator(".personality-delete")).toHaveCount(0);
+  await page.getByTestId("create-personality").click();
+  const dialog = page.getByRole("dialog", { name: "Thêm tính cách riêng" });
+  await dialog.getByLabel("Tên tính cách").fill("Cà khịa vui");
+  await dialog.getByLabel("Mô tả ngắn").fill("Trêu nhẹ, sắc nhưng biết dừng.");
+  await dialog.getByRole("radio", { name: "Biển" }).click();
+  await expect(dialog.getByRole("radio", { name: "Biển" })).toHaveAttribute("aria-checked", "true");
+  await dialog.getByLabel("Hướng dẫn cho AI").fill("Trêu nhẹ theo ngữ cảnh, phản biện lập luận.");
+  await dialog.getByRole("button", { name: "Lưu tính cách" }).click();
+  await expect.poll(() => personalityCreates).toEqual([
+    {
+      label: "Cà khịa vui",
+      summary: "Trêu nhẹ, sắc nhưng biết dừng.",
+      accent: "cyan",
+      instructions: "Trêu nhẹ theo ngữ cảnh, phản biện lập luận.",
+    },
+  ]);
+  await expect(page.getByRole("radio", { name: /Cà khịa vui/ })).toBeVisible();
+  await expect(page.locator(".personality-delete")).toHaveCount(1);
+  await page.locator(".personality-delete").click();
+  const confirm = page.getByRole("dialog", { name: "Xóa tính cách riêng?" });
+  await confirm.getByRole("button", { name: "Xóa preset" }).click();
+  await expect.poll(() => personalityDeletes).toEqual(["custom-personality-1"]);
+  await expect(page.getByRole("radio", { name: /Cà khịa vui/ })).toHaveCount(0);
 });
 
 test("changes the published assistant assigned to an existing device", async ({ page }) => {

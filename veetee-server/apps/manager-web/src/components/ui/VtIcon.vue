@@ -1,7 +1,7 @@
 <script lang="ts">
 export type VtIconName =
   | "overview" | "device" | "display" | "agent" | "provider" | "lab" | "tool" | "resource"
-  | "telemetry" | "plus" | "arrow" | "menu" | "close" | "check" | "warning" | "refresh"
+  | "telemetry" | "plus" | "arrow" | "menu" | "close" | "check" | "warning" | "refresh" | "trash"
   | "logout" | "upload" | "play" | "stop" | "mic" | "edit" | "search" | "chevron";
 </script>
 
@@ -59,6 +59,7 @@ defineProps<{
     <template v-else-if="name === 'check'"><path d="m5 12 4 4L19 6" /></template>
     <template v-else-if="name === 'warning'"><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 9v4M12 17h.01" /></template>
     <template v-else-if="name === 'refresh'"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M7 19a8 8 0 0 0 13-7M17 5A8 8 0 0 0 4 12" /></template>
+    <template v-else-if="name === 'trash'"><path d="M4 7h16M10 11v6M14 11v6M9 7V4h6v3M6 7l1 14h10l1-14" /></template>
     <template v-else-if="name === 'logout'"><path d="M10 17l5-5-5-5M15 12H3M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" /></template>
     <template v-else-if="name === 'upload'"><path d="M12 16V4M7 9l5-5 5 5M4 15v4h16v-4" /></template>
     <template v-else-if="name === 'play'"><path d="m8 5 11 7-11 7V5Z" /></template>

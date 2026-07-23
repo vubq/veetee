@@ -51,7 +51,9 @@ describe("Vue-native Manager Web", () => {
     expect(agentsPage).toContain("promptCatalog?.variables");
     expect(agentsPage).toContain("personalityPresets");
     expect(agentsPage).toContain("promptTemplate");
-    expect(agentsPage).toContain("{{agent_name}}");
-    expect(agentsPage).toContain("{{language}}");
+    expect(agentsPage).toContain("agent_name: form.name");
+    expect(agentsPage).toContain("language: form.language");
+    expect(agentsPage).toContain("createPersonalityPreset");
+    expect(agentsPage).toContain("deletePersonalityPreset");
   });
 });

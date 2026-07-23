@@ -103,6 +103,7 @@ model Tenant {
   uiPackRollouts     UiPackRollout[]
   firmwareRollouts   FirmwareRollout[]
   wakeProfiles       WakeProfile[]
+  personalityPresets PersonalityPreset[]
 }
 
 model User {
@@ -164,6 +165,22 @@ model AgentConfigVersion {
 
   @@unique([agentId, version])
   @@index([agentId, publishedAt])
+}
+
+model PersonalityPreset {
+  id           String   @id @default(uuid())
+  tenantId     String
+  label        String
+  summary      String
+  accent       String
+  instructions String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, label])
+  @@index([tenantId, createdAt])
 }
 
 model Device {

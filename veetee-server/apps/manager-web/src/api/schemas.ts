@@ -71,6 +71,16 @@ export const agentSchema = z.object({
   publishedVersion: z.number().int().nonnegative(),
 });
 
+export const personalityPresetSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  summary: z.string(),
+  accent: z.string(),
+  instructions: z.string(),
+  builtIn: z.boolean().default(true),
+  deletable: z.boolean().default(false),
+});
+
 export const agentPromptCatalogSchema = z.object({
   schemaVersion: z.literal(1),
   catalogVersion: z.literal(1),
@@ -82,13 +92,7 @@ export const agentPromptCatalogSchema = z.object({
     required: z.boolean(),
     dynamic: z.boolean(),
   })),
-  personalityPresets: z.array(z.object({
-    id: z.string(),
-    label: z.string(),
-    summary: z.string(),
-    accent: z.string(),
-    instructions: z.string(),
-  })).min(1),
+  personalityPresets: z.array(personalityPresetSchema).min(1),
 });
 
 export const providerSchema = z.object({
@@ -381,6 +385,7 @@ export const apiErrorSchema = z.object({
 export type Principal = z.infer<typeof principalSchema>;
 export type Device = z.infer<typeof deviceSchema>;
 export type Agent = z.infer<typeof agentSchema>;
+export type PersonalityPreset = z.infer<typeof personalityPresetSchema>;
 export type AgentPromptCatalog = z.infer<typeof agentPromptCatalogSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;

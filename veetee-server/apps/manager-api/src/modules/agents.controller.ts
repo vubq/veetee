@@ -1,12 +1,20 @@
-import { Body, Controller, Get, Param, Patch, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from "@nestjs/common";
 import { TenantRole } from "@prisma/client";
 import { IsIn, IsLocale, IsObject, IsOptional, IsString, Length } from "class-validator";
 
 import { CurrentPrincipal } from "../auth/current-principal.decorator.js";
 import { Roles } from "../auth/roles.decorator.js";
 import type { Principal, RequestWithPrincipal } from "../auth/auth.types.js";
-import { agentPromptCatalog, type AgentPromptCatalog } from "../config/agent-prompt.policy.js";
-import { ControlPlaneStore, type AgentRecord } from "../store/control-plane.store.js";
+import {
+  PERSONALITY_ACCENTS,
+  type AgentPromptCatalog,
+  type PersonalityPreset,
+} from "../config/agent-prompt.policy.js";
+import {
+  ControlPlaneStore,
+  type AgentRecord,
+  type PersonalityPresetInput,
+} from "../store/control-plane.store.js";
 
 class CreateAgentDto {
   @IsString()
@@ -52,13 +60,56 @@ class UpdateAgentDto {
   draftConfig?: Record<string, unknown>;
 }
 
+class CreatePersonalityPresetDto implements PersonalityPresetInput {
+  @IsString()
+  @Length(1, 80)
+  label!: string;
+
+  @IsString()
+  @Length(1, 240)
+  summary!: string;
+
+  @IsIn(PERSONALITY_ACCENTS)
+  accent!: string;
+
+  @IsString()
+  @Length(1, 4_000)
+  instructions!: string;
+}
+
 @Controller("api/v1/agents")
 export class AgentsController {
   constructor(private readonly store: ControlPlaneStore) {}
 
   @Get("prompt-catalog")
-  promptCatalog(): AgentPromptCatalog {
-    return agentPromptCatalog();
+  promptCatalog(@CurrentPrincipal() principal: Principal): Promise<AgentPromptCatalog> {
+    return this.store.getAgentPromptCatalog(principal.tenantId);
+  }
+
+  @Roles(TenantRole.OPERATOR)
+  @Post("personality-presets")
+  createPersonalityPreset(
+    @Body() input: CreatePersonalityPresetDto,
+    @CurrentPrincipal() principal: Principal,
+    @Req() request: RequestWithPrincipal,
+  ): Promise<PersonalityPreset> {
+    return this.store.createPersonalityPreset(input, {
+      principal,
+      requestId: request.id,
+    });
+  }
+
+  @Roles(TenantRole.OPERATOR)
+  @Delete("personality-presets/:id")
+  deletePersonalityPreset(
+    @Param("id") id: string,
+    @CurrentPrincipal() principal: Principal,
+    @Req() request: RequestWithPrincipal,
+  ): Promise<PersonalityPreset> {
+    return this.store.deletePersonalityPreset(id, {
+      principal,
+      requestId: request.id,
+    });
   }
 
   @Get()

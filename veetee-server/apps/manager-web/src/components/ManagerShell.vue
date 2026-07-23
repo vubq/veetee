@@ -139,7 +139,12 @@ onBeforeUnmount(() => {
 });
 
 async function refresh(...keys: string[]): Promise<void> {
-  await Promise.all(keys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  await Promise.all(
+    keys.map(async (key) => {
+      await queryClient.invalidateQueries({ queryKey: [key], refetchType: "none" });
+      await queryClient.refetchQueries({ queryKey: [key], type: "active" });
+    }),
+  );
 }
 
 async function pairDevice(code: string, name: string, agentId?: string): Promise<void> {
@@ -211,6 +216,21 @@ async function createAgent(input: {
   await refresh("agents");
   toast("Đã tạo trợ lý draft.");
   return agent;
+}
+
+async function createPersonalityPreset(
+  input: Parameters<typeof managerApi.createPersonalityPreset>[0],
+) {
+  const preset = await managerApi.createPersonalityPreset(input);
+  void refresh("agent-prompt-catalog");
+  toast(`Đã thêm tính cách "${preset.label}".`);
+  return preset;
+}
+
+async function deletePersonalityPreset(id: string): Promise<void> {
+  const preset = await managerApi.deletePersonalityPreset(id);
+  void refresh("agent-prompt-catalog");
+  toast(`Đã xóa tính cách "${preset.label}".`);
 }
 
 async function registerArtifact(id: string, license: string): Promise<void> {
@@ -312,7 +332,7 @@ async function runDeviceSelfTest(deviceId: string) {
         <template v-else>
           <OverviewPage v-if="activePage === 'overview'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
           <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :assign-device-agent="assignDeviceAgent" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" :get-diagnostics-health="getDiagnosticsHealth" :start-audio-diagnostic="startAudioDiagnostic" :run-device-self-test="runDeviceSelfTest" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
-          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :prompt-catalog="agentPromptCatalog.data.value" :publish-agent="publishAgent" :create-agent="createAgent" />
+          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :prompt-catalog="agentPromptCatalog.data.value" :publish-agent="publishAgent" :create-agent="createAgent" :create-personality-preset="createPersonalityPreset" :delete-personality-preset="deletePersonalityPreset" />
           <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
           <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
           <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :firmware-releases="firmwareReleases.data.value ?? []" :firmware-rollouts="firmwareRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" :publish-firmware-release="publishFirmwareRelease" :create-firmware-rollout="createFirmwareRollout" :pause-firmware-rollout="pauseFirmwareRollout" :resume-firmware-rollout="resumeFirmwareRollout" :rollback-firmware-rollout="rollbackFirmwareRollout" />

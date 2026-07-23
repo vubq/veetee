@@ -60,6 +60,8 @@ export interface PersonalityPreset {
   summary: string;
   accent: string;
   instructions: string;
+  builtIn?: boolean;
+  deletable?: boolean;
 }
 
 export interface AgentPromptCatalog {
@@ -332,6 +334,25 @@ export const PERSONALITY_PRESETS = [
   },
 ] as const satisfies readonly PersonalityPreset[];
 
+export const PERSONALITY_ACCENTS = [
+  "sage",
+  "coral",
+  "sun",
+  "ember",
+  "red",
+  "ink",
+  "steel",
+  "cyan",
+  "lime",
+  "orange",
+  "slate",
+  "navy",
+  "pink",
+  "blue",
+  "violet",
+  "gold",
+] as const;
+
 const allowedVariables: ReadonlySet<string> = new Set(
   AGENT_PROMPT_VARIABLES.map(({ name }) => name),
 );
@@ -340,17 +361,33 @@ const requiredVariables: ReadonlySet<string> = new Set(
 );
 const tokenPattern = /{{\s*([a-z_][a-z0-9_]*)\s*}}/g;
 
-export function agentPromptCatalog(): AgentPromptCatalog {
+export function agentPromptCatalog(
+  customPresets: readonly PersonalityPreset[] = [],
+): AgentPromptCatalog {
   return {
     schemaVersion: AGENT_PROMPT_SCHEMA_VERSION,
     catalogVersion: AGENT_PROMPT_CATALOG_VERSION,
     defaultTemplate: DEFAULT_AGENT_BASE_PROMPT,
     variables: AGENT_PROMPT_VARIABLES.map((variable) => ({ ...variable })),
-    personalityPresets: PERSONALITY_PRESETS.map((preset) => ({ ...preset })),
+    personalityPresets: [
+      ...PERSONALITY_PRESETS.map((preset) => ({
+        ...preset,
+        builtIn: true,
+        deletable: false,
+      })),
+      ...customPresets.map((preset) => ({
+        ...preset,
+        builtIn: false,
+        deletable: true,
+      })),
+    ],
   };
 }
 
-export function validateAgentPromptDraft(value: unknown): void {
+export function validateAgentPromptDraft(
+  value: unknown,
+  personalityPresets: readonly PersonalityPreset[] = PERSONALITY_PRESETS,
+): void {
   if (value === undefined) return;
   if (!isRecord(value)) {
     throw new BadRequestException("Agent prompt config must be an object");
@@ -368,7 +405,7 @@ export function validateAgentPromptDraft(value: unknown): void {
   const presetId = value.personalityPresetId;
   if (
     typeof presetId !== "string" ||
-    !PERSONALITY_PRESETS.some((preset) => preset.id === presetId)
+    !personalityPresets.some((preset) => preset.id === presetId)
   ) {
     throw new BadRequestException("Agent prompt personalityPresetId is unknown");
   }
@@ -388,6 +425,7 @@ export function validateAgentPromptDraft(value: unknown): void {
 export function normalizePublishedAgentPrompt(
   value: unknown,
   defaults: { locale: string },
+  personalityPresets: readonly PersonalityPreset[] = PERSONALITY_PRESETS,
 ): PublishedAgentPrompt {
   const draft = value === undefined
     ? {
@@ -402,11 +440,11 @@ export function normalizePublishedAgentPrompt(
         userAddress: "",
       }
     : value;
-  validateAgentPromptDraft(draft);
+  validateAgentPromptDraft(draft, personalityPresets);
   if (!isRecord(draft)) {
     throw new BadRequestException("Agent prompt config must be an object");
   }
-  const preset = PERSONALITY_PRESETS.find(
+  const preset = personalityPresets.find(
     (candidate) => candidate.id === draft.personalityPresetId,
   );
   if (!preset) {

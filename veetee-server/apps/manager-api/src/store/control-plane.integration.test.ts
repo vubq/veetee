@@ -8,6 +8,7 @@ import { ResourceCatalogService } from "../artifacts/resource-catalog.service.js
 import { ResourceManifestService } from "../artifacts/resource-manifest.service.js";
 import { AuthService } from "../auth/auth.service.js";
 import type { Principal } from "../auth/auth.types.js";
+import { DEFAULT_AGENT_BASE_PROMPT } from "../config/agent-prompt.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
@@ -81,6 +82,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await prisma.device.deleteMany();
     await prisma.agentConfigVersion.deleteMany();
     await prisma.agent.deleteMany();
+    await prisma.personalityPreset.deleteMany();
     await prisma.providerBinding.deleteMany();
     await prisma.membership.deleteMany();
     await prisma.user.deleteMany();
@@ -406,5 +408,83 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     ]);
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
     expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+  });
+
+  it("persists, publishes and safely deletes tenant personality presets", async () => {
+    const preset = await store.createPersonalityPreset(
+      {
+        label: "Cà khịa vui",
+        summary: "Trêu nhẹ, sắc nhưng biết dừng đúng lúc.",
+        accent: "coral",
+        instructions: "Trêu nhẹ theo ngữ cảnh và phản biện lập luận thay vì công kích.",
+      },
+      { principal, requestId: "integration-personality-create" },
+    );
+    await expect(store.getAgentPromptCatalog(principal.tenantId)).resolves.toEqual(
+      expect.objectContaining({
+        personalityPresets: expect.arrayContaining([
+          expect.objectContaining({ id: preset.id, builtIn: false, deletable: true }),
+        ]),
+      }),
+    );
+    const [agent] = await store.listAgents(principal.tenantId);
+    if (!agent) throw new Error("Integration agent is missing");
+    const customPrompt = {
+      schemaVersion: 1,
+      template: DEFAULT_AGENT_BASE_PROMPT,
+      language: "Tiếng Việt tự nhiên",
+      timeZone: "Asia/Bangkok",
+      timeZoneSource: "device",
+      personalityPresetId: preset.id,
+      customPersonality: "",
+      responseStyle: "Ngắn và rõ.",
+      userAddress: "bạn",
+    };
+    await store.updateAgent(
+      agent.id,
+      { draftConfig: { ...agent.draftConfig, prompt: customPrompt } },
+      { principal, requestId: "integration-personality-select" },
+    );
+    const published = await store.publishAgent(agent.id, {
+      principal,
+      requestId: "integration-personality-publish",
+    });
+    await expect(store.getAgentConfig(agent.id, published.publishedVersion)).resolves.toMatchObject({
+      prompt: {
+        personalityPresetId: preset.id,
+        personalityLabel: preset.label,
+        personality: expect.stringContaining("phản biện lập luận"),
+      },
+    });
+    await expect(
+      store.deletePersonalityPreset(preset.id, {
+        principal,
+        requestId: "integration-personality-delete-in-use",
+      }),
+    ).rejects.toThrow(/used by agent draft/i);
+    await store.updateAgent(
+      agent.id,
+      {
+        draftConfig: {
+          ...agent.draftConfig,
+          prompt: { ...customPrompt, personalityPresetId: "warm-empathetic" },
+        },
+      },
+      { principal, requestId: "integration-personality-unselect" },
+    );
+    await expect(
+      store.deletePersonalityPreset(preset.id, {
+        principal,
+        requestId: "integration-personality-delete",
+      }),
+    ).resolves.toMatchObject({ id: preset.id, deletable: true });
+    const catalog = await store.getAgentPromptCatalog(principal.tenantId);
+    expect(catalog.personalityPresets.some(({ id }) => id === preset.id)).toBe(false);
+    await expect(
+      store.deletePersonalityPreset("warm-empathetic", {
+        principal,
+        requestId: "integration-personality-delete-built-in",
+      }),
+    ).rejects.toThrow(/built-in/i);
   });
 });
