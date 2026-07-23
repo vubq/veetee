@@ -1044,6 +1044,17 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
     return studioBox.y - (capabilityBox.y + capabilityBox.height);
   }).toBeGreaterThanOrEqual(16);
 
+  await page.getByRole("tab", { name: /Wake word/ }).click();
+  await expect.poll(async () => {
+    const [capabilityBox, wakeContentBox] = await Promise.all([
+      page.locator(".wake-device-panel .capability-gate").boundingBox(),
+      page.locator(".wake-device-panel .content-grid").boundingBox(),
+    ]);
+    if (!capabilityBox || !wakeContentBox) return Number.POSITIVE_INFINITY;
+    const gap = wakeContentBox.y - (capabilityBox.y + capabilityBox.height);
+    return Math.abs(gap - 18);
+  }).toBeLessThanOrEqual(1);
+
   await page.locator('[data-page-link="agents"]').first().click();
   const identityGrid = page.locator(".form-section").first().locator(".form-grid.two");
   const nameField = page.getByLabel("Tên trợ lý").locator("..");
