@@ -232,6 +232,10 @@ function addVariable(name: string): void {
   form.promptTemplate += `${separator}${token}`;
 }
 
+function scrollToSection(id: string): void {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function resetPromptTemplate(): void {
   if (props.promptCatalog) form.promptTemplate = props.promptCatalog.defaultTemplate;
 }
@@ -304,8 +308,19 @@ const promptPreview = computed(() => {
           <VtBadge :tone="selected.version === selected.publishedVersion ? 'success' : 'warning'" dot>{{ selected.version === selected.publishedVersion ? "Đang đồng bộ" : "Có thay đổi draft" }}</VtBadge>
         </article>
 
-        <article class="vt-panel form-section">
-          <header class="panel-header"><div><span class="section-index">01</span><h2>Danh tính và ngôn ngữ</h2><p>Tên, locale kỹ thuật và tên ngôn ngữ được đóng băng trong version publish.</p></div></header>
+        <nav class="agent-config-nav" aria-label="Các phần cấu hình trợ lý">
+          <a href="#agent-identity" @click.prevent="scrollToSection('agent-identity')"><span>01</span><div><b>Danh tính</b><small>Tên & ngôn ngữ</small></div></a>
+          <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>Tính cách</b><small>Persona & giọng điệu</small></div></a>
+          <a href="#agent-prompt" @click.prevent="scrollToSection('agent-prompt')"><span>03</span><div><b>Base prompt</b><small>Template & preview</small></div></a>
+          <a href="#agent-runtime" @click.prevent="scrollToSection('agent-runtime')"><span>04</span><div><b>Runtime</b><small>Provider & timeout</small></div></a>
+        </nav>
+
+        <article id="agent-identity" class="vt-panel form-section agent-config-section">
+          <header class="agent-section-header">
+            <span class="agent-section-index">01</span>
+            <div><span class="vt-kicker">CORE PROFILE</span><h2>Danh tính và ngôn ngữ</h2><p>Tên, locale kỹ thuật và tên ngôn ngữ được đóng băng trong version publish.</p></div>
+          </header>
+          <div class="agent-section-content">
           <div class="form-grid two">
             <VtField label="Tên trợ lý" hint="Tên hiển thị trên Manager và màn hình robot" required><VtInput v-model="form.name" maxlength="80" required /></VtField>
             <VtField label="Ngôn ngữ mặc định" hint="Locale agent/provider là fallback BCP-47; thiết bị sẽ báo locale thực tế sau provisioning." required><VtInput v-model="form.locale" maxlength="35" placeholder="vi-VN" required /></VtField>
@@ -316,10 +331,20 @@ const promptPreview = computed(() => {
             <VtField label="Chế độ tương tác" class="span-two" hint="Tự động là trải nghiệm mặc định; nút và wake word cùng mở hoặc ngắt một phiên."><VtSelect v-model="form.mode"><option value="auto">Tự động · nói là xử lý trong phiên</option><option value="realtime">Realtime thử nghiệm · yêu cầu AEC/barge-in</option><option value="manual">Thủ công / PTT · chế độ tương thích</option></VtSelect></VtField>
             <div v-if="form.mode === 'realtime'" class="agent-mode-note span-two"><VtIcon name="warning" :size="18" /><p><b>Realtime đang ở mức thử nghiệm.</b><span>Chỉ dùng khi provider realtime, AEC và barge-in đã vượt benchmark; chế độ này không thay đổi logic nói → AI nghe → xử lý → trả lời.</span></p></div>
           </div>
+          </div>
         </article>
 
-        <article class="vt-panel form-section">
-          <header class="panel-header"><div><span class="section-index">02</span><h2>Tính cách</h2><p>Preset là dữ liệu prompt, không tạo nhánh logic trong runtime. An toàn, quyền tool và sự thật luôn được giữ riêng.</p></div></header>
+        <article id="agent-personality" class="vt-panel form-section agent-config-section">
+          <header class="agent-section-header">
+            <span class="agent-section-index">02</span>
+            <div><span class="vt-kicker">VOICE & STANCE</span><h2>Tính cách</h2><p>Preset là dữ liệu prompt, không tạo nhánh logic trong runtime. An toàn, quyền tool và sự thật luôn được giữ riêng.</p></div>
+          </header>
+          <div class="agent-section-content">
+          <div v-if="selectedPersonality" class="personality-feature">
+            <span class="personality-feature-mark">{{ selectedPersonality.label.slice(0, 1) }}</span>
+            <div><span class="personality-feature-kicker">ĐANG CHỌN</span><h3>{{ selectedPersonality.label }}</h3><p>{{ selectedPersonality.summary }}</p></div>
+            <VtBadge tone="success" dot>Đóng băng khi publish</VtBadge>
+          </div>
           <div class="personality-grid" role="radiogroup" aria-label="Chọn tính cách">
             <button
               v-for="preset in personalityPresets"
@@ -345,13 +370,16 @@ const promptPreview = computed(() => {
             <span>PRESET ĐƯỢC ĐÓNG BĂNG KHI PUBLISH</span>
             <p>{{ selectedPersonality.instructions }}</p>
           </div>
+          </div>
         </article>
 
-        <article class="vt-panel form-section prompt-section">
-          <header class="panel-header prompt-section-header">
-            <div><span class="section-index">03</span><h2>Agent base prompt</h2><p>Template raw tương tự `agent-base-prompt.txt`, chỉ hỗ trợ token allowlist và không chạy biểu thức.</p></div>
+        <article id="agent-prompt" class="vt-panel form-section agent-config-section prompt-section">
+          <header class="agent-section-header prompt-section-header">
+            <span class="agent-section-index">03</span>
+            <div><span class="vt-kicker">PROMPT WORKBENCH</span><h2>Agent base prompt</h2><p>Template raw tương tự `agent-base-prompt.txt`, chỉ hỗ trợ token allowlist và không chạy biểu thức.</p></div>
             <VtButton type="button" variant="quiet" size="sm" @click="resetPromptTemplate"><VtIcon name="refresh" :size="15" /> Khôi phục mặc định</VtButton>
           </header>
+          <div class="agent-section-content">
           <div class="prompt-token-bar">
             <div class="prompt-token-heading">
               <b>Chèn biến vào template</b>
@@ -371,29 +399,37 @@ const promptPreview = computed(() => {
               <pre>{{ promptPreview }}</pre>
             </div>
           </div>
-        </article>
-
-        <article class="vt-panel form-section">
-          <header class="panel-header"><div><span class="section-index">04</span><h2>Provider chain</h2><p>Routing theo capability và locale; provider khác ngôn ngữ vẫn được giữ nguyên.</p></div></header>
-          <div class="form-grid two">
-            <VtField label="VAD"><VtSelect v-model="form.vad"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('vad')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-            <VtField label="ASR"><VtSelect v-model="form.asr"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('asr')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-            <VtField label="LLM"><VtSelect v-model="form.llm"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('llm')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-            <VtField label="TTS"><VtSelect v-model="form.tts"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('tts')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
           </div>
         </article>
 
-        <article class="vt-panel form-section">
-          <header class="panel-header"><div><span class="section-index">05</span><h2>Timeout hội thoại</h2><p>Giới hạn rõ ràng giúp robot không treo ở trạng thái nghe mãi.</p></div></header>
-          <div class="form-grid four">
-            <VtField label="Chờ câu đầu" hint="3–300 giây"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
-            <VtField label="Giữa các lượt" hint="3–600 giây"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
-            <VtField label="Thời gian chào kết thúc" hint="0,5–60 giây"><VtInput v-model="form.closingGrace" type="number" min="0.5" max="60" step="0.5" /></VtField>
-            <VtField label="Giới hạn phiên" hint="10–3.600 giây"><VtInput v-model="form.maxSession" type="number" min="10" max="3600" /></VtField>
+        <article id="agent-runtime" class="vt-panel form-section agent-config-section">
+          <header class="agent-section-header">
+            <span class="agent-section-index">04</span>
+            <div><span class="vt-kicker">RUNTIME POLICY</span><h2>Provider và nhịp hội thoại</h2><p>Routing theo capability và locale, cùng các giới hạn để phiên thoại không treo ở trạng thái nghe mãi.</p></div>
+          </header>
+          <div class="agent-section-content agent-runtime-grid">
+            <section class="agent-runtime-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="provider" :size="17" /></span><div><b>Provider chain</b><small>Fallback theo locale của agent</small></div></header>
+              <div class="form-grid two">
+                <VtField label="VAD"><VtSelect v-model="form.vad"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('vad')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="ASR"><VtSelect v-model="form.asr"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('asr')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="LLM"><VtSelect v-model="form.llm"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('llm')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="TTS"><VtSelect v-model="form.tts"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('tts')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+              </div>
+            </section>
+            <section class="agent-runtime-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Timeout hội thoại</b><small>Giới hạn rõ ràng cho từng phiên</small></div></header>
+              <div class="form-grid two">
+                <VtField label="Chờ câu đầu" hint="3–300 giây"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
+                <VtField label="Giữa các lượt" hint="3–600 giây"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
+                <VtField label="Chào kết thúc" hint="0,5–60 giây"><VtInput v-model="form.closingGrace" type="number" min="0.5" max="60" step="0.5" /></VtField>
+                <VtField label="Giới hạn phiên" hint="10–3.600 giây"><VtInput v-model="form.maxSession" type="number" min="10" max="3600" /></VtField>
+              </div>
+            </section>
           </div>
         </article>
 
-        <div class="sticky-publish"><div><b>Publish tạo version mới</b><small>Robot chỉ nhận sau rollout; extension fields không thuộc form này vẫn được giữ.</small></div><p v-if="error" class="inline-error">{{ error }}</p><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> Publish version {{ selected.version + 1 }}</VtButton></div>
+        <div class="sticky-publish"><span class="publish-mark"><VtIcon name="upload" :size="18" /></span><div><b>Publish tạo version mới</b><small>Robot chỉ nhận sau rollout; extension fields không thuộc form này vẫn được giữ.</small></div><p v-if="error" class="inline-error">{{ error }}</p><span class="publish-target"><small>VERSION</small><b>v{{ selected.version + 1 }}</b></span><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> Publish version {{ selected.version + 1 }}</VtButton></div>
       </form>
     </div>
     <VtEmptyState v-else icon="agent" title="Chưa có agent" text="Manager API chưa trả về agent nào cho workspace này." />
@@ -414,3 +450,577 @@ const promptPreview = computed(() => {
     </VtDialog>
   </section>
 </template>
+
+<style scoped>
+.agent-editor {
+  gap: 16px;
+}
+
+.agent-config-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.agent-config-nav a {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: var(--paper-strong);
+  text-decoration: none;
+  transition: background .18s ease, color .18s ease;
+}
+
+.agent-config-nav a:hover,
+.agent-config-nav a:focus-visible {
+  color: var(--navy);
+  background: #fffaf3;
+}
+
+.agent-config-nav a:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: -2px;
+}
+
+.agent-config-nav a > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--orange-dark);
+  background: #ffebe5;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.agent-config-nav a > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-config-nav b {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-config-nav small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-config-section {
+  scroll-margin-top: 18px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.agent-section-header {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  border-bottom: 1px solid var(--line);
+  padding: 21px 23px 18px;
+  background: linear-gradient(135deg, #fffdfa, #f5f8f3);
+}
+
+.agent-section-index {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid #f4c4b4;
+  border-radius: 13px;
+  color: var(--orange-dark);
+  background: #ffebe5;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.agent-section-header > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.agent-section-header h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -.025em;
+}
+
+.agent-section-header p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.agent-section-content {
+  padding: 22px 23px 24px;
+}
+
+.agent-mode-note {
+  border-color: #cfe2d5;
+  color: var(--success);
+  background: #f0f8f3;
+}
+
+.agent-mode-note span {
+  color: var(--muted);
+}
+
+.personality-feature {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  border: 1px solid #d7e5d8;
+  border-radius: 16px;
+  padding: 13px 15px;
+  background: linear-gradient(115deg, #eef8df, #f7fbf0);
+}
+
+.personality-feature-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 14px;
+  color: var(--lime);
+  background: var(--navy);
+  box-shadow: 0 8px 20px rgba(16, 44, 51, .13);
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.personality-feature > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.personality-feature-kicker {
+  color: var(--success);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .13em;
+}
+
+.personality-feature h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.personality-feature p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personality-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 16px;
+}
+
+.personality-card {
+  grid-template-columns: 28px minmax(0, 1fr) 17px;
+  min-height: 75px;
+  align-items: start;
+  gap: 9px;
+  border-radius: 13px;
+  padding: 11px;
+  background: #fbfcf9;
+  box-shadow: none;
+}
+
+.personality-card::after {
+  display: none;
+}
+
+.personality-card:hover {
+  border-color: var(--line-strong);
+  background: #fffdfa;
+  transform: translateY(-1px);
+}
+
+.personality-card.active {
+  border-color: var(--orange);
+  background: #fff8f5;
+  box-shadow: 0 0 0 3px rgba(242, 100, 60, .1);
+}
+
+.personality-card > span.personality-mark {
+  position: static;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  color: color-mix(in srgb, var(--personality-accent) 78%, var(--navy));
+  background: color-mix(in srgb, var(--personality-accent) 14%, white);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.personality-card > span.personality-copy {
+  position: static;
+  display: grid;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  gap: 3px;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.personality-card b {
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personality-card small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.personality-selected {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  margin-top: 5px;
+  border-radius: 50%;
+  color: white;
+  background: var(--orange);
+}
+
+.personality-details {
+  align-items: start;
+  margin-top: 1px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: #f4f7f2;
+}
+
+.personality-preview {
+  margin-top: 14px;
+  border-color: #d7e5d8;
+  background: #f0f8f3;
+}
+
+.prompt-section-header {
+  align-items: center;
+}
+
+.prompt-section-header > :deep(.vt-button) {
+  white-space: nowrap;
+}
+
+.prompt-token-bar {
+  margin-bottom: 13px;
+  border-color: var(--line);
+  background: #f7f9f5;
+}
+
+.prompt-editor-grid {
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, .92fr);
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.prompt-editor-grid > :deep(.vt-field) {
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 13px;
+  background: #f7f9f5;
+  box-shadow: none;
+}
+
+.prompt-editor-grid > :deep(.vt-field) .prompt-template-input {
+  min-height: 465px;
+  border-color: var(--line);
+  border-radius: 11px;
+  background: var(--paper-strong);
+}
+
+.prompt-render-preview {
+  min-height: 512px;
+  border-color: var(--line);
+  border-radius: 15px;
+  color: var(--ink);
+  background: #f7f9f5;
+  box-shadow: none;
+}
+
+.prompt-render-preview header {
+  padding: 13px 14px 11px;
+  background: linear-gradient(180deg, #fffdfa, #f3f7f2);
+}
+
+.prompt-render-preview pre {
+  max-height: 465px;
+  margin: 0 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 13px;
+  color: var(--ink-2);
+  background: #eef2ec;
+}
+
+.agent-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-runtime-card {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: #f7f9f5;
+}
+
+.agent-runtime-card > header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-runtime-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--navy-2);
+  background: var(--blue);
+}
+
+.agent-runtime-card > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.agent-runtime-card > header b {
+  font-size: 11px;
+}
+
+.agent-runtime-card > header small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.agent-runtime-card .form-grid {
+  gap: 12px;
+}
+
+.sticky-publish {
+  position: sticky;
+  bottom: 16px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 18px;
+  padding: 14px 16px;
+  color: white;
+  background: var(--navy);
+  box-shadow: 0 16px 42px rgba(16, 44, 51, .2);
+}
+
+.publish-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--navy);
+  background: var(--lime);
+}
+
+.sticky-publish > div {
+  display: grid;
+  gap: 3px;
+}
+
+.sticky-publish b {
+  color: white;
+  font-size: 11px;
+}
+
+.sticky-publish small {
+  color: #9fb5b7;
+  font-size: 8px;
+}
+
+.sticky-publish .inline-error {
+  max-width: 280px;
+  margin: 0;
+  color: #ffc6b7;
+}
+
+.publish-target {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  min-width: 44px;
+}
+
+.publish-target small {
+  color: #8ca6a9;
+  font-size: 7px;
+  letter-spacing: .12em;
+}
+
+.publish-target b {
+  color: var(--lime);
+  font-size: 18px;
+}
+
+@media (max-width: 1240px) {
+  .personality-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .agent-runtime-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .personality-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-config-nav {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .agent-config-nav a {
+    flex: 0 0 154px;
+  }
+
+  .agent-section-header {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+    padding: 18px;
+  }
+
+  .agent-section-index {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .agent-section-header > :deep(.vt-button) {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 5px;
+  }
+
+  .agent-section-content {
+    padding: 18px;
+  }
+
+  .personality-feature {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .personality-feature-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .personality-feature > :deep(.vt-badge) {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .personality-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-editor-grid > :deep(.vt-field) .prompt-template-input,
+  .prompt-render-preview {
+    min-height: 360px;
+  }
+
+  .prompt-render-preview pre {
+    max-height: 330px;
+  }
+
+  .sticky-publish {
+    position: static;
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .sticky-publish .publish-target {
+    grid-column: 2;
+    justify-items: start;
+  }
+
+  .sticky-publish .inline-error {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .sticky-publish > :deep(.vt-button) {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+</style>

@@ -1073,6 +1073,42 @@ test("creates an independent assistant draft from the manager UI", async ({ page
   await expect(page.locator(".agent-editor")).toContainText("Có thay đổi draft");
 });
 
+test("keeps the assistant configuration cockpit aligned on desktop and mobile", async ({ page }) => {
+  await mockManagerApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="agents"]').first().click();
+
+  const navigation = page.locator(".agent-config-nav");
+  await expect(navigation.getByRole("link")).toHaveCount(4);
+  await expect(page.locator(".agent-config-section")).toHaveCount(4);
+  await expect(page.locator(".personality-feature")).toContainText("ĐANG CHỌN");
+  await expect(page.locator(".agent-runtime-grid")).toBeVisible();
+  const desktopOverflow = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(desktopOverflow.documentWidth).toBeLessThanOrEqual(desktopOverflow.viewportWidth);
+
+  const promptSection = page.locator('[id="agent-prompt"]');
+  await expect(promptSection).toHaveCount(1);
+  await page.getByRole("link", { name: /Base prompt/ }).click();
+  await promptSection.scrollIntoViewIfNeeded();
+  await expect(promptSection).toBeInViewport();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileOverflow = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(mobileOverflow.documentWidth).toBeLessThanOrEqual(mobileOverflow.viewportWidth);
+  await expect(page.locator(".agent-config-nav")).toBeVisible();
+  await expect(page.locator(".sticky-publish")).toContainText("Publish tạo version mới");
+});
+
 test("changes the published assistant assigned to an existing device", async ({ page }) => {
   const deviceAgentAssignments: unknown[] = [];
   await mockManagerApi(page, {
