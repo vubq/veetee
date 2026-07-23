@@ -29,10 +29,13 @@ async function mockManagerApi(
     agentCreates?: unknown[];
     deviceAgentAssignments?: unknown[];
     withSecondAgent?: boolean;
+    primaryAgentPublishedVersion?: number;
+    deviceAgentConfigVersion?: number;
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
   let assignedDeviceAgentId = "agent-1";
+  let desiredDeviceAgentVersion = options.deviceAgentConfigVersion ?? 1;
   let createdAgent: Record<string, unknown> | undefined;
   await page.route("http://127.0.0.1:8001/**", async (route) => {
     const request = route.request();
@@ -91,7 +94,15 @@ async function mockManagerApi(
                 status: "online",
                 agentId: assignedDeviceAgentId,
                 firmwareVersion: "0.1.0",
-                desiredState: { version: 2, state: {} },
+                desiredState: {
+                  version: 2,
+                  state: assignedDeviceAgentId
+                    ? {
+                        agentId: assignedDeviceAgentId,
+                        agentConfigVersion: desiredDeviceAgentVersion,
+                      }
+                    : {},
+                },
                 reportedState: {
                   version: 42,
                   state: {
@@ -134,6 +145,9 @@ async function mockManagerApi(
       const input = request.postDataJSON() as { agentId?: string };
       options.deviceAgentAssignments?.push(input);
       assignedDeviceAgentId = input.agentId ?? "";
+      desiredDeviceAgentVersion = assignedDeviceAgentId === "agent-2"
+        ? 2
+        : (options.primaryAgentPublishedVersion ?? 1);
       return json({
         id: deviceId,
         hardwareId: "A1B2C3D4E5F6",
@@ -144,7 +158,10 @@ async function mockManagerApi(
         desiredState: {
           version: 3,
           state: assignedDeviceAgentId
-            ? { agentId: assignedDeviceAgentId, agentConfigVersion: 2 }
+            ? {
+                agentId: assignedDeviceAgentId,
+                agentConfigVersion: desiredDeviceAgentVersion,
+              }
             : {},
         },
         reportedState: { version: 42, state: {} },
@@ -413,8 +430,8 @@ async function mockManagerApi(
               { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
             ],
           },
-          version: 1,
-          publishedVersion: 1,
+          version: options.primaryAgentPublishedVersion ?? 1,
+          publishedVersion: options.primaryAgentPublishedVersion ?? 1,
         },
       ];
       if (options.withSecondAgent) {
@@ -949,6 +966,30 @@ test("changes the published assistant assigned to an existing device", async ({ 
 
   await expect.poll(() => deviceAgentAssignments).toEqual([{ agentId: "agent-2" }]);
   await expect(page.locator(".vt-toast-region")).toContainText("Đã đổi trợ lý cho thiết bị");
+});
+
+test("rolls a newer published version to a device already using the same assistant", async ({
+  page,
+}) => {
+  const deviceAgentAssignments: unknown[] = [];
+  await mockManagerApi(page, {
+    withDevice: true,
+    primaryAgentPublishedVersion: 3,
+    deviceAgentConfigVersion: 2,
+    deviceAgentAssignments,
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="devices"]').first().click();
+  const updateButton = page.getByRole("button", { name: "Cập nhật v3" });
+  await expect(updateButton).toBeEnabled();
+  await updateButton.click();
+
+  await expect.poll(() => deviceAgentAssignments).toEqual([{ agentId: "agent-1" }]);
+  await expect(page.getByRole("button", { name: "Đã lưu" })).toBeDisabled();
 });
 
 test("keeps device assistant controls cohesive on desktop and mobile", async ({ page }) => {

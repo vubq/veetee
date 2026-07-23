@@ -17,6 +17,9 @@ npm run dev --workspace @veetee/manager-api
 The development command performs one clean TypeScript build, then runs the
 compiler and Node in watch mode. This keeps Nest decorator metadata identical to
 the production build; do not run the Nest entrypoint directly through `tsx`.
+`VEETEE_MANAGER_CORS_ORIGIN` accepts a comma-separated origin allowlist. Browser
+preflight explicitly permits the Manager REST verbs `GET`, `HEAD`, `POST`, `PUT`
+and `PATCH`; keep this list aligned with controller mutations when adding a new verb.
 
 Docker remains available through `npm run infra:up`. Only PostgreSQL/Redis use
 containers in that profile; app/model workers run directly on the host.

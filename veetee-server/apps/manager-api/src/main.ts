@@ -9,6 +9,7 @@ import { LogController } from "fastify";
 import type { Readable } from "node:stream";
 
 import { AppModule } from "./app.module.js";
+import { createManagerCorsOptions } from "./common/cors-options.js";
 import { HttpExceptionFilter } from "./common/http-exception.filter.js";
 
 class VeeteeLogController extends LogController {
@@ -32,10 +33,7 @@ async function bootstrap(): Promise<void> {
     (request, payload: Readable, done) => done(null, payload),
   );
   await app.register(cookie);
-  await app.register(cors, {
-    origin: process.env.VEETEE_MANAGER_CORS_ORIGIN?.split(",") ?? ["http://127.0.0.1:8081"],
-    credentials: true,
-  });
+  await app.register(cors, createManagerCorsOptions(process.env.VEETEE_MANAGER_CORS_ORIGIN));
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );

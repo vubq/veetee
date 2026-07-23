@@ -83,6 +83,24 @@ const filteredDevices = computed(() => {
 });
 const selected = computed(() => filteredDevices.value.find((device) => device.id === props.selectedDeviceId) ?? filteredDevices.value[0]);
 const publishedAgents = computed(() => props.agents.filter((agent) => agent.publishedVersion > 0));
+const selectedPublishedAgent = computed(() => publishedAgents.value.find((agent) => agent.id === selectedAgentId.value));
+const agentAssignmentCurrent = computed(() => {
+  const device = selected.value;
+  if (!device) return true;
+  const assignedAgentId = device.agentId ?? "";
+  if (selectedAgentId.value !== assignedAgentId) return false;
+  if (!selectedAgentId.value) return true;
+  const desired = device.desiredState.state;
+  return desired.agentId === selectedAgentId.value
+    && desired.agentConfigVersion === selectedPublishedAgent.value?.publishedVersion;
+});
+const agentSaveLabel = computed(() => {
+  if (agentAssignmentCurrent.value) return "Đã lưu";
+  if (selectedAgentId.value === (selected.value?.agentId ?? "") && selectedPublishedAgent.value) {
+    return `Cập nhật v${selectedPublishedAgent.value.publishedVersion}`;
+  }
+  return "Lưu thay đổi";
+});
 const delivery = computed(() => selected.value ? summarizeDeviceDelivery(selected.value) : undefined);
 const presence = computed(() => selected.value ? devicePresence(selected.value) : undefined);
 
@@ -205,9 +223,9 @@ async function assignAgent(): Promise<void> {
                   </VtSelect>
                   <VtIcon name="chevron" :size="16" />
                 </span>
-                <VtButton size="sm" :busy="agentBusy" :disabled="selectedAgentId === (selected.agentId ?? '')" @click="assignAgent">
+                <VtButton size="sm" :busy="agentBusy" :disabled="agentAssignmentCurrent" @click="assignAgent">
                   <VtIcon name="check" :size="15" />
-                  {{ selectedAgentId === (selected.agentId ?? "") ? "Đã lưu" : "Lưu thay đổi" }}
+                  {{ agentSaveLabel }}
                 </VtButton>
               </div>
               <small v-if="agentError" class="inline-error" role="alert">{{ agentError }}</small>
