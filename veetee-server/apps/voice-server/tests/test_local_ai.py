@@ -124,3 +124,13 @@ async def test_silero_endpoint_requires_configured_silence_not_one_quiet_chunk()
     assert results[0].speech_started is True
     assert results[1].speech_ended is False
     assert results[-1].speech_ended is True
+
+async def test_silero_endpoint_can_disable_fixed_utterance_duration() -> None:
+    speech_chunks = 4
+    silence_chunks = (400 + CHUNK_MS - 1) // CHUNK_MS
+    model = FakeVadModel([*([0.9] * speech_chunks), *([0.1] * silence_chunks)])
+    session = SileroVadSession(model, min_silence_ms=400, max_speech_seconds=0)
+    results = session.process(b"\0" * 1_024 * (speech_chunks + silence_chunks))
+
+    assert all(not result.speech_ended for result in results[:speech_chunks])
+    assert results[-1].speech_ended is True

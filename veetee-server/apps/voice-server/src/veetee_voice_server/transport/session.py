@@ -593,18 +593,41 @@ class VoiceSession:
         ended = any(item.speech_ended for item in results)
 
         if self._speech_active:
-            self._speech.extend(pcm)
+            if not self._append_speech(pcm):
+                self._telemetry.record(
+                    self.session_id,
+                    "vad.forced_finalize",
+                    generation=self.arbiter.snapshot.generation,
+                    payload={"reason": "pcm_buffer_limit"},
+                )
+                self._start_asr()
+                return
         else:
             self._pre_roll.extend(pcm)
             if len(self._pre_roll) > self._pre_roll_bytes:
                 del self._pre_roll[: len(self._pre_roll) - self._pre_roll_bytes]
             if started:
                 await self.inactivity.candidate_started()
-                self._speech.extend(self._pre_roll or pcm)
-                self._pre_roll.clear()
                 self._speech_active = True
+                if not self._append_speech(self._pre_roll or pcm):
+                    self._telemetry.record(
+                        self.session_id,
+                        "vad.forced_finalize",
+                        generation=self.arbiter.snapshot.generation,
+                        payload={"reason": "pcm_buffer_limit"},
+                    )
+                    self._start_asr()
+                    return
+                self._pre_roll.clear()
         if ended and self._speech_active:
             self._start_asr()
+
+    def _append_speech(self, pcm: bytes | bytearray) -> bool:
+        remaining = self.settings.max_utterance_buffer_bytes - len(self._speech)
+        if remaining <= 0:
+            return False
+        self._speech.extend(pcm[:remaining])
+        return len(pcm) <= remaining
 
     def _start_asr(self) -> None:
         if self._asr_task and not self._asr_task.done():

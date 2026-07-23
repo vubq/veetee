@@ -336,7 +336,11 @@ Firmware chịu trách nhiệm thu audio sạch nhất có thể và gửi metad
 
 Metadata có thể gồm VAD probability, RMS/noise floor, clipping, frame loss và optional AEC state. Server trả state/telemetry tổng quát như `non_actionable`, `unclear`, `accepted` để UI hiển thị; firmware không cần biết input đến từ TV, quạt hay nguồn cụ thể nào.
 
-Sau mỗi response, firmware giữ assistant gate mở và chạy watchdog session đồng bộ với server. `first_input_timeout`, `between_turns_timeout` và `closing_grace` nhận từ signed agent/bootstrap config trong safe range. Khi server gửi sleep/close:
+Sau mỗi response, firmware giữ assistant gate mở và chạy inactivity watchdog đồng bộ
+với server. Mặc định `first_input_timeout` và `between_turns_timeout` đều là 180 giây;
+`max_session_seconds=0` và `total_turn_seconds=0` nghĩa là không có absolute/parent
+ceiling. VAD/endpoint detection vẫn chốt từng câu trước khi gửi ASR, không chờ
+inactivity timer. Khi server gửi sleep/close:
 
 1. phát goodbye TTS nếu có;
 2. trong closing grace vẫn ưu tiên button/activation/interrupt event;

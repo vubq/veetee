@@ -1146,7 +1146,7 @@ test("publishes bounded conversation changes without dropping extension fields",
   await page.getByRole("button", { name: /Vào control room/ }).click();
 
   await page.locator('[data-page-link="agents"]').first().click();
-  await page.getByLabel("Chờ câu đầu").fill("20");
+  await page.getByLabel("Chờ hoạt động đầu tiên").fill("20");
   await page.getByLabel("Giới hạn phiên").fill("900");
   await page.getByRole("button", { name: /Publish version/ }).click();
 
@@ -1159,6 +1159,7 @@ test("publishes bounded conversation changes without dropping extension fields",
         firstInputSeconds: 20,
         betweenTurnsSeconds: 30,
         maxSessionSeconds: 900,
+        totalTurnSeconds: 0,
       },
     },
   });

@@ -97,9 +97,9 @@ class InactivityController:
             self._timer = asyncio.create_task(self._run(delay, reason))
 
     async def _arm_session_limit(self) -> None:
-        if self._max_session_seconds <= 0:
-            raise ValueError("max_session_seconds must be positive")
         await self._cancel_session_timer()
+        if self._max_session_seconds <= 0:
+            return
         async with self._lock:
             self._session_timer = asyncio.create_task(self._run_session_limit())
 

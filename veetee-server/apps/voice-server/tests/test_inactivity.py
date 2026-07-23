@@ -108,6 +108,45 @@ async def test_absolute_session_ceiling_cancels_an_active_turn() -> None:
     assert goodbye_reasons == ["max_session_duration"]
     assert arbiter.snapshot.state is ConversationState.STANDBY
 
+async def test_zero_session_ceiling_does_not_close_an_active_session() -> None:
+    arbiter = TurnArbiter("session-unlimited")
+    goodbye_reasons: list[str] = []
+
+    async def goodbye(reason: str) -> None:
+        goodbye_reasons.append(reason)
+
+    controller = InactivityController(
+        arbiter=arbiter,
+        first_input_seconds=1,
+        between_turns_seconds=1,
+        closing_grace_seconds=0.01,
+        max_session_seconds=0,
+        goodbye=goodbye,
+    )
+    await controller.assistant_opened(WakeSource.BUTTON)
+    await asyncio.sleep(0.03)
+
+    assert goodbye_reasons == []
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+    await controller.close()
+
+async def test_zero_turn_ceiling_keeps_operation_deadline_open() -> None:
+    arbiter = TurnArbiter("session-unlimited-turn")
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    context = await arbiter.begin_turn(0)
+
+    assert context.deadline_at == float("inf")
+    assert context.remaining_seconds == float("inf")
+
+    await arbiter.abort("test_cleanup")
+
+async def test_negative_turn_ceiling_is_rejected() -> None:
+    arbiter = TurnArbiter("session-invalid-turn")
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        await arbiter.begin_turn(-1)
+
 
 async def test_interrupt_closing_cancels_goodbye_without_closing_gate() -> None:
     arbiter = TurnArbiter("session-1")

@@ -86,11 +86,18 @@ class Settings(BaseSettings):
     vad_release_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     vad_min_silence_ms: int = Field(default=400, ge=80, le=2_000)
     vad_pre_roll_ms: int = Field(default=320, ge=0, le=1_000)
-    max_utterance_seconds: float = Field(default=20.0, gt=0.1, le=60.0)
-    first_input_seconds: float = Field(default=15.0, gt=0.1, le=300.0)
-    between_turns_seconds: float = Field(default=30.0, gt=0.1, le=600.0)
+    # Zero leaves utterance boundaries to VAD silence detection.
+    max_utterance_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
+    max_utterance_buffer_bytes: int = Field(
+        default=16 * 1_024 * 1_024,
+        ge=1 * 1_024 * 1_024,
+        le=64 * 1_024 * 1_024,
+    )
+    first_input_seconds: float = Field(default=180.0, gt=0.1, le=300.0)
+    between_turns_seconds: float = Field(default=180.0, gt=0.1, le=600.0)
     closing_grace_seconds: float = Field(default=5.0, gt=0.1, le=60.0)
-    max_session_seconds: float = Field(default=600.0, gt=1.0, le=3_600.0)
+    # Zero means no absolute session ceiling; inactivity remains the only product close.
+    max_session_seconds: float = Field(default=0.0, ge=0.0, le=3_600.0)
     asr_seconds: float = Field(default=8.0, gt=0.1, le=60.0)
     goodbye_text: str = "Tạm biệt, hẹn gặp lại."
 

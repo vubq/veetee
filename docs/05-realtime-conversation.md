@@ -278,26 +278,35 @@ Khi đang `thinking/speaking`, `interrupt_profile` phải gọi abort trước; 
 
 ## 6. Conversation timeout và standby
 
-Assistant không được giữ session vô hạn. Mỗi session có các deadline cấu hình theo agent/locale, với safe upper bound ở server:
+Trải nghiệm mặc định không có absolute session ceiling hoặc parent turn ceiling. Mỗi
+lượt vẫn kết thúc bằng VAD/endpoint detection (sau đó ASR chốt transcript), không phải
+bằng timer tổng phiên. Chỉ khi assistant đang chờ một hoạt động hội thoại hợp lệ mới
+chạy inactivity timer:
 
 | Timer | Mặc định gợi ý | Behavior |
 |---|---:|---|
-| `first_input_timeout` | 15 s | sau khi wake nhưng không có speech: goodbye ngắn -> standby |
-| `between_turns_timeout` | 30 s | sau khi AI trả lời mà không có lượt mới: chào kết thúc -> standby |
+| `first_input_timeout` | 180 s | sau khi wake nhưng không có hoạt động hợp lệ: goodbye ngắn -> standby |
+| `between_turns_timeout` | 180 s | sau khi AI trả lời mà không có lượt mới: chào kết thúc -> standby |
 | `closing_grace` | 5 s | nếu user nói/wake trong lúc chào: hủy closing, quay lại listening |
-| `max_utterance_duration` | 20 s | finalize hoặc báo câu quá dài, không giữ capture vô hạn |
-| `max_session_duration` | 10 phút | absolute ceiling; policy có thể kết thúc sớm hơn |
+| `max_utterance_duration` | `0` | disabled; VAD silence/endpoint detection chốt câu |
+| `max_session_duration` | `0` | disabled; không tự đóng phiên khi vẫn còn hoạt động |
 | `admission_deadline` | 1 s | gate không giữ turn vô hạn |
 | `asr_deadline` | 8 s | tính từ VAD final đến ASR final |
 | `planner_deadline` | 15 s ceiling | structured plan/intent; mục tiêu LAN <6 s |
 | `llm_first_token_deadline` | 5 s | fallback nếu model không stream |
 | `tts_first_audio_deadline` | 5 s | fallback hoặc text-only error |
 | `mcp_deadline` | 10 s mặc định | override theo tool trong safe range |
-| `total_turn_deadline` | 45 s | hard ceiling cho turn có planner/MCP; normal turn phải thấp hơn nhiều |
+| `total_turn_deadline` | `0` | disabled parent ceiling; provider deadlines bên dưới vẫn độc lập |
 
 Timeout không gọi LLM chỉ để tạo câu tạm biệt. Server lấy localized template/voice policy từ agent config, ví dụ `session.timeout_goodbye`, phát TTS ngắn, gửi `system.assistant_sleep` và đóng gate. Nếu user bấm nút hoặc nói activation/interrupt profile trước khi kết thúc, `closing` bị cancel và session mới/turn mới được ưu tiên.
 
-Timeout các provider và timeout không có user activity là hai loại khác nhau; không được dùng một timer duy nhất cho cả hai.
+VAD chốt câu ngay khi phát hiện khoảng im lặng cấu hình; `max_utterance_duration=0`
+không tạo một mốc thời gian cưỡng bức cắt câu dài. PCM đang chờ ASR vẫn có byte budget
+khẩn cấp để lỗi detector không làm cạn RAM; chạm budget phải emit telemetry và finalize
+an toàn. Timeout các provider và timeout không có user activity là hai loại khác nhau;
+không được dùng một timer duy nhất cho cả hai. Provider deadline chỉ dùng để hủy một
+operation bị treo và trả quyền điều khiển cho lượt mới, không đóng session vì người
+dùng nói lâu.
 
 Chỉ user activity hợp lệ mới reset inactivity timer. Raw energy, VAD false positive, input bị admission reject hoặc self-echo không được giữ session sống mãi. Một clarification hợp lệ được reset timer tối đa theo `maxClarificationAttempts`; sau đó hệ thống quay lại listening hoặc kết thúc lịch sự theo policy.
 

@@ -116,11 +116,11 @@ class ConversationOutput:
 
 @dataclass(frozen=True, slots=True)
 class ConversationPolicy:
-    first_input_seconds: float = 15.0
-    between_turns_seconds: float = 30.0
+    first_input_seconds: float = 180.0
+    between_turns_seconds: float = 180.0
     closing_grace_seconds: float = 5.0
-    max_session_seconds: float = 600.0
-    total_turn_seconds: float = 30.0
+    max_session_seconds: float = 0.0
+    total_turn_seconds: float = 0.0
     admission_seconds: float = 1.0
     planner_seconds: float = 3.0
     llm_seconds: float = 20.0

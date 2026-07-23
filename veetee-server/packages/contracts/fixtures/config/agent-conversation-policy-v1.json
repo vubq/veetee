@@ -14,18 +14,18 @@
     "max_clarification_attempts": 1
   },
   "timeouts": {
-    "first_input_seconds": 15,
-    "between_turns_seconds": 30,
+    "first_input_seconds": 180,
+    "between_turns_seconds": 180,
     "closing_grace_seconds": 5,
-    "max_utterance_seconds": 20,
-    "max_session_seconds": 600,
+    "max_utterance_seconds": 0,
+    "max_session_seconds": 0,
     "admission_seconds": 1,
     "asr_seconds": 8,
     "planner_seconds": 3,
     "llm_first_token_seconds": 5,
     "tts_first_audio_seconds": 5,
     "mcp_seconds": 10,
-    "total_turn_seconds": 30
+    "total_turn_seconds": 0
   },
   "mcp": {
     "enabled": true,

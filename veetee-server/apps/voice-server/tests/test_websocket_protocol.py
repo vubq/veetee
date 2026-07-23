@@ -220,6 +220,22 @@ async def test_oversized_opus_packet_closes_with_message_too_big() -> None:
     await session(websocket, settings).run()
     assert websocket.closed == [(1009, "Opus packet too large")]
 
+async def test_unlimited_utterance_capture_still_has_a_pcm_memory_bound() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        max_utterance_seconds=0,
+        max_utterance_buffer_bytes=1_024 * 1_024,
+    )
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    voice_session._speech.extend(b"x" * (settings.max_utterance_buffer_bytes - 1))
+
+    assert voice_session._append_speech(b"yz") is False
+    assert len(voice_session._speech) == settings.max_utterance_buffer_bytes
+
+    await voice_session.close()
+
 
 async def test_protocol_parser_enforces_size_audio_and_session_contract() -> None:
     hello = fixture("device-hello-v1.json")

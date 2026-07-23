@@ -77,7 +77,9 @@ class SileroVadSession:
         self._threshold = threshold
         self._release_threshold = release_threshold
         self._min_silence_ms = min_silence_ms
-        self._max_speech_ms = int(max_speech_seconds * 1000)
+        self._max_speech_ms = (
+            int(max_speech_seconds * 1000) if max_speech_seconds > 0 else None
+        )
         self._pending = bytearray()
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
         self._context = np.zeros((1, CONTEXT_SAMPLES), dtype=np.float32)
@@ -116,7 +118,10 @@ class SileroVadSession:
 
             if self._speech_active:
                 self._speech_ms += CHUNK_MS
-                ended = ended or self._speech_ms >= self._max_speech_ms
+                ended = ended or (
+                    self._max_speech_ms is not None
+                    and self._speech_ms >= self._max_speech_ms
+                )
             if ended:
                 self._speech_active = False
                 self._speech_ms = 0

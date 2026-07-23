@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
+from math import inf
 from time import monotonic
 
 from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
@@ -73,6 +74,8 @@ class TurnArbiter:
             return self.snapshot
 
     async def begin_turn(self, total_turn_seconds: float) -> OperationContext:
+        if total_turn_seconds < 0:
+            raise ValueError("total_turn_seconds must be non-negative")
         async with self._lock:
             if not self._assistant_gate_open or self._state is not ConversationState.LISTENING:
                 raise InvalidConversationTransitionError(
@@ -85,7 +88,11 @@ class TurnArbiter:
                 turn_id=f"{self.session_id}:{self._turn_sequence}",
                 generation=self._generation,
                 token=CancellationToken(),
-                deadline_at=monotonic() + total_turn_seconds,
+                deadline_at=(
+                    monotonic() + total_turn_seconds
+                    if total_turn_seconds > 0
+                    else inf
+                ),
             )
             self._current = context
             self._state = ConversationState.THINKING

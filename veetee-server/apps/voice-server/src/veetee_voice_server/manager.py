@@ -112,7 +112,7 @@ class SessionProfile:
                 between_turns_seconds=settings.between_turns_seconds,
                 closing_grace_seconds=settings.closing_grace_seconds,
                 max_session_seconds=settings.max_session_seconds,
-                total_turn_seconds=45.0,
+                total_turn_seconds=0.0,
                 admission_seconds=1.0,
                 planner_seconds=settings.planner_seconds,
                 llm_seconds=20.0,
@@ -198,11 +198,14 @@ class SessionProfile:
                 max_session_seconds=_bounded_float(
                     conversation.get("maxSessionSeconds"),
                     defaults.policy.max_session_seconds,
-                    10.0,
+                    0.0,
                     3_600.0,
                 ),
                 total_turn_seconds=_bounded_float(
-                    conversation.get("totalTurnSeconds"), 30.0, 5.0, 60.0
+                    conversation.get("totalTurnSeconds"),
+                    defaults.policy.total_turn_seconds,
+                    0.0,
+                    60.0,
                 ),
                 admission_seconds=_bounded_float(
                     conversation.get("admissionSeconds"), 1.0, 0.1, 5.0

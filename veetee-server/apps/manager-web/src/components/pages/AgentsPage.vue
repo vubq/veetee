@@ -71,7 +71,7 @@ const form = reactive({
   personalityPresetId: "", customPersonality: "",
   responseStyle: "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
   userAddress: "", promptTemplate: "",
-  firstInput: 15, betweenTurns: 30, closingGrace: 5, maxSession: 600,
+  firstInput: 180, betweenTurns: 180, closingGrace: 5, maxSession: 0,
   vad: "", asr: "", llm: "", tts: "",
 });
 
@@ -166,10 +166,10 @@ watch(
     form.responseStyle = prompt.responseStyle;
     form.userAddress = prompt.userAddress;
     form.promptTemplate = prompt.template;
-    form.firstInput = Number(conversation.firstInputSeconds ?? 15);
-    form.betweenTurns = Number(conversation.betweenTurnsSeconds ?? 30);
+    form.firstInput = Number(conversation.firstInputSeconds ?? 180);
+    form.betweenTurns = Number(conversation.betweenTurnsSeconds ?? 180);
     form.closingGrace = Number(conversation.closingGraceSeconds ?? 5);
-    form.maxSession = Number(conversation.maxSessionSeconds ?? 600);
+    form.maxSession = Number(conversation.maxSessionSeconds ?? 0);
     form.vad = chainProvider(agent, "vad");
     form.asr = chainProvider(agent, "asr");
     form.llm = chainProvider(agent, "llm");
@@ -213,6 +213,8 @@ async function publish(): Promise<void> {
           betweenTurnsSeconds: Number(form.betweenTurns),
           closingGraceSeconds: Number(form.closingGrace),
           maxSessionSeconds: Number(form.maxSession),
+          // Product conversation has no parent turn ceiling; provider deadlines stay internal.
+          totalTurnSeconds: 0,
         },
       },
     });
@@ -571,7 +573,7 @@ const promptPreview = computed(() => {
         <article id="agent-runtime" class="vt-panel form-section agent-config-section">
           <header class="agent-section-header">
             <span class="agent-section-index">04</span>
-            <div><span class="vt-kicker">RUNTIME POLICY</span><h2>Provider và nhịp hội thoại</h2><p>Routing theo capability và locale, cùng các giới hạn để phiên thoại không treo ở trạng thái nghe mãi.</p></div>
+            <div><span class="vt-kicker">RUNTIME POLICY</span><h2>Provider và nhịp hội thoại</h2><p>Routing theo capability và locale; phiên chỉ tự chào khi không còn hoạt động hội thoại.</p></div>
           </header>
           <div class="agent-section-content agent-runtime-grid">
             <section class="agent-runtime-card">
@@ -584,12 +586,12 @@ const promptPreview = computed(() => {
               </div>
             </section>
             <section class="agent-runtime-card">
-              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Timeout hội thoại</b><small>Giới hạn rõ ràng cho từng phiên</small></div></header>
+              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Inactivity hội thoại</b><small>Không giới hạn tổng phiên hoặc tổng lượt</small></div></header>
               <div class="form-grid two">
-                <VtField label="Chờ câu đầu" hint="3–300 giây"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
-                <VtField label="Giữa các lượt" hint="3–600 giây"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
+                <VtField label="Chờ hoạt động đầu tiên" hint="Mặc định 180 giây"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
+                <VtField label="Giữa các lượt" hint="Mặc định 180 giây"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
                 <VtField label="Chào kết thúc" hint="0,5–60 giây"><VtInput v-model="form.closingGrace" type="number" min="0.5" max="60" step="0.5" /></VtField>
-                <VtField label="Giới hạn phiên" hint="10–3.600 giây"><VtInput v-model="form.maxSession" type="number" min="10" max="3600" /></VtField>
+                <VtField label="Giới hạn phiên" hint="0 = không giới hạn"><VtInput v-model="form.maxSession" type="number" min="0" max="3600" /></VtField>
               </div>
             </section>
           </div>

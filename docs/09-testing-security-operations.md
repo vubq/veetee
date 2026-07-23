@@ -78,7 +78,7 @@ E2E-03 button wake and activation wake word -> same auto conversation flow
 E2E-04 non-actionable/not-addressed/low-confidence input -> no LLM/MCP call
 E2E-05 click or interrupt profile during ASR/LLM/TTS/MCP -> silence/cancel -> new turn
 E2E-06 wake word -> conversation -> semantic “tạm biệt” -> close
-E2E-07 inactivity -> localized goodbye -> standby; wake in closing grace cancels close
+E2E-07 180 giây không có hoạt động hợp lệ -> localized goodbye -> standby; wake in closing grace cancels close
 E2E-08 provider ASR/LLM/TTS/MCP timeout and fallback
 E2E-09 Wi-Fi/server drop and reconnect
 E2E-10 MCP regular vs user-only policy

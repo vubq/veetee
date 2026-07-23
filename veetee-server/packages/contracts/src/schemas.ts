@@ -3,6 +3,7 @@ const sessionId = { type: "string", minLength: 1, maxLength: 64 } as const;
 const reasonCode = { type: "string", minLength: 1, maxLength: 64 } as const;
 const nonNegativeInteger = { type: "integer", minimum: 0 } as const;
 const positiveNumber = { type: "number", exclusiveMinimum: 0 } as const;
+const nonNegativeNumber = { type: "number", minimum: 0 } as const;
 const sha256 = { type: "string", pattern: "^[a-f0-9]{64}$" } as const;
 
 export const deviceCapabilitySchema = {
@@ -302,15 +303,15 @@ export const conversationPolicySchema = {
         first_input_seconds: positiveNumber,
         between_turns_seconds: positiveNumber,
         closing_grace_seconds: positiveNumber,
-        max_utterance_seconds: positiveNumber,
-        max_session_seconds: positiveNumber,
+        max_utterance_seconds: nonNegativeNumber,
+        max_session_seconds: nonNegativeNumber,
         admission_seconds: positiveNumber,
         asr_seconds: positiveNumber,
         planner_seconds: positiveNumber,
         llm_first_token_seconds: positiveNumber,
         tts_first_audio_seconds: positiveNumber,
         mcp_seconds: positiveNumber,
-        total_turn_seconds: positiveNumber,
+        total_turn_seconds: nonNegativeNumber,
       },
     },
     mcp: {

@@ -11,7 +11,8 @@ describe("validateAgentDraftConfig", () => {
           firstInputSeconds: 15,
           betweenTurnsSeconds: 30,
           closingGraceSeconds: 5,
-          maxSessionSeconds: 600,
+          maxSessionSeconds: 0,
+          totalTurnSeconds: 0,
           contextMessageLimit: 12,
           contextMessageCharacters: 1200,
           timeoutGoodbye: "Tạm biệt, hẹn gặp lại.",
@@ -26,6 +27,7 @@ describe("validateAgentDraftConfig", () => {
     ["betweenTurnsSeconds", Number.NaN],
     ["closingGraceSeconds", 61],
     ["maxSessionSeconds", 3_601],
+    ["totalTurnSeconds", 61],
     ["plannerSeconds", "8"],
     ["contextMessageLimit", 1],
     ["contextMessageCharacters", 4_001],
@@ -33,6 +35,14 @@ describe("validateAgentDraftConfig", () => {
     expect(() =>
       validateAgentDraftConfig({ conversation: { [field]: value } }),
     ).toThrow(BadRequestException);
+  });
+
+  it("accepts disabled session and parent-turn ceilings", () => {
+    expect(() =>
+      validateAgentDraftConfig({
+        conversation: { maxSessionSeconds: 0, totalTurnSeconds: 0 },
+      }),
+    ).not.toThrow();
   });
 
   it("rejects empty timeout goodbye text", () => {

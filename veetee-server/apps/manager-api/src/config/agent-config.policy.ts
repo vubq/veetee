@@ -33,8 +33,9 @@ const conversationNumberBounds = {
   firstInputSeconds: [3, 300],
   betweenTurnsSeconds: [3, 600],
   closingGraceSeconds: [0.5, 60],
-  maxSessionSeconds: [10, 3_600],
-  totalTurnSeconds: [5, 60],
+  // Zero disables the product-level ceiling. Provider deadlines remain separate.
+  maxSessionSeconds: [0, 3_600],
+  totalTurnSeconds: [0, 60],
   admissionSeconds: [0.1, 5],
   plannerSeconds: [0.5, 15],
   llmSeconds: [1, 45],
