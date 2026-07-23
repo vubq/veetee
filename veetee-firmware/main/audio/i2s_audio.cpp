@@ -9,8 +9,10 @@
 #include "board/board_config.h"
 #include "decoder/impl/esp_opus_dec.h"
 #include "encoder/impl/esp_opus_enc.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/idf_additions.h"
 #include "sdkconfig.h"
 
 namespace veetee::audio {
@@ -155,12 +157,18 @@ esp_err_t I2sAudio::Start(bool play_boot_chime) {
         return ESP_ERR_INVALID_STATE;
     }
     play_boot_chime_ = play_boot_chime;
-    if (xTaskCreate(&I2sAudio::CaptureTaskEntry, "veetee_capture", 6144, this, 6,
-                    &capture_task_) != pdPASS) {
+    // Opus codec calls need an internal task stack on this ESP32-S3 profile.
+    const UBaseType_t audio_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    if (xTaskCreateWithCaps(&I2sAudio::CaptureTaskEntry, "veetee_capture",
+                            12 * 1024, this, 6, &capture_task_,
+                            audio_stack_caps) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&I2sAudio::PlaybackTaskEntry, "veetee_playback", 7168, this, 6,
-                    &playback_task_) != pdPASS) {
+    if (xTaskCreateWithCaps(&I2sAudio::PlaybackTaskEntry, "veetee_playback",
+                            12 * 1024, this, 6, &playback_task_,
+                            audio_stack_caps) != pdPASS) {
+        vTaskDeleteWithCaps(capture_task_);
+        capture_task_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

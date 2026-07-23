@@ -7,8 +7,10 @@
 #include <cstring>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "freertos/idf_additions.h"
 #include "network/endpoint_url.h"
 
 namespace veetee::transport {
@@ -51,19 +53,22 @@ esp_err_t WebSocketTransport::Initialize(settings::DeviceSettings* settings,
                   "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
                   mac[3], mac[4], mac[5]);
 
-    command_queue_ = xQueueCreate(kCommandQueueDepth, sizeof(Command));
+    const UBaseType_t external_memory_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    command_queue_ = xQueueCreateWithCaps(kCommandQueueDepth, sizeof(Command),
+                                          external_memory_caps);
     if (command_queue_ == nullptr) return ESP_ERR_NO_MEM;
-    outbound_audio_queue_ =
-        xQueueCreate(kOutboundAudioQueueDepth, sizeof(OutboundAudioFrame));
+    outbound_audio_queue_ = xQueueCreateWithCaps(
+        kOutboundAudioQueueDepth, sizeof(OutboundAudioFrame),
+        external_memory_caps);
     if (outbound_audio_queue_ == nullptr) {
-        vQueueDelete(command_queue_);
+        vQueueDeleteWithCaps(command_queue_);
         command_queue_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&WebSocketTransport::TaskEntry, "veetee_ws", 12288, this, 6,
-                    &task_) != pdPASS) {
-        vQueueDelete(command_queue_);
-        vQueueDelete(outbound_audio_queue_);
+    if (xTaskCreateWithCaps(&WebSocketTransport::TaskEntry, "veetee_ws", 12288,
+                            this, 6, &task_, external_memory_caps) != pdPASS) {
+        vQueueDeleteWithCaps(command_queue_);
+        vQueueDeleteWithCaps(outbound_audio_queue_);
         command_queue_ = nullptr;
         outbound_audio_queue_ = nullptr;
         return ESP_ERR_NO_MEM;
@@ -332,7 +337,8 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
     config.ping_interval_sec = 15;
     config.pingpong_timeout_sec = 10;
     config.buffer_size = 4096;
-    config.task_stack = 6144;
+    // TLS/WebSocket handshakes use more stack than the component default.
+    config.task_stack = 12 * 1024;
     config.task_prio = 5;
     config.user_agent = "veetee-firmware/0.1";
     config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -354,8 +360,14 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
                                       ? esp_websocket_client_start(client_)
                                       : register_error;
     if (start_error != ESP_OK) {
-        ESP_LOGW(kTag, "WebSocket start failed: %s",
-                 esp_err_to_name(start_error));
+        ESP_LOGW(
+            kTag,
+            "WebSocket start failed: %s internal_free=%u largest=%u psram_free=%u",
+            esp_err_to_name(start_error),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+            static_cast<unsigned>(
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
         Teardown(false);
         NotifyWithRetry(WebSocketTransportEvent::kLost, generation);
         return;

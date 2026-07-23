@@ -172,7 +172,7 @@ esp_err_t WakeDetector::Start() {
     }
     stop_requested_.store(false, std::memory_order_release);
     task_running_.store(true, std::memory_order_release);
-    if (xTaskCreateWithCaps(&WakeDetector::TaskEntry, "veetee_wake", 8192,
+    if (xTaskCreateWithCaps(&WakeDetector::TaskEntry, "veetee_wake", 12 * 1024,
                             this, 5, &task_,
                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(kTag,
