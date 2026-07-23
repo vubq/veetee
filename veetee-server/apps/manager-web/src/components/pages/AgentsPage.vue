@@ -1133,7 +1133,7 @@ const promptPreview = computed(() => {
   position: relative;
   display: block;
   min-width: 0;
-  min-height: 112px;
+  min-height: 0;
   gap: 0;
   align-items: normal;
   overflow: hidden;
@@ -1145,18 +1145,13 @@ const promptPreview = computed(() => {
 }
 
 .personality-card::after {
-  display: block;
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: var(--personality-accent);
-  content: "";
+  display: none;
 }
 
 .personality-card.active {
-  border-color: var(--personality-accent);
-  background: color-mix(in srgb, var(--personality-accent) 6%, white);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--personality-accent) 14%, transparent);
+  border-color: var(--orange);
+  background: #fff8f5;
+  box-shadow: 0 0 0 3px rgba(242, 100, 60, .1);
 }
 
 .personality-choice {
@@ -1167,7 +1162,7 @@ const promptPreview = computed(() => {
   align-items: start;
   gap: 10px;
   border: 0;
-  padding: 14px 13px 14px 17px;
+  padding: 13px 14px;
   color: var(--ink);
   background: transparent;
   text-align: left;
@@ -1214,22 +1209,22 @@ const promptPreview = computed(() => {
 }
 
 .personality-card b {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   font-size: 11px;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .personality-card small {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   color: var(--muted);
   font-size: 9px;
   line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .personality-selected {

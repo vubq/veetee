@@ -1240,6 +1240,22 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   });
   expect(desktopPersonalityCards.firstWidth).toBeGreaterThanOrEqual(240);
   expect(desktopPersonalityCards.firstRowCount).toBeLessThanOrEqual(4);
+  const personalityCardVisual = await page.locator(".personality-card").first().evaluate((card) => {
+    const description = card.querySelector("small");
+    const title = card.querySelector("b");
+    const cardBox = card.getBoundingClientRect();
+    const descriptionBox = description?.getBoundingClientRect();
+    return {
+      accentRail: getComputedStyle(card, "::after").display,
+      titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : "",
+      descriptionWhiteSpace: description ? getComputedStyle(description).whiteSpace : "",
+      contentBottomGap: descriptionBox ? cardBox.bottom - descriptionBox.bottom : Number.POSITIVE_INFINITY,
+    };
+  });
+  expect(personalityCardVisual.accentRail).toBe("none");
+  expect(personalityCardVisual.titleWhiteSpace).toBe("normal");
+  expect(personalityCardVisual.descriptionWhiteSpace).toBe("normal");
+  expect(personalityCardVisual.contentBottomGap).toBeLessThanOrEqual(16);
   const desktopOverflow = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
