@@ -448,7 +448,9 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
   mất packet.
 - `tts:start`, binary Opus và `tts:stop` phải được xử lý theo đúng thứ tự. Firmware
   chỉ báo `tts stopped` cho state machine sau khi playback queue drain, không phải
-  ngay khi nhận JSON `tts:stop`.
+  ngay khi nhận JSON `tts:stop`. Nếu queue đã đầy đến mức không thể xếp marker kết
+  thúc, audio task phải hủy generation chưa hoàn chỉnh rồi vẫn phát completion từ
+  chính audio task; không được để state kẹt vĩnh viễn ở `SPEAKING`.
 - `abort` phải idempotent và hoàn tất trong mục tiêu <100 ms ở local device.
 - Khi local abort, firmware đặt `accept_tts_audio=false`, clear decoder/playback queue và chỉ nhận binary TTS lại sau `tts:start` của generation mới. Raw Opus V1 không mang `turn_id`, nên quy tắc này là bắt buộc để frame cũ đang nằm trong socket không phát lại.
 

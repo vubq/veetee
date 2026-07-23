@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "audio/audio_diagnostics.h"
+#include "audio/playback_control.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -40,13 +41,6 @@ public:
     AudioRuntimeHealth Health(std::uint64_t now_ms);
 
 private:
-    enum class PlaybackItemKind : std::uint8_t {
-        kBegin,
-        kPacket,
-        kEnd,
-        kAbort,
-    };
-
     struct PlaybackItem {
         PlaybackItemKind kind;
         std::uint32_t generation;

@@ -49,6 +49,16 @@ target_compile_options(audio_diagnostics_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME audio_diagnostics_test COMMAND audio_diagnostics_test)
 
 add_executable(
+    playback_control_test
+    playback_control_test.cpp
+)
+target_include_directories(playback_control_test PRIVATE ../main)
+target_compile_features(playback_control_test PRIVATE cxx_std_17)
+target_compile_options(playback_control_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME playback_control_test COMMAND playback_control_test)
+
+add_executable(
     endpoint_url_test
     endpoint_url_test.cpp
     ../main/network/endpoint_url.cpp

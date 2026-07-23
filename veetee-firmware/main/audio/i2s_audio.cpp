@@ -211,7 +211,18 @@ void I2sAudio::EndPlayback() {
     if (!playback_accepting_.exchange(false)) return;
     const std::uint32_t generation = playback_generation_.load();
     if (!QueuePlaybackControl(PlaybackItemKind::kEnd, generation)) {
-        AbortPlayback();
+        RecordAudioCounter(AudioCounter::kPlaybackQueueDrop);
+        const std::uint32_t recovery_generation =
+            playback_generation_.fetch_add(1) + 1;
+        xQueueReset(playback_queue_);
+        ESP_LOGW(kTag,
+                 "Playback queue full at end; aborting generation=%" PRIu32
+                 " and completing generation=%" PRIu32,
+                 generation, recovery_generation);
+        if (!QueuePlaybackControl(PlaybackEndOverflowRecovery(),
+                                  recovery_generation)) {
+            ESP_LOGE(kTag, "Unable to queue playback completion recovery");
+        }
     }
 }
 
@@ -400,10 +411,15 @@ void I2sAudio::RunPlayback() {
             esp_opus_dec_reset(decoder_);
             continue;
         }
-        if (item.kind == PlaybackItemKind::kAbort) {
+        if (item.kind == PlaybackItemKind::kAbort ||
+            item.kind == PlaybackItemKind::kAbortAndFinish) {
             decoder_generation = item.generation;
             esp_opus_dec_reset(decoder_);
             WriteSilence();
+            if (FinishesPlayback(item.kind) &&
+                playback_finished_sink_ != nullptr) {
+                playback_finished_sink_(sink_context_);
+            }
             continue;
         }
         if (item.generation != decoder_generation ||
@@ -412,7 +428,8 @@ void I2sAudio::RunPlayback() {
         }
         if (item.kind == PlaybackItemKind::kEnd) {
             WriteSilence();
-            if (playback_finished_sink_ != nullptr) {
+            if (FinishesPlayback(item.kind) &&
+                playback_finished_sink_ != nullptr) {
                 playback_finished_sink_(sink_context_);
             }
             continue;
