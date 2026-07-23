@@ -115,9 +115,9 @@ async function publish(): Promise<void> {
         <article class="vt-panel form-section">
           <header class="panel-header"><div><span class="section-index">01</span><h2>Danh tính</h2><p>Tên hiển thị, ngôn ngữ và persona được gửi vào runtime.</p></div></header>
           <div class="form-grid two">
-            <VtField label="Tên trợ lý" required><VtInput v-model="form.name" maxlength="80" required /></VtField>
+            <VtField label="Tên trợ lý" hint="Tên hiển thị trên Manager và màn hình robot" required><VtInput v-model="form.name" maxlength="80" required /></VtField>
             <VtField label="Ngôn ngữ mặc định" hint="BCP 47 locale"><VtSelect v-model="form.locale"><option value="vi-VN">Tiếng Việt · vi-VN</option><option value="en-US">English · en-US</option></VtSelect></VtField>
-            <VtField label="Chế độ tương tác" hint="Tự động là trải nghiệm mặc định; nút và wake word cùng mở hoặc ngắt một phiên."><VtSelect v-model="form.mode"><option value="auto">Tự động · nói là xử lý trong phiên</option><option value="realtime">Realtime thử nghiệm · yêu cầu AEC/barge-in</option><option value="manual">Thủ công / PTT · chế độ tương thích</option></VtSelect></VtField>
+            <VtField label="Chế độ tương tác" class="span-two" hint="Tự động là trải nghiệm mặc định; nút và wake word cùng mở hoặc ngắt một phiên."><VtSelect v-model="form.mode"><option value="auto">Tự động · nói là xử lý trong phiên</option><option value="realtime">Realtime thử nghiệm · yêu cầu AEC/barge-in</option><option value="manual">Thủ công / PTT · chế độ tương thích</option></VtSelect></VtField>
             <div v-if="form.mode === 'realtime'" class="agent-mode-note span-two"><VtIcon name="warning" :size="18" /><p><b>Realtime đang ở mức thử nghiệm.</b><span>Chỉ dùng khi provider realtime, AEC và barge-in đã vượt benchmark; chế độ này không thay đổi logic nói → AI nghe → xử lý → trả lời.</span></p></div>
             <VtField label="Tính cách / persona" class="span-two" required><VtTextarea v-model="form.persona" rows="5" required /></VtField>
           </div>

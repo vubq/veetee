@@ -1006,6 +1006,65 @@ test("filters the device fleet without losing the selected device", async ({ pag
   await expect(page.locator(".device-detail h2")).toHaveText("Veetee Lab");
 });
 
+test("keeps device workspaces separated and agent identity fields aligned", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/#/devices");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  const filterBox = await page.locator(".device-filter-panel").boundingBox();
+  const deviceLayoutBox = await page.locator(".device-layout").boundingBox();
+  expect(filterBox).not.toBeNull();
+  expect(deviceLayoutBox).not.toBeNull();
+  expect(deviceLayoutBox!.y - (filterBox!.y + filterBox!.height)).toBeGreaterThanOrEqual(16);
+
+  const deliveryHeading = page.locator(".delivery-state-heading");
+  const deliveryBadge = deliveryHeading.locator(".vt-badge");
+  await expect(deliveryBadge).toHaveCount(1);
+  const deliveryHeadingBox = await deliveryHeading.boundingBox();
+  const deliveryBadgeBox = await deliveryBadge.boundingBox();
+  expect(deliveryHeadingBox).not.toBeNull();
+  expect(deliveryBadgeBox).not.toBeNull();
+  expect(deliveryBadgeBox!.x).toBeGreaterThanOrEqual(deliveryHeadingBox!.x);
+  expect(deliveryBadgeBox!.x + deliveryBadgeBox!.width).toBeLessThanOrEqual(
+    deliveryHeadingBox!.x + deliveryHeadingBox!.width + 1,
+  );
+
+  await page.getByRole("tab", { name: /Display \/ UI/ }).click();
+  await expect.poll(async () => {
+    const [capabilityBox, studioBox] = await Promise.all([
+      page.locator(".capability-gate").boundingBox(),
+      page.locator(".studio-layout").boundingBox(),
+    ]);
+    if (!capabilityBox || !studioBox) return -1;
+    return studioBox.y - (capabilityBox.y + capabilityBox.height);
+  }).toBeGreaterThanOrEqual(16);
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  const identityGrid = page.locator(".form-section").first().locator(".form-grid.two");
+  const nameField = page.getByLabel("Tên trợ lý").locator("..");
+  const localeField = page.getByLabel("Ngôn ngữ mặc định").locator("..");
+  const modeField = page.getByLabel("Chế độ tương tác").locator("..");
+  const [identityGridBox, nameFieldBox, localeFieldBox, modeFieldBox] = await Promise.all([
+    identityGrid.boundingBox(),
+    nameField.boundingBox(),
+    localeField.boundingBox(),
+    modeField.boundingBox(),
+  ]);
+  expect(identityGridBox).not.toBeNull();
+  expect(nameFieldBox).not.toBeNull();
+  expect(localeFieldBox).not.toBeNull();
+  expect(modeFieldBox).not.toBeNull();
+  expect(Math.abs(nameFieldBox!.y - localeFieldBox!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(nameFieldBox!.height - localeFieldBox!.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(modeFieldBox!.x - identityGridBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(modeFieldBox!.width - identityGridBox!.width)).toBeLessThanOrEqual(1);
+});
+
 test("keeps every top-level screen inside the mobile viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockManagerApi(page, { withDevice: true });

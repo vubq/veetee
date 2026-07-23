@@ -18,11 +18,13 @@ const icon = computed(() => summary.value.state === "synced" ? "check" : summary
   <section class="delivery-state" data-device-delivery :data-delivery-state="summary.state">
     <div class="delivery-state-banner" :class="`is-${summary.state}`">
       <span><VtIcon :name="icon" :size="21" /></span>
-      <div>
-        <b>{{ summary.title }}</b>
+      <div class="delivery-state-copy">
+        <div class="delivery-state-heading">
+          <b>{{ summary.title }}</b>
+          <VtBadge :tone="deliveryTone(summary.state)">{{ deliveryLabel(summary.state) }}</VtBadge>
+        </div>
         <p>{{ summary.description }}</p>
       </div>
-      <VtBadge :tone="deliveryTone(summary.state)">{{ deliveryLabel(summary.state) }}</VtBadge>
     </div>
 
     <div class="delivery-subsystems">
