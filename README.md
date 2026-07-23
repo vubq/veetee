@@ -44,6 +44,7 @@ veetee/
 
 - `docs/17-xiaozhi-useful-capabilities.md` - capability inventory tham khảo từ Xiaozhi, không phải plan task.
 - `docs/18-device-diagnostics.md` - contract audio debugger, self-test và device health P0.
+- `docs/19-signed-firmware-ota.md` - firmware OTA ký số, canary/% rollout và rollback.
 
 ## Source tham chiếu
 

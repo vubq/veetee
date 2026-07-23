@@ -54,6 +54,8 @@ const resourcePhases = [
   "active",
   "failed",
   "rolled_back",
+  "rebooting",
+  "pending_health",
 ] as const;
 
 export class ReportedFirmwareStateDto {
@@ -236,6 +238,12 @@ export class ReportedDeviceStateDto {
   @ValidateNested()
   @Type(() => ReportedResourceStateDto)
   ui?: ReportedResourceStateDto;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedResourceStateDto)
+  firmware_ota?: ReportedResourceStateDto;
 }
 
 export class ReportedStateDto {
@@ -299,7 +307,7 @@ export class DevicesController {
   @UseGuards(DeviceAuthGuard)
   @Put("veetee/devices/:id/reported-state")
   async report(@Param("id") id: string, @Body() input: ReportedStateDto): Promise<DeviceRecord> {
-    const artifacts = [input.state.resource, input.state.ui].filter(
+    const artifacts = [input.state.resource, input.state.ui, input.state.firmware_ota].filter(
       (artifact): artifact is ReportedResourceStateDto => artifact !== undefined,
     );
     if (artifacts.length !== 1) {

@@ -26,7 +26,7 @@ interface BootstrapResponse {
     timeout_ms: number;
   };
   websocket: { url: string; token: string };
-  firmware: { version: string; url: string };
+  firmware: { version: string; url: string; manifest_url?: string };
   config?: { version: number; etag: string; url: string };
   resources?: { version: string; manifest_url: string };
   ui?: { version: string; manifest_url: string };
@@ -71,7 +71,10 @@ export class OtaController {
         token: state.state === "active" ? token ?? "" : "",
       },
       firmware: {
-        version: process.env.VEETEE_FIRMWARE_VERSION ?? firmwareVersion ?? "0.1.0",
+        version: (state.state === "active" ? state.firmwareVersion : undefined) ??
+          process.env.VEETEE_FIRMWARE_VERSION ??
+          firmwareVersion ??
+          "0.1.0",
         url: process.env.VEETEE_FIRMWARE_URL ?? "",
       },
     };
@@ -105,6 +108,16 @@ export class OtaController {
         version: state.resourceVersion ?? process.env.VEETEE_RESOURCE_VERSION ?? "0.0.0",
         manifest_url: this.httpUrl(manifestUrl, "VEETEE_RESOURCE_MANIFEST_URL"),
       };
+    }
+    // Do not hand the running image its own manifest again: after a successful
+    // reboot this would otherwise create an A/B download-and-reboot loop.
+    if (
+      state.state === "active" &&
+      state.firmwareManifestId &&
+      firmwareVersion !== state.firmwareVersion
+    ) {
+      response.firmware.manifest_url =
+        `${managerUrl}/veetee/artifacts/manifests/${encodeURIComponent(state.firmwareManifestId)}`;
     }
     if (state.uiManifestId) {
       response.ui = {

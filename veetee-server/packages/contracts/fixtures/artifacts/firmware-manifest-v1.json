@@ -1,0 +1,35 @@
+{
+  "manifest_version": 1,
+  "bundle_id": "firmware-0.4.0",
+  "kind": "firmware",
+  "version": "0.4.0",
+  "channel": "canary",
+  "target": {
+    "board": "veetee-s3-n16r8",
+    "chip": "esp32s3",
+    "flash_bytes": 16777216,
+    "psram_bytes": 8388608
+  },
+  "compatibility": {
+    "min_bootloader": "1.0.0",
+    "min_security_epoch": 1
+  },
+  "payload": {
+    "url": "http://192.168.1.20:8001/veetee/artifacts/fw-0.4.0/content",
+    "size": 1532480,
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "content_type": "application/vnd.veetee.esp32s3-firmware"
+  },
+  "apply": {
+    "mode": "when_standby",
+    "requires_reboot": true,
+    "rollback_allowed": true
+  },
+  "created_at": "2026-07-23T00:00:00.000Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "firmware-test-key",
+    "security_epoch": 1,
+    "value": "CraouQ5bPY3hAIBcW+6RYCQPldkI6Qf0+J0TFJJY90spf9V2Uf/9NBWsiFC7obWMJAkqWibafOBE0mWD6K97Bg=="
+  }
+}

@@ -141,6 +141,85 @@ export const resourceManifestSchema = {
   },
 } as const;
 
+export const firmwareManifestSchema = {
+  $id: "https://schemas.veetee.local/artifacts/firmware-manifest-v1.json",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "manifest_version",
+    "bundle_id",
+    "kind",
+    "version",
+    "channel",
+    "target",
+    "compatibility",
+    "payload",
+    "apply",
+    "created_at",
+    "signature",
+  ],
+  properties: {
+    manifest_version: { const: 1 },
+    bundle_id: id,
+    kind: { const: "firmware" },
+    version: id,
+    channel: { enum: ["development", "canary", "stable"] },
+    target: {
+      type: "object",
+      additionalProperties: false,
+      required: ["board", "chip", "flash_bytes", "psram_bytes"],
+      properties: {
+        board: id,
+        chip: { const: "esp32s3" },
+        flash_bytes: nonNegativeInteger,
+        psram_bytes: nonNegativeInteger,
+      },
+    },
+    compatibility: {
+      type: "object",
+      additionalProperties: false,
+      required: ["min_bootloader", "min_security_epoch"],
+      properties: {
+        min_bootloader: id,
+        min_security_epoch: nonNegativeInteger,
+      },
+    },
+    payload: {
+      type: "object",
+      additionalProperties: false,
+      required: ["url", "size", "sha256", "content_type"],
+      properties: {
+        url: { type: "string", format: "uri" },
+        size: { type: "integer", minimum: 1 },
+        sha256,
+        content_type: { const: "application/vnd.veetee.esp32s3-firmware" },
+      },
+    },
+    apply: {
+      type: "object",
+      additionalProperties: false,
+      required: ["mode", "requires_reboot", "rollback_allowed"],
+      properties: {
+        mode: { const: "when_standby" },
+        requires_reboot: { const: true },
+        rollback_allowed: { const: true },
+      },
+    },
+    created_at: { type: "string", format: "date-time" },
+    signature: {
+      type: "object",
+      additionalProperties: false,
+      required: ["algorithm", "key_id", "security_epoch", "value"],
+      properties: {
+        algorithm: { const: "ed25519" },
+        key_id: id,
+        security_epoch: nonNegativeInteger,
+        value: id,
+      },
+    },
+  },
+} as const;
+
 export const signedManifestVectorSchema = {
   $id: "https://schemas.veetee.local/artifacts/signed-manifest-vector-v1.json",
   type: "object",
@@ -900,6 +979,7 @@ export const webSocketEventSchema = {
 export const schemas = [
   deviceCapabilitySchema,
   resourceManifestSchema,
+  firmwareManifestSchema,
   signedManifestVectorSchema,
   conversationPolicySchema,
   providerBaselineSchema,

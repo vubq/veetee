@@ -25,7 +25,7 @@ interface MutationContext {
 
 export interface ArtifactRecord {
   id: string;
-  kind: "resource_bundle" | "model_pack" | "display_assets" | "audio_assets" | "admission_model";
+  kind: "firmware" | "resource_bundle" | "model_pack" | "display_assets" | "audio_assets" | "admission_model";
   version: string;
   channel: string;
   sizeBytes: number;
@@ -96,6 +96,7 @@ export interface WakeProfileInput {
 }
 
 const artifactKindToDatabase = {
+  firmware: ArtifactKind.FIRMWARE,
   resource_bundle: ArtifactKind.RESOURCE_BUNDLE,
   model_pack: ArtifactKind.MODEL_PACK,
   display_assets: ArtifactKind.DISPLAY_ASSETS,

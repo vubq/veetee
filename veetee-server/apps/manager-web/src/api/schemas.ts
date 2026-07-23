@@ -239,6 +239,7 @@ const detectorProfileSchema = z.object({
 export const artifactSchema = z.object({
   id: z.string(),
   kind: z.enum([
+    "firmware",
     "resource_bundle",
     "model_pack",
     "display_assets",
@@ -262,6 +263,36 @@ export const artifactSchema = z.object({
   status: z.enum(["validated", "published", "revoked"]),
   publishedAt: z.string().optional(),
   createdAt: z.string(),
+});
+
+export const firmwareReleaseSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  channel: z.string(),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string().length(64),
+  contentType: z.string(),
+  board: z.string(),
+  signatureKeyId: z.string(),
+  securityEpoch: z.number().int().positive(),
+  status: z.enum(["validated", "published", "revoked"]),
+  publishedAt: z.string().optional(),
+  createdAt: z.string(),
+});
+
+export const firmwareRolloutSchema = z.object({
+  id: z.string(),
+  artifactId: z.string(),
+  previousArtifactId: z.string().optional(),
+  channel: z.string(),
+  percentage: z.number().int().min(0).max(100),
+  canaryDeviceIds: z.array(z.string()),
+  status: z.enum(["draft", "running", "paused", "completed", "failed", "rolled_back"]),
+  selectedDeviceIds: z.array(z.string()),
+  activeDeviceIds: z.array(z.string()),
+  failedDeviceIds: z.array(z.string()),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const wakeProfileSchema = z.object({
@@ -342,5 +373,7 @@ export type Artifact = z.infer<typeof artifactSchema>;
 export type WakeProfile = z.infer<typeof wakeProfileSchema>;
 export type ResourceRollout = z.infer<typeof resourceRolloutSchema>;
 export type UiPackRollout = z.infer<typeof uiPackRolloutSchema>;
+export type FirmwareRelease = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareRollout = z.infer<typeof firmwareRolloutSchema>;
 export type LabSession = z.infer<typeof labSessionSchema>;
 export type DeviceCapabilities = z.infer<typeof deviceCapabilitiesSchema>;

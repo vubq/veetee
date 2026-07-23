@@ -12,7 +12,7 @@ const allowedChannels = new Set(["development", "canary", "stable"]);
 
 export interface ValidatedResourceManifest {
   artifactId: string;
-  kind: "resource_bundle" | "display_assets";
+  kind: "firmware" | "resource_bundle" | "display_assets";
   version: string;
   channel: string;
   sizeBytes: number;
@@ -40,7 +40,11 @@ export class ResourceManifestService {
     const bundleId = string(manifest.bundle_id, "bundle_id", safeId);
     if (bundleId.length < 1) throw new BadRequestException("bundle_id is invalid");
     const manifestKind = string(manifest.kind, "kind");
-    if (manifestKind !== "resource_bundle" && manifestKind !== "ui_pack") {
+    if (
+      manifestKind !== "firmware" &&
+      manifestKind !== "resource_bundle" &&
+      manifestKind !== "ui_pack"
+    ) {
       throw new BadRequestException("Artifact manifest kind is unsupported");
     }
     const version = string(manifest.version, "version", semver);
@@ -56,19 +60,38 @@ export class ResourceManifestService {
     integer(target.psram_bytes, "target.psram_bytes", 8_388_608, 8_388_608);
 
     const compatibility = object(manifest.compatibility, "compatibility");
-    const minFirmware = string(compatibility.min_firmware, "compatibility.min_firmware", semver);
-    const maxFirmware = string(
-      compatibility.max_firmware_exclusive,
-      "compatibility.max_firmware_exclusive",
-      semver,
-    );
-    const resourceAbi = integer(
-      compatibility.resource_abi,
-      "compatibility.resource_abi",
-      manifestKind === "ui_pack" ? 2 : 1,
-      manifestKind === "ui_pack" ? 2 : 1,
-    );
-    if (manifestKind === "ui_pack") {
+    const minFirmware =
+      manifestKind === "firmware"
+        ? "0.0.0"
+        : string(compatibility.min_firmware, "compatibility.min_firmware", semver);
+    const maxFirmware =
+      manifestKind === "firmware"
+        ? "999.999.999"
+        : string(
+            compatibility.max_firmware_exclusive,
+            "compatibility.max_firmware_exclusive",
+            semver,
+          );
+    const resourceAbi =
+      manifestKind === "firmware"
+        ? 1
+        : integer(
+            compatibility.resource_abi,
+            "compatibility.resource_abi",
+            manifestKind === "ui_pack" ? 2 : 1,
+            manifestKind === "ui_pack" ? 2 : 1,
+          );
+    const minimumSecurityEpoch = manifestKind === "firmware"
+      ? integer(
+          compatibility.min_security_epoch,
+          "compatibility.min_security_epoch",
+          1,
+          2_147_483_647,
+        )
+      : 1;
+    if (manifestKind === "firmware") {
+      string(compatibility.min_bootloader, "compatibility.min_bootloader", semver);
+    } else if (manifestKind === "ui_pack") {
       integer(compatibility.ui_abi, "compatibility.ui_abi", 1, 1);
     }
 
@@ -82,11 +105,12 @@ export class ResourceManifestService {
     ) {
       throw new BadRequestException("Artifact payload URL is outside the canonical route");
     }
+    const maximumBytes = manifestKind === "firmware" ? 0x3a0000 : 2 * 1024 * 1024;
     const sizeBytes = integer(
       payload.size,
       "payload.size",
       1,
-      manifestKind === "ui_pack" ? 2 * 1024 * 1024 : 2 * 1024 * 1024,
+      maximumBytes,
     );
     const payloadHash = string(payload.sha256, "payload.sha256", sha256);
     if (sizeBytes !== inspected.sizeBytes || payloadHash !== inspected.sha256) {
@@ -94,27 +118,48 @@ export class ResourceManifestService {
     }
     const contentType = string(payload.content_type, "payload.content_type");
     const expectedContentType =
-      manifestKind === "ui_pack"
+      manifestKind === "firmware"
+        ? "application/vnd.veetee.esp32s3-firmware"
+        : manifestKind === "ui_pack"
         ? "application/vnd.veetee.ui-pack"
         : "application/vnd.veetee.esp-sr-model-pack";
     if (contentType !== expectedContentType) {
       throw new BadRequestException("Artifact content type is unsupported");
     }
 
-    const members = array(manifest.members, "members");
-    if (members.length !== 1) throw new BadRequestException("Artifact requires one payload member");
-    const member = object(members[0], "members[0]");
-    const expectedMemberKind = manifestKind === "ui_pack" ? "display_assets" : "model_pack";
-    if (member.kind !== expectedMemberKind) {
-      throw new BadRequestException("Artifact member kind is unsupported");
-    }
-    const runtime = string(member.runtime, "members[0].runtime", safeId);
-    const expectedRuntime = manifestKind === "ui_pack" ? "veetee-ui" : "esp-sr";
-    if (runtime !== expectedRuntime) throw new BadRequestException("Artifact runtime is unsupported");
-    const runtimeAbi = integer(member.runtime_abi, "members[0].runtime_abi", 1, 1);
-    integer(member.format_version, "members[0].format_version", 1, 1);
-    if (member.bytes !== sizeBytes || member.sha256 !== payloadHash) {
-      throw new BadRequestException("Artifact member does not match the signed payload");
+    let runtime = "esp-idf-image";
+    let runtimeAbi = 1;
+    if (manifestKind === "firmware") {
+      const apply = object(manifest.apply, "apply");
+      if (
+        apply.mode !== "when_standby" ||
+        apply.requires_reboot !== true ||
+        apply.rollback_allowed !== true
+      ) {
+        throw new BadRequestException("Firmware apply policy is unsafe");
+      }
+      await this.files.assertEsp32FirmwareImage(artifactId, sizeBytes);
+    } else {
+      const members = array(manifest.members, "members");
+      if (members.length !== 1) {
+        throw new BadRequestException("Artifact requires one payload member");
+      }
+      const member = object(members[0], "members[0]");
+      const expectedMemberKind =
+        manifestKind === "ui_pack" ? "display_assets" : "model_pack";
+      if (member.kind !== expectedMemberKind) {
+        throw new BadRequestException("Artifact member kind is unsupported");
+      }
+      runtime = string(member.runtime, "members[0].runtime", safeId);
+      const expectedRuntime = manifestKind === "ui_pack" ? "veetee-ui" : "esp-sr";
+      if (runtime !== expectedRuntime) {
+        throw new BadRequestException("Artifact runtime is unsupported");
+      }
+      runtimeAbi = integer(member.runtime_abi, "members[0].runtime_abi", 1, 1);
+      integer(member.format_version, "members[0].format_version", 1, 1);
+      if (member.bytes !== sizeBytes || member.sha256 !== payloadHash) {
+        throw new BadRequestException("Artifact member does not match the signed payload");
+      }
     }
 
     if (manifestKind === "ui_pack") {
@@ -146,6 +191,9 @@ export class ResourceManifestService {
       1,
       2_147_483_647,
     );
+    if (securityEpoch < minimumSecurityEpoch) {
+      throw new BadRequestException("Firmware security epoch is below its compatibility floor");
+    }
     const signatureBytes = Buffer.from(string(signature.value, "signature.value"), "base64");
     if (signatureBytes.length !== 64) {
       throw new BadRequestException("Artifact signature must contain 64 bytes");
@@ -169,7 +217,12 @@ export class ResourceManifestService {
 
     return {
       artifactId,
-      kind: manifestKind === "ui_pack" ? "display_assets" : "resource_bundle",
+      kind:
+        manifestKind === "firmware"
+          ? "firmware"
+          : manifestKind === "ui_pack"
+            ? "display_assets"
+            : "resource_bundle",
       version,
       channel,
       sizeBytes,

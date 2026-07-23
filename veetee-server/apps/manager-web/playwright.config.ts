@@ -4,7 +4,8 @@ import { existsSync } from "node:fs";
 const localBrave = "/opt/brave.com/brave/brave";
 const executablePath =
   process.env.PLAYWRIGHT_CHROMIUM_PATH ?? (existsSync(localBrave) ? localBrave : undefined);
-const webPort = Number(process.env.VEETEE_WEB_E2E_PORT ?? 8081);
+// Keep E2E isolated from the long-running LAN/Tailscale dev server on 8081.
+const webPort = Number(process.env.VEETEE_WEB_E2E_PORT ?? 8082);
 const webUrl = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({

@@ -2,7 +2,7 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/vue";
 import { computed, reactive, ref } from "vue";
 
-import type { Artifact, Device, ResourceRollout, UiPackRollout, WakeProfile } from "../../api/schemas";
+import type { Artifact, Device, FirmwareRelease, FirmwareRollout, ResourceRollout, UiPackRollout, WakeProfile } from "../../api/schemas";
 import { formatBytes, statusTone } from "../../utils/format";
 import { normalizeRollouts } from "../../utils/rollouts";
 import RolloutHistory from "../delivery/RolloutHistory.vue";
@@ -13,6 +13,8 @@ const props = defineProps<{
   wakeProfiles: WakeProfile[];
   rollouts: ResourceRollout[];
   uiPackRollouts: UiPackRollout[];
+  firmwareReleases: FirmwareRelease[];
+  firmwareRollouts: FirmwareRollout[];
   devices: Device[];
   registerArtifact: (artifactId: string, license: string) => Promise<void>;
   publishArtifact: (id: string) => Promise<void>;
@@ -22,15 +24,29 @@ const props = defineProps<{
     interrupt: { detectorId: string; sensitivity: number; cooldownMs: number; allowedStates: string[] };
   }) => Promise<void>;
   publishWakeProfile: (id: string) => Promise<void>;
+  publishFirmwareRelease: (id: string) => Promise<void>;
+  createFirmwareRollout: (artifactId: string, percentage: number, canaryDeviceIds: string[]) => Promise<void>;
+  pauseFirmwareRollout: (id: string) => Promise<void>;
+  resumeFirmwareRollout: (id: string, percentage?: number) => Promise<void>;
+  rollbackFirmwareRollout: (id: string) => Promise<void>;
 }>();
 
 const artifactForm = reactive({ id: "", license: "" });
 const wakeForm = reactive({ name: "Hey VeeTee", artifactId: "", phrase: "Hey VeeTee", channel: "development", locale: "vi-VN", activationDetector: "", interruptDetector: "" });
 const busyKey = ref("");
 const error = ref("");
+const firmwareForm = reactive({ artifactId: "", canaryDeviceId: "", percentage: 10 });
 
 const wakeArtifacts = computed(() => props.artifacts.filter((artifact) => ["resource_bundle", "model_pack"].includes(artifact.kind)));
 const deliveryRollouts = computed(() => normalizeRollouts(props.rollouts, props.uiPackRollouts));
+function canaryReady(rollout: FirmwareRollout): boolean {
+  return rollout.canaryDeviceIds.every((deviceId) => rollout.activeDeviceIds.includes(deviceId));
+}
+function percentagePending(rollout: FirmwareRollout): boolean {
+  if (rollout.status !== "running" || rollout.percentage <= 0 || !canaryReady(rollout)) return false;
+  const canaries = new Set(rollout.canaryDeviceIds);
+  return rollout.selectedDeviceIds.every((deviceId) => canaries.has(deviceId));
+}
 const activeRollouts = computed(() => deliveryRollouts.value.filter((rollout) => rollout.status === "active").length);
 const completeRollouts = computed(() => deliveryRollouts.value.filter((rollout) => rollout.status === "complete").length);
 const problemRollouts = computed(() => deliveryRollouts.value.filter((rollout) => ["failed", "rolled_back"].includes(rollout.status)).length);
@@ -67,6 +83,21 @@ async function createWake(): Promise<void> {
   });
 }
 
+async function createFirmware(): Promise<void> {
+  await perform("firmware-create", async () => {
+    const release = props.firmwareReleases.find((item) => item.id === firmwareForm.artifactId);
+    const canaries = firmwareForm.canaryDeviceId ? [firmwareForm.canaryDeviceId] : [];
+    if (release?.channel === "stable" && canaries.length === 0) {
+      throw new Error("Stable rollout bắt buộc có thiết bị canary.");
+    }
+    await props.createFirmwareRollout(
+      firmwareForm.artifactId,
+      Number(firmwareForm.percentage),
+      canaries,
+    );
+  });
+}
+
 </script>
 
 <template>
@@ -79,6 +110,7 @@ async function createWake(): Promise<void> {
         <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="resource" :size="17" /> Artifacts <span>{{ artifacts.length }}</span></button></Tab>
         <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="mic" :size="17" /> Wake profiles <span>{{ wakeProfiles.length }}</span></button></Tab>
         <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="telemetry" :size="17" /> Rollouts <span>{{ deliveryRollouts.length }}</span></button></Tab>
+        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="upload" :size="17" /> Firmware OTA <span>{{ firmwareRollouts.length }}</span></button></Tab>
       </TabList>
 
       <TabPanels>
@@ -164,6 +196,49 @@ async function createWake(): Promise<void> {
                   <span><b>03</b><strong>Firmware xác nhận</strong><small>Hoàn tất khi report active đúng phiên bản.</small></span>
                 </div>
               </div>
+            </article>
+          </div>
+        </TabPanel>
+
+        <TabPanel class="tab-panel">
+          <div class="content-grid is-wide-left firmware-rollout-grid">
+            <article class="vt-panel">
+              <header class="panel-header"><div><span class="vt-kicker">SIGNED EXECUTABLE RELEASES</span><h2>Firmware A/B</h2><p>Chỉ image ESP32-S3 có manifest Ed25519 hợp lệ mới được publish. Desired và reported luôn tách biệt.</p></div><VtBadge tone="info">Không xoá NVS / Wi-Fi</VtBadge></header>
+              <div v-if="firmwareReleases.length" class="artifact-list">
+                <div v-for="release in firmwareReleases" :key="release.id">
+                  <span class="artifact-icon"><VtIcon name="upload" :size="20" /></span>
+                  <div><b>{{ release.version }}</b><small>{{ release.id }} · {{ release.channel }} · {{ formatBytes(release.sizeBytes) }}</small><code>{{ release.sha256.slice(0, 18) }}… · epoch {{ release.securityEpoch }}</code></div>
+                  <VtBadge :tone="statusTone(release.status)">{{ release.status }}</VtBadge>
+                  <VtButton v-if="release.status === 'validated'" size="sm" variant="secondary" :busy="busyKey === `fw-publish-${release.id}`" @click="perform(`fw-publish-${release.id}`, () => publishFirmwareRelease(release.id))">Publish</VtButton>
+                </div>
+              </div>
+              <VtEmptyState v-else icon="resource" title="Chưa có firmware release" text="Chạy firmware:release, đăng ký artifact, rồi publish tại đây." />
+
+              <div v-if="firmwareRollouts.length" class="firmware-campaigns">
+                <article v-for="rollout in firmwareRollouts" :key="rollout.id">
+                  <header><div><b>{{ rollout.artifactId }}</b><small>{{ rollout.channel }} · {{ rollout.percentage }}% · {{ rollout.selectedDeviceIds.length }} thiết bị</small></div><VtBadge :tone="statusTone(rollout.status)">{{ rollout.status }}</VtBadge></header>
+                  <div class="firmware-progress"><span :style="{ width: `${rollout.percentage}%` }"></span></div>
+                  <p>Canary {{ rollout.canaryDeviceIds.length }} · Active {{ rollout.activeDeviceIds.length }} · Lỗi {{ rollout.failedDeviceIds.length }}</p>
+                  <footer>
+                    <VtButton v-if="rollout.status === 'running'" size="sm" variant="secondary" :busy="busyKey === `fw-pause-${rollout.id}`" @click="perform(`fw-pause-${rollout.id}`, () => pauseFirmwareRollout(rollout.id))">Pause</VtButton>
+                    <VtButton v-if="rollout.status === 'paused'" size="sm" :busy="busyKey === `fw-resume-${rollout.id}`" @click="perform(`fw-resume-${rollout.id}`, () => resumeFirmwareRollout(rollout.id))">Resume</VtButton>
+                    <VtButton v-if="percentagePending(rollout)" size="sm" :busy="busyKey === `fw-apply-${rollout.id}`" @click="perform(`fw-apply-${rollout.id}`, () => resumeFirmwareRollout(rollout.id, rollout.percentage))">Phân phối {{ rollout.percentage }}%</VtButton>
+                    <VtButton v-if="rollout.status === 'running' && rollout.percentage < 100 && canaryReady(rollout)" size="sm" :busy="busyKey === `fw-expand-${rollout.id}`" @click="perform(`fw-expand-${rollout.id}`, () => resumeFirmwareRollout(rollout.id, Math.min(100, rollout.percentage + 10)))">Mở rộng +10%</VtButton>
+                    <VtButton v-if="rollout.previousArtifactId && !['rolled_back', 'completed'].includes(rollout.status)" size="sm" variant="danger" :busy="busyKey === `fw-rollback-${rollout.id}`" @click="perform(`fw-rollback-${rollout.id}`, () => rollbackFirmwareRollout(rollout.id))">Rollback</VtButton>
+                  </footer>
+                </article>
+              </div>
+            </article>
+
+            <article class="vt-panel form-section">
+              <header class="panel-header"><div><span class="vt-kicker">CANARY → PERCENTAGE</span><h2>Tạo rollout</h2><p>Canary luôn nhận trước. Phần trăm chỉ mở rộng sau khi canary report <code>active</code> đúng version.</p></div></header>
+              <form class="form-stack" @submit.prevent="createFirmware">
+                <VtField label="Firmware release" required><VtSelect v-model="firmwareForm.artifactId" required><option value="">Chọn release đã publish</option><option v-for="release in firmwareReleases.filter((item) => item.status === 'published')" :key="release.id" :value="release.id">{{ release.version }} · {{ release.channel }}</option></VtSelect></VtField>
+                <VtField label="Thiết bị canary"><VtSelect v-model="firmwareForm.canaryDeviceId"><option value="">Không chọn (chỉ development)</option><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} · {{ device.firmwareVersion ?? "unknown" }}</option></VtSelect></VtField>
+                <VtField label="Phần trăm fleet"><VtInput v-model.number="firmwareForm.percentage" type="number" min="0" max="100" required /></VtField>
+                <p class="desired-note">Pause không đổi image đang chạy. Rollback chỉ đổi desired pointer về release đã publish trước đó; firmware vẫn tự verify chữ ký và image.</p>
+                <VtButton type="submit" :busy="busyKey === 'firmware-create'" :disabled="!firmwareForm.artifactId">Bắt đầu rollout</VtButton>
+              </form>
             </article>
           </div>
         </TabPanel>

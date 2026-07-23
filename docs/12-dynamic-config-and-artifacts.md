@@ -276,6 +276,10 @@ OTA/bootstrap response giữ field Xiaozhi cũ và thêm optional Veetee fields:
   "resources": {
     "version": "1.4.0",
     "manifest_url": "http://192.168.1.20:8001/veetee/artifacts/manifests/01JRESOURCE"
+  },
+  "firmware": {
+    "version": "0.4.0",
+    "manifest_url": "http://192.168.1.20:8001/veetee/artifacts/manifests/fw-0.4.0"
   }
 }
 ```
@@ -380,7 +384,11 @@ capability của đúng artifact class.
 
 ## 10. Apply transaction và rollback
 
-Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1 và UI Pack V1:
+Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1 và UI Pack V1.
+Executable firmware có transaction riêng: detached Ed25519 manifest, streaming
+SHA-256 vào inactive `ota_*`, `esp_ota_end`, boot partition pending-verify, health
+window rồi mark-valid hoặc bootloader rollback. Firmware security epoch được giữ
+monotonic trong namespace NVS riêng và không sửa Wi-Fi/activation NVS:
 device-authenticated manifest/content pull, strict verify, Range/resume, streaming
 hash/write, CRC journal, safe-boundary reload, pending-health và rollback. Manager
 API stream file immutable trực tiếp, trả `206`/`Content-Range`, không buffer artifact
@@ -408,6 +416,11 @@ với `manifest.json`, `content.bin` và marker hoàn tất. Bootstrap có thể
 không cần domain.
 
 Không overwrite active slot trước khi verify xong. Mất điện ở mọi bước phải khởi động lại được từ apply journal.
+
+Executable release dùng `npm run firmware:release -- ...`; input mặc định hợp lý là
+`veetee-firmware/build/veetee_firmware.bin`. Script từ chối image không có magic ESP,
+image rỗng/quá `0x3A0000`, output directory đã tồn tại hoặc URL ngoài canonical
+artifact route. Chi tiết rollout và hardware gate ở `docs/19-signed-firmware-ota.md`.
 
 ## 11. Manager API và artifact lifecycle
 

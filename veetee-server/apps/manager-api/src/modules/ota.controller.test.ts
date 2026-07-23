@@ -64,6 +64,8 @@ describe("OtaController", () => {
         configVersion: 3,
         resourceVersion: "1.2.0",
         resourceManifestId: "canary-vi-v2",
+        firmwareVersion: "0.4.0",
+        firmwareManifestId: "fw-0.4.0",
       }),
     } as unknown as ControlPlaneStore;
     vi.stubEnv("VEETEE_MANAGER_PUBLIC_URL", "http://192.168.1.20:8001");
@@ -90,6 +92,33 @@ describe("OtaController", () => {
     expect(response.resources?.manifest_url).toBe(
       "http://192.168.1.20:8001/veetee/artifacts/manifests/canary-vi-v2",
     );
+    expect(response.firmware).toMatchObject({
+      version: "0.4.0",
+      manifest_url: "http://192.168.1.20:8001/veetee/artifacts/manifests/fw-0.4.0",
+    });
+  });
+
+  it("does not re-offer the manifest when the device already runs the desired firmware", async () => {
+    const store = {
+      bootstrapDevice: vi.fn().mockResolvedValue({
+        state: "active",
+        deviceId: "01JDEVICE",
+        agentId: "01JAGENT",
+        configVersion: 3,
+        firmwareVersion: "0.4.0",
+        firmwareManifestId: "fw-0.4.0",
+      }),
+    } as unknown as ControlPlaneStore;
+    vi.stubEnv("VEETEE_MANAGER_PUBLIC_URL", "http://192.168.1.20:8001");
+    const response = await new OtaController(store).bootstrap(
+      { ...headers, "firmware-version": "0.4.0" },
+      {},
+    );
+
+    expect(response.firmware).toEqual({
+      version: "0.4.0",
+      url: "",
+    });
   });
 
   it("keeps activation polling pending until the device is bound", async () => {

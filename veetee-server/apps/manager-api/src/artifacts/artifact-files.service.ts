@@ -77,11 +77,16 @@ export class ArtifactFilesService {
     this.validateId(manifestId);
     const desiredManifestId = desiredState.resourceManifestId;
     const desiredUiManifestId = desiredState.uiManifestId;
+    const desiredFirmwareManifestId = desiredState.firmwareManifestId;
     const expected =
       typeof desiredManifestId === "string"
         ? desiredManifestId
         : process.env.VEETEE_RESOURCE_MANIFEST_ID ?? this.manifestIdFromUrl();
-    if (expected !== manifestId && desiredUiManifestId !== manifestId) {
+    if (
+      expected !== manifestId &&
+      desiredUiManifestId !== manifestId &&
+      desiredFirmwareManifestId !== manifestId
+    ) {
       throw new ForbiddenException("Artifact is outside the device rollout scope");
     }
   }
@@ -157,6 +162,27 @@ export class ArtifactFilesService {
       throw new BadRequestException(
         error instanceof Error ? error.message : "UI Pack validation failed",
       );
+    } finally {
+      await contentFile.close();
+    }
+  }
+
+  async assertEsp32FirmwareImage(artifactId: string, expectedSize: number): Promise<void> {
+    const contentFile = await this.openArtifactFile(artifactId, contentFileName);
+    try {
+      const stat = await contentFile.stat();
+      if (!stat.isFile() || stat.size !== expectedSize || stat.size > 0x3a0000) {
+        throw new BadRequestException("Firmware image exceeds the executable OTA slot");
+      }
+      const header = Buffer.alloc(24);
+      const { bytesRead } = await contentFile.read(header, 0, header.length, 0);
+      if (bytesRead !== header.length || header[0] !== 0xe9) {
+        throw new BadRequestException("Firmware image is not an ESP32 application image");
+      }
+      const segmentCount = header[1] ?? 0;
+      if (segmentCount < 1 || segmentCount > 16) {
+        throw new BadRequestException("Firmware image segment table is invalid");
+      }
     } finally {
       await contentFile.close();
     }

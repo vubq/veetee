@@ -9,6 +9,7 @@ import { ResourceCatalogService } from "./artifacts/resource-catalog.service.js"
 import { ResourceManifestService } from "./artifacts/resource-manifest.service.js";
 import { UiPackUploadService } from "./artifacts/ui-pack-upload.service.js";
 import { UiPacksController } from "./artifacts/ui-packs.controller.js";
+import { FirmwareRolloutController } from "./ota/firmware-rollout.controller.js";
 import { AuthController } from "./auth/auth.controller.js";
 import { AuthGuard } from "./auth/auth.guard.js";
 import { LoginRateLimitService } from "./auth/login-rate-limit.service.js";
@@ -41,6 +42,7 @@ import { PairingService } from "./pairing/pairing.service.js";
 import { VoiceMcpService } from "./mcp/voice-mcp.service.js";
 import { SecretCryptoService } from "./security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./store/control-plane.store.js";
+import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
 
 @Module({
   controllers: [
@@ -48,6 +50,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     ArtifactsController,
     ResourceCatalogController,
     UiPacksController,
+    FirmwareRolloutController,
     HealthController,
     OtaController,
     PairingController,
@@ -80,6 +83,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     SecretCryptoService,
     LabSessionService,
     ControlPlaneStore,
+    FirmwareRolloutService,
     DeviceAuthGuard,
     ServiceTokenGuard,
     { provide: APP_GUARD, useClass: AuthGuard },

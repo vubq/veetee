@@ -207,8 +207,11 @@ consume code, firmware poll activate bằng challenge; server trả `202` tới 
 xong và kết quả `200` phải idempotent để retry sau mất response không xoay token.
 
 Sau activation, bootstrap yêu cầu Bearer device token, không còn `activation` và có
-thể trả `config`/`resources` optional. Device-facing JSON dùng `snake_case`; URL lấy
-từ cấu hình LAN/public endpoint, không nhúng domain cố định vào firmware.
+thể trả `config`/`resources`/`ui` optional. Signed executable rollout thêm
+`firmware.manifest_url`; field `firmware.url` cũ vẫn optional để client cũ bỏ qua,
+nhưng Veetee firmware chỉ cài image qua signed manifest. Device-facing JSON dùng
+`snake_case`; URL lấy từ cấu hình LAN/public endpoint, không nhúng domain cố định
+vào firmware.
 
 Firmware phải parse được cả `websocket` và `mqtt` object để giữ compatibility. Native Veetee V1 chọn WebSocket mặc định và chỉ chọn MQTT+UDP khi signed `preferred_transport=mqtt_udp` được publish rõ cho device/agent. Compatibility profile có thể giữ hành vi ưu tiên MQTT giống source tham chiếu. Server không được vô tình làm native firmware đổi transport chỉ vì response có thêm `mqtt` object.
 

@@ -18,6 +18,8 @@
     "models:benchmark": "HF_HUB_OFFLINE=1 uv run --project apps/voice-server python scripts/benchmark_local_ai.py",
     "providers:probe:9router": "uv run --env-file apps/voice-server/.env --project apps/voice-server python scripts/probe_nine_router.py",
     "resources:release": "node scripts/release_resource.mjs",
+    "firmware:release": "node scripts/release_firmware.mjs",
+    "firmware:image:test": "node --test scripts/lib/firmware-image.test.mjs",
     "ui-packs:build": "node scripts/build_ui_pack.mjs build",
     "ui-packs:inspect": "node scripts/build_ui_pack.mjs inspect",
     "ui-packs:test": "node --test scripts/lib/ui-pack.test.mjs",

@@ -16,11 +16,14 @@ enum class ReportedResourcePhase : std::uint8_t {
     kActive = 5,
     kFailed = 6,
     kRolledBack = 7,
+    kRebooting = 8,
+    kPendingHealth = 9,
 };
 
 enum class ReportedArtifactKind : std::uint8_t {
     kWakeResource = 0,
     kUiPack = 1,
+    kFirmware = 2,
 };
 
 struct ReportedResourceState {

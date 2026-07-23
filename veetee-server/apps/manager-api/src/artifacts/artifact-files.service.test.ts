@@ -66,6 +66,9 @@ describe("ArtifactFilesService", () => {
   it("limits access to the manifest selected for the device", () => {
     expect(() => service.assertDeviceAccess("stable", {})).not.toThrow();
     expect(() =>
+      service.assertDeviceAccess("canary", { firmwareManifestId: "canary" }),
+    ).not.toThrow();
+    expect(() =>
       service.assertDeviceAccess("canary", { resourceManifestId: "stable" }),
     ).toThrow(ForbiddenException);
   });

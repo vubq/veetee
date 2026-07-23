@@ -41,6 +41,8 @@ const artifacts = useQuery({ queryKey: ["artifacts"], queryFn: managerApi.artifa
 const wakeProfiles = useQuery({ queryKey: ["wake-profiles"], queryFn: managerApi.wakeProfiles });
 const resourceRollouts = useQuery({ queryKey: ["resource-rollouts"], queryFn: managerApi.resourceRollouts });
 const uiPackRollouts = useQuery({ queryKey: ["ui-pack-rollouts"], queryFn: managerApi.uiPackRollouts });
+const firmwareReleases = useQuery({ queryKey: ["firmware-releases"], queryFn: managerApi.firmwareReleases });
+const firmwareRollouts = useQuery({ queryKey: ["firmware-rollouts"], queryFn: managerApi.firmwareRollouts });
 const fleetConversationEvents = useQuery({
   queryKey: ["conversation-events", "fleet"],
   queryFn: () => managerApi.conversationEvents(undefined, 100),
@@ -84,8 +86,8 @@ const navItems: Array<{ id: ManagerPage; label: string; short: string; icon: VtI
 
 const tools = computed(() => deviceTools.data.value ?? baselineTools.data.value ?? []);
 const ready = computed(() => health.data.value?.status === "ready");
-const hasQueryError = computed(() => [devices, agents, providers, artifacts, wakeProfiles, fleetConversationEvents, operationsProfile, auditEvents].some((query) => query.isError.value));
-const initialDataReady = computed(() => [devices, agents, providers, artifacts, wakeProfiles].every((query) => query.isFetched.value));
+const hasQueryError = computed(() => [devices, agents, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts, fleetConversationEvents, operationsProfile, auditEvents].some((query) => query.isError.value));
+const initialDataReady = computed(() => [devices, agents, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts].every((query) => query.isFetched.value));
 const apiHost = computed(() => { try { return new URL(managerApi.baseUrl).host; } catch { return managerApi.baseUrl; } });
 
 watch(
@@ -231,6 +233,25 @@ async function publishWakeProfile(id: string): Promise<void> {
 async function rolloutWakeProfile(id: string, deviceIds: string[]): Promise<void> {
   await managerApi.rolloutWakeProfile(id, deviceIds); await refresh("resource-rollouts", "devices"); toast("Đã tạo desired rollout cho wake profile.");
 }
+async function publishFirmwareRelease(id: string): Promise<void> {
+  await managerApi.publishFirmwareRelease(id);
+  await refresh("firmware-releases", "artifacts");
+  toast("Firmware ký số đã được publish.");
+}
+async function createFirmwareRollout(artifactId: string, percentage: number, canaryDeviceIds: string[]): Promise<void> {
+  await managerApi.createFirmwareRollout({ artifactId, percentage, canaryDeviceIds });
+  await refresh("firmware-rollouts", "devices");
+  toast("Đã khởi tạo rollout firmware; canary được phân phối trước.");
+}
+async function pauseFirmwareRollout(id: string): Promise<void> {
+  await managerApi.pauseFirmwareRollout(id); await refresh("firmware-rollouts"); toast("Đã pause rollout firmware.");
+}
+async function resumeFirmwareRollout(id: string, percentage?: number): Promise<void> {
+  await managerApi.resumeFirmwareRollout(id, percentage); await refresh("firmware-rollouts", "devices"); toast("Đã resume/mở rộng rollout firmware.");
+}
+async function rollbackFirmwareRollout(id: string): Promise<void> {
+  await managerApi.rollbackFirmwareRollout(id); await refresh("firmware-rollouts", "devices"); toast("Đã rollback desired firmware về release trước.", "danger");
+}
 async function callTool(deviceId: string, name: string, args: Record<string, unknown>, confirmed: boolean): Promise<Record<string, unknown>> {
   const result = await managerApi.callDeviceTool(deviceId, name, args, confirmed); toast(`MCP tool ${name} đã trả kết quả.`); return result;
 }
@@ -289,7 +310,7 @@ async function runDeviceSelfTest(deviceId: string) {
           <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" :create-agent="createAgent" />
           <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
           <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
-          <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" />
+          <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :firmware-releases="firmwareReleases.data.value ?? []" :firmware-rollouts="firmwareRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" :publish-firmware-release="publishFirmwareRelease" :create-firmware-rollout="createFirmwareRollout" :pause-firmware-rollout="pauseFirmwareRollout" :resume-firmware-rollout="resumeFirmwareRollout" :rollback-firmware-rollout="rollbackFirmwareRollout" />
           <OperationsPage v-else-if="activePage === 'operations'" :devices="devices.data.value ?? []" :audit-events="auditEvents.data.value ?? []" :profile="operationsProfile.data.value" :ready="ready" />
           <OverviewPage v-else :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
         </template>

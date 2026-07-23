@@ -19,6 +19,8 @@ import {
   resourceRolloutSchema,
   tokenResponseSchema,
   uiPackRolloutSchema,
+  firmwareReleaseSchema,
+  firmwareRolloutSchema,
   wakeProfileSchema,
   type Agent,
   type Provider,
@@ -188,6 +190,37 @@ export const managerApi = {
     request("/api/v1/resource-rollouts", z.array(resourceRolloutSchema)),
   uiPackRollouts: () =>
     request("/api/v1/ui-packs/rollouts", z.array(uiPackRolloutSchema)),
+  firmwareReleases: () =>
+    request("/api/v1/firmware-releases", z.array(firmwareReleaseSchema)),
+  firmwareRollouts: () =>
+    request("/api/v1/firmware-rollouts", z.array(firmwareRolloutSchema)),
+  publishFirmwareRelease: (id: string) =>
+    request(`/api/v1/firmware-releases/${encodeURIComponent(id)}/publish`, firmwareReleaseSchema, {
+      method: "POST",
+    }),
+  createFirmwareRollout: (input: {
+    artifactId: string;
+    percentage: number;
+    canaryDeviceIds: string[];
+    channel?: string;
+  }) =>
+    request("/api/v1/firmware-rollouts", firmwareRolloutSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  pauseFirmwareRollout: (id: string) =>
+    request(`/api/v1/firmware-rollouts/${encodeURIComponent(id)}/pause`, firmwareRolloutSchema, {
+      method: "POST",
+    }),
+  resumeFirmwareRollout: (id: string, percentage?: number) =>
+    request(`/api/v1/firmware-rollouts/${encodeURIComponent(id)}/resume`, firmwareRolloutSchema, {
+      method: "POST",
+      body: JSON.stringify(percentage === undefined ? {} : { percentage }),
+    }),
+  rollbackFirmwareRollout: (id: string) =>
+    request(`/api/v1/firmware-rollouts/${encodeURIComponent(id)}/rollback`, firmwareRolloutSchema, {
+      method: "POST",
+    }),
 
   createLabSession(input: {
     agentId: string;

@@ -28,6 +28,8 @@ async function mockManagerApi(
     labSessionCalls?: unknown[];
     agentCreates?: unknown[];
     deviceAgentAssignments?: unknown[];
+    firmwareRolloutCalls?: unknown[];
+    withFirmware?: boolean;
     withSecondAgent?: boolean;
     primaryAgentPublishedVersion?: number;
     deviceAgentConfigVersion?: number;
@@ -236,6 +238,85 @@ async function mockManagerApi(
             ]
           : [],
       );
+    }
+    if (url.pathname === "/api/v1/firmware-releases" && request.method() === "GET") {
+      return json(options.withFirmware
+        ? [{
+            id: "fw-0.4.0",
+            version: "0.4.0",
+            channel: "stable",
+            sizeBytes: 1_532_480,
+            sha256: "0123456789abcdef".repeat(4),
+            contentType: "application/vnd.veetee.esp32s3-firmware",
+            board: "veetee-s3-n16r8",
+            signatureKeyId: "veetee-dev-release-2026-01",
+            securityEpoch: 1,
+            status: "published",
+            publishedAt: "2026-07-23T04:00:00.000Z",
+            createdAt: "2026-07-23T03:00:00.000Z",
+          }]
+        : []);
+    }
+    if (url.pathname === "/api/v1/firmware-rollouts" && request.method() === "GET") {
+      return json(options.withFirmware
+        ? [{
+            id: "rollout-1",
+            artifactId: "fw-0.4.0",
+            previousArtifactId: "fw-0.3.0",
+            channel: "stable",
+            percentage: 10,
+            canaryDeviceIds: [deviceId],
+            status: "running",
+            selectedDeviceIds: [deviceId],
+            activeDeviceIds: [deviceId],
+            failedDeviceIds: [],
+            createdAt: "2026-07-23T04:01:00.000Z",
+            updatedAt: "2026-07-23T04:02:00.000Z",
+          }]
+        : []);
+    }
+    if (url.pathname === "/api/v1/firmware-rollouts" && request.method() === "POST") {
+      options.firmwareRolloutCalls?.push({ action: "create", body: request.postDataJSON() });
+      return json({
+        id: "rollout-created",
+        artifactId: "fw-0.4.0",
+        channel: "stable",
+        percentage: 25,
+        canaryDeviceIds: [deviceId],
+        status: "running",
+        selectedDeviceIds: [deviceId],
+        activeDeviceIds: [],
+        failedDeviceIds: [],
+        createdAt: "2026-07-23T05:00:00.000Z",
+        updatedAt: "2026-07-23T05:00:00.000Z",
+      });
+    }
+    const firmwareAction =
+      /^\/api\/v1\/firmware-rollouts\/([^/]+)\/(pause|resume|rollback)$/.exec(url.pathname);
+    if (firmwareAction && request.method() === "POST") {
+      options.firmwareRolloutCalls?.push({
+        action: firmwareAction[2],
+        id: firmwareAction[1],
+        body: request.postDataJSON(),
+      });
+      return json({
+        id: firmwareAction[1],
+        artifactId: "fw-0.4.0",
+        previousArtifactId: "fw-0.3.0",
+        channel: "stable",
+        percentage: firmwareAction[2] === "resume" ? 20 : 10,
+        canaryDeviceIds: [deviceId],
+        status: firmwareAction[2] === "pause"
+          ? "paused"
+          : firmwareAction[2] === "rollback"
+            ? "rolled_back"
+            : "running",
+        selectedDeviceIds: [deviceId],
+        activeDeviceIds: [deviceId],
+        failedDeviceIds: [],
+        createdAt: "2026-07-23T04:01:00.000Z",
+        updatedAt: "2026-07-23T05:00:00.000Z",
+      });
     }
     if (url.pathname === "/api/v1/wake-profiles") {
       return json(
@@ -709,7 +790,7 @@ test("renders semantic device delivery and a unified rollout history", async ({ 
   await expect(history).toContainText("Đã áp dụng");
 });
 
-test("keeps all five device tabs usable without mobile page overflow", async ({ page }) => {
+test("keeps all six device tabs usable without mobile page overflow", async ({ page }) => {
   await mockManagerApi(page, { withDevice: true });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
@@ -719,7 +800,7 @@ test("keeps all five device tabs usable without mobile page overflow", async ({ 
   await page.setViewportSize({ width: 390, height: 844 });
 
   const tabs = page.locator(".device-tabs");
-  await expect(tabs.getByRole("tab")).toHaveCount(5);
+  await expect(tabs.getByRole("tab")).toHaveCount(6);
   await expect.poll(async () => tabs.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await tabs.getByRole("tab", { name: /Telemetry/ }).click();
@@ -1182,6 +1263,42 @@ test("keeps wake profiles global but applies them from a compatible online devic
     },
   ]);
   await expect(page.locator(".vt-toast")).toContainText("desired rollout");
+});
+
+test("creates and controls a signed firmware canary rollout", async ({ page }) => {
+  const firmwareRolloutCalls: unknown[] = [];
+  await mockManagerApi(page, {
+    withDevice: true,
+    withFirmware: true,
+    firmwareRolloutCalls,
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="resources"]').first().click();
+  await page.getByRole("tab", { name: /Firmware OTA/ }).click();
+
+  await expect(page.locator(".firmware-rollout-grid")).toContainText("Firmware A/B");
+  await page.getByLabel("Firmware release").selectOption("fw-0.4.0");
+  await page.getByLabel("Thiết bị canary").selectOption(deviceId);
+  await page.getByLabel("Phần trăm fleet").fill("25");
+  await page.getByRole("button", { name: "Bắt đầu rollout" }).click();
+  await expect.poll(() => firmwareRolloutCalls).toContainEqual({
+    action: "create",
+    body: {
+      artifactId: "fw-0.4.0",
+      percentage: 25,
+      canaryDeviceIds: [deviceId],
+    },
+  });
+
+  await page.getByRole("button", { name: "Mở rộng +10%" }).click();
+  await expect.poll(() => firmwareRolloutCalls).toContainEqual({
+    action: "resume",
+    id: "rollout-1",
+    body: { percentage: 20 },
+  });
 });
 
 test("opens operations deep link with privacy, firmware and redacted audit data", async ({ page }) => {

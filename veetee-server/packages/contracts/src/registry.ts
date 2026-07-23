@@ -52,6 +52,7 @@ export class ContractRegistry {
 
 export const fixtureSchemaIds = {
   "artifacts/device-capability-v1.json": "https://schemas.veetee.local/artifacts/device-capability-v1.json",
+  "artifacts/firmware-manifest-v1.json": "https://schemas.veetee.local/artifacts/firmware-manifest-v1.json",
   "artifacts/resource-manifest-v1.json": "https://schemas.veetee.local/artifacts/resource-manifest-v1.json",
   "artifacts/signed-resource-manifest-vector-v1.json": "https://schemas.veetee.local/artifacts/signed-manifest-vector-v1.json",
   "config/agent-conversation-policy-v1.json": "https://schemas.veetee.local/config/agent-conversation-policy-v1.json",

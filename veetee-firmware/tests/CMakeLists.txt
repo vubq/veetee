@@ -190,6 +190,28 @@ target_link_libraries(resource_manifest_test PRIVATE cjson_host monocypher_host)
 add_test(NAME resource_manifest_test COMMAND resource_manifest_test)
 
 add_executable(
+    firmware_manifest_test
+    firmware_manifest_test.cpp
+    ../main/ota/firmware_manifest.cpp
+    ../main/network/endpoint_url.cpp
+    ../main/security/signed_json.cpp
+)
+target_include_directories(
+    firmware_manifest_test PRIVATE
+    ../main
+    ../managed_components/espressif__cjson/cJSON
+    ../components/monocypher/include
+)
+target_compile_definitions(
+    firmware_manifest_test PRIVATE
+    VEETEE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+target_compile_features(firmware_manifest_test PRIVATE cxx_std_17)
+target_compile_options(firmware_manifest_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(firmware_manifest_test PRIVATE cjson_host monocypher_host)
+add_test(NAME firmware_manifest_test COMMAND firmware_manifest_test)
+
+add_executable(
     resource_record_test
     resource_record_test.cpp
     ../main/settings/resource_record.cpp

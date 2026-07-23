@@ -17,6 +17,8 @@ set(VEETEE_SRCS
     "network/wifi_candidate_order.cpp"
     "network/wifi_manager.cpp"
     "ota/bootstrap_client.cpp"
+    "ota/firmware_manifest.cpp"
+    "ota/firmware_updater.cpp"
     "ota/resource_manifest.cpp"
     "ota/resource_reconciler.cpp"
     "security/signed_json.cpp"
@@ -40,6 +42,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_i2s
         esp_driver_spi
+        app_update
         esp_app_format
         esp_event
         esp_http_client

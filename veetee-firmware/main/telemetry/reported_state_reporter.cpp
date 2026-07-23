@@ -306,7 +306,9 @@ bool ReportedStateReporter::BuildBody(
     const char* artifact_name =
         state.artifact_kind == settings::ReportedArtifactKind::kUiPack
             ? "ui"
-            : "resource";
+            : state.artifact_kind == settings::ReportedArtifactKind::kFirmware
+                  ? "firmware_ota"
+                  : "resource";
     cJSON* resource = reported == nullptr
                           ? nullptr
                           : cJSON_AddObjectToObject(reported, artifact_name);

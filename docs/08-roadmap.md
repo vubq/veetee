@@ -223,7 +223,9 @@ Chỉ bật `mode=realtime` khi ERLE/false VAD/latency đạt tiêu chí trong `
 ## Phase 8 - Production hardening
 
 - MQTT+UDP gateway nếu connection scale cần.
-- Signed OTA rollout/canary/rollback.
+- Signed executable OTA A/B và control plane canary/%/pause/resume/rollback đã
+  đạt host/build gate; power-loss, crash-before-mark-valid và NVS/Wi-Fi survival
+  vẫn phải nghiệm thu trên board theo `docs/19-signed-firmware-ota.md`.
 - Ed25519 release signer/key rotation, artifact provenance/SBOM/license và revocation.
 - Power-loss/resource-slot recovery, resumable download và desired/reported drift alerts.
 - OTel traces, SLO/alerts, backup/restore.

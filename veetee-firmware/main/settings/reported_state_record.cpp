@@ -77,6 +77,10 @@ const char* ReportedResourcePhaseName(ReportedResourcePhase phase) {
             return "failed";
         case ReportedResourcePhase::kRolledBack:
             return "rolled_back";
+        case ReportedResourcePhase::kRebooting:
+            return "rebooting";
+        case ReportedResourcePhase::kPendingHealth:
+            return "pending_health";
     }
     return nullptr;
 }
@@ -90,7 +94,8 @@ bool IsTerminalReportedResourcePhase(ReportedResourcePhase phase) {
 bool IsValidReportedResourceState(const ReportedResourceState& state) {
     if (ReportedResourcePhaseName(state.phase) == nullptr ||
         (state.artifact_kind != ReportedArtifactKind::kWakeResource &&
-         state.artifact_kind != ReportedArtifactKind::kUiPack) ||
+         state.artifact_kind != ReportedArtifactKind::kUiPack &&
+         state.artifact_kind != ReportedArtifactKind::kFirmware) ||
         state.active_slot > 1 || state.target_slot > 1 ||
         state.downloaded_bytes > state.expected_bytes ||
         !IsTerminated(state.current_version) ||

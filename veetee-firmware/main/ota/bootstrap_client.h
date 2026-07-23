@@ -19,6 +19,7 @@ enum class BootstrapEvent : std::uint8_t {
     kDeviceIdentityRejected,
     kResourceDesired,
     kUiPackDesired,
+    kFirmwareDesired,
 };
 
 struct BootstrapNotification {
@@ -27,7 +28,9 @@ struct BootstrapNotification {
     char resource_version[33] = {};
     char resource_manifest_url[257] = {};
     char ui_version[33] = {};
-    char ui_manifest_url[257] = {};
+  char ui_manifest_url[257] = {};
+  char firmware_version[33] = {};
+  char firmware_manifest_url[257] = {};
 };
 
 class BootstrapClient {
@@ -57,6 +60,9 @@ private:
         bool has_ui = false;
         char ui_version[33] = {};
         char ui_manifest_url[257] = {};
+        bool has_firmware = false;
+        char firmware_version[33] = {};
+        char firmware_manifest_url[257] = {};
     };
 
     struct ActivationPayload {

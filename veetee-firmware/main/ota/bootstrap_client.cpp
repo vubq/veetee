@@ -186,6 +186,11 @@ void BootstrapClient::Run(std::uint32_t generation) {
                                        &payload, generation)) {
                         return;
                     }
+                    if (payload.has_firmware &&
+                        !EmitWithRetry(BootstrapEvent::kFirmwareDesired, nullptr,
+                                       &payload, generation)) {
+                        return;
+                    }
                     EmitWithRetry(BootstrapEvent::kActivationComplete, nullptr,
                                   nullptr, generation);
                     return;
@@ -481,6 +486,19 @@ esp_err_t BootstrapClient::ParseBootstrap(BootstrapPayload* payload) const {
                                sizeof(payload->ui_manifest_url)) &&
                 network::IsHttpEndpointUrl(payload->ui_manifest_url);
     }
+    const cJSON* firmware = cJSON_GetObjectItemCaseSensitive(root, "firmware");
+    if (valid && cJSON_IsObject(firmware)) {
+        const cJSON* manifest = cJSON_GetObjectItemCaseSensitive(firmware, "manifest_url");
+        if (cJSON_IsString(manifest)) {
+            payload->has_firmware = true;
+            valid = CopyJsonString(firmware, "version", payload->firmware_version,
+                                   sizeof(payload->firmware_version)) &&
+                    CopyJsonString(firmware, "manifest_url",
+                                   payload->firmware_manifest_url,
+                                   sizeof(payload->firmware_manifest_url)) &&
+                    network::IsHttpEndpointUrl(payload->firmware_manifest_url);
+        }
+    }
     cJSON_Delete(root);
     return valid ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
@@ -529,6 +547,15 @@ bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
         std::snprintf(notification.ui_manifest_url,
                       sizeof(notification.ui_manifest_url), "%s",
                       payload->ui_manifest_url);
+    }
+    if (event == BootstrapEvent::kFirmwareDesired && payload != nullptr &&
+        payload->has_firmware) {
+        std::snprintf(notification.firmware_version,
+                      sizeof(notification.firmware_version), "%s",
+                      payload->firmware_version);
+        std::snprintf(notification.firmware_manifest_url,
+                      sizeof(notification.firmware_manifest_url), "%s",
+                      payload->firmware_manifest_url);
     }
     return sink_(notification, sink_context_);
 }

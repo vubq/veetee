@@ -20,6 +20,7 @@
 #include "mcp/device_mcp.h"
 #include "network/wifi_manager.h"
 #include "ota/bootstrap_client.h"
+#include "ota/firmware_updater.h"
 #include "ota/resource_reconciler.h"
 #include "settings/settings_store.h"
 #include "telemetry/reported_state_reporter.h"
@@ -31,6 +32,7 @@ constexpr char kTag[] = "veetee_app";
 constexpr UBaseType_t kEventQueueDepth = 16;
 constexpr std::uint64_t kResourceApplyDelayUs = 250000;
 constexpr std::uint64_t kResourceHealthWindowUs = 5000000;
+constexpr std::uint64_t kFirmwareHealthWindowUs = 5000000;
 constexpr std::uint32_t kProvisioningRetryDelayMs = 3000;
 
 enum class AppMessageKind : std::uint8_t {
@@ -39,6 +41,8 @@ enum class AppMessageKind : std::uint8_t {
     kResourceReconcile,
     kResourceApply,
     kResourceHealthCheck,
+    kFirmwareReconcile,
+    kFirmwareHealthCheck,
 };
 
 struct AppMessage {
@@ -50,6 +54,7 @@ struct AppMessage {
     veetee::ota::ResourceClass resource_class =
         veetee::ota::ResourceClass::kWakeModel;
     veetee::ota::ResourceReconcileNotification resource_notification{};
+    veetee::ota::FirmwareOtaNotification firmware_notification{};
 };
 
 QueueHandle_t g_event_queue = nullptr;
@@ -61,6 +66,7 @@ veetee::network::WifiManager g_wifi;
 veetee::ota::BootstrapClient g_bootstrap;
 veetee::ota::ResourceReconciler g_resources;
 veetee::ota::ResourceReconciler g_ui_resources;
+veetee::ota::FirmwareUpdater g_firmware;
 veetee::telemetry::ReportedStateReporter g_reporter;
 veetee::transport::WebSocketTransport g_transport;
 veetee::mcp::DeviceMcp g_mcp;
@@ -68,6 +74,7 @@ esp_timer_handle_t g_resource_apply_timer = nullptr;
 esp_timer_handle_t g_resource_health_timer = nullptr;
 esp_timer_handle_t g_ui_apply_timer = nullptr;
 esp_timer_handle_t g_ui_health_timer = nullptr;
+esp_timer_handle_t g_firmware_health_timer = nullptr;
 bool g_resource_apply_pending = false;
 bool g_ui_apply_pending = false;
 
@@ -122,6 +129,13 @@ void OnUiHealthTimer(void*) {
             .resource_class = veetee::ota::ResourceClass::kUiPack}) &&
         g_ui_health_timer != nullptr) {
         esp_timer_start_once(g_ui_health_timer, kResourceApplyDelayUs);
+    }
+}
+
+void OnFirmwareHealthTimer(void*) {
+    if (!PostMessage(AppMessage{.kind = AppMessageKind::kFirmwareHealthCheck}) &&
+        g_firmware_health_timer != nullptr) {
+        esp_timer_start_once(g_firmware_health_timer, kResourceApplyDelayUs);
     }
 }
 
@@ -213,6 +227,34 @@ bool ScheduleResourceNotificationReport(
                                   is_ui
                                       ? veetee::settings::ReportedArtifactKind::kUiPack
                                       : veetee::settings::ReportedArtifactKind::kWakeResource);
+}
+
+bool ScheduleFirmwareReport(
+    veetee::settings::ReportedResourcePhase phase,
+    const veetee::ota::FirmwareOtaNotification& notification,
+    const char* error_code = nullptr) {
+    veetee::settings::ReportedResourceState report{};
+    report.phase = phase;
+    report.artifact_kind = veetee::settings::ReportedArtifactKind::kFirmware;
+    report.active_slot = notification.active_slot;
+    report.target_slot = notification.target_slot;
+    report.expected_bytes = notification.expected_bytes;
+    report.downloaded_bytes = notification.downloaded_bytes;
+    report.security_epoch = notification.security_epoch;
+    std::snprintf(report.current_version, sizeof(report.current_version), "%s",
+                  notification.current_version[0] != '\0'
+                      ? notification.current_version
+                      : CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+    std::snprintf(report.desired_version, sizeof(report.desired_version), "%s",
+                  notification.desired_version[0] != '\0'
+                      ? notification.desired_version
+                      : CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+    if (phase == veetee::settings::ReportedResourcePhase::kFailed ||
+        phase == veetee::settings::ReportedResourcePhase::kRolledBack) {
+        CopyErrorCode(report.error_code, sizeof(report.error_code),
+                      error_code == nullptr ? notification.error_code : error_code);
+    }
+    return g_reporter.Schedule(report);
 }
 
 void ScheduleResourceApply() {
@@ -535,6 +577,9 @@ bool OnBootstrapEvent(const veetee::ota::BootstrapNotification& notification,
                 "schedule_rejected", nullptr,
                 veetee::settings::ReportedArtifactKind::kUiPack);
             return true;
+        case veetee::ota::BootstrapEvent::kFirmwareDesired:
+            return g_firmware.Schedule(notification.firmware_version,
+                                       notification.firmware_manifest_url);
     }
     return PostMessage(message);
 }
@@ -544,6 +589,14 @@ bool OnResourceReconcileEvent(
     AppMessage message{};
     message.kind = AppMessageKind::kResourceReconcile;
     message.resource_notification = notification;
+    return PostMessage(message);
+}
+
+bool OnFirmwareOtaEvent(const veetee::ota::FirmwareOtaNotification& notification,
+                        void*) {
+    AppMessage message{};
+    message.kind = AppMessageKind::kFirmwareReconcile;
+    message.firmware_notification = notification;
     return PostMessage(message);
 }
 
@@ -784,6 +837,62 @@ void RunApplication(void*) {
             }
             continue;
         }
+        if (message.kind == AppMessageKind::kFirmwareReconcile) {
+            const auto& notification = message.firmware_notification;
+            using Phase = veetee::settings::ReportedResourcePhase;
+            switch (notification.event) {
+                case veetee::ota::FirmwareOtaEvent::kChecking:
+                    ScheduleFirmwareReport(Phase::kChecking, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kDownloading:
+                    ScheduleFirmwareReport(Phase::kDownloading, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kVerifying:
+                    ScheduleFirmwareReport(Phase::kVerifying, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kStaged:
+                    ScheduleFirmwareReport(Phase::kStaged, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kRebooting:
+                    ScheduleFirmwareReport(Phase::kRebooting, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kActive:
+                    ScheduleFirmwareReport(Phase::kActive, notification);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kRolledBack:
+                    ScheduleFirmwareReport(Phase::kRolledBack, notification,
+                                           notification.error_code);
+                    break;
+                case veetee::ota::FirmwareOtaEvent::kFailed:
+                    ScheduleFirmwareReport(Phase::kFailed, notification,
+                                           notification.error_code);
+                    break;
+            }
+            continue;
+        }
+        if (message.kind == AppMessageKind::kFirmwareHealthCheck) {
+            veetee::ota::FirmwareOtaNotification notification{};
+            std::snprintf(notification.current_version,
+                          sizeof(notification.current_version), "%s",
+                          CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+            std::snprintf(notification.desired_version,
+                          sizeof(notification.desired_version), "%s",
+                          CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+            notification.active_slot = g_firmware.ActiveSlot();
+            notification.target_slot = notification.active_slot;
+            if (g_board.WakeResourceHealthy() && g_board.UiPackHealthy() &&
+                g_firmware.ConfirmPendingBoot() == ESP_OK) {
+                ScheduleFirmwareReport(
+                    veetee::settings::ReportedResourcePhase::kActive,
+                    notification);
+            } else {
+                ScheduleFirmwareReport(
+                    veetee::settings::ReportedResourcePhase::kRolledBack,
+                    notification, "boot_health_failed");
+                g_firmware.RollbackPendingBoot();
+            }
+            continue;
+        }
         const veetee::app::Event event = message.event;
         const veetee::app::TransitionResult result = g_state_machine.Handle(event);
         if (!result.accepted) {
@@ -973,12 +1082,21 @@ extern "C" void app_main() {
         .name = "ui_health",
         .skip_unhandled_events = false,
     };
+    const esp_timer_create_args_t firmware_health_timer_args = {
+        .callback = &OnFirmwareHealthTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "firmware_health",
+        .skip_unhandled_events = false,
+    };
     ESP_ERROR_CHECK(
         esp_timer_create(&apply_timer_args, &g_resource_apply_timer));
     ESP_ERROR_CHECK(
         esp_timer_create(&health_timer_args, &g_resource_health_timer));
     ESP_ERROR_CHECK(esp_timer_create(&ui_apply_timer_args, &g_ui_apply_timer));
     ESP_ERROR_CHECK(esp_timer_create(&ui_health_timer_args, &g_ui_health_timer));
+    ESP_ERROR_CHECK(esp_timer_create(&firmware_health_timer_args,
+                                     &g_firmware_health_timer));
 
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
@@ -988,6 +1106,7 @@ extern "C" void app_main() {
         &g_settings, &OnResourceReconcileEvent, nullptr,
         veetee::ota::ResourceClass::kUiPack));
     ESP_ERROR_CHECK(g_reporter.Initialize(&g_settings));
+    ESP_ERROR_CHECK(g_firmware.Initialize(&g_settings, &OnFirmwareOtaEvent, nullptr));
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
                                            &OnBootstrapEvent, nullptr));
     ESP_ERROR_CHECK(g_transport.Initialize(&g_settings, &OnTransportEvent,
@@ -1005,6 +1124,22 @@ extern "C" void app_main() {
             : g_ui_resources.PreviousPartitionLabel(),
         nullptr));
     ESP_ERROR_CHECK(g_board.StartAudio(ShouldPlayBootChime(reset_reason)));
+    if (g_firmware.PendingBootVerification()) {
+        veetee::ota::FirmwareOtaNotification notification{};
+        std::snprintf(notification.current_version,
+                      sizeof(notification.current_version), "%s",
+                      CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+        std::snprintf(notification.desired_version,
+                      sizeof(notification.desired_version), "%s",
+                      CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION);
+        notification.active_slot = g_firmware.ActiveSlot();
+        notification.target_slot = notification.active_slot;
+        ScheduleFirmwareReport(
+            veetee::settings::ReportedResourcePhase::kPendingHealth,
+            notification);
+        ESP_ERROR_CHECK(esp_timer_start_once(g_firmware_health_timer,
+                                             kFirmwareHealthWindowUs));
+    }
 
     const auto resource_phase = g_resources.phase();
     if (resource_phase ==

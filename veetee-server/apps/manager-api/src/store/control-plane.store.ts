@@ -10,6 +10,7 @@ import {
 import {
   DeviceStatus,
   InteractionMode,
+  FirmwareRolloutStatus,
   Prisma,
   ProviderCircuitState,
   ProviderHealth,
@@ -136,6 +137,8 @@ export type DeviceBootstrapResult =
       resourceManifestId?: string;
       uiVersion?: string;
       uiManifestId?: string;
+      firmwareVersion?: string;
+      firmwareManifestId?: string;
     };
 
 export interface DeviceActivationResult {
@@ -261,6 +264,8 @@ export class ControlPlaneStore {
     const resourceManifestId = desired.resourceManifestId;
     const uiVersion = desired.uiPackVersion;
     const uiManifestId = desired.uiManifestId;
+    const desiredFirmwareVersion = desired.firmwareVersion;
+    const firmwareManifestId = desired.firmwareManifestId;
     return {
       state: "active",
       deviceId: device.id,
@@ -270,6 +275,10 @@ export class ControlPlaneStore {
       ...(typeof resourceManifestId === "string" ? { resourceManifestId } : {}),
       ...(typeof uiVersion === "string" ? { uiVersion } : {}),
       ...(typeof uiManifestId === "string" ? { uiManifestId } : {}),
+      ...(typeof desiredFirmwareVersion === "string"
+        ? { firmwareVersion: desiredFirmwareVersion }
+        : {}),
+      ...(typeof firmwareManifestId === "string" ? { firmwareManifestId } : {}),
     };
   }
 
@@ -617,6 +626,102 @@ export class ControlPlaneStore {
               },
               data: { status: rolloutStatus },
             });
+          }
+        }
+        const firmwareOta = state.firmware_ota;
+        if (
+          firmwareOta &&
+          typeof firmwareOta === "object" &&
+          !Array.isArray(firmwareOta)
+        ) {
+          const report = firmwareOta as Record<string, unknown>;
+          const desiredVersion =
+            typeof report.desiredVersion === "string"
+              ? report.desiredVersion
+              : undefined;
+          const identity = await transaction.device.findUnique({
+            where: { id },
+            select: { tenantId: true },
+          });
+          if (identity && desiredVersion) {
+            if (report.phase === "failed" || report.phase === "rolled_back") {
+              await transaction.firmwareRollout.updateMany({
+                where: {
+                  tenantId: identity.tenantId,
+                  status: {
+                    in: [
+                      FirmwareRolloutStatus.RUNNING,
+                      FirmwareRolloutStatus.PAUSED,
+                    ],
+                  },
+                  selectedDeviceIds: { has: id },
+                  artifact: { is: { version: desiredVersion } },
+                },
+                data: { status: FirmwareRolloutStatus.FAILED },
+              });
+            } else if (report.phase === "active") {
+              const campaigns = await transaction.firmwareRollout.findMany({
+                where: {
+                  tenantId: identity.tenantId,
+                  status: {
+                    in: [
+                      FirmwareRolloutStatus.RUNNING,
+                      FirmwareRolloutStatus.PAUSED,
+                    ],
+                  },
+                  selectedDeviceIds: { has: id },
+                  artifact: { is: { version: desiredVersion } },
+                },
+                include: { artifact: true },
+              });
+              const devices = campaigns.length
+                ? await transaction.device.findMany({
+                    where: { tenantId: identity.tenantId },
+                    include: { reportedState: true },
+                  })
+                : [];
+              for (const campaign of campaigns) {
+                const canaries = new Set(campaign.canaryDeviceIds);
+                const canaryDevices = devices.filter((device) =>
+                  canaries.has(device.id),
+                );
+                const canaryPassed =
+                  campaign.canaryDeviceIds.length === 0 ||
+                  (canaryDevices.length === campaign.canaryDeviceIds.length &&
+                    canaryDevices.every((device) =>
+                      this.firmwareReportedActive(
+                        device.reportedState?.state,
+                        campaign.artifact.version,
+                      ),
+                    ));
+                const expected = devices.filter(
+                  (device) =>
+                    canaries.has(device.id) ||
+                    (canaryPassed &&
+                      this.firmwareBucket(`${campaign.id}:${device.id}`) <
+                        campaign.percentage),
+                );
+                const selectedIds = new Set(campaign.selectedDeviceIds);
+                const selected = devices.filter((device) =>
+                  selectedIds.has(device.id),
+                );
+                if (
+                  selected.length > 0 &&
+                  expected.every((device) => selectedIds.has(device.id)) &&
+                  selected.every((device) =>
+                    this.firmwareReportedActive(
+                      device.reportedState?.state,
+                      campaign.artifact.version,
+                    ),
+                  )
+                ) {
+                  await transaction.firmwareRollout.update({
+                    where: { id: campaign.id },
+                    data: { status: FirmwareRolloutStatus.COMPLETED },
+                  });
+                }
+              }
+            }
           }
         }
       }
@@ -1121,6 +1226,29 @@ export class ControlPlaneStore {
       version: agent.version,
       publishedVersion: agent.publishedVersion,
     };
+  }
+
+  private firmwareBucket(value: string): number {
+    return createHash("sha256").update(value).digest().readUInt32BE(0) % 100;
+  }
+
+  private firmwareReportedActive(
+    value: Prisma.JsonValue | undefined,
+    targetVersion: string,
+  ): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const state = value as Record<string, Prisma.JsonValue>;
+    const ota = state.firmware_ota;
+    const firmware = state.firmware;
+    if (!ota || typeof ota !== "object" || Array.isArray(ota)) return false;
+    const otaState = ota as Record<string, Prisma.JsonValue>;
+    const firmwareState =
+      firmware && typeof firmware === "object" && !Array.isArray(firmware)
+        ? firmware as Record<string, Prisma.JsonValue>
+        : undefined;
+    return otaState.phase === "active" &&
+      (otaState.currentVersion === targetVersion ||
+        firmwareState?.version === targetVersion);
   }
 
   private toDeviceRecord(device: {

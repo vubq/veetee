@@ -48,6 +48,7 @@ enum ProviderCircuitState {
 }
 
 enum ArtifactKind {
+  FIRMWARE
   RESOURCE_BUNDLE
   MODEL_PACK
   DISPLAY_ASSETS
@@ -74,6 +75,15 @@ enum ResourceRolloutStatus {
   ROLLED_BACK
 }
 
+enum FirmwareRolloutStatus {
+  DRAFT
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  ROLLED_BACK
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -91,6 +101,7 @@ model Tenant {
   refreshSessions    RefreshSession[]
   resourceRollouts   ResourceRollout[]
   uiPackRollouts     UiPackRollout[]
+  firmwareRollouts   FirmwareRollout[]
   wakeProfiles       WakeProfile[]
 }
 
@@ -317,6 +328,8 @@ model Artifact {
   wakeProfileVersions WakeProfileVersion[]
   resourceRollouts    ResourceRollout[]
   uiPackRollouts      UiPackRollout[]
+  firmwareRollouts    FirmwareRollout[] @relation("FirmwareRolloutArtifact")
+  previousFirmwareRollouts FirmwareRollout[] @relation("FirmwareRolloutPreviousArtifact")
 
   @@index([tenantId, status, createdAt])
 }
@@ -396,4 +409,25 @@ model UiPackRollout {
 
   @@index([tenantId, createdAt])
   @@index([deviceId, status])
+}
+
+model FirmwareRollout {
+  id               String                @id @default(uuid())
+  tenantId         String
+  artifactId       String
+  previousArtifactId String?
+  channel          String
+  percentage       Int                   @default(0)
+  canaryDeviceIds  String[]              @default([])
+  selectedDeviceIds String[]             @default([])
+  status           FirmwareRolloutStatus @default(DRAFT)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  artifact         Artifact @relation("FirmwareRolloutArtifact", fields: [artifactId], references: [id], onDelete: Restrict)
+  previousArtifact Artifact? @relation("FirmwareRolloutPreviousArtifact", fields: [previousArtifactId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
 }
