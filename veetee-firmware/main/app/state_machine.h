@@ -55,6 +55,7 @@ struct TransitionResult {
     State to;
     bool assistant_gate_open;
     std::uint32_t cancellation_generation;
+    bool network_lost;
 };
 
 class StateMachine {
@@ -68,7 +69,7 @@ public:
     }
 
 private:
-    TransitionResult Result(bool accepted, State from) const;
+    TransitionResult Result(bool accepted, State from, Event event) const;
     void BeginAbort();
 
     State state_ = State::kStarting;

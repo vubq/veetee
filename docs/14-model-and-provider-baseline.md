@@ -362,6 +362,15 @@ Tên field có thể map sang `snake_case` ở device contract.
 }
 ```
 
+Structured gate truyền thêm bằng chứng bounded của utterance (`wake_source`, thống kê
+VAD/RMS/SNR/clipping, integrity và các capability chưa đo được để `null`) cùng transcript,
+ASR metrics, agent snapshot và cửa sổ hội thoại. Những tín hiệu này hỗ trợ admission,
+không thay thế ngữ cảnh: VAD không tự kết luận addressing, và LLM không được coi `null` là
+số 0. Prose response sau planner/tool cũng nhận lại evidence, ASR metrics,
+admission decision, dialogue plan, agent snapshot và context message count để không mất
+ngữ cảnh giữa các stage. Raw PCM, provider secret và chain-of-thought không bao giờ vào
+request TTS.
+
 `base_url`, model id, thresholds và fallback chain là configuration version có
 validation; không cho model/LLM tự sửa chúng.
 

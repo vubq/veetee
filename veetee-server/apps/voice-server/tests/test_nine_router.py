@@ -10,12 +10,19 @@ from veetee_voice_server.conversation.cancellation import (
     OperationContext,
 )
 from veetee_voice_server.conversation.types import (
+    AdmissionDecision,
+    AdmissionDisposition,
+    ConversationMessage,
     ConversationPlan,
     DialogueAct,
+    InputEvidence,
+    InputSource,
     PlanAction,
     Transcript,
+    WakeSource,
 )
 from veetee_voice_server.providers.contracts import (
+    LlmRequest,
     LlmStreamDone,
     LlmTextDelta,
     LlmToolCallFragment,
@@ -48,6 +55,56 @@ def request() -> object:
             "tool_result": None,
         },
     )()
+
+
+async def test_payload_includes_structured_turn_context_for_prose_response() -> None:
+    provider = NineRouterLlmProvider(
+        base_url="http://router/v1",
+        model="cx/gpt-5.4-mini",
+    )
+    transcript = Transcript(
+        "Gke vậy sao?",
+        "vi-VN",
+        stability=1.0,
+        context=(
+            ConversationMessage("assistant", "Tôi vừa nói một câu đùa."),
+        ),
+        input_evidence=InputEvidence(
+            source=InputSource.DEVICE_MIC,
+            wake_source=WakeSource.BUTTON,
+        ),
+    )
+    payload = provider._payload(
+        LlmRequest(
+            transcript=transcript,
+            plan=ConversationPlan(
+                PlanAction.RESPOND,
+                DialogueAct.FOLLOW_UP,
+                "vi-VN",
+                "conversation.follow_up",
+                True,
+            ),
+            admission=AdmissionDecision(
+                AdmissionDisposition.ACCEPTED,
+                0.91,
+                "speech_relevant",
+                0.88,
+            ),
+            system_prompt="published",
+        )
+    )
+    metadata_text = payload["messages"][-1]["content"].split(
+        "Turn metadata (JSON): ", 1
+    )[1]
+    metadata = json.loads(metadata_text)
+
+    assert metadata["asr"] == {"confidence": None, "stability": 1.0}
+    assert metadata["admission"]["decision"] == "accepted"
+    assert metadata["admission"]["addressed_to_robot"] == 0.88
+    assert metadata["input_evidence"]["wake_source"] == "button"
+    assert metadata["context_message_count"] == 1
+    assert payload["messages"][0] == {"role": "system", "content": "published"}
+    await provider.close()
 
 
 async def test_stream_accepts_terminal_finish_without_done_marker_and_filters_reasoning() -> None:

@@ -446,6 +446,16 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
 - Uplink queue bounded và ưu tiên control: khi đầy, drop frame mic cũ nhất để giữ
   realtime. Downlink queue overflow làm session fail rõ ràng thay vì phát stream đã
   mất packet.
+- Task điều phối WebSocket của Veetee dùng stack PSRAM riêng, nhưng task I/O của
+  `esp_websocket_client` phải giữ stack trong RAM nội vì gọi Wi-Fi/TLS. Budget task
+  I/O là 10 KiB: trace board ngày 2026-07-23 sau 12 lượt hội thoại còn tối thiểu
+  3.392 byte stack. Budget 12 KiB cũ không tạo được khi heap còn 37.735 byte nhưng
+  block nội lớn nhất chỉ 11.776 byte. Không tăng lại budget hoặc chuyển stack I/O
+  sang PSRAM nếu chưa stress cả WS/WSS, cache-disabled path và heap fragmentation.
+- Khi Wi-Fi/link đã mất, firmware dùng abortive WebSocket stop; không gửi close frame
+  lịch sự trên socket chết vì API component có đường chờ không giới hạn. Sau station
+  reconnect, lần mở assistant tiếp theo phải tạo session/task mới thay vì kẹt
+  `connecting`.
 - `tts:start`, binary Opus và `tts:stop` phải được xử lý theo đúng thứ tự. Firmware
   chỉ báo `tts stopped` cho state machine sau khi playback queue drain, không phải
   ngay khi nhận JSON `tts:stop`. Nếu queue đã đầy đến mức không thể xếp marker kết

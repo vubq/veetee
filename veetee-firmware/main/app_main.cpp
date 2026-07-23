@@ -952,7 +952,10 @@ void RunApplication(void*) {
                 PostEvent(veetee::app::Event::kRetryWifiProvisioning);
             }
         } else if (result.to == veetee::app::State::kNetworkConnecting) {
-            g_transport.Close();
+            g_transport.Close(
+                result.network_lost
+                    ? veetee::transport::WebSocketCloseMode::kAbortive
+                    : veetee::transport::WebSocketCloseMode::kGraceful);
             g_bootstrap.Cancel();
             g_resources.Cancel();
             g_ui_resources.Cancel();

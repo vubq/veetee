@@ -8,6 +8,7 @@ import httpx
 from jsonschema import Draft202012Validator
 
 from veetee_voice_server.conversation.cancellation import OperationContext
+from veetee_voice_server.conversation.evidence import input_evidence_payload
 from veetee_voice_server.providers.contracts import (
     LlmEvent,
     LlmRequest,
@@ -75,6 +76,7 @@ class NineRouterLlmProvider:
         schema: Mapping[str, Any] | None = None,
         schema_name: str = "veetee_return_json",
         schema_transport: Literal["tool_call", "json_object"] = "tool_call",
+        max_output_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Stream a structured call so planners do not wait for the full HTTP body."""
         context.checkpoint()
@@ -88,6 +90,8 @@ class NineRouterLlmProvider:
             "reasoning_effort": self._reasoning_effort,
             "temperature": 0,
         }
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max(64, min(max_output_tokens, 4_096))
         if schema is None or schema_transport == "json_object":
             payload["response_format"] = {"type": "json_object"}
         else:
@@ -262,6 +266,36 @@ class NineRouterLlmProvider:
 
     def _payload(self, request: LlmRequest) -> dict[str, Any]:
         user_content = request.transcript.text
+        admission = getattr(request, "admission", None)
+        turn_metadata = {
+            "locale": request.transcript.locale,
+            "asr": {
+                "confidence": request.transcript.confidence,
+                "stability": request.transcript.stability,
+            },
+            "admission": (
+                {
+                    "decision": admission.disposition.value,
+                    "confidence": admission.confidence,
+                    "addressed_to_robot": admission.addressed_to_robot,
+                    "reason_code": admission.reason_code,
+                }
+                if admission is not None
+                else None
+            ),
+            "dialogue_act": request.plan.dialogue_act.value,
+            "plan": {
+                "action": request.plan.action.value,
+                "intent": request.plan.intent,
+                "response_required": request.plan.response_required,
+            },
+            "input_evidence": input_evidence_payload(request.transcript.input_evidence),
+            "context_message_count": len(request.transcript.context),
+        }
+        user_content = (
+            f"{user_content}\n\nTurn metadata (JSON): "
+            f"{json.dumps(turn_metadata, ensure_ascii=False, separators=(',', ':'))}"
+        )
         if request.tool_result is not None:
             tool_json = json.dumps(request.tool_result, ensure_ascii=False)
             user_content = f"{user_content}\n\nTool result:\n{tool_json}"

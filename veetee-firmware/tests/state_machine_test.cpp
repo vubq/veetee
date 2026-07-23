@@ -24,7 +24,10 @@ void ReachIdle(StateMachine& machine) {
 
 void TestBootAndProvisioningFlow() {
     StateMachine first_boot;
-    Expect(first_boot, Event::kBootNeedsProvisioning, State::kWifiConfiguring);
+    const auto boot = first_boot.Handle(Event::kBootNeedsProvisioning);
+    assert(boot.accepted);
+    assert(boot.to == State::kWifiConfiguring);
+    assert(!boot.network_lost);
     Expect(first_boot, Event::kRetryWifiProvisioning, State::kWifiConfiguring);
     Expect(first_boot, Event::kProvisioningSaved, State::kNetworkConnecting);
     Expect(first_boot, Event::kWifiConnected, State::kActivating);
@@ -34,6 +37,17 @@ void TestBootAndProvisioningFlow() {
     StateMachine timeout;
     Expect(timeout, Event::kBootWithCredentials, State::kNetworkConnecting);
     Expect(timeout, Event::kWifiConnectionTimeout, State::kWifiConfiguring);
+}
+
+void TestWifiLossMarksTransportForAbortiveClose() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    const auto result = machine.Handle(Event::kWifiDisconnected);
+    assert(result.accepted);
+    assert(result.to == State::kNetworkConnecting);
+    assert(result.network_lost);
 }
 
 void TestAutoConversationDoesNotNeedSecondButtonPress() {
@@ -135,6 +149,7 @@ void TestRejectedIdentityRequiresPhysicalRecovery() {
 
 int main() {
     TestBootAndProvisioningFlow();
+    TestWifiLossMarksTransportForAbortiveClose();
     TestAutoConversationDoesNotNeedSecondButtonPress();
     TestWakeAndButtonShareTheSamePath();
     TestAbortInvalidatesTheCurrentGeneration();

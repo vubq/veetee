@@ -246,16 +246,18 @@ TransitionResult StateMachine::Handle(Event event) {
             break;
     }
 
-    return Result(accepted, from);
+    return Result(accepted, from, event);
 }
 
-TransitionResult StateMachine::Result(bool accepted, State from) const {
+TransitionResult StateMachine::Result(bool accepted, State from,
+                                      Event event) const {
     return TransitionResult{
         accepted,
         from,
         state_,
         assistant_gate_open_,
         cancellation_generation_,
+        accepted && event == Event::kWifiDisconnected,
     };
 }
 

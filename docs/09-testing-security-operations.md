@@ -101,6 +101,12 @@ E2E-26 corrupt/incompatible UI Pack -> rollback UI journal hoặc built-in Signa
 E2E-27 goodbye TTS slow/fail -> vẫn đóng assistant gate; button trong goodbye -> cancel và quay lại listening
 ```
 
+E2E-09 phải kiểm tra riêng mất Wi-Fi khi `evaluating/thinking/speaking`: transport
+dùng abortive close, station reconnect, assistant trở về `idle`, rồi một lần bấm
+mới phải mở được WebSocket và hoàn tất thêm ít nhất một lượt nói. Trace board ngày
+2026-07-23 đã pass mất beacon khi `speaking`, reconnect khoảng 6 giây, mở lại và
+hoàn tất hai lượt tiếp theo; đây không thay thế soak reconnect 30 phút.
+
 Mỗi scenario lưu trace id, firmware log, voice-server events và manager audit.
 
 Admission test corpus phải đa dạng về môi trường, speaker, media playback, khoảng cách, âm lượng, utterance hợp lệ/không hợp lệ và self-TTS echo. Các nguồn cụ thể chỉ là dataset examples; acceptance dựa trên admission decision/false-accept/false-reject, không dựa trên rule nhận diện tên nguồn.

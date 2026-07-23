@@ -142,6 +142,10 @@ async def test_conversation_gate_forces_the_full_structured_schema() -> None:
     assert isinstance(schema, dict)
     assert schema["required"] == ["admission", "dialogue_act", "plan"]
     assert llm.arguments["schema_name"] == "veetee_conversation_gate"
+    assert llm.arguments["schema_transport"] == "json_object"
+    assert llm.arguments["max_output_tokens"] == 512
+    assert '"published_agent"' in str(llm.arguments["user_prompt"])
+    assert "Published agent runtime context" in str(llm.arguments["system_prompt"])
     assert result["admission"]["decision"] == "accepted"  # type: ignore[index]
 
 

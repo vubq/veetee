@@ -12,6 +12,7 @@
 #include "esp_mac.h"
 #include "freertos/idf_additions.h"
 #include "network/endpoint_url.h"
+#include "transport/websocket_task_policy.h"
 
 namespace veetee::transport {
 namespace {
@@ -159,14 +160,20 @@ bool WebSocketTransport::SendMcpPayload(const char* payload,
     return false;
 }
 
-void WebSocketTransport::Close() {
+void WebSocketTransport::Close(WebSocketCloseMode mode) {
     if (task_ == nullptr) return;
+    if (mode == WebSocketCloseMode::kAbortive) {
+        abortive_close_requested_.store(true);
+    }
+    const WebSocketCloseMode effective_mode =
+        abortive_close_requested_.load() ? WebSocketCloseMode::kAbortive : mode;
     const std::uint32_t previous_generation = requested_generation_.fetch_add(1);
     const std::uint32_t generation = previous_generation + 1;
     ready_for_audio_.store(false);
     xQueueReset(outbound_audio_queue_);
     if (!QueueCommand(Command{.type = CommandType::kClose,
-                              .generation = generation},
+                              .generation = generation,
+                              .close_mode = effective_mode},
                       kCommandSendTimeout)) {
         std::uint32_t expected = generation;
         requested_generation_.compare_exchange_strong(expected,
@@ -244,7 +251,7 @@ void WebSocketTransport::HandleCommand(const Command& command) {
             StartClient(command.generation, command.wake_source);
             break;
         case CommandType::kClose:
-            Teardown(true);
+            Teardown(command.close_mode == WebSocketCloseMode::kGraceful);
             break;
         case CommandType::kSocketConnected:
             HandleSocketConnected(command.generation);
@@ -337,8 +344,8 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
     config.ping_interval_sec = 15;
     config.pingpong_timeout_sec = 10;
     config.buffer_size = 4096;
-    // TLS/WebSocket handshakes use more stack than the component default.
-    config.task_stack = 12 * 1024;
+    config.task_name = kWebSocketIoTaskName;
+    config.task_stack = static_cast<int>(kWebSocketIoTaskStackBytes);
     config.task_prio = 5;
     config.user_agent = "veetee-firmware/0.1";
     config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -371,6 +378,11 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
         Teardown(false);
         NotifyWithRetry(WebSocketTransportEvent::kLost, generation);
         return;
+    }
+    const TaskHandle_t io_task = xTaskGetHandle(kWebSocketIoTaskName);
+    if (io_task != nullptr) {
+        ESP_LOGI(kTag, "WebSocket I/O stack free at start=%u bytes",
+                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(io_task)));
     }
     ESP_LOGI(kTag, "WebSocket connection started generation=%u",
              static_cast<unsigned>(generation));
@@ -582,6 +594,12 @@ void WebSocketTransport::Teardown(bool clean, int close_code,
     ready_for_audio_.store(false);
     session_id_[0] = '\0';
     if (client != nullptr) {
+        const TaskHandle_t io_task = xTaskGetHandle(kWebSocketIoTaskName);
+        if (io_task != nullptr) {
+            ESP_LOGI(kTag, "WebSocket I/O stack minimum free=%u bytes",
+                     static_cast<unsigned>(
+                         uxTaskGetStackHighWaterMark(io_task)));
+        }
         if (clean && esp_websocket_client_is_connected(client)) {
             const char* close_reason = reason == nullptr ? "" : reason;
             esp_websocket_client_close_with_code(
@@ -595,6 +613,7 @@ void WebSocketTransport::Teardown(bool clean, int close_code,
     text_assembler_.Reset();
     binary_assembler_.Reset();
     if (outbound_audio_queue_ != nullptr) xQueueReset(outbound_audio_queue_);
+    abortive_close_requested_.store(false);
     std::fill(headers_.begin(), headers_.end(), '\0');
     std::fill(control_buffer_.begin(), control_buffer_.end(), '\0');
 }

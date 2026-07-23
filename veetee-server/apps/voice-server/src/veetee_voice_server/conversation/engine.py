@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+from time import monotonic
 from typing import Any, Literal
 
 import structlog
@@ -16,6 +17,7 @@ from veetee_voice_server.conversation.cancellation import (
 )
 from veetee_voice_server.conversation.sentence_chunker import SentenceChunker
 from veetee_voice_server.conversation.types import (
+    AdmissionDecision,
     AdmissionDisposition,
     ConversationMessage,
     ConversationOutput,
@@ -82,9 +84,22 @@ class ConversationEngine:
                 else self._policy.admission_seconds
             )
             admission_context = context.child(admission_seconds)
+            admission_started_at = monotonic()
             decision = await await_operation(
                 self._admission.evaluate(contextual_transcript, admission_context),
                 admission_context,
+            )
+            logger.info(
+                "conversation_admission_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                duration_ms=round((monotonic() - admission_started_at) * 1_000, 1),
+                context_messages=len(contextual_transcript.context),
+                input_source=(
+                    contextual_transcript.input_evidence.source.value
+                    if contextual_transcript.input_evidence is not None
+                    else "unknown"
+                ),
             )
             await self._emit(
                 context,
@@ -114,6 +129,7 @@ class ConversationEngine:
                 return decision.disposition
 
             self._remember("user", contextual_transcript.text)
+            planner_started_at = monotonic()
             plan = await await_operation(
                 self._planner.plan(
                     contextual_transcript, decision, context.child(self._policy.planner_seconds)
@@ -129,6 +145,7 @@ class ConversationEngine:
                 response_required=plan.response_required,
                 has_tool=plan.tool_call is not None,
                 has_response_text=bool(plan.response_text),
+                duration_ms=round((monotonic() - planner_started_at) * 1_000, 1),
             )
             await self._emit(
                 context,
@@ -145,7 +162,7 @@ class ConversationEngine:
                     },
                 ),
             )
-            await self._execute_plan(contextual_transcript, plan, context)
+            await self._execute_plan(contextual_transcript, decision, plan, context)
             return decision.disposition
         except (TurnCancelledError, StaleTurnError):
             return None
@@ -170,7 +187,11 @@ class ConversationEngine:
             await self._arbiter.complete_turn(context)
 
     async def _execute_plan(
-        self, transcript: Transcript, plan: ConversationPlan, context: OperationContext
+        self,
+        transcript: Transcript,
+        admission: AdmissionDecision,
+        plan: ConversationPlan,
+        context: OperationContext,
     ) -> None:
         if plan.action in {PlanAction.NOOP, PlanAction.CANCEL_PENDING_TOOL}:
             return
@@ -212,6 +233,7 @@ class ConversationEngine:
                 LlmRequest(
                     transcript=transcript,
                     plan=plan,
+                    admission=admission,
                     tool_result=tool_result,
                     system_prompt=self._system_prompt,
                 ),

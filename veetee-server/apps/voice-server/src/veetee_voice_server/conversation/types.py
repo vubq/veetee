@@ -10,6 +10,13 @@ class WakeSource(StrEnum):
     WAKE_WORD = "wake_word"
 
 
+class InputSource(StrEnum):
+    DEVICE_MIC = "device_mic"
+    AUDIO_REPLAY = "audio_replay"
+    LIVE_MIC = "live_mic"
+    TYPED_TEXT = "typed_text"
+
+
 class AdmissionDisposition(StrEnum):
     ACCEPTED = "accepted"
     NON_ACTIONABLE = "non_actionable"
@@ -52,12 +59,36 @@ class ConversationMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class InputEvidence:
+    """Bounded per-utterance evidence; unavailable measurements stay null."""
+
+    source: InputSource
+    wake_source: WakeSource | None = None
+    utterance_duration_ms: int | None = None
+    vad_mean_probability: float | None = None
+    vad_peak_probability: float | None = None
+    vad_speech_ratio: float | None = None
+    signal_rms_dbfs: float | None = None
+    signal_peak_dbfs: float | None = None
+    noise_rms_dbfs: float | None = None
+    estimated_snr_db: float | None = None
+    clipping_ratio: float | None = None
+    server_buffer_truncated: bool = False
+    packet_loss_ratio: float | None = None
+    audio_overrun: bool | None = None
+    aec_enabled: bool = False
+    self_echo_probability: float | None = None
+    target_speaker_probability: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Transcript:
     text: str
     locale: str
     confidence: float | None = None
     stability: float | None = None
     context: tuple[ConversationMessage, ...] = ()
+    input_evidence: InputEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)

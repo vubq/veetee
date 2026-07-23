@@ -15,6 +15,16 @@ target_compile_options(state_machine_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME state_machine_test COMMAND state_machine_test)
 
 add_executable(
+    websocket_task_policy_test
+    websocket_task_policy_test.cpp
+)
+target_include_directories(websocket_task_policy_test PRIVATE ../main)
+target_compile_features(websocket_task_policy_test PRIVATE cxx_std_17)
+target_compile_options(websocket_task_policy_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME websocket_task_policy_test COMMAND websocket_task_policy_test)
+
+add_executable(
     state_visual_test
     state_visual_test.cpp
     ../main/display/state_visual.cpp

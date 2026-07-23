@@ -20,10 +20,16 @@ from veetee_voice_server.conversation.cancellation import (
     iterate_operation,
 )
 from veetee_voice_server.conversation.engine import ConversationEngine
+from veetee_voice_server.conversation.evidence import (
+    build_input_evidence,
+    input_evidence_payload,
+)
 from veetee_voice_server.conversation.inactivity import InactivityController
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationOutput,
+    InputEvidence,
+    InputSource,
     OutputKind,
     Transcript,
     WakeSource,
@@ -442,6 +448,9 @@ class VoiceSession:
         self._speech = bytearray()
         self._pre_roll = bytearray()
         self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
+        self._noise_reference = b""
+        self._vad_probabilities: list[float] = []
+        self._wake_source: WakeSource | None = None
         self._speech_active = False
         self._asr_task: asyncio.Task[None] | None = None
         self._asr_context: OperationContext | None = None
@@ -507,6 +516,7 @@ class VoiceSession:
     async def _handle_control(self, event: ClientEvent) -> None:
         if isinstance(event, ListenEvent) and event.state in {"start", "detect"}:
             source = WakeSource(event.source or "button")
+            self._wake_source = source
             if self.arbiter.snapshot.state is ConversationState.CLOSING:
                 await self.inactivity.wake_during_closing(source)
             else:
@@ -593,6 +603,7 @@ class VoiceSession:
         ended = any(item.speech_ended for item in results)
 
         if self._speech_active:
+            self._vad_probabilities.extend(item.probability for item in results)
             if not self._append_speech(pcm):
                 self._telemetry.record(
                     self.session_id,
@@ -600,15 +611,28 @@ class VoiceSession:
                     generation=self.arbiter.snapshot.generation,
                     payload={"reason": "pcm_buffer_limit"},
                 )
-                self._start_asr()
+                self._start_asr(server_buffer_truncated=True)
                 return
         else:
+            prior_pre_roll = bytes(self._pre_roll)
             self._pre_roll.extend(pcm)
             if len(self._pre_roll) > self._pre_roll_bytes:
                 del self._pre_roll[: len(self._pre_roll) - self._pre_roll_bytes]
             if started:
                 await self.inactivity.candidate_started()
                 self._speech_active = True
+                first_started = next(
+                    (
+                        index
+                        for index, item in enumerate(results)
+                        if item.speech_started
+                    ),
+                    0,
+                )
+                self._vad_probabilities.extend(
+                    item.probability for item in results[first_started:]
+                )
+                self._noise_reference = prior_pre_roll
                 if not self._append_speech(self._pre_roll or pcm):
                     self._telemetry.record(
                         self.session_id,
@@ -616,10 +640,16 @@ class VoiceSession:
                         generation=self.arbiter.snapshot.generation,
                         payload={"reason": "pcm_buffer_limit"},
                     )
-                    self._start_asr()
+                    self._start_asr(server_buffer_truncated=True)
                     return
                 self._pre_roll.clear()
         if ended and self._speech_active:
+            self._telemetry.record(
+                self.session_id,
+                "vad.speech_end",
+                generation=self.arbiter.snapshot.generation,
+                payload={"frame_count": len(self._vad_probabilities)},
+            )
             self._start_asr()
 
     def _append_speech(self, pcm: bytes | bytearray) -> bool:
@@ -629,19 +659,42 @@ class VoiceSession:
         self._speech.extend(pcm[:remaining])
         return len(pcm) <= remaining
 
-    def _start_asr(self) -> None:
+    def _start_asr(self, *, server_buffer_truncated: bool = False) -> None:
         if self._asr_task and not self._asr_task.done():
             return
         audio = bytes(self._speech)
+        evidence = (
+            build_input_evidence(
+                audio,
+                sample_rate=self.settings.input_sample_rate,
+                source=InputSource.DEVICE_MIC,
+                wake_source=self._wake_source,
+                vad_probabilities=self._vad_probabilities,
+                noise_pcm_s16le=self._noise_reference,
+                server_buffer_truncated=server_buffer_truncated,
+            )
+            if audio
+            else None
+        )
         self._speech.clear()
         self._pre_roll.clear()
+        self._noise_reference = b""
+        self._vad_probabilities.clear()
         self._speech_active = False
         self.vad.reset()
         if not audio:
             return
-        self._asr_task = asyncio.create_task(self._transcribe(audio))
+        self._telemetry.record(
+            self.session_id,
+            "asr.start",
+            generation=self.arbiter.snapshot.generation,
+            payload={"audio_bytes": len(audio)},
+        )
+        self._asr_task = asyncio.create_task(self._transcribe(audio, evidence))
 
-    async def _transcribe(self, pcm: bytes) -> None:
+    async def _transcribe(
+        self, pcm: bytes, evidence: InputEvidence | None = None
+    ) -> None:
         context = OperationContext(
             self.session_id,
             f"asr:{uuid4().hex}",
@@ -665,6 +718,16 @@ class VoiceSession:
                 transcript.locale,
                 transcript.confidence,
                 transcript.stability,
+                input_evidence=evidence,
+            )
+            self._telemetry.record(
+                self.session_id,
+                "asr.final",
+                generation=self.arbiter.snapshot.generation,
+                payload={
+                    "audio_bytes": len(pcm),
+                    "input_evidence": input_evidence_payload(evidence),
+                },
             )
             await self.sink.send_stt(
                 normalized, generation=self.arbiter.snapshot.generation
@@ -800,5 +863,7 @@ class VoiceSession:
     def _reset_input(self) -> None:
         self._speech.clear()
         self._pre_roll.clear()
+        self._noise_reference = b""
+        self._vad_probabilities.clear()
         self._speech_active = False
         self.vad.reset()

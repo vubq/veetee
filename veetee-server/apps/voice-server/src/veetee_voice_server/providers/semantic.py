@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any, ClassVar
 
 from veetee_voice_server.conversation.cancellation import OperationContext
+from veetee_voice_server.conversation.evidence import input_evidence_payload
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
@@ -71,6 +72,7 @@ class JsonPlannerProvider:
                 "locale": transcript.locale or self._locale,
                 "transcript": transcript.text,
                 "admission": admission.disposition.value,
+                "input_evidence": input_evidence_payload(transcript.input_evidence),
                 "conversation_context": [
                     {"role": item.role, "text": item.text} for item in transcript.context
                 ],
@@ -166,6 +168,7 @@ class StructuredConversationGate:
                 "transcript": transcript.text,
                 "asr_confidence": transcript.confidence,
                 "asr_stability": transcript.stability,
+                "input_evidence": input_evidence_payload(transcript.input_evidence),
                 "conversation_context": [
                     {"role": item.role, "text": item.text} for item in transcript.context
                 ],

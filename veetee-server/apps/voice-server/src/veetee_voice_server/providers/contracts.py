@@ -17,6 +17,7 @@ from veetee_voice_server.conversation.types import (
 class LlmRequest:
     transcript: Transcript
     plan: ConversationPlan
+    admission: AdmissionDecision | None = None
     tool_result: Any | None = None
     system_prompt: str | None = None
 

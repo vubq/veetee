@@ -19,10 +19,16 @@ from veetee_voice_server.conversation.cancellation import (
     iterate_operation,
 )
 from veetee_voice_server.conversation.engine import ConversationEngine
+from veetee_voice_server.conversation.evidence import (
+    build_input_evidence,
+    input_evidence_payload,
+)
 from veetee_voice_server.conversation.inactivity import InactivityController
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationOutput,
+    InputEvidence,
+    InputSource,
     OutputKind,
     Transcript,
     WakeSource,
@@ -423,6 +429,9 @@ class LabSession:
         self._speech = bytearray()
         self._pre_roll = bytearray()
         self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1_000 * 2
+        self._noise_reference = b""
+        self._vad_probabilities: list[float] = []
+        self._wake_source = WakeSource.BUTTON
         self._speech_active = False
         self._audio_open = False
         self._processing_task: asyncio.Task[None] | None = None
@@ -523,7 +532,16 @@ class LabSession:
         await self.inactivity.candidate_started()
         await self.sink.send_event("vad.bypassed", {"reason": "typed_text"})
         await self.sink.send_event("asr.bypassed", {"reason": "typed_text"})
-        transcript = Transcript(text, self.profile.locale, confidence=1.0, stability=1.0)
+        transcript = Transcript(
+            text,
+            self.profile.locale,
+            confidence=1.0,
+            stability=1.0,
+            input_evidence=InputEvidence(
+                source=InputSource.TYPED_TEXT,
+                wake_source=self._wake_source,
+            ),
+        )
         await self.sink.send_event(
             "stt.final",
             {
@@ -548,24 +566,38 @@ class LabSession:
         started = any(item.speech_started for item in results)
         ended = any(item.speech_ended for item in results)
         if self._speech_active:
+            self._vad_probabilities.extend(item.probability for item in results)
             if not self._append_speech(pcm):
                 await self.sink.send_event(
                     "vad.speech_end", {"forced": True, "reason": "pcm_buffer_limit"}
                 )
-                self._start_asr()
+                self._start_asr(server_buffer_truncated=True)
                 return
         else:
+            prior_pre_roll = bytes(self._pre_roll)
             self._pre_roll.extend(pcm)
             if len(self._pre_roll) > self._pre_roll_bytes:
                 del self._pre_roll[: len(self._pre_roll) - self._pre_roll_bytes]
             if started:
                 await self.inactivity.candidate_started()
                 self._speech_active = True
+                first_started = next(
+                    (
+                        index
+                        for index, item in enumerate(results)
+                        if item.speech_started
+                    ),
+                    0,
+                )
+                self._vad_probabilities.extend(
+                    item.probability for item in results[first_started:]
+                )
+                self._noise_reference = prior_pre_roll
                 if not self._append_speech(self._pre_roll or pcm):
                     await self.sink.send_event(
                         "vad.speech_end", {"forced": True, "reason": "pcm_buffer_limit"}
                     )
-                    self._start_asr()
+                    self._start_asr(server_buffer_truncated=True)
                     return
                 self._pre_roll.clear()
                 await self.sink.send_event("vad.speech_start")
@@ -598,16 +630,29 @@ class LabSession:
         self._speech.extend(pcm[:remaining])
         return len(pcm) <= remaining
 
-    def _start_asr(self) -> None:
+    def _start_asr(self, *, server_buffer_truncated: bool = False) -> None:
         if self._processing_task is not None and not self._processing_task.done():
             return
         audio = bytes(self._speech)
+        evidence = (
+            build_input_evidence(
+                audio,
+                sample_rate=self.settings.input_sample_rate,
+                source=InputSource(self.context.input_mode),
+                wake_source=self._wake_source,
+                vad_probabilities=self._vad_probabilities,
+                noise_pcm_s16le=self._noise_reference,
+                server_buffer_truncated=server_buffer_truncated,
+            )
+            if audio
+            else None
+        )
         self._reset_input()
         if not audio:
             return
-        self._processing_task = asyncio.create_task(self._transcribe(audio))
+        self._processing_task = asyncio.create_task(self._transcribe(audio, evidence))
 
-    async def _transcribe(self, pcm: bytes) -> None:
+    async def _transcribe(self, pcm: bytes, evidence: InputEvidence | None) -> None:
         context = OperationContext(
             self.session_id,
             f"asr:{self.session_id}",
@@ -633,6 +678,7 @@ class LabSession:
                 transcript.locale,
                 transcript.confidence,
                 transcript.stability,
+                input_evidence=evidence,
             )
             await self.sink.send_event(
                 "stt.final",
@@ -642,6 +688,7 @@ class LabSession:
                     "confidence": normalized.confidence,
                     "stability": normalized.stability,
                     "source": self.context.input_mode,
+                    "input_evidence": input_evidence_payload(evidence),
                 },
             )
             await self._run_transcript(normalized)
@@ -764,5 +811,7 @@ class LabSession:
     def _reset_input(self) -> None:
         self._speech.clear()
         self._pre_roll.clear()
+        self._noise_reference = b""
+        self._vad_probabilities.clear()
         self._speech_active = False
         self.vad.reset()

@@ -10,13 +10,19 @@ from veetee_voice_server.conversation.cancellation import (
     OperationContext,
     TurnCancelledError,
 )
+from veetee_voice_server.conversation.evidence import (
+    build_input_evidence,
+    input_evidence_payload,
+)
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
     ConversationMessage,
     DialogueAct,
+    InputSource,
     PlanAction,
     Transcript,
+    WakeSource,
 )
 from veetee_voice_server.providers.semantic import (
     JsonPlannerProvider,
@@ -82,6 +88,28 @@ async def test_local_admission_keeps_short_contextual_reply_for_semantic_gate() 
         context(),
     )
     assert result.disposition is AdmissionDisposition.ACCEPTED
+
+
+async def test_input_evidence_bounds_audio_and_keeps_unavailable_signals_explicit() -> None:
+    pcm = (b"\0\0" * 80) + (b"\xff\x7f" * 20)
+    evidence = build_input_evidence(
+        pcm,
+        sample_rate=16_000,
+        source=InputSource.DEVICE_MIC,
+        wake_source=WakeSource.BUTTON,
+        vad_probabilities=[0.2, 0.8, 1.2, -0.2],
+        noise_pcm_s16le=b"\0\0" * 20,
+        server_buffer_truncated=True,
+    )
+    payload = input_evidence_payload(evidence)
+
+    assert payload["source"] == "device_mic"
+    assert payload["wake_source"] == "button"
+    assert payload["signal"]["vad_mean_probability"] == 0.5  # type: ignore[index]
+    assert payload["signal"]["clipping_ratio"] == 0.2  # type: ignore[index]
+    assert payload["integrity"]["server_buffer_truncated"] is True  # type: ignore[index]
+    assert payload["integrity"]["packet_loss_ratio"] is None  # type: ignore[index]
+    assert payload["aec"]["self_echo_probability"] is None  # type: ignore[index]
 
 
 async def test_planner_tolerates_unknown_model_dialogue_label() -> None:
@@ -198,6 +226,7 @@ async def test_structured_gate_passes_recent_context_to_semantic_model() -> None
         {"role": "user", "text": "Bạn vừa nói gì?"},
         {"role": "assistant", "text": "Tôi vừa nói một câu đùa."},
     ]
+    assert payloads[0]["input_evidence"]["wake_source"] is None  # type: ignore[index]
 
 
 @pytest.mark.parametrize(

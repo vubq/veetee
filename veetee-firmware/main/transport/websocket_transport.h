@@ -27,6 +27,11 @@ enum class WebSocketTransportEvent : std::uint8_t {
     kAssistantSleep,
 };
 
+enum class WebSocketCloseMode : std::uint8_t {
+    kGraceful,
+    kAbortive,
+};
+
 struct WebSocketTransportNotification {
     WebSocketTransportEvent event;
 };
@@ -47,7 +52,7 @@ public:
     esp_err_t StopListening(const char* reason);
     bool SendAudio(const std::uint8_t* packet, std::size_t length);
     bool SendMcpPayload(const char* payload, std::size_t length);
-    void Close();
+    void Close(WebSocketCloseMode mode = WebSocketCloseMode::kGraceful);
     [[nodiscard]] bool control_task_running() const {
         return task_ != nullptr;
     }
@@ -80,6 +85,7 @@ private:
         ServerEvent server_event{};
         char reason[65] = {};
         char source[33] = {};
+        WebSocketCloseMode close_mode = WebSocketCloseMode::kGraceful;
         std::uint16_t packet_length = 0;
         std::array<std::uint8_t, kMaximumOpusPacketBytes> packet{};
         char* control_payload = nullptr;
@@ -130,6 +136,7 @@ private:
     std::atomic<std::uint32_t> requested_generation_{0};
     std::atomic<std::uint32_t> client_generation_{0};
     std::atomic<bool> ready_for_audio_{false};
+    std::atomic<bool> abortive_close_requested_{false};
     TextFrameAssembler text_assembler_;
     BinaryFrameAssembler binary_assembler_;
     WakeSource wake_source_ = WakeSource::kButton;
