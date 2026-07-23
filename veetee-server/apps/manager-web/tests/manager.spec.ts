@@ -945,10 +945,53 @@ test("changes the published assistant assigned to an existing device", async ({ 
 
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByLabel("Trợ lý cho thiết bị").selectOption("agent-2");
-  await page.getByRole("button", { name: "Lưu trợ lý" }).click();
+  await page.getByRole("button", { name: "Lưu thay đổi" }).click();
 
   await expect.poll(() => deviceAgentAssignments).toEqual([{ agentId: "agent-2" }]);
   await expect(page.locator(".vt-toast-region")).toContainText("Đã đổi trợ lý cho thiết bị");
+});
+
+test("keeps device assistant controls cohesive on desktop and mobile", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true, withSecondAgent: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="devices"]').first().click();
+
+  const binding = page.locator(".device-agent-binding");
+  const select = page.getByLabel("Trợ lý cho thiết bị");
+  const savedButton = page.getByRole("button", { name: "Đã lưu" });
+  await expect(binding).toContainText("HỒ SƠ TRỢ LÝ");
+  await expect(savedButton).toBeDisabled();
+
+  const desktopSelect = await select.boundingBox();
+  const desktopButton = await savedButton.boundingBox();
+  expect(desktopSelect).not.toBeNull();
+  expect(desktopButton).not.toBeNull();
+  expect(Math.abs(desktopSelect!.y - desktopButton!.y)).toBeLessThanOrEqual(2.5);
+  expect(Math.abs(desktopSelect!.height - desktopButton!.height)).toBeLessThanOrEqual(2.5);
+  expect(await select.evaluate((element) => getComputedStyle(element).backgroundImage)).toBe("none");
+  const desktopOverflow = await binding.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(desktopOverflow.scrollWidth).toBeLessThanOrEqual(desktopOverflow.clientWidth);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSelect = await select.boundingBox();
+  const mobileButton = await savedButton.boundingBox();
+  expect(mobileSelect).not.toBeNull();
+  expect(mobileButton).not.toBeNull();
+  expect(mobileButton!.y).toBeGreaterThan(mobileSelect!.y + mobileSelect!.height);
+  expect(Math.abs(mobileSelect!.x - mobileButton!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(mobileSelect!.width - mobileButton!.width)).toBeLessThanOrEqual(1);
+  const mobileOverflow = await binding.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(mobileOverflow.scrollWidth).toBeLessThanOrEqual(mobileOverflow.clientWidth);
 });
 
 test("keeps device telemetry on overview and opens a clean Web Device Simulator", async ({

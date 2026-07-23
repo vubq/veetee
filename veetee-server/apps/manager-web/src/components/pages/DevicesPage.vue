@@ -189,13 +189,27 @@ async function assignAgent(): Promise<void> {
             <p>{{ selected.hardwareId }} · {{ selected.firmwareVersion ? `Firmware ${selected.firmwareVersion}` : "Chưa báo firmware" }}</p>
             <div class="device-facts"><span><small>Agent</small><b>{{ agents.find((agent) => agent.id === selected?.agentId)?.name ?? "Chưa gán" }}</b></span><span><small>Liên hệ gần nhất</small><b>{{ formatDate(selected.lastSeenAt) }}</b></span><span><small>Đã ghép nối</small><b>{{ formatDate(selected.pairedAt) }}</b></span></div>
             <div class="device-agent-binding">
-              <VtField label="Trợ lý cho thiết bị" hint="Chỉ assistant đã publish mới được nhận config.">
-                <VtSelect v-model="selectedAgentId">
-                  <option value="">Không gán trợ lý</option>
-                  <option v-for="agent in publishedAgents" :key="agent.id" :value="agent.id">{{ agent.name }} · v{{ agent.publishedVersion }}</option>
-                </VtSelect>
-              </VtField>
-              <VtButton size="sm" variant="secondary" :busy="agentBusy" :disabled="selectedAgentId === (selected.agentId ?? '')" @click="assignAgent"><VtIcon name="check" :size="15" /> Lưu trợ lý</VtButton>
+              <div class="device-agent-heading">
+                <span class="device-agent-icon"><VtIcon name="agent" :size="20" /></span>
+                <div>
+                  <small>HỒ SƠ TRỢ LÝ</small>
+                  <label :for="`device-agent-${selected.id}`">Trợ lý vận hành</label>
+                  <p>Profile đã publish sẽ được đồng bộ xuống thiết bị.</p>
+                </div>
+              </div>
+              <div class="device-agent-controls">
+                <span class="device-agent-select">
+                  <VtSelect :id="`device-agent-${selected.id}`" v-model="selectedAgentId" aria-label="Trợ lý cho thiết bị">
+                    <option value="">Không gán trợ lý</option>
+                    <option v-for="agent in publishedAgents" :key="agent.id" :value="agent.id">{{ agent.name }} · v{{ agent.publishedVersion }}</option>
+                  </VtSelect>
+                  <VtIcon name="chevron" :size="16" />
+                </span>
+                <VtButton size="sm" :busy="agentBusy" :disabled="selectedAgentId === (selected.agentId ?? '')" @click="assignAgent">
+                  <VtIcon name="check" :size="15" />
+                  {{ selectedAgentId === (selected.agentId ?? "") ? "Đã lưu" : "Lưu thay đổi" }}
+                </VtButton>
+              </div>
               <small v-if="agentError" class="inline-error" role="alert">{{ agentError }}</small>
             </div>
           </div>
