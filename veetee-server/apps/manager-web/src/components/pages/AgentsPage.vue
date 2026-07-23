@@ -468,7 +468,14 @@ const promptPreview = computed(() => {
             <div
               v-for="preset in personalityPresets"
               :key="preset.id"
-              :class="['personality-card', `accent-${preset.accent}`, { active: form.personalityPresetId === preset.id }]"
+              :class="[
+                'personality-card',
+                `accent-${preset.accent}`,
+                {
+                  active: form.personalityPresetId === preset.id,
+                  deletable: preset.deletable && !preset.builtIn,
+                },
+              ]"
             >
               <button
                 type="button"
@@ -1117,7 +1124,7 @@ const promptPreview = computed(() => {
 /* The personality library and prompt workbench share the same two-level surface. */
 .personality-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -1160,10 +1167,14 @@ const promptPreview = computed(() => {
   align-items: start;
   gap: 10px;
   border: 0;
-  padding: 14px 13px 30px 17px;
+  padding: 14px 13px 14px 17px;
   color: var(--ink);
   background: transparent;
   text-align: left;
+}
+
+.personality-card.deletable .personality-choice {
+  padding-bottom: 30px;
 }
 
 .personality-choice:hover,
@@ -1226,7 +1237,8 @@ const promptPreview = computed(() => {
   width: 18px;
   height: 18px;
   place-items: center;
-  margin-top: 14px;
+  align-self: center;
+  margin: 0;
   border-radius: 50%;
   color: white;
   background: var(--orange);
@@ -1269,6 +1281,7 @@ const promptPreview = computed(() => {
 }
 
 .prompt-editor-grid {
+  --prompt-pane-height: 430px;
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(300px, .92fr);
   align-items: stretch;
@@ -1282,7 +1295,8 @@ const promptPreview = computed(() => {
 .prompt-render-preview {
   display: grid;
   min-width: 0;
-  height: 430px;
+  min-height: 0;
+  height: var(--prompt-pane-height);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1334,7 +1348,7 @@ const promptPreview = computed(() => {
   width: 100%;
   min-height: 0;
   height: 100%;
-  resize: vertical;
+  resize: none;
   border-color: var(--line);
   border-radius: 11px;
   background: var(--paper-strong);
@@ -1579,12 +1593,13 @@ const promptPreview = computed(() => {
   }
 
   .prompt-editor-grid {
+    --prompt-pane-height: 390px;
     grid-template-columns: 1fr;
   }
 
   .prompt-editor-grid > :deep(.vt-field) .prompt-template-input,
   .prompt-render-preview {
-    min-height: 360px;
+    min-height: 0;
   }
 
   .prompt-render-preview pre {
@@ -1593,7 +1608,7 @@ const promptPreview = computed(() => {
 
   .prompt-workbench-pane,
   .prompt-render-preview {
-    height: 390px;
+    height: var(--prompt-pane-height);
   }
 
   .sticky-publish {
@@ -1628,9 +1643,13 @@ const promptPreview = computed(() => {
     justify-self: start;
   }
 
+  .prompt-editor-grid {
+    --prompt-pane-height: 360px;
+  }
+
   .prompt-workbench-pane,
   .prompt-render-preview {
-    height: 360px;
+    height: var(--prompt-pane-height);
   }
 
   .personality-accent-picker {

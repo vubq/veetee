@@ -1231,6 +1231,15 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   await expect(page.locator(".agent-config-section")).toHaveCount(4);
   await expect(page.locator(".personality-feature")).toContainText("ĐANG CHỌN");
   await expect(page.locator(".agent-runtime-grid")).toBeVisible();
+  const desktopPersonalityCards = await page.locator(".personality-card").evaluateAll((cards) => {
+    const top = cards[0]?.getBoundingClientRect().top;
+    return {
+      firstWidth: cards[0]?.getBoundingClientRect().width ?? 0,
+      firstRowCount: cards.filter((card) => Math.abs(card.getBoundingClientRect().top - (top ?? 0)) <= 1).length,
+    };
+  });
+  expect(desktopPersonalityCards.firstWidth).toBeGreaterThanOrEqual(240);
+  expect(desktopPersonalityCards.firstRowCount).toBeLessThanOrEqual(4);
   const desktopOverflow = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
@@ -1242,13 +1251,20 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   await page.getByRole("link", { name: /Base prompt/ }).click();
   await promptSection.scrollIntoViewIfNeeded();
   await expect(promptSection).toBeInViewport();
+  const [draftPaneBox, previewPaneBox] = await Promise.all([
+    page.locator(".prompt-workbench-pane").boundingBox(),
+    page.locator(".prompt-render-preview").boundingBox(),
+  ]);
+  expect(draftPaneBox).not.toBeNull();
+  expect(previewPaneBox).not.toBeNull();
+  expect(Math.abs(draftPaneBox!.height - previewPaneBox!.height)).toBeLessThanOrEqual(1);
 
   await page.setViewportSize({ width: 1100, height: 900 });
   const intermediateCards = await page.locator(".personality-card").evaluateAll((cards) =>
     cards.slice(0, 2).map((card) => card.getBoundingClientRect().width),
   );
   expect(intermediateCards).toHaveLength(2);
-  expect(Math.min(...intermediateCards)).toBeGreaterThanOrEqual(200);
+  expect(Math.min(...intermediateCards)).toBeGreaterThanOrEqual(240);
 
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileOverflow = await page.evaluate(() => ({
@@ -1256,6 +1272,13 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
     viewportWidth: window.innerWidth,
   }));
   expect(mobileOverflow.documentWidth).toBeLessThanOrEqual(mobileOverflow.viewportWidth);
+  const [mobilePersonalityGridBox, mobilePersonalityCardBox] = await Promise.all([
+    page.locator(".personality-grid").boundingBox(),
+    page.locator(".personality-card").first().boundingBox(),
+  ]);
+  expect(mobilePersonalityGridBox).not.toBeNull();
+  expect(mobilePersonalityCardBox).not.toBeNull();
+  expect(Math.abs(mobilePersonalityGridBox!.width - mobilePersonalityCardBox!.width)).toBeLessThanOrEqual(1);
   await expect(page.locator(".agent-config-nav")).toBeVisible();
   await expect(page.locator(".sticky-publish")).toContainText("Publish tạo version mới");
 });
