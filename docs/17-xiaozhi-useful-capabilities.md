@@ -273,7 +273,7 @@ UI Pack A/B an toàn hơn nhưng ABI còn giới hạn. Có thể mở rộng da
 - text style/layout constraints;
 - RAM/flash budget;
 - smoke render inactive slot;
-- built-in Signal failsafe.
+- built-in Mobile (`signal`) failsafe.
 
 ### 7.2. Locale UI/offline prompt — 🟡 P2
 

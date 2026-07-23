@@ -4,18 +4,18 @@
   "theme_id": "quiet",
   "composition": "quiet",
   "palette": {
-    "starting": {"background": "#f2efe4", "foreground": "#173a35", "accent": "#e05f4f"},
-    "wifi_configuring": {"background": "#e1eeed", "foreground": "#18383a", "accent": "#347b84"},
-    "network_connecting": {"background": "#e1eeed", "foreground": "#18383a", "accent": "#347b84"},
-    "activating": {"background": "#e1eeed", "foreground": "#18383a", "accent": "#347b84"},
-    "pairing_recovery": {"background": "#f0ddd6", "foreground": "#541e1b", "accent": "#c34639"},
-    "idle": {"background": "#f2efe4", "foreground": "#173a35", "accent": "#e05f4f"},
-    "connecting": {"background": "#e1eeed", "foreground": "#18383a", "accent": "#347b84"},
-    "listening": {"background": "#e7efdc", "foreground": "#163b34", "accent": "#77a942"},
-    "evaluating": {"background": "#eee6d2", "foreground": "#3f3627", "accent": "#d39832"},
-    "thinking": {"background": "#eee6d2", "foreground": "#3f3627", "accent": "#d39832"},
-    "speaking": {"background": "#f1dfd9", "foreground": "#4b2929", "accent": "#df6657"},
-    "aborting": {"background": "#f0ddd6", "foreground": "#541e1b", "accent": "#c34639"},
-    "closing": {"background": "#e8e7de", "foreground": "#334944", "accent": "#8a9e95"}
+    "starting": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "wifi_configuring": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "network_connecting": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "activating": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "pairing_recovery": {"background": "#102C33", "foreground": "#FFF3EB", "accent": "#C8F36B"},
+    "idle": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "connecting": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "listening": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "evaluating": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "thinking": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"},
+    "speaking": {"background": "#102C33", "foreground": "#FFF3EB", "accent": "#C8F36B"},
+    "aborting": {"background": "#102C33", "foreground": "#FFF3EB", "accent": "#C8F36B"},
+    "closing": {"background": "#102C33", "foreground": "#FBFBF7", "accent": "#C8F36B"}
   }
 }

@@ -392,7 +392,8 @@ void RollbackUiPack(const char* fallback_partition, const char* reason) {
     } else {
         const esp_err_t reload_error = g_board.ReloadUiPack(fallback_partition);
         if (reload_error != ESP_OK) {
-            ESP_LOGE(kTag, "UI fallback %s failed: %s; using built-in Signal",
+            ESP_LOGE(kTag,
+                     "UI fallback %s failed: %s; using built-in Mobile (signal)",
                      fallback_partition, esp_err_to_name(reload_error));
             g_board.UseBuiltInSignal();
         }

@@ -88,7 +88,7 @@ describe("UiPackUploadService", () => {
     );
 
     expect(artifact).toMatchObject({
-      id: "ui-signal-1.1.0",
+      id: "ui-signal-1.2.0",
       kind: "display_assets",
       runtime: "veetee-ui",
       runtimeAbi: 1,
@@ -98,7 +98,7 @@ describe("UiPackUploadService", () => {
     expect(registerArtifact).toHaveBeenCalledTimes(1);
     await expect(manifests.validate(artifact.id)).resolves.toMatchObject({
       kind: "display_assets",
-      version: "1.1.0",
+      version: "1.2.0",
     });
   });
 
@@ -118,12 +118,12 @@ describe("UiPackUploadService", () => {
 
   it("builds a selected standard theme before passing it through normal staging", async () => {
     const service = new UiPackUploadService({} as ResourceCatalogService);
-    const artifact = { id: "ui-quiet-1.1.0" } as Awaited<ReturnType<UiPackUploadService["stage"]>>;
+    const artifact = { id: "ui-quiet-1.2.0" } as Awaited<ReturnType<UiPackUploadService["stage"]>>;
     const stage = vi.spyOn(service, "stage").mockImplementation(async (body, fileName) => {
       const chunks: Buffer[] = [];
       for await (const chunk of body as Readable) chunks.push(Buffer.from(chunk));
       const inspected = await inspectUiPackBuffer(Buffer.concat(chunks));
-      expect(fileName).toBe("quiet-1.1.0.vtp");
+      expect(fileName).toBe("quiet-1.2.0.vtp");
       expect(inspected.manifest.theme_id).toBe("quiet");
       expect(inspected.theme.composition).toBe("quiet");
       return artifact;

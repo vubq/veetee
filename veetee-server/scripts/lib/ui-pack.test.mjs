@@ -8,7 +8,7 @@ import { buildUiPack, inspectUiPackBuffer } from "./ui-pack.mjs";
 
 const signal = resolve("ui-packs/signal");
 
-test("builds and inspects a deterministic Signal UI Pack", async () => {
+test("builds and inspects a deterministic Mobile UI Pack", async () => {
   const first = await buildUiPack(signal);
   const second = await buildUiPack(signal);
   assert.deepEqual(first.buffer, second.buffer);

@@ -79,6 +79,21 @@ std::uint16_t ToPanelEndian(std::uint16_t color) {
     return static_cast<std::uint16_t>((color << 8U) | (color >> 8U));
 }
 
+std::uint16_t MixRgb565(std::uint16_t base, std::uint16_t overlay,
+                        int overlay_eighths) {
+    const int weight = std::clamp(overlay_eighths, 0, 8);
+    const int inverse = 8 - weight;
+    const int red = (((base >> 11U) & 0x1FU) * inverse +
+                     ((overlay >> 11U) & 0x1FU) * weight) /
+                    8;
+    const int green = (((base >> 5U) & 0x3FU) * inverse +
+                       ((overlay >> 5U) & 0x3FU) * weight) /
+                      8;
+    const int blue =
+        ((base & 0x1FU) * inverse + (overlay & 0x1FU) * weight) / 8;
+    return static_cast<std::uint16_t>((red << 11U) | (green << 5U) | blue);
+}
+
 }  // namespace
 
 esp_err_t St7789Display::Initialize() {
@@ -203,7 +218,10 @@ esp_err_t St7789Display::DrawColorBars() {
 }
 
 esp_err_t St7789Display::DrawState(app::State state) {
-    return RenderState(state, nullptr);
+    last_state_ = state;
+    last_activation_code_[0] = '\0';
+    animation_frame_ = 0;
+    return RenderState(state, nullptr, animation_frame_, true);
 }
 
 esp_err_t St7789Display::DrawTextCentered(const char* text, int y,
@@ -357,7 +375,23 @@ esp_err_t St7789Display::DrawActivationCode(const char* code) {
     for (const char* digit = code; *digit != '\0'; ++digit) {
         if (*digit < '0' || *digit > '9') return ESP_ERR_INVALID_ARG;
     }
-    return RenderState(app::State::kActivating, code);
+    last_state_ = app::State::kActivating;
+    std::snprintf(last_activation_code_, sizeof(last_activation_code_), "%s",
+                  code);
+    animation_frame_ = 0;
+    return RenderState(last_state_, last_activation_code_, animation_frame_,
+                       true);
+}
+
+esp_err_t St7789Display::DrawAnimationFrame() {
+    if (panel_ == nullptr || framebuffer_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ++animation_frame_;
+    return RenderState(
+        last_state_,
+        last_activation_code_[0] == '\0' ? nullptr : last_activation_code_,
+        animation_frame_, false);
 }
 
 esp_err_t St7789Display::DrawStandby() {
@@ -386,7 +420,9 @@ bool St7789Display::UiPackHealthy() const {
 }
 
 esp_err_t St7789Display::RenderState(app::State state,
-                                     const char* activation_code) {
+                                     const char* activation_code,
+                                     std::uint32_t animation_frame,
+                                     bool log_transition) {
     if (panel_ == nullptr || line_buffer_ == nullptr || framebuffer_ == nullptr ||
         transfer_faulted_) {
         return ESP_ERR_INVALID_STATE;
@@ -396,18 +432,18 @@ esp_err_t St7789Display::RenderState(app::State state,
     const UiStateStyle& style = theme_.states[state_index];
     switch (theme_.composition) {
         case UiComposition::kSignal:
-            RenderSignal(state, style, activation_code);
+            RenderSignal(state, style, activation_code, animation_frame);
             break;
         case UiComposition::kMonolith:
-            RenderMonolith(state, style, activation_code);
+            RenderMonolith(state, style, activation_code, animation_frame);
             break;
         case UiComposition::kQuiet:
-            RenderQuiet(state, style, activation_code);
+            RenderQuiet(state, style, activation_code, animation_frame);
             break;
     }
     const esp_err_t error = FlushFramebuffer();
     last_render_ok_ = error == ESP_OK;
-    if (error == ESP_OK) {
+    if (error == ESP_OK && log_transition) {
         ESP_LOGI(kTag, "State rendered state=%s theme=%s external=%d",
                  app::ToString(state), theme_.theme_id, theme_.external);
     }
@@ -415,79 +451,226 @@ esp_err_t St7789Display::RenderState(app::State state,
 }
 
 void St7789Display::RenderSignal(app::State state, const UiStateStyle& style,
-                                 const char* activation_code) {
+                                 const char* activation_code,
+                                 std::uint32_t animation_frame) {
     const std::size_t index = static_cast<std::size_t>(state);
     const ScreenCopy& copy = kScreenCopy[index];
+    const std::uint16_t panel =
+        MixRgb565(style.background, style.foreground, 1);
+    const std::uint16_t accent_soft =
+        MixRgb565(style.background, style.accent, 2);
     CanvasFill(style.background);
-    CanvasRectangle(16, 18, 30, 3, style.accent);
-    CanvasText("VEE/TEE", 54, 13, 1, style.foreground);
-    CanvasText(copy.number, 16, 48, 2, style.accent);
-    CanvasText(copy.kicker, 58, 53, 1, style.foreground);
-    CanvasTextCentered(copy.title, 76, 3, style.foreground);
+    const std::uint16_t frame =
+        MixRgb565(style.background, style.foreground, 2);
+    CanvasRoundedRectangle(5, 3, 230, 274, 29, frame);
+    CanvasRoundedRectangle(8, 6, 224, 268, 26, style.background);
 
-    const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
-    const int center_y = 162;
+    CanvasText("POCKET OS", 20, 17, 1, style.accent);
+    CanvasText(copy.number, 198, 17, 1, style.foreground);
+    CanvasText(copy.kicker, 20, 42, 1, frame);
+    CanvasText(copy.title, 20, 59, 2, style.foreground);
+    CanvasCircle(205, 55, animation_frame % 2U == 0U ? 5 : 3,
+                 style.accent, true);
+
+    CanvasRoundedRectangle(18, 86, 204, 76, 20, style.accent);
+    CanvasText("SYSTEM STATE", 30, 98, 1, style.background);
     if (activation_code != nullptr) {
-        CanvasCircle(center_x, center_y, 57, style.accent, false);
-        CanvasCircle(center_x, center_y, 49, style.foreground, false);
-        CanvasTextCentered(activation_code, center_y - 12, 4, style.accent);
+        CanvasText(activation_code, 30, 123, 3, style.background);
     } else {
-        CanvasCircle(center_x, center_y, 53, style.accent, false);
-        CanvasCircle(center_x, center_y, 40, style.foreground, false);
-        CanvasCircle(center_x, center_y, 17, style.accent, true);
-        for (int segment = 0; segment < 7; ++segment) {
-            const int x0 = center_x - 76 + segment * 24;
-            const int amplitude = 5 + ((static_cast<int>(index) + segment) % 4) * 4;
-            CanvasLine(x0, center_y, x0 + 12, center_y - amplitude, 2,
-                       style.foreground);
-            CanvasLine(x0 + 12, center_y - amplitude, x0 + 24, center_y, 2,
-                       style.foreground);
-        }
+        CanvasText(copy.number, 30, 121, 4, style.background);
     }
-    CanvasRectangle(16, 239, CONFIG_VEETEE_LCD_WIDTH - 32, 1, style.accent);
-    CanvasTextCentered(copy.hint, 255, 1, style.foreground);
+    CanvasCircle(178, 124, 25, style.background, true);
+    if (animation_frame % 8U == 7U) {
+        CanvasRoundedRectangle(165, 123, 9, 4, 2, style.accent);
+        CanvasRoundedRectangle(182, 123, 9, 4, 2, style.accent);
+    } else {
+        const int eye_height =
+            state == app::State::kListening ? 17 : 12;
+        CanvasRoundedRectangle(166, 124 - eye_height / 2, 7, eye_height, 3,
+                               style.accent);
+        CanvasRoundedRectangle(183, 124 - eye_height / 2, 7, eye_height, 3,
+                               style.accent);
+    }
+
+    const char* mic_status =
+        state == app::State::kListening
+            ? "ACTIVE"
+            : state == app::State::kEvaluating ||
+                      state == app::State::kThinking ||
+                      state == app::State::kSpeaking
+                  ? "PAUSED"
+                  : "READY";
+    CanvasRoundedRectangle(18, 170, 98, 52, 15, panel);
+    CanvasText("MIC", 30, 184, 2, style.foreground);
+    CanvasText(mic_status, 30, 207, 1, frame);
+    CanvasRoundedRectangle(124, 170, 98, 52, 15, panel);
+    CanvasText("PHASE", 136, 184, 2, style.foreground);
+    CanvasText(copy.number, 136, 207, 1, style.accent);
+
+    CanvasTextCentered(copy.hint, 229, 1, style.foreground);
+    CanvasRoundedRectangle(57, 246, 126, 22, 11, panel);
+    const bool input_active =
+        state == app::State::kListening || state == app::State::kEvaluating;
+    const bool ai_active = state == app::State::kThinking;
+    const bool output_active = state == app::State::kSpeaking;
+    const std::array<bool, 3> active = {
+        input_active, ai_active, output_active};
+    for (int item = 0; item < 3; ++item) {
+        CanvasCircle(84 + item * 36, 257,
+                     active[item] && animation_frame % 2U == 0U ? 5 : 3,
+                     active[item] ? style.accent : accent_soft, true);
+    }
 }
 
 void St7789Display::RenderMonolith(app::State state,
                                    const UiStateStyle& style,
-                                   const char* activation_code) {
+                                   const char* activation_code,
+                                   std::uint32_t animation_frame) {
     const std::size_t index = static_cast<std::size_t>(state);
     const ScreenCopy& copy = kScreenCopy[index];
+    const std::uint16_t panel =
+        MixRgb565(style.background, style.foreground, 1);
+    const std::uint16_t face =
+        MixRgb565(style.background, style.foreground, 2);
+    constexpr std::array<int, 4> kBob = {0, -2, -1, 1};
+    const int bob = kBob[animation_frame % kBob.size()];
+    const bool blink = animation_frame % 8U == 7U ||
+                       state == app::State::kClosing ||
+                       state == app::State::kAborting;
     CanvasFill(style.background);
-    CanvasRectangle(0, 0, 9, CONFIG_VEETEE_LCD_HEIGHT, style.accent);
-    CanvasText("VEE/TEE", 24, 20, 2, style.foreground);
-    CanvasText(copy.number, 24, 62, 4, style.accent);
-    CanvasText(copy.kicker, 24, 104, 1, style.foreground);
-    CanvasText(copy.title, 24, 126, 3, style.foreground);
-    if (activation_code != nullptr) {
-        CanvasText(activation_code, 24, 188, 4, style.accent);
+    CanvasText("VEE", 16, 18, 1, style.foreground);
+    CanvasText(copy.kicker, 58, 18, 1, style.accent);
+    CanvasText(copy.number, 204, 18, 1, style.foreground);
+    CanvasRoundedRectangle(16, 43, 208, 166, 28, panel);
+
+    const int head_y = 61 + bob;
+    CanvasLine(120, head_y - 9, 120, head_y + 3, 3, style.foreground);
+    CanvasCircle(120, head_y - 12,
+                 animation_frame % 2U == 0U ? 5 : 3, style.accent, true);
+    CanvasRoundedRectangle(82, head_y + 76, 76, 49, 18, style.accent);
+    CanvasRoundedRectangle(99, head_y + 87, 42, 27, 10, face);
+    CanvasCircle(120, head_y + 100,
+                 animation_frame % 2U == 0U ? 6 : 4, style.foreground, true);
+    CanvasRoundedRectangle(90, head_y + 118, 20, 10, 5, style.accent);
+    CanvasRoundedRectangle(130, head_y + 118, 20, 10, 5, style.accent);
+
+    const int arm_y = head_y + 92;
+    if (state == app::State::kListening) {
+        CanvasLine(88, arm_y, 62, arm_y - 25, 7, style.accent);
+        CanvasLine(152, arm_y, 178, arm_y - 25, 7, style.accent);
+        CanvasLine(43, head_y + 28, 34, head_y + 18, 2, style.foreground);
+        CanvasLine(43, head_y + 43, 30, head_y + 43, 2, style.foreground);
+        CanvasLine(197, head_y + 28, 206, head_y + 18, 2, style.foreground);
+        CanvasLine(197, head_y + 43, 210, head_y + 43, 2, style.foreground);
     } else {
-        for (int bar = 0; bar < 9; ++bar) {
-            const int height = 10 + ((bar + static_cast<int>(index)) % 5) * 11;
-            CanvasRectangle(24 + bar * 20, 218 - height, 11, height,
-                            bar % 2 == 0 ? style.accent : style.foreground);
-        }
+        CanvasLine(88, arm_y, 67, arm_y + 15, 7, style.accent);
+        CanvasLine(152, arm_y, 173, arm_y + 15, 7, style.accent);
     }
-    CanvasText(copy.hint, 24, 255, 1, style.foreground);
+
+    CanvasRoundedRectangle(54, head_y + 25, 18, 34, 8, style.accent);
+    CanvasRoundedRectangle(168, head_y + 25, 18, 34, 8, style.accent);
+    CanvasRoundedRectangle(61, head_y, 118, 88, 34, style.accent);
+    CanvasRoundedRectangle(72, head_y + 13, 96, 56, 20, style.background);
+    const int eye_y = head_y + 37;
+    if (blink) {
+        CanvasRoundedRectangle(89, eye_y, 22, 5, 2, style.foreground);
+        CanvasRoundedRectangle(129, eye_y, 22, 5, 2, style.foreground);
+    } else {
+        int look = 0;
+        if (state == app::State::kEvaluating ||
+            state == app::State::kThinking) {
+            look = animation_frame % 2U == 0U ? -3 : 3;
+        }
+        CanvasRoundedRectangle(89 + look, eye_y - 2, 22, 13, 6,
+                               style.foreground);
+        CanvasRoundedRectangle(129 + look, eye_y - 2, 22, 13, 6,
+                               style.foreground);
+    }
+
+    const int mouth_y = head_y + 59;
+    if (state == app::State::kSpeaking) {
+        const int mouth_width = animation_frame % 2U == 0U ? 28 : 16;
+        CanvasRoundedRectangle(120 - mouth_width / 2, mouth_y - 3,
+                               mouth_width, 7, 3, style.accent);
+    } else if (state == app::State::kPairingRecovery) {
+        CanvasLine(109, mouth_y + 3, 120, mouth_y - 1, 2, style.accent);
+        CanvasLine(120, mouth_y - 1, 131, mouth_y + 3, 2, style.accent);
+    } else {
+        CanvasRoundedRectangle(109, mouth_y - 2, 22, 5, 2, style.accent);
+    }
+
+    if (activation_code != nullptr) {
+        CanvasRoundedRectangle(32, 176, 176, 42, 14, face);
+        CanvasTextCentered(activation_code, 187, 3, style.foreground);
+    } else {
+        CanvasTextCentered(copy.title, 220, 2, style.foreground);
+    }
+    CanvasTextCentered(copy.hint, 254, 1, style.foreground);
 }
 
 void St7789Display::RenderQuiet(app::State state, const UiStateStyle& style,
-                                const char* activation_code) {
+                                const char* activation_code,
+                                std::uint32_t animation_frame) {
     const std::size_t index = static_cast<std::size_t>(state);
     const ScreenCopy& copy = kScreenCopy[index];
+    const std::uint16_t panel =
+        MixRgb565(style.background, style.foreground, 1);
+    const std::uint16_t accent_soft =
+        MixRgb565(style.background, style.accent, 2);
     CanvasFill(style.background);
-    CanvasText("VEE TEE", 18, 18, 1, style.foreground);
-    CanvasText(copy.number, CONFIG_VEETEE_LCD_WIDTH - 42, 18, 1, style.accent);
-    const int center_x = CONFIG_VEETEE_LCD_WIDTH / 2;
-    const int center_y = 137;
-    CanvasCircle(center_x, center_y, 58, style.accent, false);
-    CanvasCircle(center_x, center_y, 40, style.foreground, false);
-    if (activation_code != nullptr) {
-        CanvasTextCentered(activation_code, center_y - 10, 3, style.accent);
-    } else {
-        CanvasCircle(center_x, center_y, 11, style.accent, true);
+    CanvasCircle(19, 21, 4, style.accent, true);
+    CanvasText("VEE TEE", 31, 17, 1, style.foreground);
+    CanvasText(copy.number, 204, 17, 1, style.accent);
+    CanvasRoundedRectangle(14, 47, 212, 158, 30, panel);
+
+    const bool closing = state == app::State::kClosing ||
+                         state == app::State::kAborting;
+    const bool blink = closing || animation_frame % 8U == 7U;
+    int eye_height = blink ? 6 : 54;
+    int eye_width = 28;
+    int eye_y = 111;
+    if (state == app::State::kListening) {
+        eye_height = blink ? 7 : 62;
+        eye_width = 31;
+        eye_y += animation_frame % 2U == 0U ? -2 : 2;
     }
-    CanvasTextCentered(copy.title, 210, 2, style.foreground);
+    if (state == app::State::kSpeaking && !blink) {
+        eye_height = animation_frame % 2U == 0U ? 46 : 58;
+    }
+    int look = 0;
+    if (state == app::State::kEvaluating ||
+        state == app::State::kThinking) {
+        look = animation_frame % 2U == 0U ? -7 : 7;
+    }
+    CanvasRoundedRectangle(78 - eye_width / 2 + look,
+                           eye_y - eye_height / 2, eye_width, eye_height,
+                           std::max(2, eye_width / 2), style.accent);
+    CanvasRoundedRectangle(162 - eye_width / 2 + look,
+                           eye_y - eye_height / 2, eye_width, eye_height,
+                           std::max(2, eye_width / 2), style.accent);
+
+    if (state == app::State::kListening && !blink) {
+        CanvasLine(40, 88, 32, 80, 2, accent_soft);
+        CanvasLine(40, 111, 28, 111, 2, accent_soft);
+        CanvasLine(200, 88, 208, 80, 2, accent_soft);
+        CanvasLine(200, 111, 212, 111, 2, accent_soft);
+    }
+
+    if (activation_code != nullptr) {
+        CanvasRoundedRectangle(55, 158, 130, 33, 12, accent_soft);
+        CanvasTextCentered(activation_code, 165, 3, style.foreground);
+    } else {
+        int mouth_width = 24;
+        int mouth_height = 5;
+        if (state == app::State::kSpeaking) {
+            mouth_width = animation_frame % 2U == 0U ? 34 : 22;
+            mouth_height = animation_frame % 2U == 0U ? 6 : 13;
+        }
+        CanvasRoundedRectangle(120 - mouth_width / 2, 165 - mouth_height / 2,
+                               mouth_width, mouth_height,
+                               std::max(2, mouth_height / 2), style.accent);
+    }
+    CanvasTextCentered(copy.title, 220, 2, style.foreground);
     CanvasTextCentered(copy.hint, 254, 1, style.foreground);
 }
 
@@ -508,6 +691,30 @@ void St7789Display::CanvasRectangle(int x, int y, int width, int height,
         std::fill(framebuffer_ + row * CONFIG_VEETEE_LCD_WIDTH + left,
                   framebuffer_ + row * CONFIG_VEETEE_LCD_WIDTH + right, color);
     }
+}
+
+void St7789Display::CanvasRoundedRectangle(int x, int y, int width, int height,
+                                           int radius,
+                                           std::uint16_t color) {
+    if (width <= 0 || height <= 0) return;
+    const int bounded_radius =
+        std::clamp(radius, 0, std::min(width, height) / 2);
+    if (bounded_radius == 0) {
+        CanvasRectangle(x, y, width, height, color);
+        return;
+    }
+    CanvasRectangle(x + bounded_radius, y, width - bounded_radius * 2, height,
+                    color);
+    CanvasRectangle(x, y + bounded_radius, width,
+                    height - bounded_radius * 2, color);
+    CanvasCircle(x + bounded_radius, y + bounded_radius, bounded_radius, color,
+                 true);
+    CanvasCircle(x + width - bounded_radius - 1, y + bounded_radius,
+                 bounded_radius, color, true);
+    CanvasCircle(x + bounded_radius, y + height - bounded_radius - 1,
+                 bounded_radius, color, true);
+    CanvasCircle(x + width - bounded_radius - 1,
+                 y + height - bounded_radius - 1, bounded_radius, color, true);
 }
 
 void St7789Display::CanvasCircle(int center_x, int center_y, int radius,

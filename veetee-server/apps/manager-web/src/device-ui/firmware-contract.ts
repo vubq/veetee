@@ -78,7 +78,7 @@ function firmwareTheme(source: ThemeSource, index: string, name: string, note: s
 }
 
 export const FIRMWARE_THEMES: FirmwareTheme[] = [
-  firmwareTheme(signalTheme, "01", "Signal", "Built-in default và failsafe trong firmware"),
-  firmwareTheme(monolithTheme, "02", "Monolith", "Standard UI Pack · composition compile sẵn"),
-  firmwareTheme(quietTheme, "03", "Quiet", "Standard UI Pack · composition compile sẵn"),
+  firmwareTheme(signalTheme, "01", "Mobile", "Bảng thông tin kiểu điện thoại · built-in failsafe"),
+  firmwareTheme(monolithTheme, "02", "Companion", "Nhân vật Vee chuyển động theo trạng thái"),
+  firmwareTheme(quietTheme, "03", "Robot Face", "Hai mắt navy/lime đồng bộ thẻ Thiết bị"),
 ];

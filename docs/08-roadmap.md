@@ -12,7 +12,7 @@ Manager Web theo prototype với live MCP, Realtime Lab dùng event metadata th�
 catalog/wake rollout cơ bản. Custom `Hey VeeTee`, AEC, canary pause/resume và
 soak phần cứng vẫn phải qua benchmark trên thiết bị thật. UI Pack V1 đã có builder,
 streaming quarantine/upload, immutable signing/publish, explicit-device rollout,
-firmware parser, `ui_0/ui_1` rollback độc lập và built-in Signal failsafe. Host suite
+firmware parser, `ui_0/ui_1` rollback độc lập và built-in Mobile (`signal`) failsafe. Host suite
 đã pass upload/publish/rollout, corruption policy và `state.ui`; apply/rollback trực
 tiếp trên LCD vẫn chờ pairing và nghiệm thu thiết bị.
 

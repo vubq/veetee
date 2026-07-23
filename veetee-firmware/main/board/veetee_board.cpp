@@ -13,6 +13,7 @@ namespace veetee::board {
 namespace {
 
 constexpr char kTag[] = "veetee_board";
+constexpr TickType_t kDisplayAnimationPeriod = pdMS_TO_TICKS(500);
 
 #if CONFIG_VEETEE_ESP_SR_BRINGUP
 constexpr audio::DetectorProfile kBringupProfiles[] = {
@@ -78,7 +79,7 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
             error = display_.ReloadUiPack(fallback_ui_partition);
         }
         if (error != ESP_OK) {
-            ESP_LOGW(kTag, "No UI Pack loaded: %s; using built-in Signal",
+            ESP_LOGW(kTag, "No UI Pack loaded: %s; using built-in Mobile (signal)",
                      esp_err_to_name(error));
             display_.UseBuiltInSignal();
         }
@@ -194,7 +195,7 @@ void VeeteeBoard::UseBuiltInSignal() {
     const esp_err_t error = display_.DrawState(state_);
     xSemaphoreGive(display_mutex_);
     if (error != ESP_OK) {
-        ESP_LOGE(kTag, "Built-in Signal render failed: %s",
+        ESP_LOGE(kTag, "Built-in Mobile (signal) render failed: %s",
                  esp_err_to_name(error));
     }
 }
@@ -250,15 +251,28 @@ void VeeteeBoard::DisplayTaskEntry(void* context) {
 
 void VeeteeBoard::RunDisplay() {
     DisplayCommand command{};
-    while (xQueueReceive(display_queue_, &command, portMAX_DELAY) == pdTRUE) {
+    while (true) {
+        if (xQueueReceive(display_queue_, &command, kDisplayAnimationPeriod) ==
+            pdTRUE) {
+            xSemaphoreTake(display_mutex_, portMAX_DELAY);
+            const esp_err_t error =
+                command.kind == DisplayCommandKind::kActivationCode
+                    ? display_.DrawActivationCode(command.activation_code)
+                    : display_.DrawState(command.state);
+            xSemaphoreGive(display_mutex_);
+            if (error != ESP_OK) {
+                ESP_LOGE(kTag, "Display command failed: %s",
+                         esp_err_to_name(error));
+            }
+            continue;
+        }
+
         xSemaphoreTake(display_mutex_, portMAX_DELAY);
-        const esp_err_t error =
-            command.kind == DisplayCommandKind::kActivationCode
-                ? display_.DrawActivationCode(command.activation_code)
-                : display_.DrawState(command.state);
+        const esp_err_t error = display_.DrawAnimationFrame();
         xSemaphoreGive(display_mutex_);
-        if (error != ESP_OK) {
-            ESP_LOGE(kTag, "Display command failed: %s", esp_err_to_name(error));
+        if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(kTag, "Display animation frame failed: %s",
+                     esp_err_to_name(error));
         }
     }
 }

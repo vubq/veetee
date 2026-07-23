@@ -209,8 +209,8 @@ const actionLabel = computed(() => ({
         <div v-if="uiArtifacts.length" class="release-stack">
           <div v-for="artifact in uiArtifacts" :key="artifact.id"><span class="release-token">{{ artifact.version }}</span><div><b>{{ artifact.id }}</b><small>{{ formatBytes(artifact.sizeBytes) }} · {{ artifact.channel }} · {{ formatDate(artifact.createdAt) }}</small></div><VtBadge :tone="statusTone(artifact.status)">{{ artifact.status }}</VtBadge></div>
         </div>
-        <VtEmptyState v-else icon="display" title="Chưa upload UI Pack" text="Signal vẫn là giao diện mặc định được nhúng trong firmware." />
-        <div class="device-ui-rollouts"><span class="vt-kicker">DELIVERY HISTORY</span><RolloutHistory :rollouts="deviceRollouts" compact :show-kind="false" empty-title="Chưa rollout UI Pack" empty-text="Signal vẫn là failsafe cho tới khi thiết bị report một UI Pack đã verify và active." /></div>
+        <VtEmptyState v-else icon="display" title="Chưa upload UI Pack" text="Mobile vẫn là giao diện mặc định được nhúng trong firmware." />
+        <div class="device-ui-rollouts"><span class="vt-kicker">DELIVERY HISTORY</span><RolloutHistory :rollouts="deviceRollouts" compact :show-kind="false" empty-title="Chưa rollout UI Pack" empty-text="Mobile vẫn là failsafe cho tới khi thiết bị report một UI Pack đã verify và active." /></div>
       </article>
     </div>
   </section>

@@ -11,6 +11,10 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     server: {
       allowedHosts,
+      proxy: {
+        "/api": { target: "http://127.0.0.1:8001", changeOrigin: true },
+        "/health": { target: "http://127.0.0.1:8001", changeOrigin: true },
+      },
       fs: { allow: ["../.."] },
     },
   };

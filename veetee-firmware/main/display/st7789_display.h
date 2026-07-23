@@ -19,6 +19,7 @@ public:
     esp_err_t DrawColorBars();
     esp_err_t DrawState(app::State state);
     esp_err_t DrawActivationCode(const char* code);
+    esp_err_t DrawAnimationFrame();
     esp_err_t DrawStandby();
     esp_err_t ReloadUiPack(const char* partition_label);
     void UseBuiltInSignal();
@@ -42,16 +43,22 @@ private:
     esp_err_t DrawIcon(app::State state, std::uint16_t foreground,
                        std::uint16_t accent);
     esp_err_t FlushFramebuffer();
-    esp_err_t RenderState(app::State state, const char* activation_code);
+    esp_err_t RenderState(app::State state, const char* activation_code,
+                          std::uint32_t animation_frame, bool log_transition);
     void RenderSignal(app::State state, const UiStateStyle& style,
-                      const char* activation_code);
+                      const char* activation_code,
+                      std::uint32_t animation_frame);
     void RenderMonolith(app::State state, const UiStateStyle& style,
-                        const char* activation_code);
+                        const char* activation_code,
+                        std::uint32_t animation_frame);
     void RenderQuiet(app::State state, const UiStateStyle& style,
-                     const char* activation_code);
+                     const char* activation_code,
+                     std::uint32_t animation_frame);
     void CanvasFill(std::uint16_t color);
     void CanvasRectangle(int x, int y, int width, int height,
                          std::uint16_t color);
+    void CanvasRoundedRectangle(int x, int y, int width, int height, int radius,
+                                std::uint16_t color);
     void CanvasCircle(int center_x, int center_y, int radius,
                       std::uint16_t color, bool filled);
     void CanvasLine(int x0, int y0, int x1, int y1, int thickness,
@@ -72,6 +79,9 @@ private:
     std::size_t framebuffer_pixels_ = 0;
     UiTheme theme_ = BuiltInSignalTheme();
     char loaded_ui_partition_[16] = {};
+    app::State last_state_ = app::State::kStarting;
+    char last_activation_code_[7] = {};
+    std::uint32_t animation_frame_ = 0;
     bool last_render_ok_ = false;
     bool transfer_faulted_ = false;
 };

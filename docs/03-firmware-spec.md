@@ -486,7 +486,8 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
 - ST7789 hiển thị locale Việt, UTF-8 fallback hợp lý.
 - State UI render bất đồng bộ, đúng orientation/visibility trên board và không làm
   tăng abort latency; MAX98357A idle không pop/chirp liên tục sau mitigation clock.
-- Signal luôn có trong executable làm default/failsafe; UI Pack chỉ đổi presentation
-  qua `ui_0/ui_1`, smoke-render trước activate và rollback độc lập wake model.
+- Mobile luôn có trong executable dưới stable ID `signal` làm default/failsafe;
+  UI Pack chỉ đổi presentation qua `ui_0/ui_1`, smoke-render trước activate và
+  rollback độc lập wake model.
 - MCP `initialize/tools/list/tools/call` pass với ít nhất 3 device tools.
 - OTA signed artifact update và rollback test pass trên board thật.

@@ -6,15 +6,19 @@ Veetee giữ ba visual direction cho ST7789 dọc `240x280`:
 
 | ID | Tên | Phân phối | Vai trò |
 |---|---|---|---|
-| `signal` | 01 / Signal | Có sẵn trong firmware và có standard pack | Mặc định, failsafe, navy/lime/coral. |
-| `monolith` | 02 / Monolith | Standard UI Pack | Tương phản cao, thiên về thiết bị AI công nghiệp. |
-| `quiet` | 03 / Quiet | Standard UI Pack | Nền sáng, ít kích thích, phù hợp không gian sống. |
+| `signal` | 01 / Mobile | Có sẵn trong firmware và có standard pack | Bảng thông tin dạng điện thoại, mặc định và failsafe. |
+| `monolith` | 02 / Companion | Standard UI Pack | Nhân vật Vee hoạt ảnh theo state hội thoại. |
+| `quiet` | 03 / Robot Face | Standard UI Pack | Hai mắt hoạt ảnh, navy/lime đồng bộ robot trên Manager Web. |
+
+Ba ID `signal`, `monolith`, `quiet` được giữ như khóa tương thích của UI ABI 1;
+tên và presentation sản phẩm từ firmware `0.3.1` lần lượt là Mobile, Companion và
+Robot Face. UI và API không suy luận behavior từ tên legacy này.
 
 Manager Web preview cả ba bằng cùng state contract. Theme chỉ được đổi
 presentation; UI Pack không có quyền thay TurnArbiter, state machine, admission
 policy, provider routing, MCP permission hoặc executable behavior.
 
-Signal tối thiểu luôn nằm trong executable để boot, provisioning, pairing code,
+Mobile tối thiểu luôn nằm trong executable dưới composition ID `signal` để boot, provisioning, pairing code,
 pairing recovery và lỗi artifact vẫn hiển thị nếu cả hai UI slot đều hỏng. Ba
 composition hình học `signal`, `monolith`, `quiet` đều compile sẵn như một
 allowlist an toàn; đo trên ELF hiện tại, ba hàm renderer chỉ chiếm khoảng 1.3 KiB
@@ -81,8 +85,8 @@ Manifest trong container hiện dùng schema:
 {
   "schema_version": 1,
   "kind": "ui_pack",
-  "id": "ui-signal-1.1.0",
-  "version": "1.1.0",
+  "id": "ui-signal-1.2.0",
+  "version": "1.2.0",
   "theme_id": "signal",
   "channel": "stable",
   "license": "MIT",
@@ -93,7 +97,7 @@ Manifest trong container hiện dùng schema:
   "compatibility": {
     "resource_abi": 2,
     "ui_abi": 1,
-    "min_firmware": "0.3.0",
+    "min_firmware": "0.3.1",
     "max_firmware_exclusive": "0.4.0"
   },
   "locales": ["vi-VN", "en-US"],
@@ -126,9 +130,10 @@ signature/security epoch. Container CRC/hash không thay thế release signature
 ```
 
 Composition allowlist là `signal`, `monolith`, `quiet`. Firmware dùng framebuffer
-RGB565 trong PSRAM và DMA stripe buffer để flush ST7789. Renderer có rings/core,
-waveform, state number, header/footer và activation-code layout; không chạy layout
-script từ pack.
+RGB565 trong PSRAM và DMA stripe buffer để flush ST7789. Renderer Mobile dùng card
+thông tin kiểu điện thoại; Companion dùng nhân vật vector primitive; Robot Face
+dùng hai mắt navy/lime. Cả ba dùng frame hoạt ảnh bounded 500 ms, state number,
+copy vận hành và activation-code layout; không chạy layout script từ pack.
 
 UI ABI 1 hiện áp dụng composition và palette từ pack. Parser bắt buộc kiểm cấu trúc
 chuỗi `vi-VN`, nhưng renderer firmware vẫn dùng operational ASCII copy tích hợp để
@@ -141,7 +146,7 @@ không được quảng bá là đã render đầy đủ tiếng Việt có dấ
 Luồng chính cho ba giao diện chuẩn đã triển khai:
 
 ```text
-chọn Signal / Monolith / Quiet trên software twin
+chọn Mobile / Companion / Robot Face trên software twin
   -> POST /api/v1/ui-packs/standard/:theme/stage
   -> server build deterministic VTPACK1 từ source chuẩn
   -> chạy cùng quarantine/parser/hash/signature pipeline như file upload
@@ -178,8 +183,8 @@ cầu ADMIN; rollout yêu cầu OPERATOR; mutation có tenant scope và audit/re
 Publish không có nghĩa device đã apply. Rollout chỉ terminal khi reported `state.ui`
 xác nhận `active`, `failed` hoặc `rolled_back`.
 
-Ba standard template `ui-signal-1.1.0`, `ui-monolith-1.1.0` và
-`ui-quiet-1.1.0` đã build/inspect deterministic; binary generated không commit Git.
+Ba standard template `ui-signal-1.2.0`, `ui-monolith-1.2.0` và
+`ui-quiet-1.2.0` đã build/inspect deterministic; binary generated không commit Git.
 Manager có thể tạo, ký, publish và rollout lại từ Web qua endpoint chuẩn mà không
 buffer pack upload tùy ý trong browser.
 Không có domain không chặn luồng LAN. HTTP/IP có thể làm Web Crypto browser không
@@ -198,12 +203,12 @@ bootstrap desired ui
   -> activate UI journal
   -> health window
   -> confirm hoặc rollback previous slot
-  -> built-in Signal nếu cả hai slot đều fail
+  -> built-in Mobile nếu cả hai slot đều fail
 ```
 
 Firmware report `state.resource` và `state.ui` độc lập; một request reported-state
 chỉ chứa đúng một artifact subsystem để retry/idempotency không trộn hai journal.
-Firmware compatibility quảng bá cho bootstrap/reported state là `0.3.0`, không dùng
+Firmware compatibility quảng bá cho bootstrap/reported state là `0.3.1`, không dùng
 Git describe `*-dirty` làm SemVer capability.
 
 ## 7. Invariant bắt buộc hard-code
@@ -216,7 +221,7 @@ hoặc trust root:
 - mapping state machine sang stable state ID;
 - renderer primitive/composition allowlist;
 - boot/provisioning/pairing/recovery copy tối thiểu;
-- Signal fallback palette/font tối thiểu;
+- Mobile fallback palette/font tối thiểu dưới stable ID `signal`;
 - nút vật lý và cancellation vẫn hoạt động khi UI Pack lỗi.
 
 Persona, câu trả lời AI, provider routing, theme token, locale pack, font, icon,
@@ -227,20 +232,21 @@ Firmware không phân nhánh theo exact phrase như `dừng lại` để chọn 
 
 Đã pass trên host/build:
 
-- deterministic build/inspect cho Signal, Monolith và Quiet;
+- deterministic build/inspect cho Mobile, Companion và Robot Face;
 - Web chọn standard theme -> server build/stage -> publish -> desired rollout;
-- test chống drift giữa Web software twin, C++ renderer, state order và Signal RGB565;
+- test chống drift giữa Web software twin, C++ renderer, state order và Mobile RGB565;
 - corruption, executable member và path traversal rejection;
 - Manager upload/publish/rollout E2E;
-- simulated firmware `0.3.0` bootstrap + `state.ui` complete;
+- simulated firmware `0.3.1` bootstrap + `state.ui` complete;
 - firmware host tests và ESP-IDF 6.0.2 production build;
-- built-in Signal render path đã chạy trên ESP32 mà không crash.
+- built-in Mobile render path kế thừa safe fallback; renderer animation `0.3.1`
+  đã pass host/build và còn cần nghiệm thu trên LCD thật.
 
 Vẫn cần người dùng nghiệm thu trên board:
 
-- orientation, color, brightness và visual Signal thực tế;
-- rollout Monolith -> Quiet -> Signal qua hai UI slot;
-- reboot persistence, corrupt-pack rollback và built-in Signal fallback;
+- orientation, color, brightness và visual Mobile thực tế;
+- rollout Companion -> Robot Face -> Mobile qua hai UI slot;
+- reboot persistence, corrupt-pack rollback và built-in Mobile fallback;
 - SPI/render soak không tăng button abort latency;
 - font/chuỗi tiếng Việt có dấu trước khi mở dynamic localized-copy apply;
 - power-loss matrix trong download, activate và health window.

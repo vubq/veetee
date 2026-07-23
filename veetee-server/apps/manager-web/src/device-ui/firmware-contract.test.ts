@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import kconfigSource from "../../../../../veetee-firmware/main/Kconfig.projbuild?raw";
+import boardSource from "../../../../../veetee-firmware/main/board/veetee_board.cpp?raw";
 import displaySource from "../../../../../veetee-firmware/main/display/st7789_display.cpp?raw";
 import uiPackSource from "../../../../../veetee-firmware/main/display/ui_pack.cpp?raw";
+import previewSource from "../components/device-ui/FirmwareDisplayPreview.vue?raw";
 import {
   DEVICE_UI_TARGET,
   FIRMWARE_SCREEN_COPY,
@@ -47,7 +49,7 @@ describe("Device UI firmware contract", () => {
     }
   });
 
-  it("keeps the web Signal palette bit-identical to the built-in RGB565 firmware fallback", () => {
+  it("keeps the web Mobile palette bit-identical to the built-in RGB565 firmware fallback", () => {
     const styles = uiPackSource.match(/BuiltInSignalTheme\(\)[\s\S]*?styles = \{\{([\s\S]*?)\}\};/)?.[1];
     expect(styles).toBeTruthy();
     const firmwareColors = [...(styles ?? "").matchAll(/0x([0-9A-Fa-f]{4})/g)].map((match) => Number.parseInt(match[1]!, 16));
@@ -63,9 +65,27 @@ describe("Device UI firmware contract", () => {
     for (const renderer of ["RenderSignal", "RenderMonolith", "RenderQuiet"]) {
       expect(displaySource).toContain(`St7789Display::${renderer}`);
     }
-    expect(displaySource).toContain("CanvasRectangle(16, 18, 30, 3, style.accent)");
-    expect(displaySource).toContain("const int center_y = 162");
-    expect(displaySource).toContain("CanvasRectangle(0, 0, 9, CONFIG_VEETEE_LCD_HEIGHT, style.accent)");
-    expect(displaySource).toContain("const int center_y = 137");
+    expect(displaySource).toContain("CanvasRoundedRectangle(5, 3, 230, 274, 29, frame)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(18, 86, 204, 76, 20, style.accent)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(18, 170, 98, 52, 15, panel)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(124, 170, 98, 52, 15, panel)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(57, 246, 126, 22, 11, panel)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(16, 43, 208, 166, 28, panel)");
+    expect(displaySource).toContain("CanvasRoundedRectangle(14, 47, 212, 158, 30, panel)");
+    expect(displaySource).toContain("animation_frame % 8U == 7U");
+    expect(displaySource).toContain("CanvasRoundedRectangle(78 - eye_width / 2 + look");
+
+    expect(previewSource).toContain("roundedRectangle(5, 3, 230, 274, 29, face)");
+    expect(previewSource).toContain("roundedRectangle(18, 86, 204, 76, 20, accent)");
+    expect(previewSource).toContain("roundedRectangle(18, 170, 98, 52, 15, panel)");
+    expect(previewSource).toContain("roundedRectangle(124, 170, 98, 52, 15, panel)");
+    expect(previewSource).toContain("roundedRectangle(57, 246, 126, 22, 11, panel)");
+    expect(previewSource).toContain("roundedRectangle(16, 43, 208, 166, 28, panel)");
+    expect(previewSource).toContain("roundedRectangle(14, 47, 212, 158, 30, panel)");
+    expect(previewSource).toContain("animationFrame % 8 === 7");
+    expect(previewSource).toContain("roundedRectangle(78 - Math.floor(eyeWidth / 2) + look");
+
+    expect(boardSource).toContain("constexpr TickType_t kDisplayAnimationPeriod = pdMS_TO_TICKS(500)");
+    expect(previewSource).toContain("}, 500);");
   });
 });

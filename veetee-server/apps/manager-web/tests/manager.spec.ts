@@ -469,7 +469,7 @@ async function mockManagerApi(
         runtimeAbi: 1,
         license: "MIT",
         board: "veetee-s3-n16r8",
-        minFirmware: "0.3.0",
+        minFirmware: "0.3.1",
         maxFirmware: "0.4.0",
         signatureKeyId: "veetee-dev-release-2026-01",
         securityEpoch: 1,
@@ -485,9 +485,9 @@ async function mockManagerApi(
       const theme = standardUiMatch[1]!;
       options.standardUiStages?.push(theme);
       return json({
-        id: `ui-${theme}-1.1.0`,
+        id: `ui-${theme}-1.2.0`,
         kind: "display_assets",
-        version: "1.1.0",
+        version: "1.2.0",
         channel: "stable",
         sizeBytes: 5108,
         sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
@@ -496,7 +496,7 @@ async function mockManagerApi(
         runtimeAbi: 1,
         license: "MIT",
         board: "veetee-s3-n16r8",
-        minFirmware: "0.3.0",
+        minFirmware: "0.3.1",
         maxFirmware: "0.4.0",
         signatureKeyId: "veetee-dev-release-2026-01",
         securityEpoch: 1,
@@ -506,13 +506,17 @@ async function mockManagerApi(
       });
     }
     const publishUiMatch = url.pathname.match(
-      /^\/api\/v1\/artifacts\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1)\.0)\/publish$/,
+      /^\/api\/v1\/artifacts\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1|2)\.0)\/publish$/,
     );
     if (publishUiMatch) {
       return json({
         id: publishUiMatch[1]!,
         kind: "display_assets",
-        version: publishUiMatch[1]!.endsWith("1.1.0") ? "1.1.0" : "1.0.0",
+        version: publishUiMatch[1]!.endsWith("1.2.0")
+          ? "1.2.0"
+          : publishUiMatch[1]!.endsWith("1.1.0")
+            ? "1.1.0"
+            : "1.0.0",
         channel: "stable",
         sizeBytes: 19,
         sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
@@ -532,7 +536,7 @@ async function mockManagerApi(
       });
     }
     const rolloutUiMatch = url.pathname.match(
-      /^\/api\/v1\/ui-packs\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1)\.0)\/rollout$/,
+      /^\/api\/v1\/ui-packs\/(ui-(?:signal|monolith|quiet)-1\.(?:0|1|2)\.0)\/rollout$/,
     );
     if (rolloutUiMatch) {
       options.uiRollouts?.push(request.postDataJSON());
@@ -1025,11 +1029,11 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   expect(fileBadgeBox?.width ?? 0).toBeGreaterThan(fileBadgeBox?.height ?? 0);
   const preview = page.locator("[data-ui-preview]");
   await expect(preview).toHaveAttribute("data-theme", "signal");
-  await expect(page.locator("#uiPreviewName")).toHaveText("01 / Signal");
+  await expect(page.locator("#uiPreviewName")).toHaveText("01 / Mobile");
 
   await page.locator('[data-ui-theme="monolith"]').click();
   await expect(preview).toHaveAttribute("data-theme", "monolith");
-  await expect(page.locator("#uiPreviewName")).toHaveText("02 / Monolith");
+  await expect(page.locator("#uiPreviewName")).toHaveText("02 / Companion");
   await page.locator('[data-ui-state="pairing_recovery"]').click();
   await expect(preview).toHaveAttribute("data-state", "pairing_recovery");
   await expect(page.locator(".firmware-contract-card")).toContainText("PAIRING LOST");
@@ -1078,7 +1082,7 @@ test("builds, publishes and rolls out the selected standard firmware UI", async 
   await page.locator("[data-apply-standard-theme]").click();
 
   await expect(page.locator(".firmware-contract-card")).toContainText(
-    "Đã đặt Monolith làm desired UI cho Veetee Lab.",
+    "Đã đặt Companion làm desired UI cho Veetee Lab.",
   );
   await expect.poll(() => standardUiStages).toEqual(["monolith"]);
   await expect.poll(() => uiRollouts).toEqual([{ deviceIds: [deviceId] }]);

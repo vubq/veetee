@@ -37,11 +37,12 @@ left/right slot trong Kconfig để smoke test không đóng băng một giả �
 - application state machine chạy ổn định; blank settings vào `wifi_configuring`,
   phát AP `Veetee-XXXX`, không watchdog/panic/reset trong cửa sổ monitor ngắn.
 
-Firmware `0.3.0` hiện đã render built-in Signal cho startup, network, activation và
-pairing recovery bằng full RGB565 framebuffer trong PSRAM, sau đó flush theo DMA
-stripe ở SPI 10 MHz. Serial không ghi nhận crash/watchdog/display fault; màn hình đã
-đi tới trạng thái `PAIRING LOST`. Vẫn cần xác nhận bằng mắt về màu, orientation,
-độ sáng và hình học vì ST7789 write-only không có readback trong wiring hiện tại.
+Firmware `0.3.1` đã render built-in Mobile (`signal`) cho startup, network,
+activation và idle bằng full RGB565 framebuffer trong PSRAM, sau đó flush theo DMA
+stripe ở SPI 10 MHz. Flash không xóa NVS; serial xác nhận thiết bị giữ pairing/Wi-Fi,
+kết nối lại mạng đã lưu và không có crash/watchdog/display fault trong monitor ngắn.
+Vẫn cần xác nhận bằng mắt về màu, orientation, độ sáng và hình học vì ST7789
+write-only không có readback trong wiring hiện tại.
 
 Các mục vẫn cần xác nhận bằng mắt/tai/tay trước khi freeze: color bars đúng màu và
 orientation, chime nghe sạch, lời nói làm mic level thay đổi, short/long/5-second

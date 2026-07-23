@@ -42,14 +42,15 @@ of the current `veetee-firmware/main/display/st7789_display.cpp` renderer:
 - portrait ST7789 canvas at 240x280 using the same RGB565 quantization;
 - the same 5x7 bitmap glyphs, operational ASCII copy and activation-code layout;
 - the exact 13 firmware state IDs in enum order;
-- the three compiled UI ABI 1 compositions: `signal`, `monolith` and `quiet`;
+- the three compiled UI ABI 1 compositions, presented as Mobile (`signal`),
+  Companion (`monolith`) and Robot Face (`quiet`);
 - palettes imported directly from the standard UI Packs in `ui-packs`.
 
 The corresponding contract and Canvas renderer live in `src/device-ui` and
 `src/components/device-ui`. `firmware-contract.test.ts` reads the firmware C++
-sources and fails when state order, copy, target/ABI, built-in Signal colors or
-renderer geometry drift without a matching Web update. Signal remains the
-firmware built-in fallback. UI Packs are data only and cannot upload executable
+sources and fails when state order, copy, target/ABI, built-in Mobile colors or
+renderer geometry drift without a matching Web update. Mobile remains the
+firmware built-in fallback under stable ID `signal`. UI Packs are data only and cannot upload executable
 layout code; rotation, panel offset, color order and brightness still require
 acceptance on physical hardware.
 
@@ -57,6 +58,11 @@ acceptance on physical hardware.
 npm run dev --workspace @veetee/manager-web
 npm run test:e2e --workspace @veetee/manager-web
 ```
+
+The development server binds all local interfaces so the same process is
+reachable through localhost, the LAN address and an active Tailscale address.
+Vite still validates hostnames; add an exact Tailscale DNS name through
+`VEETEE_WEB_ALLOWED_HOSTS` instead of disabling host checks.
 
 When `VITE_MANAGER_API_URL` is not set, Manager Web targets port `8001` on the
 same host used to open the web page. This keeps LAN clients from accidentally

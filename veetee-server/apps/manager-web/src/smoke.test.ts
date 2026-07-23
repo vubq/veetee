@@ -33,11 +33,11 @@ describe("Vue-native Manager Web", () => {
     expect(deviceDiagnosticsPanel).toContain("WebSocket ở đây là task điều phối của Veetee");
   });
 
-  it("keeps Signal as the default UI and all three built-in themes", () => {
+  it("keeps Mobile as the default UI and exposes all three synchronized styles", () => {
     expect(deviceUiPage).toContain('ref<FirmwareComposition>("signal")');
-    expect(firmwareContract).toContain('firmwareTheme(signalTheme, "01", "Signal"');
-    expect(firmwareContract).toContain('firmwareTheme(monolithTheme, "02", "Monolith"');
-    expect(firmwareContract).toContain('firmwareTheme(quietTheme, "03", "Quiet"');
+    expect(firmwareContract).toContain('firmwareTheme(signalTheme, "01", "Mobile"');
+    expect(firmwareContract).toContain('firmwareTheme(monolithTheme, "02", "Companion"');
+    expect(firmwareContract).toContain('firmwareTheme(quietTheme, "03", "Robot Face"');
     expect(deviceUiPage).toContain("stageStandardUiPack");
     expect(deviceUiPage).toContain("data-ui-pack-file");
   });

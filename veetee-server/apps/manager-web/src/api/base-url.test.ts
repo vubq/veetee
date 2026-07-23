@@ -16,6 +16,13 @@ describe("resolveManagerApiBaseUrl", () => {
     })).toBe("http://192.168.110.115:8001");
   });
 
+  it("uses the same-origin proxy for HTTPS tunnel clients", () => {
+    expect(resolveManagerApiBaseUrl(undefined, {
+      protocol: "https:",
+      hostname: "veetee-dev.tail52a635.ts.net",
+    })).toBe("");
+  });
+
   it("keeps localhost as the server-side fallback", () => {
     expect(resolveManagerApiBaseUrl(undefined)).toBe("http://127.0.0.1:8001");
   });
