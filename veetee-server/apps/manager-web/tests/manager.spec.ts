@@ -949,6 +949,17 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
   await expect(page.locator("#labTextInput")).toBeEnabled();
   await page.locator("#interruptButton").click();
   await expect(page.locator("#labMetrics")).toContainText("18");
+  const [consoleBox, controlsBox] = await Promise.all([
+    page.locator(".lab-console").boundingBox(),
+    page.locator(".lab-controls").boundingBox(),
+  ]);
+  expect(consoleBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
+  expect(
+    Math.abs(
+      consoleBox!.y + consoleBox!.height - (controlsBox!.y + controlsBox!.height),
+    ),
+  ).toBeLessThanOrEqual(1);
   await expect.poll(() => labSessionCalls).toEqual([
     { agentId: "agent-1", inputMode: "text", mcpMode: "simulated" },
   ]);
@@ -1074,6 +1085,17 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
   expect(Math.abs(nameFieldBox!.height - localeFieldBox!.height)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.x - identityGridBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.width - identityGridBox!.width)).toBeLessThanOrEqual(1);
+
+  await page.locator('[data-page-link="resources"]').first().click();
+  await page.getByRole("tab", { name: /Wake profiles/ }).click();
+  const wakeFormPanel = page.locator(".resource-tabs .tab-panel:visible .form-section");
+  const [wakeHeaderBox, wakeFormBox] = await Promise.all([
+    wakeFormPanel.locator(".panel-header > div").boundingBox(),
+    wakeFormPanel.locator("form").boundingBox(),
+  ]);
+  expect(wakeHeaderBox).not.toBeNull();
+  expect(wakeFormBox).not.toBeNull();
+  expect(Math.abs(wakeHeaderBox!.x - wakeFormBox!.x)).toBeLessThanOrEqual(1);
 });
 
 test("keeps every top-level screen inside the mobile viewport", async ({ page }) => {
