@@ -27,9 +27,10 @@ class CreateAgentDto {
   @IsIn(["auto", "manual", "realtime"])
   interactionMode!: "auto" | "manual" | "realtime";
 
+  @IsOptional()
   @IsString()
-  @Length(1, 20_000)
-  persona!: string;
+  @Length(0, 20_000)
+  persona?: string;
 
   @IsOptional()
   @IsObject()
@@ -52,7 +53,7 @@ class UpdateAgentDto {
 
   @IsOptional()
   @IsString()
-  @Length(1, 20_000)
+  @Length(0, 20_000)
   persona?: string;
 
   @IsOptional()

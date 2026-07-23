@@ -172,7 +172,7 @@ interface AgentInput {
   name: string;
   defaultLocale: string;
   interactionMode: AgentRecord["interactionMode"];
-  persona: string;
+  persona?: string;
   draftConfig?: Record<string, unknown>;
 }
 
@@ -1044,7 +1044,7 @@ export class ControlPlaneStore {
           name: input.name,
           defaultLocale: input.defaultLocale,
           interactionMode: interactionModeToDatabase[input.interactionMode],
-          persona: input.persona,
+          persona: input.persona ?? "",
           draftConfig: (input.draftConfig ?? {}) as Prisma.InputJsonValue,
         },
       });

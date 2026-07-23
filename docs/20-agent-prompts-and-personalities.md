@@ -40,8 +40,14 @@ Khi publish, Manager bổ sung `catalogVersion`, nhãn preset, nội dung preset
 và `allowedVariables` vào snapshot. Preset được đóng băng trong snapshot để catalog
 thay đổi sau đó không làm version cũ đổi giọng.
 
-`persona` vẫn là trường agent riêng cho vai trò/bối cảnh/chuyên môn. Template phải
-đưa `{{persona}}` vào prompt nếu muốn AI dùng phần này; template mặc định đã có.
+`persona` vẫn là trường agent riêng cho vai trò/bối cảnh/chuyên môn nhưng là tùy chọn.
+Template chỉ dùng phần này nếu có `{{persona}}`; template mặc định có token để người
+dùng có thể điền thêm, còn base prompt tự viết có thể không dùng token đó.
+
+Snapshot V1 vẫn giữ các field personality/persona-related dưới dạng chuỗi rỗng để
+client cũ không phải đổi cấu trúc. Đây là mở rộng tương thích ngược của V1: tên agent,
+`language` và base prompt vẫn bắt buộc; preset, persona, response style, cách xưng hô
+và timezone override có thể bỏ trống.
 
 ## 3. Allowlist biến
 
@@ -50,8 +56,8 @@ thay đổi sau đó không làm version cũ đổi giọng.
 | `{{agent_name}}` | tên agent của version | Có | Danh tính trợ lý |
 | `{{language}}` | operator nhập | Có | Tên ngôn ngữ tự nhiên để AI dùng khi trả lời |
 | `{{locale}}` | `defaultLocale` | Không | BCP-47 cho provider/ASR/TTS |
-| `{{persona}}` | trường persona của agent | Có | Vai trò, bối cảnh và chuyên môn |
-| `{{personality}}` | preset + custom override | Có | Tính cách dạng instruction data |
+| `{{persona}}` | trường persona của agent | Không | Vai trò, bối cảnh và chuyên môn |
+| `{{personality}}` | preset + custom override | Không | Tính cách dạng instruction data |
 | `{{response_style}}` | operator nhập | Không | Nhịp, độ dài và hình thức trả lời |
 | `{{user_address}}` | operator nhập | Không | Cách xưng hô, có thể để trống |
 | `{{interaction_mode}}` | agent config | Không | `auto`, `manual` hoặc `realtime` |
@@ -65,7 +71,8 @@ thay đổi sau đó không làm version cũ đổi giọng.
 | `{{available_tools}}` | tool broker của session | Không | Catalog bounded, chỉ để AI biết tool đã cấp |
 
 Mọi token lạ, token không đóng, Jinja expression (`{% ... %}`), attribute access,
-filter, gọi hàm hoặc token bắt buộc bị thiếu đều làm publish thất bại. Runtime kiểm tra
+filter, gọi hàm hoặc thiếu `{{agent_name}}`/`{{language}}` đều làm publish thất bại.
+Các token còn lại được phép bỏ trống hoặc không đưa vào base prompt. Runtime kiểm tra
 lại snapshot trước khi gửi provider; không đánh giá chuỗi template như code.
 
 ## 4. Personality preset
@@ -110,8 +117,8 @@ publish vẫn giữ nội dung đã đóng băng và không bị mutate.
 1. Mở `Trợ lý` trong Manager Web.
 2. Nhập tên, locale fallback và tên ngôn ngữ trả lời; chọn `Thiết bị` để ưu tiên
    locale/múi giờ firmware báo lại, hoặc `Cố định` nếu cần một fallback IANA.
-3. Chọn một preset tính cách, thêm vai trò riêng và tinh chỉnh nếu cần.
-4. Sửa template raw hoặc chèn token từ danh sách allowlist.
+3. Có thể chọn preset tính cách, thêm giới thiệu trợ lý và tinh chỉnh nếu cần.
+4. Sửa base prompt raw; chỉ `{{agent_name}}` và `{{language}}` bắt buộc, phần giới thiệu có thể viết trực tiếp trong prompt.
 5. Kiểm tra live preview; tool catalog và giờ thật được render lại khi mở session.
 6. Chọn provider/timeout rồi publish version mới.
 7. Thiết bị nhận desired config version qua flow hiện có; session đang chạy giữ

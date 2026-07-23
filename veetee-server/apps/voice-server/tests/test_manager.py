@@ -76,6 +76,32 @@ def test_session_profile_uses_configurable_local_persona_fallback() -> None:
     assert profile.policy.max_session_seconds == 720
 
 
+def test_session_profile_preserves_an_explicitly_empty_agent_persona() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        default_persona="Configured local persona",
+    )
+    profile = SessionProfile.from_payload(
+        {
+            "agentName": "VeeTee",
+            "defaultLocale": "vi-VN",
+            "persona": "",
+            "prompt": {
+                "template": "{{agent_name}} speaks {{language}}.",
+                "language": "Tiếng Việt",
+                "timeZone": "",
+                "personalityPresetId": "",
+                "personality": "",
+            },
+        },
+        settings,
+    )
+
+    assert profile.persona == ""
+    assert profile.prompt.personality == ""
+
+
 @pytest.mark.asyncio
 async def test_manager_authenticates_device_and_caches_immutable_config() -> None:
     config_calls = 0

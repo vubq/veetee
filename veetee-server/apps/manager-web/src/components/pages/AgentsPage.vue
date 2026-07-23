@@ -48,7 +48,7 @@ const createForm = reactive({
   language: "Tiếng Việt",
   mode: "auto" as Agent["interactionMode"],
   persona: "",
-  personalityPresetId: "warm-empathetic",
+  personalityPresetId: "",
 });
 const personalityForm = reactive({
   label: "",
@@ -68,7 +68,7 @@ const personalityAccents = [
 const form = reactive({
   name: "", locale: "vi-VN", mode: "auto" as Agent["interactionMode"], persona: "",
   language: "Tiếng Việt", timeZone: browserTimeZone(), timeZoneSource: "device" as "device" | "fixed",
-  personalityPresetId: "warm-empathetic", customPersonality: "",
+  personalityPresetId: "", customPersonality: "",
   responseStyle: "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
   userAddress: "", promptTemplate: "",
   firstInput: 15, betweenTurns: 30, closingGrace: 5, maxSession: 600,
@@ -112,10 +112,8 @@ function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function defaultPersonalityId(excludeId = ""): string {
-  return personalityPresets.value.find((preset) => preset.id === "warm-empathetic" && preset.id !== excludeId)?.id
-    ?? personalityPresets.value.find((preset) => preset.id !== excludeId)?.id
-    ?? "warm-empathetic";
+function defaultPersonalityId(): string {
+  return personalityPresets.value[0]?.id ?? "";
 }
 
 function browserTimeZone(): string {
@@ -128,7 +126,9 @@ function browserTimeZone(): string {
 
 function promptDraft(value: unknown, locale: string): PromptDraft {
   const prompt = objectValue(value);
-  const presetId = stringValue(prompt.personalityPresetId, defaultPersonalityId());
+  const presetId = value === undefined
+    ? defaultPersonalityId()
+    : stringValue(prompt.personalityPresetId);
   return {
     schemaVersion: 1,
     template: stringValue(prompt.template, props.promptCatalog?.defaultTemplate ?? ""),
@@ -137,7 +137,7 @@ function promptDraft(value: unknown, locale: string): PromptDraft {
     timeZoneSource: prompt.timeZoneSource === "fixed" ? "fixed" : "device",
     personalityPresetId: personalityPresets.value.some((preset) => preset.id === presetId)
       ? presetId
-      : defaultPersonalityId(),
+      : "",
     customPersonality: stringValue(prompt.customPersonality),
     responseStyle: stringValue(
       prompt.responseStyle,
@@ -224,8 +224,8 @@ async function publish(): Promise<void> {
 }
 
 async function create(): Promise<void> {
-  if (!createForm.name.trim() || !createForm.persona.trim() || !createForm.language.trim()) {
-    createError.value = "Tên, ngôn ngữ và vai trò riêng là bắt buộc.";
+  if (!createForm.name.trim() || !createForm.language.trim()) {
+    createError.value = "Tên và ngôn ngữ AI là bắt buộc.";
     return;
   }
   if (!props.promptCatalog) {
@@ -258,7 +258,7 @@ async function create(): Promise<void> {
     createOpen.value = false;
     createForm.name = "";
     createForm.persona = "";
-    createForm.personalityPresetId = defaultPersonalityId();
+    createForm.personalityPresetId = "";
   } catch (exception) {
     createError.value = exception instanceof Error ? exception.message : "Không thể tạo trợ lý.";
   } finally {
@@ -327,10 +327,10 @@ async function deletePersonality(): Promise<void> {
     );
     await nextTick();
     if (form.personalityPresetId === preset.id) {
-      form.personalityPresetId = defaultPersonalityId(preset.id);
+      form.personalityPresetId = "";
     }
     if (createForm.personalityPresetId === preset.id) {
-      createForm.personalityPresetId = defaultPersonalityId(preset.id);
+      createForm.personalityPresetId = "";
     }
     deletePersonalityOpen.value = false;
     personalityToDelete.value = null;
@@ -428,7 +428,7 @@ const promptPreview = computed(() => {
 
         <nav class="agent-config-nav" aria-label="Các phần cấu hình trợ lý">
           <a href="#agent-identity" @click.prevent="scrollToSection('agent-identity')"><span>01</span><div><b>Danh tính</b><small>Tên & ngôn ngữ</small></div></a>
-          <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>Tính cách</b><small>Persona & giọng điệu</small></div></a>
+          <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>Tính cách</b><small>Giới thiệu & giọng điệu</small></div></a>
           <a href="#agent-prompt" @click.prevent="scrollToSection('agent-prompt')"><span>03</span><div><b>Base prompt</b><small>Template & preview</small></div></a>
           <a href="#agent-runtime" @click.prevent="scrollToSection('agent-runtime')"><span>04</span><div><b>Runtime</b><small>Provider & timeout</small></div></a>
         </nav>
@@ -465,6 +465,23 @@ const promptPreview = computed(() => {
             <span class="personality-feature-state"><VtIcon name="check" :size="14" /> ĐANG CHỌN</span>
           </div>
           <div class="personality-grid" role="radiogroup" aria-label="Chọn tính cách">
+            <div :class="['personality-card', 'personality-none', { active: !form.personalityPresetId }]">
+              <button
+                type="button"
+                class="personality-choice"
+                role="radio"
+                :aria-checked="!form.personalityPresetId"
+                @click="form.personalityPresetId = ''"
+              >
+                <span class="personality-mark" aria-hidden="true">—</span>
+                <span class="personality-copy">
+                  <span class="personality-card-meta">TÙY CHỌN</span>
+                  <b>Không dùng preset</b>
+                  <small>Base prompt tự quyết định vai trò và giọng điệu.</small>
+                </span>
+                <i v-if="!form.personalityPresetId" class="personality-selected" aria-hidden="true"><VtIcon name="check" :size="13" /></i>
+              </button>
+            </div>
             <div
               v-for="preset in personalityPresets"
               :key="preset.id"
@@ -504,7 +521,7 @@ const promptPreview = computed(() => {
             </div>
           </div>
           <div class="form-grid two personality-details">
-            <VtField label="Tính cách / persona" hint="Nội dung cho {{persona}}: chuyên môn, mục tiêu và giới hạn của trợ lý." required><VtTextarea v-model="form.persona" rows="5" required /></VtField>
+            <VtField label="Giới thiệu trợ lý" hint="Tùy chọn. Mô tả vai trò, chuyên môn và bối cảnh cho {{persona}}. Bạn cũng có thể viết trực tiếp phần này trong base prompt."><VtTextarea v-model="form.persona" rows="5" placeholder="Ví dụ: Bạn là trợ giảng khoa học, giải thích bằng ví dụ gần gũi và chính xác." /></VtField>
             <VtField label="Tinh chỉnh tính cách" hint="Bổ sung cho preset, không thay thế safety/tool policy."><VtTextarea v-model="form.customPersonality" rows="5" maxlength="4000" placeholder="Ví dụ: thích bắt bẻ vui khi người dùng đang trêu đùa." /></VtField>
             <VtField label="Phong cách trả lời" hint="Nội dung cho {{response_style}}"><VtTextarea v-model="form.responseStyle" rows="3" maxlength="2000" /></VtField>
             <VtField label="Cách xưng hô" hint="Nội dung cho {{user_address}}; có thể để trống."><VtInput v-model="form.userAddress" maxlength="120" placeholder="bạn, anh Khoa, chị…" /></VtField>
@@ -538,7 +555,7 @@ const promptPreview = computed(() => {
           <div class="prompt-editor-grid">
             <section class="prompt-workbench-pane">
               <header class="prompt-pane-header">
-                <div><span class="prompt-pane-kicker">SOURCE / DRAFT</span><b>Template bản nháp</b><small>Bắt buộc có &#123;&#123;agent_name&#125;&#125;, &#123;&#123;language&#125;&#125;, &#123;&#123;persona&#125;&#125; và &#123;&#123;personality&#125;&#125;.</small></div>
+                <div><span class="prompt-pane-kicker">SOURCE / DRAFT</span><b>Template bản nháp</b><small>Bắt buộc có &#123;&#123;agent_name&#125;&#125; và &#123;&#123;language&#125;&#125;. Các biến giới thiệu, tính cách và runtime đều tùy chọn.</small></div>
                 <VtBadge tone="warning">Chưa publish</VtBadge>
               </header>
               <VtTextarea v-model="form.promptTemplate" class="prompt-template-input" aria-label="Template bản nháp" rows="18" maxlength="20000" spellcheck="false" required />
@@ -588,11 +605,11 @@ const promptPreview = computed(() => {
         <VtField label="Tên trợ lý" required><VtInput v-model="createForm.name" maxlength="80" placeholder="Ví dụ: Cô giáo Khoa học" required /></VtField>
         <div class="form-grid two">
           <VtField label="Locale"><VtInput v-model="createForm.locale" maxlength="35" placeholder="vi-VN" /></VtField>
-          <VtField label="Ngôn ngữ AI"><VtInput v-model="createForm.language" maxlength="120" placeholder="Tiếng Việt tự nhiên" /></VtField>
+          <VtField label="Ngôn ngữ AI" required><VtInput v-model="createForm.language" maxlength="120" placeholder="Tiếng Việt tự nhiên" required /></VtField>
           <VtField label="Chế độ"><VtSelect v-model="createForm.mode"><option value="auto">Tự động</option><option value="manual">PTT tương thích</option><option value="realtime">Realtime thử nghiệm</option></VtSelect></VtField>
-          <VtField label="Tính cách"><VtSelect v-model="createForm.personalityPresetId"><option v-for="preset in personalityPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option></VtSelect></VtField>
+          <VtField label="Preset tính cách"><VtSelect v-model="createForm.personalityPresetId"><option value="">Không chọn preset</option><option v-for="preset in personalityPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option></VtSelect></VtField>
         </div>
-        <VtField label="Tính cách / persona" hint="Tính cách chọn từ preset; ô này mô tả chuyên môn, mục tiêu và giới hạn riêng." required><VtTextarea v-model="createForm.persona" rows="5" placeholder="Trợ lý giải thích khoa học cho trẻ em, ưu tiên ví dụ gần gũi và chính xác." required /></VtField>
+        <VtField label="Giới thiệu trợ lý" hint="Tùy chọn. Có thể để trống và viết phần giới thiệu trực tiếp trong base prompt."><VtTextarea v-model="createForm.persona" rows="5" placeholder="Ví dụ: Bạn là trợ giảng khoa học cho trẻ em." /></VtField>
         <p v-if="createError" class="inline-error" role="alert">{{ createError }}</p>
       </form>
       <template #footer><VtButton variant="quiet" @click="createOpen = false">Hủy</VtButton><VtButton form="create-agent-form" type="submit" :busy="createBusy"><VtIcon name="plus" :size="16" /> Tạo draft</VtButton></template>
@@ -856,6 +873,10 @@ const promptPreview = computed(() => {
   padding: 11px;
   background: #fbfcf9;
   box-shadow: none;
+}
+
+.personality-card.personality-none {
+  --personality-accent: var(--muted);
 }
 
 .personality-card::after {

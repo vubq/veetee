@@ -114,14 +114,14 @@ export const AGENT_PROMPT_VARIABLES = [
     name: "persona",
     label: "Vai trò riêng",
     description: "Bối cảnh, chuyên môn và giới hạn riêng của trợ lý.",
-    required: true,
+    required: false,
     dynamic: false,
   },
   {
     name: "personality",
     label: "Tính cách",
     description: "Nội dung preset đã chọn cộng với phần tinh chỉnh của operator.",
-    required: true,
+    required: false,
     dynamic: false,
   },
   {
@@ -395,16 +395,17 @@ export function validateAgentPromptDraft(
   boundedInteger(value.schemaVersion, "schemaVersion", 1, 1, false);
   boundedString(value.template, "template", 1, 20_000, false);
   boundedString(value.language, "language", 1, 120, false);
-  boundedString(value.timeZone, "timeZone", 1, 80, true);
-  boundedString(value.timeZoneSource, "timeZoneSource", 1, 16, true);
-  boundedString(value.personalityPresetId, "personalityPresetId", 1, 80, false);
+  boundedString(value.timeZone, "timeZone", 0, 80, true);
+  boundedString(value.timeZoneSource, "timeZoneSource", 0, 16, true);
+  boundedString(value.personalityPresetId, "personalityPresetId", 0, 80, true);
   boundedString(value.customPersonality, "customPersonality", 0, 4_000, true);
   boundedString(value.responseStyle, "responseStyle", 0, 2_000, true);
   boundedString(value.userAddress, "userAddress", 0, 120, true);
 
   const presetId = value.personalityPresetId;
   if (
-    typeof presetId !== "string" ||
+    typeof presetId === "string" &&
+    presetId &&
     !personalityPresets.some((preset) => preset.id === presetId)
   ) {
     throw new BadRequestException("Agent prompt personalityPresetId is unknown");
@@ -414,6 +415,7 @@ export function validateAgentPromptDraft(
   }
   if (
     value.timeZoneSource !== undefined &&
+    value.timeZoneSource !== "" &&
     value.timeZoneSource !== "device" &&
     value.timeZoneSource !== "fixed"
   ) {
@@ -444,10 +446,11 @@ export function normalizePublishedAgentPrompt(
   if (!isRecord(draft)) {
     throw new BadRequestException("Agent prompt config must be an object");
   }
-  const preset = personalityPresets.find(
-    (candidate) => candidate.id === draft.personalityPresetId,
-  );
-  if (!preset) {
+  const presetId = normalizedString(draft.personalityPresetId);
+  const preset = presetId
+    ? personalityPresets.find((candidate) => candidate.id === presetId)
+    : undefined;
+  if (presetId && !preset) {
     throw new BadRequestException("Agent prompt personalityPresetId is unknown");
   }
   const customPersonality = normalizedString(draft.customPersonality);
@@ -458,9 +461,9 @@ export function normalizePublishedAgentPrompt(
     language: String(draft.language).trim(),
     timeZone: normalizedString(draft.timeZone) || "Asia/Bangkok",
     timeZoneSource: draft.timeZoneSource === "fixed" ? "fixed" : "device",
-    personalityPresetId: preset.id,
-    personalityLabel: preset.label,
-    personality: [preset.instructions, customPersonality].filter(Boolean).join("\n"),
+    personalityPresetId: preset?.id ?? "",
+    personalityLabel: preset?.label ?? "",
+    personality: [preset?.instructions, customPersonality].filter(Boolean).join("\n"),
     customPersonality,
     responseStyle: normalizedString(draft.responseStyle),
     userAddress: normalizedString(draft.userAddress),

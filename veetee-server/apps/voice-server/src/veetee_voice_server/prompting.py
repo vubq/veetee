@@ -32,7 +32,7 @@ ALLOWED_PROMPT_VARIABLES = frozenset(
     }
 )
 REQUIRED_PROMPT_VARIABLES = frozenset(
-    {"agent_name", "language", "persona", "personality"}
+    {"agent_name", "language"}
 )
 _TOKEN_PATTERN = re.compile(r"{{\s*([a-z_][a-z0-9_]*)\s*}}")
 
@@ -83,16 +83,19 @@ class PromptConfiguration:
             return defaults
         template = _required_string(value.get("template"), "template", 20_000)
         language = _required_string(value.get("language"), "language", 120)
-        time_zone = _required_string(value.get("timeZone"), "timeZone", 80)
+        time_zone = (
+            _optional_string(value.get("timeZone"), "timeZone", 80)
+            or defaults.time_zone
+        )
         time_zone_source = _optional_string(
             value.get("timeZoneSource"), "timeZoneSource", 16
         ) or "device"
         if time_zone_source not in {"device", "fixed"}:
             raise PromptTemplateError("Prompt timeZoneSource must be device or fixed")
-        personality_preset_id = _required_string(
+        personality_preset_id = _optional_string(
             value.get("personalityPresetId"), "personalityPresetId", 80
         )
-        personality = _required_string(value.get("personality"), "personality", 8_000)
+        personality = _optional_string(value.get("personality"), "personality", 8_000)
         response_style = _optional_string(value.get("responseStyle"), "responseStyle", 2_000)
         user_address = _optional_string(value.get("userAddress"), "userAddress", 120)
         validate_prompt_template(template)

@@ -157,7 +157,11 @@ class SessionProfile:
             agent_name=agent_name,
             locale=locale,
             interaction_mode=interaction_mode,
-            persona=_optional_string(payload.get("persona")) or defaults.persona,
+            persona=(
+                _optional_string(payload.get("persona")) or ""
+                if "persona" in payload
+                else defaults.persona
+            ),
             prompt=PromptConfiguration.from_payload(
                 payload.get("prompt"),
                 defaults=defaults.prompt,

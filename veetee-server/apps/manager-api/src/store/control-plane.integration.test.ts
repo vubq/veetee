@@ -161,8 +161,18 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
         name: "Integration Agent",
         defaultLocale: "vi-VN",
         interactionMode: "auto",
-        persona: "Vietnamese integration agent",
         draftConfig: {
+          prompt: {
+            schemaVersion: 1,
+            template: "You are {{agent_name}}. Reply in {{language}}.",
+            language: "Tiếng Việt",
+            timeZone: "",
+            timeZoneSource: "device",
+            personalityPresetId: "",
+            customPersonality: "",
+            responseStyle: "",
+            userAddress: "",
+          },
           providerChains: ["vad", "asr", "llm", "tts"].map((kind) => ({
             kind,
             locale: "vi-VN",
@@ -172,6 +182,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       },
       { principal, requestId: "integration-agent" },
     );
+    expect(agent.persona).toBe("");
     const published = await store.publishAgent(agent.id, {
       principal,
       requestId: "integration-publish",
@@ -267,8 +278,9 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       interactionMode: "auto",
       prompt: {
         schemaVersion: 1,
-        personalityPresetId: "warm-empathetic",
-        language: "vi-VN",
+        personalityPresetId: "",
+        personality: "",
+        language: "Tiếng Việt",
       },
     });
 

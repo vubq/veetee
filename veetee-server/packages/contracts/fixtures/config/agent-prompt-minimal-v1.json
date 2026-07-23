@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": 1,
+  "template": "You are {{agent_name}}. Reply in {{language}}.",
+  "language": "Tiếng Việt",
+  "timeZone": "Asia/Bangkok",
+  "timeZoneSource": "device",
+  "personalityPresetId": "",
+  "personalityLabel": "",
+  "personality": "",
+  "customPersonality": "",
+  "responseStyle": "",
+  "userAddress": "",
+  "allowedVariables": [
+    "agent_name",
+    "language",
+    "locale",
+    "persona",
+    "personality",
+    "response_style",
+    "user_address",
+    "interaction_mode",
+    "config_version",
+    "current_date",
+    "current_time",
+    "timezone",
+    "device_locale",
+    "device_timezone",
+    "device_timezone_offset",
+    "available_tools"
+  ]
+}

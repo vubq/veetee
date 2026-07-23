@@ -73,7 +73,7 @@ def test_render_prompt_prefers_reported_device_locale_and_time_zone() -> None:
         "{{agent_name}} {{language}} {{persona}} {{personality}} {{current_time",
         "{{agent_name}} {{language}} {{persona}} {{personality}} {{name | upper}}",
         "{{agent_name}} {{language}} {{persona}} {{personality}} {% for x in tools %}",
-        "{{agent_name}} {{language}} {{persona}}",
+        "{{agent_name}} {{persona}}",
     ],
 )
 def test_prompt_validation_rejects_unknown_malformed_or_missing_tokens(template: str) -> None:
@@ -93,6 +93,34 @@ def test_prompt_renderer_never_evaluates_template_expressions() -> None:
                 "personality": "fixture",
             },
         )
+
+
+def test_prompt_configuration_allows_empty_optional_fields() -> None:
+    prompt = PromptConfiguration.from_payload(
+        {
+            "template": "You are {{agent_name}}. Reply in {{language}}.",
+            "language": "Tiếng Việt",
+            "timeZone": "",
+            "timeZoneSource": "device",
+            "personalityPresetId": "",
+            "personality": "",
+            "responseStyle": "",
+            "userAddress": "",
+        },
+        defaults=configuration(),
+    )
+
+    assert prompt.personality_preset_id == ""
+    assert prompt.personality == ""
+    assert prompt.time_zone == "Asia/Bangkok"
+    assert prompt.render(
+        agent_name="VeeTee",
+        locale="vi-VN",
+        persona="",
+        interaction_mode="auto",
+        config_version=2,
+        tools=[],
+    ) == "You are VeeTee. Reply in Tiếng Việt."
 
 
 def test_prompt_configuration_rejects_an_unknown_time_zone() -> None:

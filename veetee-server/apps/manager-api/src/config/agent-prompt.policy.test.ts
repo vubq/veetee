@@ -43,6 +43,8 @@ describe("agent prompt policy", () => {
         "available_tools",
       ]),
     );
+    expect(catalog.variables.find(({ name }) => name === "persona")?.required).toBe(false);
+    expect(catalog.variables.find(({ name }) => name === "personality")?.required).toBe(false);
   });
 
   it("normalizes a legacy agent to a complete immutable prompt snapshot", () => {
@@ -129,6 +131,47 @@ describe("agent prompt policy", () => {
       personalityLabel: "Cà khịa vui",
     });
     expect(prompt.personality).toContain(customPreset.instructions);
+  });
+
+  it("allows an agent to keep optional persona and personality fields empty", () => {
+    const template = "You are {{agent_name}}. Reply in {{language}}.";
+    expect(() =>
+      validateAgentPromptDraft({
+        schemaVersion: 1,
+        template,
+        language: "Tiếng Việt",
+        timeZone: "",
+        timeZoneSource: "device",
+        personalityPresetId: "",
+        customPersonality: "",
+        responseStyle: "",
+        userAddress: "",
+      }),
+    ).not.toThrow();
+
+    expect(
+      normalizePublishedAgentPrompt(
+        {
+          schemaVersion: 1,
+          template,
+          language: "Tiếng Việt",
+          timeZone: "",
+          timeZoneSource: "device",
+          personalityPresetId: "",
+          customPersonality: "",
+          responseStyle: "",
+          userAddress: "",
+        },
+        { locale: "vi-VN" },
+      ),
+    ).toMatchObject({
+      language: "Tiếng Việt",
+      personalityPresetId: "",
+      personalityLabel: "",
+      personality: "",
+      responseStyle: "",
+      userAddress: "",
+    });
   });
 
   it.each([

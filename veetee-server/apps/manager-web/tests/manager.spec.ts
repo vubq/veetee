@@ -70,8 +70,8 @@ async function mockManagerApi(
           { name: "agent_name", label: "Tên trợ lý", description: "Tên", required: true, dynamic: false },
           { name: "language", label: "Ngôn ngữ", description: "Ngôn ngữ", required: true, dynamic: false },
           { name: "locale", label: "Locale", description: "Locale", required: false, dynamic: false },
-          { name: "persona", label: "Persona", description: "Persona", required: true, dynamic: false },
-          { name: "personality", label: "Tính cách", description: "Tính cách", required: true, dynamic: false },
+          { name: "persona", label: "Persona", description: "Persona", required: false, dynamic: false },
+          { name: "personality", label: "Tính cách", description: "Tính cách", required: false, dynamic: false },
           { name: "response_style", label: "Phong cách", description: "Phong cách", required: false, dynamic: false },
           { name: "user_address", label: "Xưng hô", description: "Xưng hô", required: false, dynamic: false },
           { name: "interaction_mode", label: "Mode", description: "Mode", required: false, dynamic: false },
@@ -1183,9 +1183,9 @@ test("creates an independent assistant draft from the manager UI", async ({ page
   await page.getByRole("button", { name: "Tạo trợ lý" }).click();
   const dialog = page.getByRole("dialog", { name: "Tạo trợ lý mới" });
   await dialog.getByLabel("Tên trợ lý").fill("Veetee Khoa học");
-  await dialog
-    .getByLabel("Tính cách / persona")
-    .fill("Giải thích khoa học bằng tiếng Việt, thân thiện và ngắn gọn.");
+  await expect(dialog.getByLabel("Giới thiệu trợ lý")).toHaveValue("");
+  await expect(dialog.getByLabel("Ngôn ngữ AI")).toHaveValue("Tiếng Việt");
+  await expect(dialog.getByLabel("Preset tính cách")).toHaveValue("");
   await dialog.getByRole("button", { name: "Tạo draft" }).click();
 
   await expect.poll(() => agentCreates).toEqual([
@@ -1193,7 +1193,7 @@ test("creates an independent assistant draft from the manager UI", async ({ page
       name: "Veetee Khoa học",
       defaultLocale: "vi-VN",
       interactionMode: "auto",
-      persona: "Giải thích khoa học bằng tiếng Việt, thân thiện và ngắn gọn.",
+      persona: "",
       draftConfig: {
         prompt: {
           schemaVersion: 1,
@@ -1202,7 +1202,7 @@ test("creates an independent assistant draft from the manager UI", async ({ page
           language: "Tiếng Việt",
           timeZone: expect.any(String),
           timeZoneSource: "device",
-          personalityPresetId: "warm-empathetic",
+          personalityPresetId: "",
           customPersonality: "",
           responseStyle:
             "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
@@ -1229,6 +1229,11 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   const navigation = page.locator(".agent-config-nav");
   await expect(navigation.getByRole("link")).toHaveCount(4);
   await expect(page.locator(".agent-config-section")).toHaveCount(4);
+  await expect(page.locator(".personality-feature")).toContainText("ĐANG CHỌN");
+  await page.getByRole("radio", { name: /Không dùng preset/ }).click();
+  await expect(page.getByRole("radio", { name: /Không dùng preset/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator(".personality-feature")).toHaveCount(0);
+  await page.getByRole("radio", { name: /Ấm áp, đồng cảm/ }).click();
   await expect(page.locator(".personality-feature")).toContainText("ĐANG CHỌN");
   await expect(page.locator(".agent-runtime-grid")).toBeVisible();
   const desktopPersonalityCards = await page.locator(".personality-card").evaluateAll((cards) => {
