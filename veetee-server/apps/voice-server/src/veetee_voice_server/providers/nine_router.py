@@ -20,11 +20,25 @@ from veetee_voice_server.providers.contracts import (
 
 class NineRouterProviderError(RuntimeError):
     def __init__(
-        self, message: str, *, status_code: int | None = None, retryable: bool = False
+        self,
+        message: str,
+        *,
+        code: str = "provider_error",
+        status_code: int | None = None,
+        retryable: bool = False,
+        finish_reason: str | None = None,
+        output_characters: int = 0,
+        schema_validator: str | None = None,
+        schema_path: str | None = None,
     ) -> None:
         super().__init__(message)
+        self.code = code
         self.status_code = status_code
         self.retryable = retryable
+        self.finish_reason = finish_reason
+        self.output_characters = max(0, output_characters)
+        self.schema_validator = schema_validator
+        self.schema_path = schema_path
 
 
 class NineRouterLlmProvider:
@@ -75,8 +89,9 @@ class NineRouterLlmProvider:
         context: OperationContext,
         schema: Mapping[str, Any] | None = None,
         schema_name: str = "veetee_return_json",
-        schema_transport: Literal["tool_call", "json_object"] = "tool_call",
+        schema_transport: Literal["tool_call", "json_object", "json_schema"] = "tool_call",
         max_output_tokens: int | None = None,
+        validate_schema: bool = True,
     ) -> dict[str, Any]:
         """Stream a structured call so planners do not wait for the full HTTP body."""
         context.checkpoint()
@@ -94,6 +109,15 @@ class NineRouterLlmProvider:
             payload["max_tokens"] = max(64, min(max_output_tokens, 4_096))
         if schema is None or schema_transport == "json_object":
             payload["response_format"] = {"type": "json_object"}
+        elif schema_transport == "json_schema":
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": dict(schema),
+                },
+            }
         else:
             payload["tools"] = [
                 {
@@ -112,6 +136,7 @@ class NineRouterLlmProvider:
         content_parts: list[str] = []
         argument_parts: list[str] = []
         collecting_arguments = False
+        finish_reason: str | None = None
         async with self._client.stream(
             "POST",
             f"{self._base_url}/chat/completions",
@@ -123,6 +148,7 @@ class NineRouterLlmProvider:
                 detail = (await response.aread())[:500].decode(errors="replace")
                 raise NineRouterProviderError(
                     f"9router returned HTTP {response.status_code}: {detail}",
+                    code="http_error",
                     status_code=response.status_code,
                     retryable=response.status_code in {408, 409, 425, 429}
                     or response.status_code >= 500,
@@ -135,7 +161,8 @@ class NineRouterLlmProvider:
                     event = json.loads(data)
                 except json.JSONDecodeError as error:
                     raise NineRouterProviderError(
-                        "Invalid JSON in 9router structured SSE event"
+                        "Invalid JSON in 9router structured SSE event",
+                        code="invalid_sse_json",
                     ) from error
                 for parsed_event in self._events_from_payload(event):
                     if isinstance(parsed_event, LlmTextDelta):
@@ -145,23 +172,50 @@ class NineRouterLlmProvider:
                             collecting_arguments = parsed_event.name == schema_name
                         if collecting_arguments and parsed_event.arguments_fragment:
                             argument_parts.append(parsed_event.arguments_fragment)
+                    elif isinstance(parsed_event, LlmStreamDone):
+                        finish_reason = parsed_event.finish_reason
         raw_value = "".join(argument_parts or content_parts)
+        if not raw_value.strip():
+            raise NineRouterProviderError(
+                "9router structured response was empty",
+                code="empty_structured_output",
+                finish_reason=finish_reason,
+            )
         try:
             parsed = json.loads(raw_value)
         except json.JSONDecodeError as error:
             raise NineRouterProviderError(
-                "9router structured response was not valid JSON"
+                "9router structured response was not valid JSON",
+                code=(
+                    "structured_output_truncated"
+                    if finish_reason in {"length", "max_tokens"}
+                    else "invalid_structured_json"
+                ),
+                finish_reason=finish_reason,
+                output_characters=len(raw_value),
             ) from error
         if not isinstance(parsed, dict):
-            raise NineRouterProviderError("9router structured response was not an object")
-        if schema is not None:
+            raise NineRouterProviderError(
+                "9router structured response was not an object",
+                code="structured_not_object",
+                finish_reason=finish_reason,
+                output_characters=len(raw_value),
+            )
+        if schema is not None and validate_schema:
             validation_error = next(
                 Draft202012Validator(dict(schema)).iter_errors(parsed), None
             )
             if validation_error is not None:
                 raise NineRouterProviderError(
                     "9router structured response did not match the requested schema",
+                    code="structured_schema_mismatch",
                     retryable=True,
+                    finish_reason=finish_reason,
+                    output_characters=len(raw_value),
+                    schema_validator=str(validation_error.validator)[:64],
+                    schema_path=".".join(
+                        str(part)[:64] for part in tuple(validation_error.path)[:8]
+                    ),
                 )
         context.checkpoint()
         return parsed
@@ -184,6 +238,7 @@ class NineRouterLlmProvider:
                 detail = body[:500].decode(errors="replace")
                 raise NineRouterProviderError(
                     f"9router returned HTTP {response.status_code}: {detail}",
+                    code="http_error",
                     status_code=response.status_code,
                     retryable=response.status_code in {408, 409, 425, 429}
                     or response.status_code >= 500,
@@ -196,7 +251,10 @@ class NineRouterLlmProvider:
                 try:
                     event = json.loads(data)
                 except json.JSONDecodeError as error:
-                    raise NineRouterProviderError("Invalid JSON in 9router SSE event") from error
+                    raise NineRouterProviderError(
+                        "Invalid JSON in 9router SSE event",
+                        code="invalid_sse_json",
+                    ) from error
                 for parsed in self._events_from_payload(event):
                     if isinstance(parsed, LlmStreamDone):
                         finish_reason = parsed.finish_reason

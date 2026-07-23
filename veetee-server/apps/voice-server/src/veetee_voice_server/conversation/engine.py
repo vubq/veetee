@@ -7,7 +7,11 @@ from typing import Any, Literal
 
 import structlog
 
-from veetee_voice_server.conversation.arbiter import StaleTurnError, TurnArbiter
+from veetee_voice_server.conversation.arbiter import (
+    ConversationState,
+    StaleTurnError,
+    TurnArbiter,
+)
 from veetee_voice_server.conversation.cancellation import (
     OperationContext,
     OperationDeadlineExceededError,
@@ -59,6 +63,7 @@ class ConversationEngine:
         sink: ConversationSink,
         policy: ConversationPolicy | None = None,
         system_prompt: str | None = None,
+        error_text: str | None = None,
     ) -> None:
         self._arbiter = arbiter
         self._admission = admission
@@ -70,6 +75,7 @@ class ConversationEngine:
         self._sink = sink
         self._policy = policy or ConversationPolicy()
         self._system_prompt = system_prompt
+        self._error_text = " ".join((error_text or "").split())[:240]
         self._context: deque[ConversationMessage] = deque(
             maxlen=max(2, min(self._policy.context_message_limit, 32))
         )
@@ -171,7 +177,9 @@ class ConversationEngine:
                 "conversation_provider_deadline",
                 session_id=context.session_id,
                 turn_id=context.turn_id,
+                error_code="provider_deadline",
             )
+            await self._speak_recovery_if_possible(context, transcript)
             await self._emit_if_current_error(context, "provider_deadline", str(error))
             return None
         except Exception as error:
@@ -180,7 +188,11 @@ class ConversationEngine:
                 session_id=context.session_id,
                 turn_id=context.turn_id,
                 error=type(error).__name__,
+                error_code=getattr(error, "code", type(error).__name__),
+                status_code=getattr(error, "status_code", None),
+                retryable=getattr(error, "retryable", None),
             )
+            await self._speak_recovery_if_possible(context, transcript)
             await self._emit_if_current_error(context, "conversation_failed", type(error).__name__)
             return None
         finally:
@@ -366,6 +378,26 @@ class ConversationEngine:
                 payload={"code": code, "detail": detail},
             )
         )
+
+    async def _speak_recovery_if_possible(
+        self, context: OperationContext, transcript: Transcript
+    ) -> None:
+        if (
+            not self._error_text
+            or self._arbiter.snapshot.state is not ConversationState.THINKING
+            or not self._arbiter.is_current(context)
+        ):
+            return
+        try:
+            await self._speak_planned_text(self._error_text, transcript.locale, context)
+        except (TurnCancelledError, StaleTurnError, OperationDeadlineExceededError):
+            return
+        except Exception:
+            logger.warning(
+                "conversation_recovery_response_failed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+            )
 
     def _remember(self, role: Literal["user", "assistant"], text: str) -> None:
         bounded = " ".join(text.split())[: max(1, self._policy.context_message_characters)]

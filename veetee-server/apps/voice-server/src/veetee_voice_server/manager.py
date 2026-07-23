@@ -61,6 +61,7 @@ class SessionProfile:
     device_time_zone: str | None
     device_time_zone_offset_minutes: int | None
     goodbye_text: str
+    conversation_error_text: str
     policy: ConversationPolicy
     llm_chain: tuple[LlmEndpoint, ...]
 
@@ -107,6 +108,7 @@ class SessionProfile:
             device_time_zone=None,
             device_time_zone_offset_minutes=None,
             goodbye_text=settings.goodbye_text,
+            conversation_error_text=settings.conversation_error_text,
             policy=ConversationPolicy(
                 first_input_seconds=settings.first_input_seconds,
                 between_turns_seconds=settings.between_turns_seconds,
@@ -175,6 +177,11 @@ class SessionProfile:
                 _optional_string(conversation.get("timeoutGoodbye"))
                 or _optional_string(payload.get("goodbyeText"))
                 or defaults.goodbye_text
+            ),
+            conversation_error_text=(
+                _optional_string(conversation.get("providerFailureResponse"))
+                or _optional_string(payload.get("providerFailureResponse"))
+                or defaults.conversation_error_text
             ),
             policy=ConversationPolicy(
                 first_input_seconds=_bounded_float(

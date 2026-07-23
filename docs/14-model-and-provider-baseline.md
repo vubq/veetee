@@ -109,15 +109,18 @@ khoảng 1.82 s; forced function schema của full conversation gate có lượt
 `cx/gpt-5.4-mini`/`cx/gpt-5.6-luna` có lượt probe khoảng 21 s và
 `cx/gpt-5.3-codex-spark` timeout, nên không thay default chỉ dựa trên catalog model.
 
-Vì vậy semantic gate của adapter 9Router dùng JSON-object SSE và vẫn validate toàn
-bộ output bằng Draft 2020-12 JSON Schema tại voice-server. Provider boundary chỉ
-chuẩn hóa tín hiệu boolean `addressed_to_robot` thành điểm `0.0/1.0`; đây là tương
-thích kiểu dữ liệu không thay đổi quyết định semantic. Tool name nằm trong enum
-catalog, arguments tiếp tục qua schema/policy MCP. Các lỗi schema còn lại được hạ
-an toàn thành `admission=unclear`, `plan=noop`, không gọi LLM/MCP/TTS và không biến
-lỗi model thành tool tùy ý. Forced function call vẫn nằm trong provider conformance suite
-nhưng không còn là transport bắt buộc của gate. Baseline local dùng planner ceiling
-15 s và total-turn ceiling 45 s; đây là safety bound, không phải latency target.
+Probe ngày 2026-07-24 xác nhận instance hiện tại hỗ trợ `response_format=json_schema`
+strict cho full conversation gate. Vì vậy semantic gate dùng strict JSON Schema SSE rồi
+validate lần hai bằng Draft 2020-12 tại voice-server. Provider boundary giữ mã lỗi
+bounded và chỉ expose metadata (code, finish reason, output length, schema path), không
+giữ raw output/transcript. Field tương thích bị model bỏ sót có thể được chuẩn hóa an
+toàn từ chính structured fields trước lần validate cuối; không suy diễn exact phrase.
+Tool name vẫn nằm trong enum catalog, arguments tiếp tục qua schema/policy MCP.
+Nếu structured gate hỏng sau local signal admission, server dùng prose response không
+có tool; nếu prose cũng hỏng, phát recovery response đã cấu hình và giữ session sống.
+Forced function call vẫn nằm trong provider conformance suite nhưng không còn là
+transport bắt buộc của gate. Baseline local dùng planner ceiling 15 s và total-turn
+ceiling 45 s; đây là safety bound, không phải latency target.
 
 Live Manager probe ngày 2026-07-22 đã lấy API key active do chính 9Router quản lý,
 rotate vào encrypted provider secret mà không ghi giá trị ra log/repo, rồi gọi đúng

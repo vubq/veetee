@@ -367,9 +367,15 @@ Nếu chưa đạt, UI phải hiển thị “Bấm nút để ngắt” chứ k
 
 ## 8. Latency budget
 
-Structured conversation gate dùng JSON-object SSE để bắt đầu parse sớm hơn forced tool
-arguments, nhưng vẫn validate toàn bộ object bằng Draft 2020-12 JSON Schema trước khi
-cho phép planner/tool. Nếu schema lỗi, hệ thống hạ an toàn về `unclear`/`noop`.
+Structured conversation gate dùng `response_format=json_schema` strict của 9Router khi
+provider quảng cáo capability này, rồi vẫn validate toàn bộ object bằng Draft 2020-12
+JSON Schema ở voice-server trước khi cho phép planner/tool. Adapter giữ mã lỗi bounded
+(`invalid_sse_json`, `empty_structured_output`, `invalid_structured_json`,
+`structured_output_truncated`, `structured_schema_mismatch`) và không ghi raw output. Các field tương thích bị model bỏ
+sót (ví dụ `plan.action`) được chuẩn hóa an toàn từ chính structured fields trước lần
+validate cuối; không suy diễn từ exact transcript. Nếu gate provider hỏng, input đã qua
+local signal admission được chuyển sang prose response không có tool; nếu cả prose cũng
+hỏng, server phát localized recovery response và giữ assistant gate mở thay vì im lặng.
 
 Mục tiêu cascade trên Wi-Fi tốt:
 

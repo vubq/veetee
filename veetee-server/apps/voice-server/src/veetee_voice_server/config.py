@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     max_session_seconds: float = Field(default=0.0, ge=0.0, le=3_600.0)
     asr_seconds: float = Field(default=8.0, gt=0.1, le=60.0)
     goodbye_text: str = "Tạm biệt, hẹn gặp lại."
+    conversation_error_text: str = Field(
+        default="Tôi chưa xử lý được câu vừa rồi, bạn nói lại giúp tôi nhé.",
+        min_length=1,
+        max_length=240,
+    )
 
 
 @lru_cache

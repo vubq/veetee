@@ -302,6 +302,48 @@ async def test_structured_completion_can_validate_json_object_without_forced_too
     assert value == {"action": "respond"}
 
 
+async def test_structured_completion_sends_strict_json_schema() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "submit_plan",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": {"action": {"const": "respond"}},
+                },
+            },
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"action\\":\\"respond\\"}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    value = await provider.complete_json(
+        system_prompt="Return a plan",
+        user_prompt="Xin chào",
+        context=context(),
+        schema={
+            "type": "object",
+            "required": ["action"],
+            "properties": {"action": {"const": "respond"}},
+        },
+        schema_name="submit_plan",
+        schema_transport="json_schema",
+    )
+    await client.aclose()
+    assert value == {"action": "respond"}
+
+
 async def test_structured_completion_rejects_json_object_outside_schema() -> None:
     async def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -329,6 +371,41 @@ async def test_structured_completion_rejects_json_object_outside_schema() -> Non
         )
     await client.aclose()
     assert error.value.retryable is True
+    assert error.value.code == "structured_schema_mismatch"
+    assert error.value.finish_reason == "stop"
+    assert error.value.output_characters > 0
+    assert error.value.schema_validator == "const"
+    assert error.value.schema_path == "action"
+
+
+async def test_structured_error_metadata_never_keeps_raw_model_output() -> None:
+    sensitive_output = "SENSITIVE_TRANSCRIPT"
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"SENSITIVE_TRANSCRIPT"},'
+                b'"finish_reason":"length"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test", client=client)
+    with pytest.raises(NineRouterProviderError) as error:
+        await provider.complete_json(
+            system_prompt="Return a plan",
+            user_prompt="Xin chào",
+            context=context(),
+        )
+    await client.aclose()
+
+    assert error.value.code == "structured_output_truncated"
+    assert error.value.finish_reason == "length"
+    assert error.value.output_characters == len(sensitive_output)
+    assert sensitive_output not in str(error.value)
+    assert sensitive_output not in repr(vars(error.value))
 
 
 async def test_prewarm_requires_a_valid_ready_response() -> None:

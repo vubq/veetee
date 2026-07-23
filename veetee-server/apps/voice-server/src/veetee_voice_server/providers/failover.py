@@ -86,8 +86,9 @@ class FailoverLlmProvider:
         context: OperationContext,
         schema: Mapping[str, Any] | None = None,
         schema_name: str = "veetee_return_json",
-        schema_transport: Literal["tool_call", "json_object"] = "tool_call",
+        schema_transport: Literal["tool_call", "json_object", "json_schema"] = "tool_call",
         max_output_tokens: int | None = None,
+        validate_schema: bool = True,
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         attempted = False
@@ -106,6 +107,7 @@ class FailoverLlmProvider:
                     schema_name=schema_name,
                     schema_transport=schema_transport,
                     max_output_tokens=max_output_tokens,
+                    validate_schema=validate_schema,
                 )
             except (TurnCancelledError, OperationDeadlineExceededError):
                 raise

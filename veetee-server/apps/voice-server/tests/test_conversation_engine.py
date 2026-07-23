@@ -42,6 +42,14 @@ class FakeAdmission:
         return AdmissionDecision(self.disposition, 0.95, "fixture")
 
 
+class FailingAdmission:
+    async def evaluate(
+        self, transcript: Transcript, context: OperationContext
+    ) -> AdmissionDecision:
+        del transcript, context
+        raise RuntimeError("provider fixture failure")
+
+
 class FakePlanner:
     def __init__(self, plan: ConversationPlan) -> None:
         self.plan_value = plan
@@ -298,4 +306,29 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     assert not any(
         output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP} for output in sink.outputs
     )
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_provider_failure_speaks_recovery_and_keeps_session_open() -> None:
+    arbiter = TurnArbiter("session-recovery")
+    llm = FakeLlm()
+    tts = FakeTts()
+    sink = MemoryConversationSink()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FailingAdmission(),
+        planner=FakePlanner(response_plan()),
+        llm=llm,
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+        error_text="Bạn nói lại giúp tôi nhé.",
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Hôm nay là thứ mấy?", "vi-VN"))
+
+    assert tts.calls == ["Bạn nói lại giúp tôi nhé."]
+    assert any(output.kind is OutputKind.ERROR for output in sink.outputs)
     assert arbiter.snapshot.state is ConversationState.LISTENING

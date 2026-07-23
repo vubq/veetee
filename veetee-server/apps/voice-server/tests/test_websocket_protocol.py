@@ -582,3 +582,31 @@ async def test_semantic_schema_normalizes_boolean_addressed_signal() -> None:
     assert output["admission"]["addressed_to_robot"] == 1.0
     assert output["admission"]["decision"] == "accepted"
     assert output["plan"]["action"] == "respond"
+
+
+async def test_semantic_schema_recovers_omitted_safe_plan_action() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": 0.96,
+                "addressed_to_robot": 0.96,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "social",
+            "plan": {
+                "locale": "vi-VN",
+                "intent": "conversation.social",
+                "response_required": True,
+                "response_text": "Tôi vẫn đang nghe đây.",
+                "tool_call": None,
+            },
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"]["decision"] == "accepted"
+    assert output["plan"]["action"] == "respond"
+    assert output["plan"]["response_text"] == "Tôi vẫn đang nghe đây."

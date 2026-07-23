@@ -261,8 +261,15 @@ class StructuredConversationGate:
                 tool_call=None,
             )
         elif disposition is AdmissionDisposition.ACCEPTED and plan.action is PlanAction.NOOP:
-            disposition = AdmissionDisposition.NON_ACTIONABLE
-            reason_code = "unclear"
+            # An intentional linguistic turn should not disappear just because the
+            # planner omitted a response. The prose stream remains tool-disabled.
+            plan = replace(
+                plan,
+                action=PlanAction.RESPOND,
+                response_required=True,
+                response_text=None,
+                tool_call=None,
+            )
 
         if disposition not in {AdmissionDisposition.ACCEPTED, AdmissionDisposition.END}:
             plan = replace(

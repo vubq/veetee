@@ -35,10 +35,14 @@ from veetee_voice_server.providers.contracts import ToolBroker
 from veetee_voice_server.providers.failover import (
     FailoverLlmProvider,
     LlmProviderCandidate,
+    ProviderChainUnavailableError,
 )
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
-from veetee_voice_server.providers.nine_router import NineRouterLlmProvider
+from veetee_voice_server.providers.nine_router import (
+    NineRouterLlmProvider,
+    NineRouterProviderError,
+)
 from veetee_voice_server.providers.semantic import StructuredConversationGate
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
@@ -102,49 +106,41 @@ class ManagerMcpCallRequest(BaseModel):
 def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     tool_catalog = tools.list_tools()
     catalog = json.dumps(tool_catalog, ensure_ascii=False, separators=(",", ":"))
+    prompt_tool_names = [
+        {"name": item["name"], "description": ""}
+        for item in tool_catalog
+        if isinstance(item.get("name"), str)
+    ]
     agent_context = json.dumps(
         _published_agent_context(profile), ensure_ascii=False, separators=(",", ":")
     )
     return (
-        "Return one JSON object with admission, dialogue_act and plan. admission.decision "
-        "must be accepted, non_actionable, not_addressed, unclear, interrupt or end; "
-        "include confidence, addressed_to_robot and one bounded reason_code. confidence and "
-        "addressed_to_robot must be JSON numbers from 0.0 through 1.0, never booleans. "
-        "reason_code must be one of speech_relevant, non_speech, low_quality, not_addressed, "
-        "self_echo, duplicate, low_confidence, semantic_interrupt, conversation_end, unclear "
-        "or invalid_model_output. Decide whether "
-        "the transcript is intentional, relevant and directed to this assistant before "
-        "planning a response or tool. Use the supplied recent conversation context. A short "
-        "answer, reaction, joke, correction, confirmation or follow-up to the assistant is "
-        "still an intentional conversational turn even when it is not a standalone command "
-        "or question. Do not classify a contextually meaningful reply as non_actionable or "
-        "unclear only because it is brief. If a recognizable assistant-directed turn is "
-        "ambiguous or missing details, admission must be accepted and plan.action must be "
-        "ask_clarification; unclear is only for conflicting or insufficient admission "
-        "evidence after signal, ASR, addressing and context are combined. Use non_actionable "
-        "for unusable linguistic signal, self-echo or duplicates, and not_addressed for "
-        "reliable but clearly incidental speech. Do not infer a named environmental source "
-        "or answer incidental speech. Environmental noise and media are test categories, "
-        "not hard-coded phrase rules. plan.action must be one of respond, "
-        "call_tool_then_respond, ask_clarification, execute_pending_tool, "
-        "cancel_pending_tool, end_session, noop. dialogue_act must be one of "
-        "question, command, follow_up, answer, confirmation, denial, correction, "
-        "clarification_answer, social, interrupt, end. plan must include locale, intent, "
-        "response_required, response_text and tool_call. Use null when response_text or "
-        "tool_call does not apply. "
-        "For respond, ask_clarification or end_session, set response_text to one to "
-        "three short directly speakable sentences without Markdown. Set response_text to null "
-        "for tool actions because the final response must use the actual tool result. "
-        "Use input_evidence as supporting signal context: null means that measurement is "
-        "unavailable, not zero. Do not infer self-echo, target speaker or packet loss when "
-        "those fields are null. VAD probability only indicates speech-like audio; it does "
-        "not prove that the user addressed the assistant. Keep contextually meaningful "
-        "replies accepted even when the signal evidence is incomplete. "
-        "Only choose a tool action when its exact name exists in the available tool "
-        f"catalog: {catalog}. "
-        "When the catalog is empty, never invent a tool name."
+        "Return exactly one JSON object with admission, dialogue_act and plan. "
+        "admission.decision: accepted|non_actionable|not_addressed|unclear|interrupt|end. "
+        "admission must also include numeric confidence and addressed_to_robot in [0,1], "
+        "plus reason_code from speech_relevant|non_speech|low_quality|not_addressed|"
+        "self_echo|duplicate|low_confidence|semantic_interrupt|conversation_end|unclear|"
+        "invalid_model_output. plan.action: respond|call_tool_then_respond|"
+        "ask_clarification|execute_pending_tool|cancel_pending_tool|end_session|noop. "
+        "dialogue_act: question|command|follow_up|answer|confirmation|denial|correction|"
+        "clarification_answer|social|interrupt|end. plan must include action, locale, intent, "
+        "response_required, response_text and tool_call; nullable fields must be explicit null. "
+        "Use transcript, recent context, ASR and input_evidence together. A short reaction, "
+        "slang, joke, correction, confirmation or follow-up is accepted when it is a natural "
+        "part of this conversation; it need not be a standalone command or question. If an "
+        "assistant-directed turn is ambiguous or missing details, admission must be accepted "
+        "and action ask_clarification. unclear is only for genuinely conflicting admission "
+        "evidence. non_actionable is only unusable linguistic signal, self-echo or duplicate; "
+        "not_addressed is clear incidental speech. Named noise/media sources are benchmark "
+        "categories, not hard-coded phrase rules. null evidence means unavailable, never zero. "
+        "An accepted intentional turn must respond, clarify, use a valid tool or end; do not "
+        "silently noop it. For a complete short answer, put directly speakable text in "
+        "response_text. For an answer needing more detail, set response_text null so the "
+        "runtime can stream the full natural response. Tool actions require response_text null. "
+        "Only use an exact tool name from this available tool catalog: "
+        f"{catalog}. When the catalog is empty, never invent a tool name."
         f"\n\nPublished agent runtime context (JSON): {agent_context}"
-        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(tool_catalog)}"
+        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(prompt_tool_names)}"
         "\n\nRuntime boundaries override conflicting published text: keep admission "
         "general and context-aware; never invent tool names/results; never expose secrets, "
         "internal scores or hidden reasoning; and pass every side effect through the "
@@ -300,6 +296,52 @@ def _validated_planner_output(
         if isinstance(addressed_to_robot, bool):
             normalized_admission["addressed_to_robot"] = float(addressed_to_robot)
         normalized["admission"] = normalized_admission
+    else:
+        normalized_admission = None
+
+    plan = value.get("plan")
+    if isinstance(plan, dict) and normalized_admission is not None:
+        normalized_plan = dict(plan)
+        decision = normalized_admission.get("decision")
+        dialogue_act = normalized.get("dialogue_act")
+        tool_call = normalized_plan.get("tool_call")
+        if "action" not in normalized_plan:
+            if decision == "end" or dialogue_act == "end":
+                normalized_plan["action"] = "end_session"
+            elif decision in {
+                "non_actionable",
+                "not_addressed",
+                "unclear",
+                "interrupt",
+            }:
+                normalized_plan["action"] = "noop"
+            elif isinstance(tool_call, dict):
+                normalized_plan["action"] = "call_tool_then_respond"
+            elif decision == "accepted":
+                normalized_plan["action"] = "respond"
+        action = normalized_plan.get("action")
+        normalized_plan.setdefault("locale", locale)
+        normalized_plan.setdefault("intent", "")
+        normalized_plan.setdefault(
+            "response_required",
+            action
+            not in {
+                "noop",
+                "cancel_pending_tool",
+            },
+        )
+        normalized_plan.setdefault("response_text", None)
+        normalized_plan.setdefault("tool_call", None)
+        normalized["plan"] = normalized_plan
+
+        if "dialogue_act" not in normalized:
+            normalized["dialogue_act"] = (
+                "end"
+                if decision == "end"
+                else "interrupt"
+                if decision == "interrupt"
+                else "answer"
+            )
     validation_error = next(Draft202012Validator(schema).iter_errors(normalized), None)
     if validation_error is None:
         return normalized
@@ -321,6 +363,28 @@ def _validated_planner_output(
             "locale": locale,
             "intent": "input.invalid_model_output",
             "response_required": False,
+            "response_text": None,
+            "tool_call": None,
+        },
+    }
+
+
+def _degraded_conversation_gate(locale: str) -> dict[str, Any]:
+    """Keep a linguistic turn conversational while disabling all tool execution."""
+
+    return {
+        "admission": {
+            "decision": "accepted",
+            "confidence": 0.5,
+            "addressed_to_robot": 0.5,
+            "reason_code": "invalid_model_output",
+        },
+        "dialogue_act": "answer",
+        "plan": {
+            "action": "respond",
+            "locale": locale,
+            "intent": "",
+            "response_required": True,
             "response_text": None,
             "tool_call": None,
         },
@@ -352,15 +416,32 @@ async def _complete_conversation_gate_json(
         schema_chars=len(json.dumps(schema, separators=(",", ":"))),
         tool_count=len(tools.list_tools()),
     )
-    value = await llm.complete_json(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        context=context,
-        schema=schema,
-        schema_name="veetee_conversation_gate",
-        schema_transport="json_object",
-        max_output_tokens=512,
-    )
+    try:
+        value = await llm.complete_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            context=context,
+            schema=schema,
+            schema_name="veetee_conversation_gate",
+            schema_transport="json_schema",
+            max_output_tokens=512,
+            validate_schema=False,
+        )
+    except (NineRouterProviderError, ProviderChainUnavailableError, httpx.HTTPError) as error:
+        logger.warning(
+            "conversation_gate_provider_failed",
+            turn_id=context.turn_id,
+            error=type(error).__name__,
+            provider_code=getattr(error, "code", None),
+            status_code=getattr(error, "status_code", None),
+            retryable=getattr(error, "retryable", None),
+            finish_reason=getattr(error, "finish_reason", None),
+            output_characters=getattr(error, "output_characters", None),
+            schema_validator=getattr(error, "schema_validator", None),
+            schema_path=getattr(error, "schema_path", None),
+            fallback="respond_without_tools",
+        )
+        return _degraded_conversation_gate(profile.locale)
     logger.info(
         "conversation_gate_response",
         turn_id=context.turn_id,
@@ -447,6 +528,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sink=sink,
             policy=profile.policy,
             system_prompt=system_prompt,
+            error_text=profile.conversation_error_text,
         )
 
     @asynccontextmanager

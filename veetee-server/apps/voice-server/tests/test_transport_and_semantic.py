@@ -283,6 +283,25 @@ async def test_structured_gate_bounds_unknown_reason_code() -> None:
     assert decision.reason_code == "invalid_model_output"
 
 
+async def test_accepted_noop_is_streamed_as_a_natural_turn() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            action="noop",
+            dialogue_act="social",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript("Đù", "vi-VN")
+    decision = await gate.evaluate(transcript, operation)
+    plan = await gate.plan(transcript, decision, operation)
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert plan.action is PlanAction.RESPOND
+    assert plan.response_required is True
+    assert plan.response_text is None
+
+
 async def test_cancelled_structured_gate_does_not_leave_cached_plan() -> None:
     token = CancellationToken()
 
