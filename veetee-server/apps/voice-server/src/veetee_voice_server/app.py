@@ -272,6 +272,24 @@ def _validated_planner_output(
     }
 
 
+async def _complete_conversation_gate_json(
+    llm: FailoverLlmProvider,
+    profile: SessionProfile,
+    tools: ToolBroker,
+    payload: dict[str, object],
+    context: OperationContext,
+) -> dict[str, Any]:
+    schema = _planner_output_schema(tools)
+    value = await llm.complete_json(
+        system_prompt=_planner_system_prompt(profile, tools),
+        user_prompt=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        context=context,
+        schema=schema,
+        schema_name="veetee_conversation_gate",
+    )
+    return _validated_planner_output(value, schema, profile.locale)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings)
@@ -330,13 +348,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def gate_json(
             payload: dict[str, object], context: OperationContext
         ) -> dict[str, Any]:
-            schema = _planner_output_schema(tool_broker)
-            value = await asr_llm.complete_json(
-                system_prompt=_planner_system_prompt(profile, tool_broker),
-                user_prompt=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                context=context,
+            return await _complete_conversation_gate_json(
+                asr_llm,
+                profile,
+                tool_broker,
+                payload,
+                context,
             )
-            return _validated_planner_output(value, schema, profile.locale)
 
         gate = StructuredConversationGate(gate_json, locale=profile.locale)
         return ConversationEngine(

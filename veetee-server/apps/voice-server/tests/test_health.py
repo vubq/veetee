@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from time import monotonic
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from veetee_voice_server.app import _LlmReadinessProbe, _planner_system_prompt, create_app
+from veetee_voice_server.app import (
+    _complete_conversation_gate_json,
+    _LlmReadinessProbe,
+    _planner_system_prompt,
+    create_app,
+)
 from veetee_voice_server.config import Settings
+from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
 from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.tools import RegistryToolBroker
 from veetee_voice_server.readiness import ComponentHealth
@@ -85,6 +93,56 @@ async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     assert "never invent a tool name" in prompt
     assert "ambiguous or missing details, admission must be accepted" in prompt
     assert "not hard-coded phrase rules" in prompt
+
+
+async def test_conversation_gate_forces_the_full_structured_schema() -> None:
+    class CapturingLlm:
+        def __init__(self) -> None:
+            self.arguments: dict[str, object] = {}
+
+        async def complete_json(self, **arguments: object) -> dict[str, object]:
+            self.arguments = arguments
+            return {
+                "admission": {
+                    "decision": "accepted",
+                    "confidence": 0.95,
+                    "addressed_to_robot": 0.95,
+                    "reason_code": "speech_relevant",
+                },
+                "dialogue_act": "follow_up",
+                "plan": {
+                    "action": "respond",
+                    "locale": "vi-VN",
+                    "intent": "conversation.follow_up",
+                    "response_required": True,
+                    "response_text": "Tôi vẫn đang theo dõi câu chuyện.",
+                    "tool_call": None,
+                },
+            }
+
+    llm = CapturingLlm()
+    profile = SessionProfile.defaults(Settings(environment="test", require_device_auth=False))
+    context = OperationContext(
+        "session",
+        "turn",
+        1,
+        CancellationToken(),
+        monotonic() + 1.0,
+    )
+
+    result = await _complete_conversation_gate_json(  # type: ignore[arg-type]
+        llm,
+        profile,
+        RegistryToolBroker(),
+        {"transcript": "Gke vậy sao?", "conversation_context": []},
+        context,
+    )
+
+    schema = llm.arguments["schema"]
+    assert isinstance(schema, dict)
+    assert schema["required"] == ["admission", "dialogue_act", "plan"]
+    assert llm.arguments["schema_name"] == "veetee_conversation_gate"
+    assert result["admission"]["decision"] == "accepted"  # type: ignore[index]
 
 
 async def test_llm_readiness_retries_a_failed_startup_prewarm() -> None:
