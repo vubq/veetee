@@ -164,6 +164,18 @@ class SessionProfile:
                 llm_seconds=_bounded_float(conversation.get("llmSeconds"), 20.0, 1.0, 45.0),
                 tts_seconds=_bounded_float(conversation.get("ttsSeconds"), 10.0, 1.0, 30.0),
                 mcp_seconds=_bounded_float(conversation.get("mcpSeconds"), 10.0, 0.5, 30.0),
+                context_message_limit=_bounded_int(
+                    conversation.get("contextMessageLimit"),
+                    defaults.policy.context_message_limit,
+                    2,
+                    32,
+                ),
+                context_message_characters=_bounded_int(
+                    conversation.get("contextMessageCharacters"),
+                    defaults.policy.context_message_characters,
+                    128,
+                    4_000,
+                ),
             ),
             llm_chain=_llm_chain(payload, runtime_providers or [], locale, defaults, settings),
         )

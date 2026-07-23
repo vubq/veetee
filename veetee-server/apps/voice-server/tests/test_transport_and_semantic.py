@@ -13,6 +13,7 @@ from veetee_voice_server.conversation.cancellation import (
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
+    ConversationMessage,
     DialogueAct,
     PlanAction,
     Transcript,
@@ -68,6 +69,19 @@ async def test_local_admission_rejects_no_linguistic_signal_without_llm() -> Non
     provider = LocalAdmissionProvider()
     result = await provider.evaluate(Transcript("...", "vi-VN"), context())
     assert result.disposition is AdmissionDisposition.NON_ACTIONABLE
+
+
+async def test_local_admission_keeps_short_contextual_reply_for_semantic_gate() -> None:
+    provider = LocalAdmissionProvider()
+    result = await provider.evaluate(
+        Transcript(
+            "Ừ",
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Bạn thấy câu trả lời thế nào?"),),
+        ),
+        context(),
+    )
+    assert result.disposition is AdmissionDisposition.ACCEPTED
 
 
 async def test_planner_tolerates_unknown_model_dialogue_label() -> None:
@@ -158,6 +172,32 @@ async def test_structured_gate_caches_plan_for_exact_turn_and_generation() -> No
     assert plan.response_text == "Tôi nghe đây."
     with pytest.raises(ValueError, match="unavailable"):
         await gate.plan(transcript, decision, operation)
+
+
+async def test_structured_gate_passes_recent_context_to_semantic_model() -> None:
+    payloads: list[object] = []
+
+    async def complete_json(payload: object, __: object) -> dict[str, object]:
+        payloads.append(payload)
+        return gate_payload()
+
+    gate = StructuredConversationGate(complete_json)
+    transcript = Transcript(
+        "Gke vậy sao?",
+        "vi-VN",
+        confidence=1.0,
+        stability=1.0,
+        context=(
+            ConversationMessage("user", "Bạn vừa nói gì?"),
+            ConversationMessage("assistant", "Tôi vừa nói một câu đùa."),
+        ),
+    )
+    await gate.evaluate(transcript, context())
+
+    assert payloads[0]["conversation_context"] == [  # type: ignore[index]
+        {"role": "user", "text": "Bạn vừa nói gì?"},
+        {"role": "assistant", "text": "Tôi vừa nói một câu đùa."},
+    ]
 
 
 @pytest.mark.parametrize(

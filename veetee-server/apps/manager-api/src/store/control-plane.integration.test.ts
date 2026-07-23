@@ -172,6 +172,25 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       { principal, requestId: "integration-pair" },
       agent.id,
     );
+    const unassigned = await store.assignDeviceAgent(
+      device.id,
+      undefined,
+      { principal, requestId: "integration-agent-unassign" },
+    );
+    expect(unassigned.agentId).toBeUndefined();
+    expect(unassigned.desiredState.state).not.toHaveProperty("agentConfigVersion");
+    const assigned = await store.assignDeviceAgent(
+      device.id,
+      agent.id,
+      { principal, requestId: "integration-agent-assign" },
+    );
+    expect(assigned).toMatchObject({
+      agentId: agent.id,
+      desiredState: {
+        version: 3,
+        state: { agentId: agent.id, agentConfigVersion: published.publishedVersion },
+      },
+    });
     await expect(
       store.claimPairing(ticket.code, "Duplicate", { principal, requestId: "duplicate" }),
     ).rejects.toThrow();
@@ -188,7 +207,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       { agentConfigVersion: published.publishedVersion, resourceBundleVersion: "1.0.0" },
       { principal, requestId: "integration-desired" },
     );
-    expect(desired.desiredState.version).toBe(2);
+    expect(desired.desiredState.version).toBe(4);
     const reported = await store.updateReportedState(
       device.id,
       2,

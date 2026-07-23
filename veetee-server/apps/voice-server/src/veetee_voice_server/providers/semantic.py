@@ -38,7 +38,8 @@ class LocalAdmissionProvider:
             return AdmissionDecision(
                 AdmissionDisposition.UNCLEAR, 1.0 - transcript.confidence, "low_asr_confidence"
             )
-        if len(text) < self.min_characters:
+        # A short reply can be meaningful after the assistant has just spoken.
+        if len(text) < self.min_characters and not transcript.context:
             return AdmissionDecision(
                 AdmissionDisposition.NON_ACTIONABLE, 0.9, "transcript_too_short"
             )
@@ -70,6 +71,9 @@ class JsonPlannerProvider:
                 "locale": transcript.locale or self._locale,
                 "transcript": transcript.text,
                 "admission": admission.disposition.value,
+                "conversation_context": [
+                    {"role": item.role, "text": item.text} for item in transcript.context
+                ],
             },
             context,
         )
@@ -162,6 +166,9 @@ class StructuredConversationGate:
                 "transcript": transcript.text,
                 "asr_confidence": transcript.confidence,
                 "asr_stability": transcript.stability,
+                "conversation_context": [
+                    {"role": item.role, "text": item.text} for item in transcript.context
+                ],
             },
             context,
         )

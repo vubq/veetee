@@ -178,6 +178,19 @@ export const managerApi = {
     });
   },
 
+  createAgent(input: {
+    name: string;
+    defaultLocale: string;
+    interactionMode: "auto" | "manual" | "realtime";
+    persona: string;
+    draftConfig?: Record<string, unknown>;
+  }) {
+    return request("/api/v1/agents", agentSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
   async logout(): Promise<void> {
     const response = await rawRequest("/api/v1/auth/logout", { method: "POST" });
     setAccessToken("");
@@ -188,6 +201,13 @@ export const managerApi = {
     return request(`/api/v1/devices/activation/${encodeURIComponent(code)}/bind`, deviceSchema, {
       method: "POST",
       body: JSON.stringify({ name, ...(agentId ? { agentId } : {}) }),
+    });
+  },
+
+  assignDeviceAgent(deviceId: string, agentId?: string) {
+    return request(`/api/v1/devices/${encodeURIComponent(deviceId)}/agent`, deviceSchema, {
+      method: "PUT",
+      body: JSON.stringify(agentId ? { agentId } : {}),
     });
   },
 

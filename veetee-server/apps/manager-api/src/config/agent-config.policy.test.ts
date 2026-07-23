@@ -12,6 +12,8 @@ describe("validateAgentDraftConfig", () => {
           betweenTurnsSeconds: 30,
           closingGraceSeconds: 5,
           maxSessionSeconds: 600,
+          contextMessageLimit: 12,
+          contextMessageCharacters: 1200,
           timeoutGoodbye: "Tạm biệt, hẹn gặp lại.",
           futurePolicy: { enabled: true },
         },
@@ -25,6 +27,8 @@ describe("validateAgentDraftConfig", () => {
     ["closingGraceSeconds", 61],
     ["maxSessionSeconds", 3_601],
     ["plannerSeconds", "8"],
+    ["contextMessageLimit", 1],
+    ["contextMessageCharacters", 4_001],
   ])("rejects unsafe %s values", (field, value) => {
     expect(() =>
       validateAgentDraftConfig({ conversation: { [field]: value } }),

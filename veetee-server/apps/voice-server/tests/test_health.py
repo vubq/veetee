@@ -83,6 +83,8 @@ async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     prompt = _planner_system_prompt(profile, RegistryToolBroker())
     assert "available tool catalog: []" in prompt
     assert "never invent a tool name" in prompt
+    assert "ambiguous or missing details, admission must be accepted" in prompt
+    assert "not hard-coded phrase rules" in prompt
 
 
 async def test_llm_readiness_retries_a_failed_startup_prewarm() -> None:

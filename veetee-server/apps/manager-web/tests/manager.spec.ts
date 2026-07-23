@@ -26,9 +26,14 @@ async function mockManagerApi(
     standardUiStages?: unknown[];
     uiRollouts?: unknown[];
     labSessionCalls?: unknown[];
+    agentCreates?: unknown[];
+    deviceAgentAssignments?: unknown[];
+    withSecondAgent?: boolean;
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
+  let assignedDeviceAgentId = "agent-1";
+  let createdAgent: Record<string, unknown> | undefined;
   await page.route("http://127.0.0.1:8001/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -84,6 +89,7 @@ async function mockManagerApi(
                 hardwareId: "A1B2C3D4E5F6",
                 name: "Veetee Lab",
                 status: "online",
+                agentId: assignedDeviceAgentId,
                 firmwareVersion: "0.1.0",
                 desiredState: { version: 2, state: {} },
                 reportedState: {
@@ -120,6 +126,30 @@ async function mockManagerApi(
             ]
           : [],
       );
+    }
+    if (
+      url.pathname === `/api/v1/devices/${deviceId}/agent` &&
+      request.method() === "PUT"
+    ) {
+      const input = request.postDataJSON() as { agentId?: string };
+      options.deviceAgentAssignments?.push(input);
+      assignedDeviceAgentId = input.agentId ?? "";
+      return json({
+        id: deviceId,
+        hardwareId: "A1B2C3D4E5F6",
+        name: "Veetee Lab",
+        status: "online",
+        agentId: assignedDeviceAgentId || undefined,
+        firmwareVersion: "0.1.0",
+        desiredState: {
+          version: 3,
+          state: assignedDeviceAgentId
+            ? { agentId: assignedDeviceAgentId, agentConfigVersion: 2 }
+            : {},
+        },
+        reportedState: { version: 42, state: {} },
+        pairedAt: "2026-07-22T00:00:00.000Z",
+      });
     }
     if (url.pathname === "/api/v1/conversation-events") {
       return json(
@@ -356,8 +386,20 @@ async function mockManagerApi(
         },
       ]);
     }
-    if (url.pathname === "/api/v1/agents") {
-      return json([
+    if (url.pathname === "/api/v1/agents" && request.method() === "POST") {
+      const input = request.postDataJSON() as Record<string, unknown>;
+      options.agentCreates?.push(input);
+      createdAgent = {
+        id: "agent-created",
+        ...input,
+        draftConfig: input.draftConfig ?? {},
+        version: 1,
+        publishedVersion: 0,
+      };
+      return json(createdAgent);
+    }
+    if (url.pathname === "/api/v1/agents" && request.method() === "GET") {
+      const agents: Record<string, unknown>[] = [
         {
           id: "agent-1",
           name: "Veetee Việt",
@@ -374,7 +416,21 @@ async function mockManagerApi(
           version: 1,
           publishedVersion: 1,
         },
-      ]);
+      ];
+      if (options.withSecondAgent) {
+        agents.push({
+          id: "agent-2",
+          name: "Veetee Khoa học",
+          defaultLocale: "vi-VN",
+          interactionMode: "auto",
+          persona: "Trợ lý giải thích khoa học ngắn gọn.",
+          draftConfig: {},
+          version: 2,
+          publishedVersion: 2,
+        });
+      }
+      if (createdAgent) agents.push(createdAgent);
+      return json(agents);
     }
     if (url.pathname === "/api/v1/lab/sessions" && request.method() === "POST") {
       options.labSessionCalls?.push(request.postDataJSON());
@@ -844,6 +900,57 @@ test("publishes bounded conversation changes without dropping extension fields",
   );
 });
 
+test("creates an independent assistant draft from the manager UI", async ({ page }) => {
+  const agentCreates: unknown[] = [];
+  await mockManagerApi(page, { agentCreates });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  await page.getByRole("button", { name: "Tạo trợ lý" }).click();
+  const dialog = page.getByRole("dialog", { name: "Tạo trợ lý mới" });
+  await dialog.getByLabel("Tên trợ lý").fill("Veetee Khoa học");
+  await dialog
+    .getByLabel("Tính cách / persona")
+    .fill("Giải thích khoa học bằng tiếng Việt, thân thiện và ngắn gọn.");
+  await dialog.getByRole("button", { name: "Tạo draft" }).click();
+
+  await expect.poll(() => agentCreates).toEqual([
+    {
+      name: "Veetee Khoa học",
+      defaultLocale: "vi-VN",
+      interactionMode: "auto",
+      persona: "Giải thích khoa học bằng tiếng Việt, thân thiện và ngắn gọn.",
+    },
+  ]);
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".agent-list")).toContainText("Veetee Khoa học");
+  await expect(page.locator(".agent-editor")).toContainText("Published v0");
+  await expect(page.locator(".agent-editor")).toContainText("Có thay đổi draft");
+});
+
+test("changes the published assistant assigned to an existing device", async ({ page }) => {
+  const deviceAgentAssignments: unknown[] = [];
+  await mockManagerApi(page, {
+    withDevice: true,
+    withSecondAgent: true,
+    deviceAgentAssignments,
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByLabel("Trợ lý cho thiết bị").selectOption("agent-2");
+  await page.getByRole("button", { name: "Lưu trợ lý" }).click();
+
+  await expect.poll(() => deviceAgentAssignments).toEqual([{ agentId: "agent-2" }]);
+  await expect(page.locator(".vt-toast-region")).toContainText("Đã đổi trợ lý cho thiết bị");
+});
+
 test("keeps device telemetry on overview and opens a clean Web Device Simulator", async ({
   page,
 }) => {
@@ -926,12 +1033,13 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
       }
     });
   });
-  await mockManagerApi(page, { labSessionCalls });
+  await mockManagerApi(page, { labSessionCalls, withSecondAgent: true });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
   await page.getByRole("button", { name: /Vào control room/ }).click();
   await page.locator('[data-page-link="lab"]').first().click();
+  await page.locator("#labAgent").selectOption("agent-2");
 
   await page.getByRole("button", { name: "Bắt đầu phiên thử" }).click();
   await expect(page.locator("#labState")).toContainText("Đang lắng nghe");
@@ -961,7 +1069,7 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
     ),
   ).toBeLessThanOrEqual(1);
   await expect.poll(() => labSessionCalls).toEqual([
-    { agentId: "agent-1", inputMode: "text", mcpMode: "simulated" },
+    { agentId: "agent-2", inputMode: "text", mcpMode: "simulated" },
   ]);
 });
 

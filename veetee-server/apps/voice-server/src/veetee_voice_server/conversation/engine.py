@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from collections import deque
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 import structlog
 
@@ -16,6 +17,7 @@ from veetee_voice_server.conversation.cancellation import (
 from veetee_voice_server.conversation.sentence_chunker import SentenceChunker
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
+    ConversationMessage,
     ConversationOutput,
     ConversationPlan,
     ConversationPolicy,
@@ -66,10 +68,14 @@ class ConversationEngine:
         self._sink = sink
         self._policy = policy or ConversationPolicy()
         self._system_prompt = system_prompt
+        self._context: deque[ConversationMessage] = deque(
+            maxlen=max(2, min(self._policy.context_message_limit, 32))
+        )
 
     async def handle_transcript(self, transcript: Transcript) -> AdmissionDisposition | None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
         try:
+            contextual_transcript = replace(transcript, context=tuple(self._context))
             admission_seconds = (
                 self._policy.planner_seconds
                 if self._fused_semantic_gate
@@ -77,7 +83,7 @@ class ConversationEngine:
             )
             admission_context = context.child(admission_seconds)
             decision = await await_operation(
-                self._admission.evaluate(transcript, admission_context),
+                self._admission.evaluate(contextual_transcript, admission_context),
                 admission_context,
             )
             await self._emit(
@@ -107,9 +113,10 @@ class ConversationEngine:
                 await self._arbiter.finish_cancellation(receipt)
                 return decision.disposition
 
+            self._remember("user", contextual_transcript.text)
             plan = await await_operation(
                 self._planner.plan(
-                    transcript, decision, context.child(self._policy.planner_seconds)
+                    contextual_transcript, decision, context.child(self._policy.planner_seconds)
                 ),
                 context.child(self._policy.planner_seconds),
             )
@@ -138,7 +145,7 @@ class ConversationEngine:
                     },
                 ),
             )
-            await self._execute_plan(transcript, plan, context)
+            await self._execute_plan(contextual_transcript, plan, context)
             return decision.disposition
         except (TurnCancelledError, StaleTurnError):
             return None
@@ -170,14 +177,17 @@ class ConversationEngine:
         if plan.action is PlanAction.END_SESSION:
             if plan.response_text:
                 await self._speak_planned_text(plan.response_text, plan.locale, context)
+                self._remember("assistant", plan.response_text)
             await self._arbiter.close_assistant("semantic_end")
             return
         if plan.action is PlanAction.ASK_CLARIFICATION:
             if plan.response_text:
                 await self._speak_planned_text(plan.response_text, plan.locale, context)
+                self._remember("assistant", plan.response_text)
             return
         if plan.action is PlanAction.RESPOND and plan.response_text:
             await self._speak_planned_text(plan.response_text, plan.locale, context)
+            self._remember("assistant", plan.response_text)
             return
 
         tool_result: Any | None = None
@@ -198,7 +208,7 @@ class ConversationEngine:
             )
 
         if plan.response_required:
-            await self._stream_response(
+            response_text = await self._stream_response(
                 LlmRequest(
                     transcript=transcript,
                     plan=plan,
@@ -207,10 +217,13 @@ class ConversationEngine:
                 ),
                 context,
             )
+            if response_text:
+                self._remember("assistant", response_text)
 
-    async def _stream_response(self, request: LlmRequest, context: OperationContext) -> None:
+    async def _stream_response(self, request: LlmRequest, context: OperationContext) -> str:
         llm_context = context.child(self._policy.llm_seconds)
         speech = _SpeechLifecycle()
+        response_parts: list[str] = []
         chunker = SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
             abbreviations=self._policy.sentence_abbreviations,
@@ -222,6 +235,7 @@ class ConversationEngine:
                 if not isinstance(event, LlmTextDelta):
                     # Planner-owned tool calls are handled before this prose stream in MVP.
                     continue
+                response_parts.append(event.text)
                 await self._emit(
                     context,
                     ConversationOutput(
@@ -239,6 +253,7 @@ class ConversationEngine:
                 await self._speak_text(remainder, request.plan.locale, context, speech)
         finally:
             await self._finish_speech(context, speech)
+        return "".join(response_parts).strip()
 
     async def _speak_once(self, text: str, locale: str, context: OperationContext) -> None:
         speech = _SpeechLifecycle()
@@ -329,3 +344,9 @@ class ConversationEngine:
                 payload={"code": code, "detail": detail},
             )
         )
+
+    def _remember(self, role: Literal["user", "assistant"], text: str) -> None:
+        bounded = " ".join(text.split())[: max(1, self._policy.context_message_characters)]
+        if not bounded:
+            return
+        self._context.append(ConversationMessage(role, bounded))

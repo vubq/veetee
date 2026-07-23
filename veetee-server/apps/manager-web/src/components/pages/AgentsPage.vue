@@ -3,17 +3,27 @@ import { computed, reactive, ref, watch } from "vue";
 
 import type { Agent, Provider } from "../../api/schemas";
 import type { AgentDraftInput } from "../../types/manager";
-import { VtBadge, VtButton, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect, VtTextarea } from "../ui";
+import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect, VtTextarea } from "../ui";
 
 const props = defineProps<{
   agents: Agent[];
   providers: Provider[];
   publishAgent: (input: AgentDraftInput) => Promise<void>;
+  createAgent: (input: { name: string; defaultLocale: string; interactionMode: Agent["interactionMode"]; persona: string }) => Promise<Agent>;
 }>();
 
 const selectedId = ref("");
 const busy = ref(false);
 const error = ref("");
+const createOpen = ref(false);
+const createBusy = ref(false);
+const createError = ref("");
+const createForm = reactive({
+  name: "",
+  locale: "vi-VN",
+  mode: "auto" as Agent["interactionMode"],
+  persona: "",
+});
 const form = reactive({
   name: "", locale: "vi-VN", mode: "auto" as Agent["interactionMode"], persona: "",
   firstInput: 15, betweenTurns: 30, closingGrace: 5, maxSession: 600,
@@ -92,11 +102,38 @@ async function publish(): Promise<void> {
     busy.value = false;
   }
 }
+
+async function create(): Promise<void> {
+  if (!createForm.name.trim() || !createForm.persona.trim()) {
+    createError.value = "Tên và persona là bắt buộc.";
+    return;
+  }
+  createBusy.value = true;
+  createError.value = "";
+  try {
+    const agent = await props.createAgent({
+      name: createForm.name.trim(),
+      defaultLocale: createForm.locale,
+      interactionMode: createForm.mode,
+      persona: createForm.persona.trim(),
+    });
+    selectedId.value = agent.id;
+    createOpen.value = false;
+    createForm.name = "";
+    createForm.persona = "";
+  } catch (exception) {
+    createError.value = exception instanceof Error ? exception.message : "Không thể tạo trợ lý.";
+  } finally {
+    createBusy.value = false;
+  }
+}
 </script>
 
 <template>
   <section class="vt-page" data-page="agents">
-    <VtPageHeader eyebrow="ASSISTANTS / AGENT CONFIG" title="Tính cách và luồng hội thoại" description="Mỗi lần publish tạo một version bất biến. Draft mới không ảnh hưởng robot cho đến khi được publish và rollout." />
+    <VtPageHeader eyebrow="ASSISTANTS / AGENT CONFIG" title="Tính cách và luồng hội thoại" description="Mỗi lần publish tạo một version bất biến. Draft mới không ảnh hưởng robot cho đến khi được publish và rollout.">
+      <template #actions><VtButton @click="createOpen = true"><VtIcon name="plus" :size="16" /> Tạo trợ lý</VtButton></template>
+    </VtPageHeader>
 
     <div v-if="agents.length" class="agent-layout">
       <aside class="agent-list">
@@ -147,5 +184,18 @@ async function publish(): Promise<void> {
       </form>
     </div>
     <VtEmptyState v-else icon="agent" title="Chưa có agent" text="Manager API chưa trả về agent nào cho workspace này." />
+
+    <VtDialog :open="createOpen" title="Tạo trợ lý mới" eyebrow="ASSISTANTS / NEW PROFILE" icon="agent" description="Tạo draft độc lập. Trợ lý chỉ dùng được cho Lab hoặc thiết bị sau khi đã publish config." width="sm" @close="createOpen = false">
+      <form id="create-agent-form" class="form-stack" @submit.prevent="create">
+        <VtField label="Tên trợ lý" required><VtInput v-model="createForm.name" maxlength="80" placeholder="Ví dụ: Cô giáo Khoa học" required /></VtField>
+        <div class="form-grid two">
+          <VtField label="Ngôn ngữ mặc định"><VtSelect v-model="createForm.locale"><option value="vi-VN">Tiếng Việt · vi-VN</option><option value="en-US">English · en-US</option></VtSelect></VtField>
+          <VtField label="Chế độ"><VtSelect v-model="createForm.mode"><option value="auto">Tự động</option><option value="manual">PTT tương thích</option><option value="realtime">Realtime thử nghiệm</option></VtSelect></VtField>
+        </div>
+        <VtField label="Tính cách / persona" hint="Mô tả vai trò, giọng điệu và giới hạn của trợ lý." required><VtTextarea v-model="createForm.persona" rows="5" placeholder="Trợ lý giải thích khoa học cho trẻ em bằng tiếng Việt, thân thiện và ngắn gọn." required /></VtField>
+        <p v-if="createError" class="inline-error" role="alert">{{ createError }}</p>
+      </form>
+      <template #footer><VtButton variant="quiet" @click="createOpen = false">Hủy</VtButton><VtButton form="create-agent-form" type="submit" :busy="createBusy"><VtIcon name="plus" :size="16" /> Tạo draft</VtButton></template>
+    </VtDialog>
   </section>
 </template>

@@ -287,6 +287,9 @@ export class ControlPlaneStore {
             where: { id: agentId, tenantId: context.principal.tenantId },
           });
           if (!agent) throw new NotFoundException("Agent not found");
+          if (agent.publishedVersion <= 0) {
+            throw new BadRequestException("Device agent must have a published config");
+          }
         }
         const existing = await transaction.device.findUnique({ where: { hardwareId: ticket.hardwareId } });
         if (existing) throw new ConflictException("Device is already paired");
@@ -656,6 +659,77 @@ export class ControlPlaneStore {
           requestId: context.requestId,
           before: device.desiredState?.state,
           after: state,
+        },
+        transaction,
+      );
+      const updated = await transaction.device.findUnique({
+        where: { id },
+        include: { desiredState: true, reportedState: true },
+      });
+      if (!updated) throw new NotFoundException("Device not found");
+      return this.toDeviceRecord(updated);
+    });
+  }
+
+  async assignDeviceAgent(
+    id: string,
+    agentId: string | undefined,
+    context: MutationContext,
+  ): Promise<DeviceRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const device = await transaction.device.findFirst({
+        where: { id, tenantId: context.principal.tenantId },
+        include: { desiredState: true },
+      });
+      if (!device) throw new NotFoundException("Device not found");
+
+      let agent: { id: string; publishedVersion: number } | null = null;
+      if (agentId) {
+        agent = await transaction.agent.findFirst({
+          where: {
+            id: agentId,
+            tenantId: context.principal.tenantId,
+          },
+          select: { id: true, publishedVersion: true },
+        });
+        if (!agent) throw new NotFoundException("Agent not found");
+        if (agent.publishedVersion <= 0) {
+          throw new BadRequestException("Device agent must have a published config");
+        }
+      }
+
+      const currentState = device.desiredState?.state;
+      const nextState: Record<string, unknown> =
+        currentState && typeof currentState === "object" && !Array.isArray(currentState)
+          ? { ...(currentState as Record<string, unknown>) }
+          : {};
+      if (agent) {
+        nextState.agentId = agent.id;
+        nextState.agentConfigVersion = agent.publishedVersion;
+      } else {
+        delete nextState.agentId;
+        delete nextState.agentConfigVersion;
+      }
+
+      await transaction.device.update({
+        where: { id },
+        data: { agentId: agent?.id ?? null },
+      });
+      await transaction.deviceDesiredState.upsert({
+        where: { deviceId: id },
+        create: { deviceId: id, version: 1, state: nextState as Prisma.InputJsonValue },
+        update: { version: { increment: 1 }, state: nextState as Prisma.InputJsonValue },
+      });
+      await this.audit.record(
+        {
+          tenantId: context.principal.tenantId,
+          actorUserId: context.principal.userId,
+          action: "device.agent.assign",
+          targetType: "device",
+          targetId: id,
+          requestId: context.requestId,
+          before: { agentId: device.agentId, desiredState: device.desiredState?.state },
+          after: { agentId: agent?.id ?? null, desiredState: nextState },
         },
         transaction,
       );

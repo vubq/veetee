@@ -142,6 +142,12 @@ async function pairDevice(code: string, name: string, agentId?: string): Promise
   toast(`Đã ghép ${name}.`);
 }
 
+async function assignDeviceAgent(deviceId: string, agentId?: string): Promise<void> {
+  await managerApi.assignDeviceAgent(deviceId, agentId);
+  await refresh("devices");
+  toast(agentId ? "Đã đổi trợ lý cho thiết bị." : "Đã bỏ gán trợ lý cho thiết bị.", "success");
+}
+
 async function testProvider(id: string): Promise<void> {
   await managerApi.testProvider(id);
   await refresh("providers");
@@ -186,6 +192,18 @@ async function publishAgent(input: AgentDraftInput): Promise<void> {
   await managerApi.publishAgent(input.id);
   await refresh("agents");
   toast("Agent version mới đã được publish.");
+}
+
+async function createAgent(input: {
+  name: string;
+  defaultLocale: string;
+  interactionMode: "auto" | "manual" | "realtime";
+  persona: string;
+}) {
+  const agent = await managerApi.createAgent(input);
+  await refresh("agents");
+  toast("Đã tạo trợ lý draft.");
+  return agent;
 }
 
 async function registerArtifact(id: string, license: string): Promise<void> {
@@ -254,8 +272,8 @@ async function callTool(deviceId: string, name: string, args: Record<string, unk
         <div v-if="!initialDataReady" class="page-loading" role="status" aria-live="polite"><span class="brand-mark" aria-hidden="true"><i></i><i></i></span><div><b>Đang đồng bộ control plane</b><small>Thiết bị, agent, provider và artifact đang được xác thực…</small></div></div>
         <template v-else>
           <OverviewPage v-if="activePage === 'overview'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
-          <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
-          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" />
+          <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :assign-device-agent="assignDeviceAgent" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
+          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" :create-agent="createAgent" />
           <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
           <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
           <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" />
@@ -274,7 +292,7 @@ async function callTool(deviceId: string, name: string, args: Record<string, unk
       </Dialog>
     </TransitionRoot>
 
-    <DevicesPage v-if="activePage !== 'devices' && pairOpen" class="pair-only" :devices="[]" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="false" :events="[]" selected-device-id="" :pair-open="pairOpen" :pair-device="pairDevice" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="() => undefined" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
+    <DevicesPage v-if="activePage !== 'devices' && pairOpen" class="pair-only" :devices="[]" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="false" :events="[]" selected-device-id="" :pair-open="pairOpen" :pair-device="pairDevice" :assign-device-agent="assignDeviceAgent" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" @select="() => undefined" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
     <VtToastRegion :items="toasts" @dismiss="dismissToast" />
   </div>
 </template>

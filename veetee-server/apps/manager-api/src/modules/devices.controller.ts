@@ -39,6 +39,12 @@ class DesiredStateDto {
   state!: Record<string, unknown>;
 }
 
+export class AssignAgentDto {
+  @IsOptional()
+  @IsUUID("4")
+  agentId?: string;
+}
+
 const resourcePhases = [
   "checking",
   "downloading",
@@ -273,6 +279,20 @@ export class DevicesController {
     @Req() request: RequestWithPrincipal,
   ): Promise<DeviceRecord> {
     return this.store.setDesiredState(id, input.state, { principal, requestId: request.id });
+  }
+
+  @Roles(TenantRole.OPERATOR)
+  @Put("api/v1/devices/:id/agent")
+  async assignAgent(
+    @Param("id") id: string,
+    @Body() input: AssignAgentDto,
+    @CurrentPrincipal() principal: Principal,
+    @Req() request: RequestWithPrincipal,
+  ): Promise<DeviceRecord> {
+    return this.store.assignDeviceAgent(id, input.agentId, {
+      principal,
+      requestId: request.id,
+    });
   }
 
   @Public()

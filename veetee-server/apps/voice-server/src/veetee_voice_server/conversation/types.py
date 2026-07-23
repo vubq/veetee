@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 
 class WakeSource(StrEnum):
@@ -44,11 +44,20 @@ class PlanAction(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationMessage:
+    """Bounded in-memory context passed to semantic and response providers."""
+
+    role: Literal["user", "assistant"]
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class Transcript:
     text: str
     locale: str
     confidence: float | None = None
     stability: float | None = None
+    context: tuple[ConversationMessage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,5 +126,7 @@ class ConversationPolicy:
     llm_seconds: float = 20.0
     tts_seconds: float = 10.0
     mcp_seconds: float = 10.0
+    context_message_limit: int = 12
+    context_message_characters: int = 1200
     sentence_min_characters: int = 24
     sentence_abbreviations: tuple[str, ...] = ()

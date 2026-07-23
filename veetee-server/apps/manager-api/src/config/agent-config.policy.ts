@@ -34,6 +34,8 @@ const conversationNumberBounds = {
   llmSeconds: [1, 45],
   ttsSeconds: [1, 30],
   mcpSeconds: [0.5, 30],
+  contextMessageLimit: [2, 32],
+  contextMessageCharacters: [128, 4_000],
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

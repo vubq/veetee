@@ -4,7 +4,7 @@ import { validate } from "class-validator";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneStore } from "../store/control-plane.store.js";
-import { DevicesController, ReportedStateDto } from "./devices.controller.js";
+import { AssignAgentDto, DevicesController, ReportedStateDto } from "./devices.controller.js";
 
 const validReport = {
   version: 12,
@@ -116,5 +116,21 @@ describe("DevicesController reported state", () => {
       DevicesController.prototype.report,
     ) as string;
     expect(paths).toBe("veetee/devices/:id/reported-state");
+  });
+
+  it("validates assistant assignment as an optional published-agent pointer", async () => {
+    const empty = plainToInstance(AssignAgentDto, {});
+    await expect(
+      validate(empty, { whitelist: true, forbidNonWhitelisted: true }),
+    ).resolves.toEqual([]);
+
+    const invalid = plainToInstance(AssignAgentDto, { agentId: "not-a-uuid" });
+    await expect(validate(invalid, { whitelist: true, forbidNonWhitelisted: true })).resolves.not.toEqual([]);
+
+    const paths = Reflect.getMetadata(
+      PATH_METADATA,
+      DevicesController.prototype.assignAgent,
+    ) as string;
+    expect(paths).toBe("api/v1/devices/:id/agent");
   });
 });

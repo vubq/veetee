@@ -99,9 +99,56 @@ Gate này là model/signal-processing có cấu hình, không phải một loạ
 - clipping/packet-loss/audio-overrun detection;
 - optional target-speaker probability hoặc voiceprint opt-in.
 
-Nếu input không đủ điều kiện tạo turn, server trả `admission.decision=rejected` hoặc `unclear` với reason tổng quát như `non_speech`, `low_quality`, `not_addressed`, `self_echo`, `duplicate` hoặc `low_confidence`; không gọi LLM/MCP và tiếp tục `LISTENING`. Log chỉ giữ metric đã redact, không mặc định lưu raw audio.
+Admission dùng đúng sáu trạng thái runtime: `accepted`, `non_actionable`,
+`not_addressed`, `unclear`, `interrupt`, `end`. Không dùng một nhãn `rejected` chung vì
+nó làm mất nguyên nhân và khiến UI/telemetry khó phân biệt:
+
+| Decision | Khi nào dùng | Hành vi |
+| --- | --- | --- |
+| `accepted` | Có lượt ngôn ngữ đáng tin cậy và có chủ đích trong phiên, kể cả câu tiếp lời ngắn hoặc câu còn thiếu chi tiết | Chuyển sang planner; planner có thể trả lời, gọi tool hoặc hỏi làm rõ |
+| `non_actionable` | Không có nội dung ngôn ngữ dùng được, audio hỏng/quá kém, self-echo hoặc duplicate | Không gọi LLM/MCP, tiếp tục nghe |
+| `not_addressed` | Có lời nói rõ nhưng bằng chứng cho thấy đang nói với người khác hoặc là media/ngữ cảnh ngoài phiên | Không gọi LLM/MCP, tiếp tục nghe |
+| `unclear` | Sau khi kết hợp signal, ASR, addressing và context, bằng chứng vẫn xung đột hoặc không đủ để chọn an toàn một trong ba trạng thái trên | Không gọi MCP; tiếp tục nghe và có thể hỏi lại một lần theo policy |
+| `interrupt` | Lượt có chủ đích ngắt output/công việc hiện tại | Dùng chung đường cancellation |
+| `end` | Người dùng có chủ đích kết thúc phiên | Chào kết thúc rồi về standby |
+
+Reason tổng quát gồm `non_speech`, `low_quality`, `not_addressed`, `self_echo`,
+`duplicate`, `low_confidence` hoặc `invalid_model_output`. Log chỉ giữ metric đã redact,
+không mặc định lưu raw audio.
 
 VAD chỉ chứng minh có tín hiệu giống lời nói, không chứng minh đó là yêu cầu dành cho robot. `UtteranceGate` phải kết hợp session context, target-speaker probability (nếu user bật), ASR confidence, wake context, semantic relevance và duplicate/self-audio detection. Không được coi “ASR có text” là “người dùng đang hỏi robot”.
+
+Context của một phiên là một cửa sổ in-memory có giới hạn gồm các lượt `user` và
+`assistant` gần nhất; không ghi vào Manager DB. Gate nhận cả cửa sổ này cùng transcript
+hiện tại. Khi assistant vừa nói xong, một câu đáp ngắn, phản ứng, câu đùa, phủ định,
+đính chính, xác nhận hoặc follow-up vẫn là hoạt động hội thoại hợp lệ nếu còn tín hiệu
+ngôn ngữ và có thể liên hệ với context. Không yêu cầu câu đó phải tự đứng độc lập như một
+command hoặc question.
+
+Một lượt chắc chắn hướng tới assistant nhưng còn thiếu tham số, có đại từ chưa rõ hoặc
+có nhiều cách hiểu vẫn là `accepted`; planner chọn `ask_clarification`. `unclear` chỉ là
+trạng thái không chắc ở ranh giới admission, không phải nhãn cho mọi câu AI chưa hiểu.
+Các trường hợp duy nhất được phép đánh dấu `unclear` là:
+
+1. ASR có nhiều giả thuyết cạnh tranh hoặc final không ổn định đến mức cách hiểu thay đổi
+   đáng kể, nhưng chưa đủ tệ để kết luận `non_actionable`.
+2. Signal bị suy giảm tạo ra một mảnh lời nói có vẻ hướng tới assistant nhưng không đủ
+   bằng chứng để xác nhận đó là một lượt ngôn ngữ dùng được.
+3. Bằng chứng addressing xung đột: wake/context cho thấy đang trong hội thoại nhưng
+   speaker/relevance/self-playback evidence lại cho thấy input có thể là ngẫu nhiên.
+4. Semantic gate trả output thiếu field, sai schema hoặc ngoài enum; runtime dùng
+   `reason_code=invalid_model_output` thay vì đoán ý hoặc gọi MCP.
+
+Không được đánh dấu `unclear` chỉ vì câu ngắn, là tiếng lóng/câu đùa, thiếu động từ, đổi
+ngôn ngữ, không khớp intent đã biết, thiếu tham số tool hoặc yêu cầu không được hỗ trợ.
+Các lượt đó được nhận là `accepted`; planner trả lời tự nhiên, hỏi làm rõ hoặc giải thích
+giới hạn theo agent config.
+
+Ngược lại, input chỉ được loại ở admission khi không có tín hiệu ngôn ngữ đáng tin cậy,
+chất lượng ASR/signal không đủ, là self-echo/duplicate hoặc không có bằng chứng đang
+hướng tới assistant. “Quạt”, “TV”, “tiếng xe” và các nguồn môi trường khác chỉ là nhãn
+benchmark/telemetry; runtime dùng feature chất lượng và semantic model tổng quát, không
+hard-code danh sách nguồn hay cụm từ.
 
 ### 3.2 Utterance gate và semantic planner
 
@@ -125,11 +172,16 @@ Không dùng một enum duy nhất cho cả chất lượng audio, vai trò hộ
 }
 ```
 
-`admission.decision` tối thiểu là `accepted`, `rejected`, `unclear`, `interrupt`, `end`. Reason code tổng quát có thể là `non_speech`, `low_quality`, `not_addressed`, `self_echo`, `duplicate` hoặc `low_confidence`; nguồn âm cụ thể chỉ xuất hiện trong benchmark/telemetry, không tạo branch sản phẩm.
+`admission.decision` là `accepted`, `non_actionable`, `not_addressed`, `unclear`,
+`interrupt` hoặc `end`. Reason code tổng quát có thể là `speech_relevant`,
+`non_speech`, `low_quality`, `not_addressed`, `self_echo`, `duplicate`,
+`low_confidence`, `semantic_interrupt`, `conversation_end`, `unclear` hoặc
+`invalid_model_output`; nguồn âm cụ thể chỉ xuất hiện trong benchmark/telemetry, không
+tạo branch sản phẩm.
 
 `dialogueAct` tối thiểu gồm `question`, `command`, `follow_up`, `answer`, `confirmation`, `denial`, `correction`, `clarification_answer`, `social`, `interrupt`, `end`. Nhờ vậy các lượt “đúng rồi”, “không phải”, “ý tôi là ngày mai” hoặc xác nhận MCP không bị bỏ chỉ vì không có dạng câu hỏi/command.
 
-`plan.action` tối thiểu gồm `respond`, `call_tool_then_respond`, `ask_clarification`, `execute_pending_tool`, `cancel_pending_tool`, `end_session`, `noop`. Nếu confidence thấp, planner không được tự ý gọi MCP hoặc trả lời chắc chắn. Policy chọn bỏ qua, hỏi lại tối đa một lần hoặc thông báo không nghe rõ theo agent config.
+`plan.action` tối thiểu gồm `respond`, `call_tool_then_respond`, `ask_clarification`, `execute_pending_tool`, `cancel_pending_tool`, `end_session`, `noop`. Nếu confidence thấp, planner không được tự ý gọi MCP hoặc trả lời chắc chắn. Policy chọn bỏ qua, hỏi lại tối đa một lần hoặc thông báo không nghe rõ theo agent config. Với câu tiếp lời hợp lệ trong context, planner phải được phép chọn `respond` hoặc `ask_clarification` thay vì bị chặn ở admission chỉ vì câu ngắn.
 
 ### 3.3 MCP trong conversation gate
 

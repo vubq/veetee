@@ -269,6 +269,8 @@ class NineRouterLlmProvider:
         system_prompt = getattr(request, "system_prompt", None)
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        for item in request.transcript.context:
+            messages.append({"role": item.role, "content": item.text})
         messages.append({"role": "user", "content": user_content})
         payload: dict[str, Any] = {
             "model": self._model,

@@ -31,11 +31,13 @@ class FakeAdmission:
     def __init__(self, disposition: AdmissionDisposition) -> None:
         self.disposition = disposition
         self.calls = 0
+        self.transcripts: list[Transcript] = []
 
     async def evaluate(
         self, transcript: Transcript, context: OperationContext
     ) -> AdmissionDecision:
         self.calls += 1
+        self.transcripts.append(transcript)
         context.checkpoint()
         return AdmissionDecision(self.disposition, 0.95, "fixture")
 
@@ -206,6 +208,23 @@ async def test_planner_response_text_uses_sentence_sized_tts_requests() -> None:
     kinds = [output.kind for output in sink.outputs]
     assert kinds.count(OutputKind.TTS_START) == 1
     assert kinds.count(OutputKind.TTS_STOP) == 1
+
+
+async def test_contextual_follow_up_keeps_recent_user_and_assistant_turns() -> None:
+    engine, arbiter, admission, _, _, _, _ = create_engine(
+        plan=response_plan("Tôi vừa nói một câu đùa.")
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Bạn vừa nói gì?", "vi-VN"))
+    await engine.handle_transcript(Transcript("Gke vậy sao?", "vi-VN"))
+
+    assert len(admission.transcripts) == 2
+    assert admission.transcripts[0].context == ()
+    assert [(item.role, item.text) for item in admission.transcripts[1].context] == [
+        ("user", "Bạn vừa nói gì?"),
+        ("assistant", "Tôi vừa nói một câu đùa."),
+    ]
 
 
 @pytest.mark.parametrize(

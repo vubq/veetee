@@ -36,6 +36,7 @@ const props = defineProps<{
   selectedDeviceId: string;
   pairOpen: boolean;
   pairDevice: (code: string, name: string, agentId?: string) => Promise<void>;
+  assignDeviceAgent: (deviceId: string, agentId?: string) => Promise<void>;
   stageUiPack: (file: File) => Promise<Artifact>;
   stageStandardUiPack: (theme: FirmwareComposition) => Promise<Artifact>;
   publishArtifact: (id: string) => Promise<void>;
@@ -50,6 +51,9 @@ const deviceName = ref("");
 const agentId = ref("");
 const busy = ref(false);
 const error = ref("");
+const agentBusy = ref(false);
+const agentError = ref("");
+const selectedAgentId = ref("");
 
 const search = ref("");
 const presenceFilter = ref<DevicePresenceState | "all">("all");
@@ -78,6 +82,7 @@ const filteredDevices = computed(() => {
   });
 });
 const selected = computed(() => filteredDevices.value.find((device) => device.id === props.selectedDeviceId) ?? filteredDevices.value[0]);
+const publishedAgents = computed(() => props.agents.filter((agent) => agent.publishedVersion > 0));
 const delivery = computed(() => selected.value ? summarizeDeviceDelivery(selected.value) : undefined);
 const presence = computed(() => selected.value ? devicePresence(selected.value) : undefined);
 
@@ -85,6 +90,15 @@ watch(
   [filteredDevices, () => props.selectedDeviceId],
   ([list, selectedId]) => {
     if (list.length && !list.some((device) => device.id === selectedId)) emit("select", list[0]!.id);
+  },
+  { immediate: true },
+);
+
+watch(
+  selected,
+  (device) => {
+    selectedAgentId.value = device?.agentId ?? "";
+    agentError.value = "";
   },
   { immediate: true },
 );
@@ -103,7 +117,7 @@ watch(
     if (!open) return;
     code.value = "";
     deviceName.value = "";
-    agentId.value = props.agents[0]?.id ?? "";
+    agentId.value = publishedAgents.value[0]?.id ?? "";
     error.value = "";
   },
 );
@@ -127,6 +141,19 @@ async function pair(): Promise<void> {
     error.value = exception instanceof Error ? exception.message : "Không thể ghép thiết bị.";
   } finally {
     busy.value = false;
+  }
+}
+
+async function assignAgent(): Promise<void> {
+  if (!selected.value) return;
+  agentBusy.value = true;
+  agentError.value = "";
+  try {
+    await props.assignDeviceAgent(selected.value.id, selectedAgentId.value || undefined);
+  } catch (exception) {
+    agentError.value = exception instanceof Error ? exception.message : "Không thể gán trợ lý.";
+  } finally {
+    agentBusy.value = false;
   }
 }
 </script>
@@ -161,6 +188,16 @@ async function pair(): Promise<void> {
             <h2>{{ selected.name }}</h2>
             <p>{{ selected.hardwareId }} · {{ selected.firmwareVersion ? `Firmware ${selected.firmwareVersion}` : "Chưa báo firmware" }}</p>
             <div class="device-facts"><span><small>Agent</small><b>{{ agents.find((agent) => agent.id === selected?.agentId)?.name ?? "Chưa gán" }}</b></span><span><small>Liên hệ gần nhất</small><b>{{ formatDate(selected.lastSeenAt) }}</b></span><span><small>Đã ghép nối</small><b>{{ formatDate(selected.pairedAt) }}</b></span></div>
+            <div class="device-agent-binding">
+              <VtField label="Trợ lý cho thiết bị" hint="Chỉ assistant đã publish mới được nhận config.">
+                <VtSelect v-model="selectedAgentId">
+                  <option value="">Không gán trợ lý</option>
+                  <option v-for="agent in publishedAgents" :key="agent.id" :value="agent.id">{{ agent.name }} · v{{ agent.publishedVersion }}</option>
+                </VtSelect>
+              </VtField>
+              <VtButton size="sm" variant="secondary" :busy="agentBusy" :disabled="selectedAgentId === (selected.agentId ?? '')" @click="assignAgent"><VtIcon name="check" :size="15" /> Lưu trợ lý</VtButton>
+              <small v-if="agentError" class="inline-error" role="alert">{{ agentError }}</small>
+            </div>
           </div>
         </article>
 
@@ -208,7 +245,7 @@ async function pair(): Promise<void> {
           <VtInput v-model="deviceName" maxlength="80" placeholder="Veetee phòng khách" />
         </VtField>
         <VtField label="Agent mặc định">
-          <VtSelect v-model="agentId"><option value="">Chưa gán agent</option><option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }} · v{{ agent.publishedVersion }}</option></VtSelect>
+          <VtSelect v-model="agentId"><option value="">Chưa gán assistant</option><option v-for="agent in publishedAgents" :key="agent.id" :value="agent.id">{{ agent.name }} · v{{ agent.publishedVersion }}</option></VtSelect>
         </VtField>
       </form>
       <template #footer><VtButton variant="quiet" @click="emit('closePair')">Hủy</VtButton><VtButton form="device-pair-form" type="submit" :busy="busy" :disabled="code.length !== 6"><VtIcon name="plus" :size="17" /> Ghép thiết bị</VtButton></template>
