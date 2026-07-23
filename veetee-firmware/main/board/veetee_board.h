@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "app/state_machine.h"
 #include "audio/i2s_audio.h"
@@ -57,6 +58,12 @@ public:
     void AbortPlayback();
     bool SetSpeakerVolume(int volume_percent);
     [[nodiscard]] int speaker_volume() const;
+    bool StartAudioDiagnostic(std::uint32_t duration_seconds,
+                              std::uint64_t now_ms);
+    audio::AudioRuntimeHealth AudioHealth(std::uint64_t now_ms);
+    [[nodiscard]] std::uint32_t wake_dropped_frames() const {
+        return wake_detector_.dropped_frames();
+    }
 
 private:
     enum class DisplayCommandKind : std::uint8_t {

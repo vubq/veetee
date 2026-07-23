@@ -238,6 +238,17 @@ Supported request methods for V1:
 
 Tool result uses `result.content[]` and `isError`; error uses JSON-RPC `error.code/message`. Firmware giới hạn payload khoảng 8 KB nên server phải follow `nextCursor`.
 
+Diagnostic V1 bổ sung ba user-only tool canonical mà không đổi envelope:
+
+- `self.diagnostics.get_health`;
+- `self.diagnostics.audio.start`;
+- `self.diagnostics.run_self_test`.
+
+Các tool này chỉ xuất hiện khi `withUserTools=true`, luôn có
+`requiresConfirmation=true` và trả structured JSON trong text content. Audio
+diagnostic chỉ trả metrics bounded, không truyền hoặc lưu raw audio. Contract chi
+tiết và Manager routes nằm tại `docs/18-device-diagnostics.md`.
+
 ## 7. Compatibility test matrix
 
 Mỗi release chạy fixture hai chiều:

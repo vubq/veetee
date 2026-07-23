@@ -604,6 +604,76 @@ bool ReadDeviceStatus(veetee::mcp::DeviceStatus* status, void*) {
     return true;
 }
 
+const char* ResetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "power_on";
+        case ESP_RST_EXT:
+            return "external";
+        case ESP_RST_SW:
+            return "software";
+        case ESP_RST_PANIC:
+            return "panic";
+        case ESP_RST_INT_WDT:
+            return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT:
+            return "task_watchdog";
+        case ESP_RST_WDT:
+            return "watchdog";
+        case ESP_RST_DEEPSLEEP:
+            return "deep_sleep";
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+        case ESP_RST_SDIO:
+            return "sdio";
+        case ESP_RST_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
+bool ReadDeviceDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
+                           void*) {
+    if (diagnostics == nullptr) return false;
+    *diagnostics = veetee::mcp::DeviceDiagnostics{};
+    if (!ReadDeviceStatus(&diagnostics->device, nullptr)) return false;
+
+    diagnostics->uptime_ms =
+        static_cast<std::uint64_t>(esp_timer_get_time() / 1000);
+    diagnostics->reset_reason = ResetReasonName(esp_reset_reason());
+    diagnostics->internal_free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    diagnostics->internal_min_free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    diagnostics->psram_free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    diagnostics->psram_min_free_bytes = static_cast<std::uint32_t>(
+        heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+
+    const veetee::network::WifiHealth network = g_wifi.Health();
+    diagnostics->network_connected = network.connected;
+    diagnostics->network_rssi = network.rssi;
+    std::snprintf(diagnostics->network_ipv4.data(),
+                  diagnostics->network_ipv4.size(), "%s", network.ipv4);
+    diagnostics->network_disconnect_count = network.disconnect_count;
+    diagnostics->network_reconnect_attempt_count =
+        network.reconnect_attempt_count;
+    diagnostics->network_last_disconnect_reason =
+        network.last_disconnect_reason;
+
+    diagnostics->audio = g_board.AudioHealth(diagnostics->uptime_ms);
+    diagnostics->wake_resource_healthy = g_board.WakeResourceHealthy();
+    diagnostics->ui_pack_healthy = g_board.UiPackHealthy();
+    diagnostics->wake_dropped_frames = g_board.wake_dropped_frames();
+    return true;
+}
+
+bool StartAudioDiagnostic(std::uint32_t duration_seconds, void*) {
+    return g_board.StartAudioDiagnostic(
+        duration_seconds,
+        static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
+}
+
 bool SetSpeakerVolume(int volume_percent, void*) {
     return g_board.SetSpeakerVolume(volume_percent);
 }
@@ -980,7 +1050,8 @@ extern "C" void app_main() {
     } else if (ui_phase == veetee::settings::ResourceRecordPhase::kStaged) {
         g_ui_apply_pending = true;
     }
-    if (!g_mcp.Initialize(&ReadDeviceStatus, &SetSpeakerVolume,
+    if (!g_mcp.Initialize(&ReadDeviceStatus, &ReadDeviceDiagnostics,
+                          &StartAudioDiagnostic, &SetSpeakerVolume,
                           &SendMcpResponse, nullptr)) {
         ESP_LOGE(kTag, "Unable to initialize device MCP");
         abort();

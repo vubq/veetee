@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import managerShell from "./components/ManagerShell.vue?raw";
 import devicesPage from "./components/pages/DevicesPage.vue?raw";
 import deviceUiPage from "./components/pages/DeviceUiPage.vue?raw";
+import deviceDiagnosticsPanel from "./components/device-ui/DeviceDiagnosticsPanel.vue?raw";
 import realtimeLabPage from "./components/pages/RealtimeLabPage.vue?raw";
 import firmwareContract from "./device-ui/firmware-contract.ts?raw";
 
@@ -24,6 +25,9 @@ describe("Vue-native Manager Web", () => {
     for (const devicePanel of ["DeviceUiPage", "DeviceWakePanel", "McpPage", "TelemetryPage"]) {
       expect(devicesPage).toContain(devicePanel);
     }
+    expect(devicesPage).toContain("DeviceDiagnosticsPanel");
+    expect(deviceDiagnosticsPanel).toContain("raw audio không được lưu hoặc truyền");
+    expect(deviceDiagnosticsPanel).toContain("runSelfTest");
   });
 
   it("keeps Signal as the default UI and all three built-in themes", () => {

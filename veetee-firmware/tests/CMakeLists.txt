@@ -38,6 +38,17 @@ target_compile_options(wake_detector_policy_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME wake_detector_policy_test COMMAND wake_detector_policy_test)
 
 add_executable(
+    audio_diagnostics_test
+    audio_diagnostics_test.cpp
+    ../main/audio/audio_diagnostics.cpp
+)
+target_include_directories(audio_diagnostics_test PRIVATE ../main)
+target_compile_features(audio_diagnostics_test PRIVATE cxx_std_17)
+target_compile_options(audio_diagnostics_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME audio_diagnostics_test COMMAND audio_diagnostics_test)
+
+add_executable(
     endpoint_url_test
     endpoint_url_test.cpp
     ../main/network/endpoint_url.cpp
@@ -126,6 +137,7 @@ add_test(NAME protocol_v1_test COMMAND protocol_v1_test)
 add_executable(
     device_mcp_test
     device_mcp_test.cpp
+    ../main/audio/audio_diagnostics.cpp
     ../main/mcp/device_mcp.cpp
 )
 target_include_directories(

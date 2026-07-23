@@ -71,6 +71,8 @@ export const fixtureSchemaIds = {
   "mcp/tools-call-result.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/tools-call-volume.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/tools-list-result.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
+  "mcp/tools-list-user-result.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
+  "mcp/tools-list-user.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "mcp/tools-list.json": "https://schemas.veetee.local/mcp/envelope-v1.json",
   "ota/bootstrap-bound.json": "https://schemas.veetee.local/ota/bootstrap-v1.json",
   "ota/bootstrap-unbound.json": "https://schemas.veetee.local/ota/bootstrap-v1.json",

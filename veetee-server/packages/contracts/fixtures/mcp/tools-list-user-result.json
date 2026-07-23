@@ -1,0 +1,111 @@
+{
+  "session_id": "01J00000000000000000000000",
+  "type": "mcp",
+  "payload": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": {
+      "tools": [
+        {
+          "name": "self.get_device_status",
+          "description": "Read the current device state, assistant gate, firmware version and speaker volume.",
+          "audience": "regular",
+          "safetyClass": "read_only",
+          "requiresConfirmation": false,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.audio_speaker.get_volume",
+          "description": "Read the current speaker output volume as a percentage from 0 to 100.",
+          "audience": "regular",
+          "safetyClass": "read_only",
+          "requiresConfirmation": false,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.audio_speaker.set_volume",
+          "description": "Set speaker output volume from 0 to 100 percent.",
+          "audience": "regular",
+          "safetyClass": "reversible",
+          "requiresConfirmation": false,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["volume"],
+            "properties": {
+              "volume": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        },
+        {
+          "name": "self.get_system_info",
+          "description": "Read board and firmware identity for an explicit user diagnostic action.",
+          "audience": "user",
+          "safetyClass": "read_only",
+          "requiresConfirmation": true,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.diagnostics.get_health",
+          "description": "Read bounded device, memory, network, audio and resource health without changing device state.",
+          "audience": "user",
+          "safetyClass": "read_only",
+          "requiresConfirmation": true,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        },
+        {
+          "name": "self.diagnostics.audio.start",
+          "description": "Start a bounded metrics-only microphone diagnostic without storing raw audio.",
+          "audience": "user",
+          "safetyClass": "disruptive",
+          "requiresConfirmation": true,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["duration_seconds"],
+            "properties": {
+              "duration_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              }
+            }
+          }
+        },
+        {
+          "name": "self.diagnostics.run_self_test",
+          "description": "Run a non-destructive immediate device self-test without changing Wi-Fi or NVS.",
+          "audience": "user",
+          "safetyClass": "disruptive",
+          "requiresConfirmation": true,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      ],
+      "nextCursor": ""
+    }
+  }
+}

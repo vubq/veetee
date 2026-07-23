@@ -37,6 +37,13 @@ veetee/
 12. `docs/12-dynamic-config-and-artifacts.md` - cấu hình wake/model/assets qua Web/API, signed bundle, apply và rollback.
 13. `docs/13-decision-register.md` - quyết định đã chốt, mặc định đề xuất và checklist phải xác nhận trước khi code.
 14. `docs/14-model-and-provider-baseline.md` - baseline local ASR/VAD/TTS, 9router LLM, fallback và benchmark gate.
+15. `docs/15-local-ai-runtime.md` - runtime local đã chọn, readiness, model worker và validation.
+16. `docs/16-device-ui-and-ui-packs.md` - contract và hướng triển khai UI Pack data-only.
+
+## Tài liệu tham khảo bổ sung
+
+- `docs/17-xiaozhi-useful-capabilities.md` - capability inventory tham khảo từ Xiaozhi, không phải plan task.
+- `docs/18-device-diagnostics.md` - contract audio debugger, self-test và device health P0.
 
 ## Source tham chiếu
 

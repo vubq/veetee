@@ -5,8 +5,11 @@ import { computed, ref, watch } from "vue";
 import type {
   Agent,
   Artifact,
+  AudioDiagnosticSession,
   ConversationEvent,
   Device,
+  DeviceHealth,
+  DeviceSelfTest,
   McpTool,
   ResourceRollout,
   UiPackRollout,
@@ -20,6 +23,7 @@ import DesiredReportedSummary from "../device-ui/DesiredReportedSummary.vue";
 import DeviceWakePanel from "../device-ui/DeviceWakePanel.vue";
 import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect } from "../ui";
 import DeviceUiPage from "./DeviceUiPage.vue";
+import DeviceDiagnosticsPanel from "../device-ui/DeviceDiagnosticsPanel.vue";
 import McpPage from "./McpPage.vue";
 import TelemetryPage from "./TelemetryPage.vue";
 
@@ -43,6 +47,9 @@ const props = defineProps<{
   rolloutUiPack: (id: string) => Promise<void>;
   rolloutWakeProfile: (id: string, deviceIds: string[]) => Promise<void>;
   callTool: (deviceId: string, name: string, argumentsValue: Record<string, unknown>, confirmed: boolean) => Promise<Record<string, unknown>>;
+  getDiagnosticsHealth: (deviceId: string) => Promise<DeviceHealth>;
+  startAudioDiagnostic: (deviceId: string, durationSeconds: number) => Promise<AudioDiagnosticSession>;
+  runDeviceSelfTest: (deviceId: string) => Promise<DeviceSelfTest>;
 }>();
 const emit = defineEmits<{ select: [id: string]; closePair: []; openPair: [] }>();
 
@@ -240,6 +247,7 @@ async function assignAgent(): Promise<void> {
             <Tab v-slot="{ selected: active }" as="template"><button :class="{ active }"><VtIcon name="mic" :size="17" /> Wake word</button></Tab>
             <Tab v-slot="{ selected: active }" as="template"><button :class="{ active }"><VtIcon name="tool" :size="17" /> MCP live</button></Tab>
             <Tab v-slot="{ selected: active }" as="template"><button :class="{ active }"><VtIcon name="telemetry" :size="17" /> Telemetry</button></Tab>
+            <Tab v-slot="{ selected: active }" as="template"><button :class="{ active }"><VtIcon name="mic" :size="17" /> Chẩn đoán</button></Tab>
           </TabList>
           <TabPanels>
             <TabPanel class="device-tab-panel">
@@ -256,6 +264,9 @@ async function assignAgent(): Promise<void> {
             </TabPanel>
             <TabPanel class="device-tab-panel">
               <TelemetryPage embedded :devices="[selected]" :events="events" :selected-device-id="selected.id" @select-device="() => undefined" />
+            </TabPanel>
+            <TabPanel class="device-tab-panel">
+              <DeviceDiagnosticsPanel :device-id="selected.id" :get-health="getDiagnosticsHealth" :start-audio="startAudioDiagnostic" :run-self-test="runDeviceSelfTest" />
             </TabPanel>
           </TabPanels>
         </TabGroup>

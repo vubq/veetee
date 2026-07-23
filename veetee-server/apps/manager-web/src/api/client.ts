@@ -6,6 +6,9 @@ import {
   apiErrorSchema,
   artifactSchema,
   conversationEventSchema,
+  deviceHealthSchema,
+  deviceSelfTestSchema,
+  audioDiagnosticSessionSchema,
   deviceSchema,
   healthSchema,
   labSessionSchema,
@@ -144,6 +147,26 @@ export const managerApi = {
     request(
       `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools`,
       z.array(mcpToolSchema),
+    ),
+  deviceDiagnosticsHealth: (deviceId: string) =>
+    request(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/diagnostics/health`,
+      deviceHealthSchema,
+    ),
+  startDeviceAudioDiagnostic: (deviceId: string, durationSeconds: number) =>
+    request(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/diagnostics/audio-sessions`,
+      audioDiagnosticSessionSchema,
+      {
+        method: "POST",
+        body: JSON.stringify({ durationSeconds }),
+      },
+    ),
+  runDeviceSelfTest: (deviceId: string) =>
+    request(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/diagnostics/self-test`,
+      deviceSelfTestSchema,
+      { method: "POST" },
     ),
   conversationEvents: (deviceId?: string, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit) });

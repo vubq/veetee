@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "audio/audio_diagnostics.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -35,6 +36,8 @@ public:
     void AbortPlayback();
     bool SetVolumePercent(int volume_percent);
     [[nodiscard]] int volume_percent() const { return volume_percent_.load(); }
+    bool StartDiagnostic(std::uint32_t duration_seconds, std::uint64_t now_ms);
+    AudioRuntimeHealth Health(std::uint64_t now_ms);
 
 private:
     enum class PlaybackItemKind : std::uint8_t {
@@ -61,6 +64,8 @@ private:
     void WriteSilence();
     bool QueuePlaybackControl(PlaybackItemKind kind,
                               std::uint32_t generation);
+    void RecordAudioCounter(AudioCounter counter);
+    void ObservePlaybackQueueDepth();
 
     static constexpr std::size_t kMicReadSamples = 320;
     static constexpr std::size_t kUplinkFrameSamples = 960;
@@ -94,6 +99,8 @@ private:
     std::atomic<bool> playback_accepting_{false};
     std::atomic<std::uint32_t> playback_generation_{0};
     std::atomic<int> volume_percent_{70};
+    portMUX_TYPE diagnostics_mux_ = portMUX_INITIALIZER_UNLOCKED;
+    AudioDiagnostics diagnostics_;
     bool play_boot_chime_ = false;
 };
 

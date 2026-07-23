@@ -1,5 +1,6 @@
 set(VEETEE_SRCS
     "app_main.cpp"
+    "audio/audio_diagnostics.cpp"
     "app/state_machine.cpp"
     "audio/i2s_audio.cpp"
     "audio/wake_detector.cpp"

@@ -19,6 +19,7 @@ import { ServiceTokenGuard } from "./auth/service-token.guard.js";
 import { BootstrapService } from "./database/bootstrap.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { RedisService } from "./database/redis.service.js";
+import { DeviceDiagnosticsService } from "./diagnostics/device-diagnostics.service.js";
 import { LabSessionService } from "./lab/lab-session.service.js";
 import {
   InternalLabSessionsController,
@@ -27,6 +28,7 @@ import {
 import { AgentsController } from "./modules/agents.controller.js";
 import { AuditController } from "./modules/audit.controller.js";
 import { ConversationEventsController } from "./modules/conversation-events.controller.js";
+import { DeviceDiagnosticsController } from "./modules/device-diagnostics.controller.js";
 import { DevicesController } from "./modules/devices.controller.js";
 import { HealthController } from "./modules/health.controller.js";
 import { InternalController } from "./modules/internal.controller.js";
@@ -53,6 +55,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     AgentsController,
     AuditController,
     ConversationEventsController,
+    DeviceDiagnosticsController,
     ProvidersController,
     LabSessionsController,
     McpController,
@@ -73,6 +76,7 @@ import { ControlPlaneStore } from "./store/control-plane.store.js";
     LoginRateLimitService,
     PairingService,
     VoiceMcpService,
+    DeviceDiagnosticsService,
     SecretCryptoService,
     LabSessionService,
     ControlPlaneStore,

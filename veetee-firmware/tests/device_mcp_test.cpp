@@ -1,4 +1,6 @@
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +16,7 @@ struct Harness {
     veetee::mcp::DeviceMcp mcp;
     std::string response;
     int volume = 70;
+    std::uint32_t diagnostic_duration = 0;
 };
 
 void Expect(bool condition, const char* description) {
@@ -71,14 +74,61 @@ bool SetVolume(int volume, void* context) {
     return true;
 }
 
+bool ReadDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
+                     void* context) {
+    if (diagnostics == nullptr) return false;
+    *diagnostics = veetee::mcp::DeviceDiagnostics{};
+    ReadStatus(&diagnostics->device, context);
+    diagnostics->uptime_ms = 42'000;
+    diagnostics->reset_reason = "software";
+    diagnostics->internal_free_bytes = 64'000;
+    diagnostics->internal_min_free_bytes = 48'000;
+    diagnostics->psram_free_bytes = 4'000'000;
+    diagnostics->psram_min_free_bytes = 3'500'000;
+    diagnostics->network_connected = true;
+    diagnostics->network_rssi = -52;
+    std::snprintf(diagnostics->network_ipv4.data(),
+                  diagnostics->network_ipv4.size(), "%s", "192.168.1.20");
+    diagnostics->network_disconnect_count = 2;
+    diagnostics->network_reconnect_attempt_count = 3;
+    diagnostics->network_last_disconnect_reason = 201;
+    diagnostics->audio.capture_task_running = true;
+    diagnostics->audio.playback_task_running = true;
+    diagnostics->audio.lifetime.mic_frames = 100;
+    diagnostics->audio.lifetime.mic_samples = 32'000;
+    const auto* harness = static_cast<Harness*>(context);
+    if (harness->diagnostic_duration > 0) {
+        diagnostics->audio.diagnostic.state =
+            veetee::audio::AudioDiagnosticState::kRunning;
+        diagnostics->audio.diagnostic.session_id = 9;
+        diagnostics->audio.diagnostic.duration_seconds =
+            harness->diagnostic_duration;
+        diagnostics->audio.diagnostic.started_ms = 42'000;
+        diagnostics->audio.diagnostic.ends_ms =
+            42'000 + harness->diagnostic_duration * 1000;
+    }
+    diagnostics->wake_resource_healthy = true;
+    diagnostics->ui_pack_healthy = true;
+    diagnostics->wake_dropped_frames = 4;
+    return true;
+}
+
+bool StartDiagnostic(std::uint32_t duration_seconds, void* context) {
+    auto* harness = static_cast<Harness*>(context);
+    if (harness->diagnostic_duration > 0) return false;
+    harness->diagnostic_duration = duration_seconds;
+    return true;
+}
+
 bool CaptureResponse(const char* payload, std::size_t length, void* context) {
     static_cast<Harness*>(context)->response.assign(payload, length);
     return true;
 }
 
 void InitializeHarness(Harness* harness) {
-    Expect(harness->mcp.Initialize(&ReadStatus, &SetVolume, &CaptureResponse,
-                                   harness),
+    Expect(harness->mcp.Initialize(&ReadStatus, &ReadDiagnostics,
+                                   &StartDiagnostic, &SetVolume,
+                                   &CaptureResponse, harness),
            "MCP harness initializes");
 }
 
@@ -179,15 +229,121 @@ void TestStatusPaginationAndUserOnlySplit() {
            "cursor resumes at the requested regular tool");
     cJSON_Delete(response);
 
-    const std::string user_tools = Envelope(
-        R"({"jsonrpc":"2.0","id":8,"method":"tools/list","params":{"cursor":"","withUserTools":true}})");
+    const std::string user_tools = ReadFixture(
+        "veetee-server/packages/contracts/fixtures/mcp/tools-list-user.json");
     Expect(harness.mcp.HandleEnvelope(user_tools.data(), user_tools.size()),
            "user-only catalog handles");
     response = cJSON_Parse(harness.response.c_str());
     result = cJSON_GetObjectItemCaseSensitive(response, "result");
     content = cJSON_GetObjectItemCaseSensitive(result, "tools");
-    Expect(cJSON_GetArraySize(content) == 4,
+    Expect(cJSON_GetArraySize(content) == 7,
            "user-only catalog is hidden unless explicitly requested");
+    ExpectJsonEquals(
+        harness.response,
+        FixturePayload(
+            "veetee-server/packages/contracts/fixtures/mcp/tools-list-user-result.json"),
+        "user-only diagnostic catalog matches shared fixture");
+    cJSON_Delete(response);
+}
+
+void TestStructuredDiagnosticsAndBounds() {
+    Harness harness;
+    InitializeHarness(&harness);
+
+    const std::string health_call = Envelope(
+        R"({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"self.diagnostics.get_health","arguments":{}}})");
+    Expect(harness.mcp.HandleEnvelope(health_call.data(), health_call.size()),
+           "health diagnostic handles");
+    cJSON* response = cJSON_Parse(harness.response.c_str());
+    cJSON* result = cJSON_GetObjectItemCaseSensitive(response, "result");
+    cJSON* content = cJSON_GetObjectItemCaseSensitive(result, "content");
+    cJSON* text = cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetArrayItem(content, 0), "text");
+    cJSON* health = cJSON_Parse(text->valuestring);
+    Expect(cJSON_GetObjectItemCaseSensitive(health, "schema_version")
+                   ->valueint == 1,
+           "health uses a versioned schema");
+    Expect(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(
+               cJSON_GetObjectItemCaseSensitive(
+                   cJSON_GetObjectItemCaseSensitive(health, "audio"),
+                   "diagnostic"),
+               "raw_audio_stored")),
+           "health explicitly reports no raw audio storage");
+    cJSON_Delete(health);
+    cJSON_Delete(response);
+
+    const std::string invalid = Envelope(
+        R"({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"self.diagnostics.audio.start","arguments":{"duration_seconds":31}}})");
+    Expect(harness.mcp.HandleEnvelope(invalid.data(), invalid.size()),
+           "out-of-range diagnostic returns an error");
+    response = cJSON_Parse(harness.response.c_str());
+    Expect(cJSON_GetObjectItemCaseSensitive(
+               cJSON_GetObjectItemCaseSensitive(response, "error"), "code")
+                   ->valueint == -32602,
+           "duration bounds are enforced before callback");
+    cJSON_Delete(response);
+    Expect(harness.diagnostic_duration == 0,
+           "invalid duration does not start a session");
+
+    const std::string start = Envelope(
+        R"({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"self.diagnostics.audio.start","arguments":{"duration_seconds":5}}})");
+    Expect(harness.mcp.HandleEnvelope(start.data(), start.size()),
+           "bounded audio diagnostic starts");
+    response = cJSON_Parse(harness.response.c_str());
+    result = cJSON_GetObjectItemCaseSensitive(response, "result");
+    content = cJSON_GetObjectItemCaseSensitive(result, "content");
+    text = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(content, 0),
+                                            "text");
+    cJSON* diagnostic = cJSON_Parse(text->valuestring);
+    Expect(cJSON_GetObjectItemCaseSensitive(diagnostic, "duration_seconds")
+                   ->valueint == 5,
+           "start response reports requested duration");
+    Expect(std::strcmp(cJSON_GetObjectItemCaseSensitive(diagnostic, "state")
+                           ->valuestring,
+                       "running") == 0,
+           "start response reports running session");
+    cJSON_Delete(diagnostic);
+    cJSON_Delete(response);
+
+    const std::string busy = Envelope(
+        R"({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"self.diagnostics.audio.start","arguments":{"duration_seconds":3}}})");
+    Expect(harness.mcp.HandleEnvelope(busy.data(), busy.size()),
+           "concurrent audio diagnostic returns an error");
+    response = cJSON_Parse(harness.response.c_str());
+    Expect(cJSON_GetObjectItemCaseSensitive(
+               cJSON_GetObjectItemCaseSensitive(response, "error"), "code")
+                   ->valueint == -32001,
+           "busy session uses a stable device error");
+    cJSON_Delete(response);
+
+    const std::string self_test = Envelope(
+        R"({"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"self.diagnostics.run_self_test","arguments":{}}})");
+    Expect(harness.mcp.HandleEnvelope(self_test.data(), self_test.size()),
+           "self-test handles");
+    response = cJSON_Parse(harness.response.c_str());
+    result = cJSON_GetObjectItemCaseSensitive(response, "result");
+    content = cJSON_GetObjectItemCaseSensitive(result, "content");
+    text = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(content, 0),
+                                            "text");
+    cJSON* self_test_result = cJSON_Parse(text->valuestring);
+    Expect(std::strcmp(
+               cJSON_GetObjectItemCaseSensitive(self_test_result, "overall")
+                   ->valuestring,
+               "pass") == 0,
+           "software checks pass in healthy harness");
+    cJSON* checks =
+        cJSON_GetObjectItemCaseSensitive(self_test_result, "checks");
+    Expect(cJSON_GetArraySize(checks) == 10,
+           "self-test returns the bounded check catalog");
+    cJSON* speaker = cJSON_GetArrayItem(checks, 9);
+    Expect(std::strcmp(
+               cJSON_GetObjectItemCaseSensitive(speaker, "status")
+                   ->valuestring,
+               "not_run") == 0 &&
+               cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
+                   speaker, "requires_listener")),
+           "physical speaker check is not falsely reported as passed");
+    cJSON_Delete(self_test_result);
     cJSON_Delete(response);
 }
 
@@ -216,6 +372,7 @@ int main() {
     TestInitializeAndRegularCatalogFixtures();
     TestVolumeCallAndArgumentSafety();
     TestStatusPaginationAndUserOnlySplit();
+    TestStructuredDiagnosticsAndBounds();
     TestMalformedEnvelopeAndUnknownTool();
     std::cout << "device_mcp_test: passed\n";
     return 0;

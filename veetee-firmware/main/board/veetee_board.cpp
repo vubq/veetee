@@ -294,4 +294,13 @@ int VeeteeBoard::speaker_volume() const {
     return audio_.volume_percent();
 }
 
+bool VeeteeBoard::StartAudioDiagnostic(std::uint32_t duration_seconds,
+                                       std::uint64_t now_ms) {
+    return audio_.StartDiagnostic(duration_seconds, now_ms);
+}
+
+audio::AudioRuntimeHealth VeeteeBoard::AudioHealth(std::uint64_t now_ms) {
+    return audio_.Health(now_ms);
+}
+
 }  // namespace veetee::board

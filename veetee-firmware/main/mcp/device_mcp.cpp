@@ -20,6 +20,9 @@ enum class ToolHandler {
     kGetVolume,
     kSetVolume,
     kSystemInfo,
+    kDiagnosticsHealth,
+    kDiagnosticsAudioStart,
+    kDiagnosticsSelfTest,
 };
 
 struct ToolDefinition {
@@ -35,8 +38,10 @@ constexpr char kEmptyInputSchema[] =
     R"({"type":"object","additionalProperties":false,"properties":{}})";
 constexpr char kVolumeInputSchema[] =
     R"({"type":"object","additionalProperties":false,"required":["volume"],"properties":{"volume":{"type":"integer","minimum":0,"maximum":100}}})";
+constexpr char kAudioDiagnosticInputSchema[] =
+    R"({"type":"object","additionalProperties":false,"required":["duration_seconds"],"properties":{"duration_seconds":{"type":"integer","minimum":1,"maximum":30}}})";
 
-constexpr std::array<ToolDefinition, 4> kTools = {{
+constexpr std::array<ToolDefinition, 7> kTools = {{
     {
         "self.get_device_status",
         "Read the current device state, assistant gate, firmware version and speaker volume.",
@@ -68,6 +73,30 @@ constexpr std::array<ToolDefinition, 4> kTools = {{
         "read_only",
         true,
         ToolHandler::kSystemInfo,
+    },
+    {
+        "self.diagnostics.get_health",
+        "Read bounded device, memory, network, audio and resource health without changing device state.",
+        kEmptyInputSchema,
+        "read_only",
+        true,
+        ToolHandler::kDiagnosticsHealth,
+    },
+    {
+        "self.diagnostics.audio.start",
+        "Start a bounded metrics-only microphone diagnostic without storing raw audio.",
+        kAudioDiagnosticInputSchema,
+        "disruptive",
+        true,
+        ToolHandler::kDiagnosticsAudioStart,
+    },
+    {
+        "self.diagnostics.run_self_test",
+        "Run a non-destructive immediate device self-test without changing Wi-Fi or NVS.",
+        kEmptyInputSchema,
+        "disruptive",
+        true,
+        ToolHandler::kDiagnosticsSelfTest,
     },
 }};
 
@@ -143,6 +172,234 @@ cJSON* CreateTextResult(const char* text) {
     return result;
 }
 
+bool AddCounterFields(cJSON* value, const audio::AudioCounters& counters) {
+    return cJSON_AddNumberToObject(value, "mic_frames", counters.mic_frames) &&
+           cJSON_AddNumberToObject(value, "mic_samples",
+                                   counters.mic_samples) &&
+           cJSON_AddNumberToObject(value, "mic_read_errors",
+                                   counters.mic_read_errors) &&
+           cJSON_AddNumberToObject(value, "mic_read_timeouts",
+                                   counters.mic_read_timeouts) &&
+           cJSON_AddNumberToObject(value, "detector_frame_drops",
+                                   counters.detector_frame_drops) &&
+           cJSON_AddNumberToObject(value, "opus_encode_failures",
+                                   counters.opus_encode_failures) &&
+           cJSON_AddNumberToObject(value, "uplink_drops",
+                                   counters.uplink_drops) &&
+           cJSON_AddNumberToObject(value, "playback_queue_drops",
+                                   counters.playback_queue_drops) &&
+           cJSON_AddNumberToObject(value, "playback_queue_high_water",
+                                   counters.playback_queue_high_water) &&
+           cJSON_AddNumberToObject(value, "opus_decode_failures",
+                                   counters.opus_decode_failures) &&
+           cJSON_AddNumberToObject(value, "speaker_write_failures",
+                                   counters.speaker_write_failures);
+}
+
+cJSON* CreateAudioDiagnosticJson(
+    const audio::AudioDiagnosticSnapshot& diagnostic) {
+    cJSON* value = cJSON_CreateObject();
+    cJSON* counters =
+        value == nullptr ? nullptr : cJSON_AddObjectToObject(value, "counters");
+    if (value == nullptr || counters == nullptr ||
+        !cJSON_AddStringToObject(value, "state",
+                                audio::ToString(diagnostic.state)) ||
+        !cJSON_AddNumberToObject(value, "session_id",
+                                diagnostic.session_id) ||
+        !cJSON_AddNumberToObject(value, "duration_seconds",
+                                diagnostic.duration_seconds) ||
+        !cJSON_AddNumberToObject(value, "started_ms",
+                                diagnostic.started_ms) ||
+        !cJSON_AddNumberToObject(value, "ends_ms", diagnostic.ends_ms) ||
+        !cJSON_AddNumberToObject(value, "pcm_frames",
+                                diagnostic.pcm_frames) ||
+        !cJSON_AddNumberToObject(value, "sample_count",
+                                diagnostic.sample_count) ||
+        !cJSON_AddNumberToObject(value, "rms", diagnostic.rms) ||
+        !cJSON_AddNumberToObject(value, "peak_absolute",
+                                diagnostic.peak_absolute) ||
+        !cJSON_AddNumberToObject(value, "dc_offset",
+                                diagnostic.dc_offset) ||
+        !cJSON_AddNumberToObject(value, "clipped_samples",
+                                diagnostic.clipped_samples) ||
+        !cJSON_AddNumberToObject(value, "clipping_percent",
+                                diagnostic.clipping_percent) ||
+        !cJSON_AddBoolToObject(value, "raw_audio_stored", false) ||
+        !AddCounterFields(counters, diagnostic.counters)) {
+        cJSON_Delete(value);
+        return nullptr;
+    }
+    return value;
+}
+
+cJSON* CreateHealthJson(const DeviceDiagnostics& diagnostics) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON* device =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "device");
+    cJSON* memory =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "memory");
+    cJSON* network =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "network");
+    cJSON* audio =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "audio");
+    cJSON* resources =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "resources");
+    cJSON* lifetime =
+        audio == nullptr ? nullptr : cJSON_AddObjectToObject(audio, "lifetime");
+    cJSON* diagnostic = CreateAudioDiagnosticJson(
+        diagnostics.audio.diagnostic);
+    if (root == nullptr || device == nullptr || memory == nullptr ||
+        network == nullptr || audio == nullptr || resources == nullptr ||
+        lifetime == nullptr || diagnostic == nullptr ||
+        !cJSON_AddNumberToObject(root, "schema_version", 1) ||
+        !cJSON_AddStringToObject(device, "board", kBoardName) ||
+        !cJSON_AddStringToObject(device, "firmware_version",
+                                diagnostics.device.firmware_version) ||
+        !cJSON_AddStringToObject(device, "state",
+                                diagnostics.device.state) ||
+        !cJSON_AddBoolToObject(device, "assistant_gate_open",
+                              diagnostics.device.assistant_gate_open) ||
+        !cJSON_AddNumberToObject(device, "uptime_ms",
+                                diagnostics.uptime_ms) ||
+        !cJSON_AddStringToObject(device, "reset_reason",
+                                diagnostics.reset_reason) ||
+        !cJSON_AddNumberToObject(memory, "internal_free_bytes",
+                                diagnostics.internal_free_bytes) ||
+        !cJSON_AddNumberToObject(memory, "internal_min_free_bytes",
+                                diagnostics.internal_min_free_bytes) ||
+        !cJSON_AddNumberToObject(memory, "psram_free_bytes",
+                                diagnostics.psram_free_bytes) ||
+        !cJSON_AddNumberToObject(memory, "psram_min_free_bytes",
+                                diagnostics.psram_min_free_bytes) ||
+        !cJSON_AddBoolToObject(network, "connected",
+                              diagnostics.network_connected) ||
+        !cJSON_AddNumberToObject(network, "rssi",
+                                diagnostics.network_rssi) ||
+        !cJSON_AddStringToObject(network, "ipv4",
+                                diagnostics.network_ipv4.data()) ||
+        !cJSON_AddNumberToObject(network, "disconnect_count",
+                                diagnostics.network_disconnect_count) ||
+        !cJSON_AddNumberToObject(network, "reconnect_attempt_count",
+                                diagnostics.network_reconnect_attempt_count) ||
+        !cJSON_AddNumberToObject(network, "last_disconnect_reason",
+                                diagnostics.network_last_disconnect_reason) ||
+        !cJSON_AddBoolToObject(audio, "capture_task_running",
+                              diagnostics.audio.capture_task_running) ||
+        !cJSON_AddBoolToObject(audio, "playback_task_running",
+                              diagnostics.audio.playback_task_running) ||
+        !AddCounterFields(lifetime, diagnostics.audio.lifetime) ||
+        !cJSON_AddBoolToObject(resources, "wake_resource_healthy",
+                              diagnostics.wake_resource_healthy) ||
+        !cJSON_AddBoolToObject(resources, "ui_pack_healthy",
+                              diagnostics.ui_pack_healthy) ||
+        !cJSON_AddNumberToObject(resources, "wake_dropped_frames",
+                                diagnostics.wake_dropped_frames) ||
+        !cJSON_AddItemToObject(audio, "diagnostic", diagnostic)) {
+        cJSON_Delete(diagnostic);
+        cJSON_Delete(root);
+        return nullptr;
+    }
+    return root;
+}
+
+bool AddSelfTestCheck(cJSON* checks, const char* id, const char* status,
+                      const char* detail, bool requires_listener = false) {
+    cJSON* check = cJSON_CreateObject();
+    if (check == nullptr ||
+        !cJSON_AddStringToObject(check, "id", id) ||
+        !cJSON_AddStringToObject(check, "status", status) ||
+        !cJSON_AddStringToObject(check, "detail", detail) ||
+        !cJSON_AddBoolToObject(check, "requires_listener",
+                              requires_listener) ||
+        !cJSON_AddItemToArray(checks, check)) {
+        cJSON_Delete(check);
+        return false;
+    }
+    return true;
+}
+
+cJSON* CreateSelfTestJson(const DeviceDiagnostics& diagnostics) {
+    const bool mic_observed = diagnostics.audio.lifetime.mic_frames > 0;
+    const bool passed = diagnostics.network_connected &&
+                        diagnostics.audio.capture_task_running &&
+                        diagnostics.audio.playback_task_running &&
+                        mic_observed &&
+                        diagnostics.internal_free_bytes > 0 &&
+                        diagnostics.psram_free_bytes > 0 &&
+                        diagnostics.wake_resource_healthy &&
+                        diagnostics.ui_pack_healthy;
+    cJSON* root = cJSON_CreateObject();
+    cJSON* checks =
+        root == nullptr ? nullptr : cJSON_AddArrayToObject(root, "checks");
+    if (root == nullptr || checks == nullptr ||
+        !cJSON_AddNumberToObject(root, "schema_version", 1) ||
+        !cJSON_AddNumberToObject(root, "run_at_uptime_ms",
+                                diagnostics.uptime_ms) ||
+        !cJSON_AddStringToObject(root, "overall",
+                                passed ? "pass" : "fail") ||
+        !AddSelfTestCheck(checks, "application_state", "pass",
+                          "Application state provider is available.") ||
+        !AddSelfTestCheck(checks, "wifi_connected",
+                          diagnostics.network_connected ? "pass" : "fail",
+                          diagnostics.network_connected
+                              ? "Station has an active IP connection."
+                              : "Station is not connected.") ||
+        !AddSelfTestCheck(checks, "capture_task",
+                          diagnostics.audio.capture_task_running ? "pass"
+                                                                 : "fail",
+                          diagnostics.audio.capture_task_running
+                              ? "Capture task is running."
+                              : "Capture task is unavailable.") ||
+        !AddSelfTestCheck(checks, "playback_task",
+                          diagnostics.audio.playback_task_running ? "pass"
+                                                                  : "fail",
+                          diagnostics.audio.playback_task_running
+                              ? "Playback task is running."
+                              : "Playback task is unavailable.") ||
+        !AddSelfTestCheck(checks, "mic_frames_observed",
+                          mic_observed ? "pass" : "fail",
+                          mic_observed
+                              ? "PCM frames have been observed."
+                              : "No PCM frame has been observed.") ||
+        !AddSelfTestCheck(checks, "internal_heap",
+                          diagnostics.internal_free_bytes > 0 ? "pass"
+                                                              : "fail",
+                          diagnostics.internal_free_bytes > 0
+                              ? "Internal heap is available."
+                              : "Internal heap is exhausted.") ||
+        !AddSelfTestCheck(checks, "psram",
+                          diagnostics.psram_free_bytes > 0 ? "pass" : "fail",
+                          diagnostics.psram_free_bytes > 0
+                              ? "PSRAM is available."
+                              : "PSRAM is unavailable.") ||
+        !AddSelfTestCheck(checks, "wake_resource",
+                          diagnostics.wake_resource_healthy ? "pass" : "fail",
+                          diagnostics.wake_resource_healthy
+                              ? "Wake subsystem is healthy."
+                              : "Wake subsystem is unhealthy.") ||
+        !AddSelfTestCheck(checks, "display_ui",
+                          diagnostics.ui_pack_healthy ? "pass" : "fail",
+                          diagnostics.ui_pack_healthy
+                              ? "Display/UI health check passed."
+                              : "Display/UI health check failed.") ||
+        !AddSelfTestCheck(checks, "physical_speaker_output", "not_run",
+                          "Physical sound requires a nearby listener.", true)) {
+        cJSON_Delete(root);
+        return nullptr;
+    }
+    return root;
+}
+
+cJSON* CreateJsonTextResult(cJSON* value) {
+    if (value == nullptr) return nullptr;
+    char* encoded = cJSON_PrintUnformatted(value);
+    cJSON_Delete(value);
+    if (encoded == nullptr) return nullptr;
+    cJSON* result = CreateTextResult(encoded);
+    cJSON_free(encoded);
+    return result;
+}
+
 const ToolDefinition* FindTool(const char* name) {
     for (const auto& tool : kTools) {
         if (std::strcmp(tool.name, name) == 0) return &tool;
@@ -153,13 +410,18 @@ const ToolDefinition* FindTool(const char* name) {
 }  // namespace
 
 bool DeviceMcp::Initialize(StatusProvider status_provider,
+                           DiagnosticsProvider diagnostics_provider,
+                           AudioDiagnosticStarter audio_diagnostic_starter,
                            VolumeSetter volume_setter,
                            ResponseSink response_sink, void* context) {
-    if (status_provider == nullptr || volume_setter == nullptr ||
+    if (status_provider == nullptr || diagnostics_provider == nullptr ||
+        audio_diagnostic_starter == nullptr || volume_setter == nullptr ||
         response_sink == nullptr) {
         return false;
     }
     status_provider_ = status_provider;
+    diagnostics_provider_ = diagnostics_provider;
+    audio_diagnostic_starter_ = audio_diagnostic_starter;
     volume_setter_ = volume_setter;
     response_sink_ = response_sink;
     context_ = context;
@@ -363,6 +625,36 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
         }
         return ReplyResult(request_id, CreateTextResult("true"));
     }
+    if (tool->handler == ToolHandler::kDiagnosticsAudioStart) {
+        const cJSON* duration =
+            cJSON_GetObjectItemCaseSensitive(arguments, "duration_seconds");
+        if (arguments->child == nullptr || arguments->child->next != nullptr ||
+            !cJSON_IsNumber(duration) ||
+            !std::isfinite(duration->valuedouble) ||
+            std::floor(duration->valuedouble) != duration->valuedouble ||
+            duration->valuedouble <
+                audio::AudioDiagnostics::kMinimumDurationSeconds ||
+            duration->valuedouble >
+                audio::AudioDiagnostics::kMaximumDurationSeconds) {
+            return ReplyError(request_id, -32602,
+                              "Invalid audio diagnostic duration");
+        }
+        if (!audio_diagnostic_starter_(
+                static_cast<std::uint32_t>(duration->valuedouble),
+                context_)) {
+            return ReplyError(request_id, -32001,
+                              "Audio diagnostic is already running");
+        }
+        DeviceDiagnostics diagnostics{};
+        if (!diagnostics_provider_(&diagnostics, context_)) {
+            return ReplyError(request_id, -32000,
+                              "Device diagnostics unavailable");
+        }
+        return ReplyResult(
+            request_id,
+            CreateJsonTextResult(CreateAudioDiagnosticJson(
+                diagnostics.audio.diagnostic)));
+    }
     if (!IsEmptyObject(arguments)) {
         return ReplyError(request_id, -32602, "Unexpected tool arguments");
     }
@@ -371,6 +663,23 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
         char volume[4] = {};
         std::snprintf(volume, sizeof(volume), "%d", status.volume_percent);
         return ReplyResult(request_id, CreateTextResult(volume));
+    }
+    if (tool->handler == ToolHandler::kDiagnosticsHealth ||
+        tool->handler == ToolHandler::kDiagnosticsSelfTest) {
+        DeviceDiagnostics diagnostics{};
+        if (!diagnostics_provider_(&diagnostics, context_) ||
+            diagnostics.device.state == nullptr ||
+            diagnostics.device.firmware_version == nullptr ||
+            diagnostics.reset_reason == nullptr) {
+            return ReplyError(request_id, -32000,
+                              "Device diagnostics unavailable");
+        }
+        return ReplyResult(
+            request_id,
+            CreateJsonTextResult(
+                tool->handler == ToolHandler::kDiagnosticsHealth
+                    ? CreateHealthJson(diagnostics)
+                    : CreateSelfTestJson(diagnostics)));
     }
 
     cJSON* status_json = cJSON_CreateObject();

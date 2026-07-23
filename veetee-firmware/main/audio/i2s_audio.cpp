@@ -10,6 +10,7 @@
 #include "decoder/impl/esp_opus_dec.h"
 #include "encoder/impl/esp_opus_enc.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 namespace veetee::audio {
@@ -190,7 +191,12 @@ bool I2sAudio::QueueOpusPlayback(const std::uint8_t* packet,
                       .generation = playback_generation_.load(),
                       .length = static_cast<std::uint16_t>(length)};
     std::memcpy(item.data.data(), packet, length);
-    return xQueueSend(playback_queue_, &item, 0) == pdTRUE;
+    if (xQueueSend(playback_queue_, &item, 0) != pdTRUE) {
+        RecordAudioCounter(AudioCounter::kPlaybackQueueDrop);
+        return false;
+    }
+    ObservePlaybackQueueDepth();
+    return true;
 }
 
 void I2sAudio::EndPlayback() {
@@ -218,6 +224,26 @@ bool I2sAudio::SetVolumePercent(int volume_percent) {
     return true;
 }
 
+bool I2sAudio::StartDiagnostic(std::uint32_t duration_seconds,
+                               std::uint64_t now_ms) {
+    taskENTER_CRITICAL(&diagnostics_mux_);
+    const bool started = diagnostics_.Start(duration_seconds, now_ms);
+    taskEXIT_CRITICAL(&diagnostics_mux_);
+    return started;
+}
+
+AudioRuntimeHealth I2sAudio::Health(std::uint64_t now_ms) {
+    AudioRuntimeHealth health{
+        .capture_task_running = capture_task_ != nullptr,
+        .playback_task_running = playback_task_ != nullptr,
+    };
+    taskENTER_CRITICAL(&diagnostics_mux_);
+    health.lifetime = diagnostics_.LifetimeCounters();
+    health.diagnostic = diagnostics_.Snapshot(now_ms);
+    taskEXIT_CRITICAL(&diagnostics_mux_);
+    return health;
+}
+
 void I2sAudio::CaptureTaskEntry(void* context) {
     static_cast<I2sAudio*>(context)->RunCapture();
 }
@@ -242,7 +268,10 @@ void I2sAudio::RunCapture() {
             mic_dma_buffer_.size() * sizeof(mic_dma_buffer_[0]), &bytes_read,
             pdMS_TO_TICKS(250));
         if (error != ESP_OK) {
-            if (error != ESP_ERR_TIMEOUT) {
+            if (error == ESP_ERR_TIMEOUT) {
+                RecordAudioCounter(AudioCounter::kMicReadTimeout);
+            } else {
+                RecordAudioCounter(AudioCounter::kMicReadError);
                 ESP_LOGW(kTag, "Microphone read failed: %s", esp_err_to_name(error));
             }
             continue;
@@ -267,8 +296,14 @@ void I2sAudio::RunCapture() {
                 capture_pcm_[captured_samples++] = pcm;
             }
         }
+        taskENTER_CRITICAL(&diagnostics_mux_);
+        diagnostics_.ObservePcm(
+            detector_pcm_.data(), samples,
+            static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
+        taskEXIT_CRITICAL(&diagnostics_mux_);
         if (!pcm_frame_sink_(detector_pcm_.data(), samples,
                              pcm_frame_context_)) {
+            RecordAudioCounter(AudioCounter::kDetectorFrameDrop);
             ESP_LOGD(kTag, "Dropped local detector PCM frame");
         }
 
@@ -307,6 +342,7 @@ void I2sAudio::RunCapture() {
         captured_samples = 0;
         if (encode_error != ESP_AUDIO_ERR_OK || output.encoded_bytes == 0 ||
             output.encoded_bytes > encoded_buffer_.size()) {
+            RecordAudioCounter(AudioCounter::kOpusEncodeFailure);
             ESP_LOGW(kTag, "Opus encode failed: %d", encode_error);
             continue;
         }
@@ -314,6 +350,7 @@ void I2sAudio::RunCapture() {
             capture_generation_.load() == local_generation &&
             !encoded_sink_(encoded_buffer_.data(), output.encoded_bytes,
                            sink_context_)) {
+            RecordAudioCounter(AudioCounter::kUplinkDrop);
             ESP_LOGD(kTag, "Dropped realtime uplink frame");
         }
     }
@@ -380,6 +417,7 @@ void I2sAudio::RunPlayback() {
             esp_opus_dec_decode(decoder_, &raw, &frame, &info);
         if (decode_error != ESP_AUDIO_ERR_OK || raw.consumed != item.length ||
             frame.decoded_size != playback_pcm_.size() * sizeof(std::int16_t)) {
+            RecordAudioCounter(AudioCounter::kOpusDecodeFailure);
             ESP_LOGW(kTag, "Opus decode failed: error=%d consumed=%" PRIu32
                            " decoded=%" PRIu32,
                      decode_error, raw.consumed, frame.decoded_size);
@@ -397,7 +435,10 @@ void I2sAudio::RunPlayback() {
             tx_handle_, speaker_dma_buffer_.data(),
             speaker_dma_buffer_.size() * sizeof(speaker_dma_buffer_[0]),
             &bytes_written, pdMS_TO_TICKS(100));
-        if (write_error != ESP_OK) {
+        if (write_error != ESP_OK ||
+            bytes_written != speaker_dma_buffer_.size() *
+                                 sizeof(speaker_dma_buffer_[0])) {
+            RecordAudioCounter(AudioCounter::kSpeakerWriteFailure);
             ESP_LOGW(kTag, "Speaker write failed: %s",
                      esp_err_to_name(write_error));
         }
@@ -468,6 +509,20 @@ bool I2sAudio::QueuePlaybackControl(PlaybackItemKind kind,
     if (playback_queue_ == nullptr) return false;
     const PlaybackItem item{.kind = kind, .generation = generation};
     return xQueueSend(playback_queue_, &item, kPlaybackControlTimeout) == pdTRUE;
+}
+
+void I2sAudio::RecordAudioCounter(AudioCounter counter) {
+    taskENTER_CRITICAL(&diagnostics_mux_);
+    diagnostics_.Increment(counter);
+    taskEXIT_CRITICAL(&diagnostics_mux_);
+}
+
+void I2sAudio::ObservePlaybackQueueDepth() {
+    const auto depth = static_cast<std::uint32_t>(
+        uxQueueMessagesWaiting(playback_queue_));
+    taskENTER_CRITICAL(&diagnostics_mux_);
+    diagnostics_.ObservePlaybackQueueDepth(depth);
+    taskEXIT_CRITICAL(&diagnostics_mux_);
 }
 
 }  // namespace veetee::audio

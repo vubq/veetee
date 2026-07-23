@@ -100,6 +100,86 @@ export const mcpToolSchema = z.object({
   requiresConfirmation: z.boolean().default(false),
 });
 
+const audioCountersSchema = z.object({
+  micFrames: z.number().int().nonnegative(),
+  micSamples: z.number().int().nonnegative(),
+  micReadErrors: z.number().int().nonnegative(),
+  micReadTimeouts: z.number().int().nonnegative(),
+  detectorFrameDrops: z.number().int().nonnegative(),
+  opusEncodeFailures: z.number().int().nonnegative(),
+  uplinkDrops: z.number().int().nonnegative(),
+  playbackQueueDrops: z.number().int().nonnegative(),
+  playbackQueueHighWater: z.number().int().min(0).max(1024),
+  opusDecodeFailures: z.number().int().nonnegative(),
+  speakerWriteFailures: z.number().int().nonnegative(),
+});
+
+export const audioDiagnosticSessionSchema = z.object({
+  state: z.enum(["not_run", "running", "completed"]),
+  sessionId: z.number().int().nonnegative(),
+  durationSeconds: z.number().int().min(0).max(30),
+  startedMs: z.number().int().nonnegative(),
+  endsMs: z.number().int().nonnegative(),
+  pcmFrames: z.number().int().nonnegative(),
+  sampleCount: z.number().int().nonnegative(),
+  rms: z.number().min(0).max(32768),
+  peakAbsolute: z.number().int().min(0).max(32768),
+  dcOffset: z.number().min(-32768).max(32767),
+  clippedSamples: z.number().int().nonnegative(),
+  clippingPercent: z.number().min(0).max(100),
+  rawAudioStored: z.literal(false),
+  counters: audioCountersSchema,
+});
+
+export const deviceHealthSchema = z.object({
+  schemaVersion: z.literal(1),
+  device: z.object({
+    board: z.string(),
+    firmwareVersion: z.string(),
+    state: z.string(),
+    assistantGateOpen: z.boolean(),
+    uptimeMs: z.number().int().nonnegative(),
+    resetReason: z.string(),
+  }),
+  memory: z.object({
+    internalFreeBytes: z.number().int().nonnegative(),
+    internalMinFreeBytes: z.number().int().nonnegative(),
+    psramFreeBytes: z.number().int().nonnegative(),
+    psramMinFreeBytes: z.number().int().nonnegative(),
+  }),
+  network: z.object({
+    connected: z.boolean(),
+    rssi: z.number().int().min(-127).max(0),
+    ipv4: z.string().max(45),
+    disconnectCount: z.number().int().nonnegative(),
+    reconnectAttemptCount: z.number().int().nonnegative(),
+    lastDisconnectReason: z.number().int().nonnegative(),
+  }),
+  audio: z.object({
+    captureTaskRunning: z.boolean(),
+    playbackTaskRunning: z.boolean(),
+    lifetime: audioCountersSchema,
+    diagnostic: audioDiagnosticSessionSchema,
+  }),
+  resources: z.object({
+    wakeResourceHealthy: z.boolean(),
+    uiPackHealthy: z.boolean(),
+    wakeDroppedFrames: z.number().int().nonnegative(),
+  }),
+});
+
+export const deviceSelfTestSchema = z.object({
+  schemaVersion: z.literal(1),
+  runAtUptimeMs: z.number().int().nonnegative(),
+  overall: z.enum(["pass", "fail"]),
+  checks: z.array(z.object({
+    id: z.string(),
+    status: z.enum(["pass", "fail", "not_run"]),
+    detail: z.string(),
+    requiresListener: z.boolean(),
+  })).min(1).max(16),
+});
+
 export const conversationEventSchema = z.object({
   id: z.string().uuid(),
   deviceId: z.string().uuid(),
@@ -252,6 +332,9 @@ export type Device = z.infer<typeof deviceSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
+export type AudioDiagnosticSession = z.infer<typeof audioDiagnosticSessionSchema>;
+export type DeviceHealth = z.infer<typeof deviceHealthSchema>;
+export type DeviceSelfTest = z.infer<typeof deviceSelfTestSchema>;
 export type ConversationEvent = z.infer<typeof conversationEventSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 export type OperationsProfile = z.infer<typeof operationsProfileSchema>;

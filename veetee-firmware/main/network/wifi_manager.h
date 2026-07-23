@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -20,6 +21,15 @@ enum class WifiManagerEvent : std::uint8_t {
     kProvisioningSaved,
 };
 
+struct WifiHealth {
+    bool connected = false;
+    std::int32_t rssi = 0;
+    char ipv4[16] = {};
+    std::uint64_t disconnect_count = 0;
+    std::uint64_t reconnect_attempt_count = 0;
+    std::uint32_t last_disconnect_reason = 0;
+};
+
 class WifiManager {
 public:
     using EventSink = void (*)(WifiManagerEvent event, void* context);
@@ -30,6 +40,7 @@ public:
     esp_err_t StartStation();
     esp_err_t StartProvisioning();
     esp_err_t ResetProvisioning();
+    WifiHealth Health() const;
 
 private:
     static constexpr std::size_t kMaxStationScanResults = 32;
@@ -84,6 +95,9 @@ private:
     bool ignore_disconnect_until_scan_ = false;
     bool provisioning_active_ = false;
     bool provisioning_wifi_ready_ = false;
+    std::atomic<std::uint64_t> disconnect_count_{0};
+    std::atomic<std::uint64_t> reconnect_attempt_count_{0};
+    std::atomic<std::uint32_t> last_disconnect_reason_{0};
     char connecting_ssid_[33] = {};
     char ap_ssid_[24] = {};
 };

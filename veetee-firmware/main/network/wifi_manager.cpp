@@ -272,6 +272,18 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
         manager->station_connected_ = false;
         const auto* disconnected =
             static_cast<const wifi_event_sta_disconnected_t*>(event_data);
+        if (was_connected ||
+            (manager->station_connecting_ &&
+             manager->candidate_in_flight_ &&
+             !manager->ignore_disconnect_until_scan_)) {
+            manager->disconnect_count_.fetch_add(1,
+                                                  std::memory_order_relaxed);
+            manager->last_disconnect_reason_.store(
+                disconnected == nullptr ? 0U
+                                        : static_cast<std::uint32_t>(
+                                              disconnected->reason),
+                std::memory_order_relaxed);
+        }
         ESP_LOGW(kTag, "Station disconnected from '%s' reason=%u",
                  manager->connecting_ssid_[0] == '\0'
                      ? "saved network"
@@ -291,6 +303,8 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
             if (manager->candidate_reconnect_count_ <
                 kMaxCandidateReconnects) {
                 ++manager->candidate_reconnect_count_;
+                manager->reconnect_attempt_count_.fetch_add(
+                    1, std::memory_order_relaxed);
                 const esp_err_t reconnect_error = esp_wifi_connect();
                 if (reconnect_error == ESP_OK ||
                     reconnect_error == ESP_ERR_WIFI_CONN) {
@@ -579,6 +593,30 @@ void WifiManager::ScheduleScanRetry() {
     } else {
         ESP_LOGI(kTag, "No saved network connected; rescanning before AP fallback");
     }
+}
+
+WifiHealth WifiManager::Health() const {
+    WifiHealth health{
+        .disconnect_count =
+            disconnect_count_.load(std::memory_order_relaxed),
+        .reconnect_attempt_count =
+            reconnect_attempt_count_.load(std::memory_order_relaxed),
+        .last_disconnect_reason =
+            last_disconnect_reason_.load(std::memory_order_relaxed),
+    };
+    wifi_ap_record_t access_point{};
+    if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        health.connected = true;
+        health.rssi = access_point.rssi;
+    }
+    if (health.connected && station_netif_ != nullptr) {
+        esp_netif_ip_info_t ip_info{};
+        if (esp_netif_get_ip_info(station_netif_, &ip_info) == ESP_OK) {
+            std::snprintf(health.ipv4, sizeof(health.ipv4), IPSTR,
+                          IP2STR(&ip_info.ip));
+        }
+    }
+    return health;
 }
 
 }  // namespace veetee::network
