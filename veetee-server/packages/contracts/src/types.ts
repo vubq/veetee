@@ -165,6 +165,22 @@ export interface ConversationPolicy {
   };
 }
 
+export interface AgentPromptConfigV1 {
+  schemaVersion: 1;
+  catalogVersion: 1;
+  template: string;
+  language: string;
+  timeZone: string;
+  timeZoneSource: "device" | "fixed";
+  personalityPresetId: string;
+  personalityLabel: string;
+  personality: string;
+  customPersonality: string;
+  responseStyle: string;
+  userAddress: string;
+  allowedVariables: string[];
+}
+
 export interface JsonRpcRequest<TParams = unknown> {
   jsonrpc: "2.0";
   id: string | number;

@@ -25,6 +25,7 @@ import {
   validateAgentDraftConfig,
   type ProviderPolicyBinding,
 } from "../config/agent-config.policy.js";
+import { normalizePublishedAgentPrompt } from "../config/agent-prompt.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
@@ -192,6 +193,46 @@ interface ProviderPatch {
   secret?: string;
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstInteger(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (
+      typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= -840 &&
+      value <= 840
+    ) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function desiredAgentConfigVersion(
+  state: unknown,
+  publishedFallback: number,
+): number {
+  const value = recordValue(state).agentConfigVersion;
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= 2_147_483_647
+    ? value
+    : publishedFallback;
+}
+
 const interactionModeToDatabase: Record<AgentRecord["interactionMode"], InteractionMode> = {
   auto: InteractionMode.AUTO,
   manual: InteractionMode.MANUAL,
@@ -270,7 +311,10 @@ export class ControlPlaneStore {
       state: "active",
       deviceId: device.id,
       agentId: device.agentId,
-      configVersion: device.agent?.publishedVersion ?? 0,
+      configVersion: desiredAgentConfigVersion(
+        device.desiredState?.state,
+        device.agent?.publishedVersion ?? 0,
+      ),
       ...(typeof resourceVersion === "string" ? { resourceVersion } : {}),
       ...(typeof resourceManifestId === "string" ? { resourceManifestId } : {}),
       ...(typeof uiVersion === "string" ? { uiVersion } : {}),
@@ -350,7 +394,7 @@ export class ControlPlaneStore {
   ): Promise<DeviceActivationResult | null> {
     const device = await this.prisma.device.findUnique({
       where: { hardwareId },
-      include: { agent: true },
+      include: { agent: true, desiredState: true },
     });
     if (!device) return null;
 
@@ -394,19 +438,49 @@ export class ControlPlaneStore {
     tenantId: string;
     agentId: string | null;
     configVersion: number;
+    deviceLocale?: string;
+    deviceTimeZone?: string;
+    deviceTimeZoneOffsetMinutes?: number;
   }> {
     const device = await this.prisma.device.findUnique({
       where: { hardwareId },
-      include: { agent: true },
+      include: { agent: true, desiredState: true, reportedState: true },
     });
     if (!device?.tokenHash || !this.tokenMatches(token, device.tokenHash)) {
       throw new UnauthorizedException("Device token is invalid");
     }
+    const reported = recordValue(device.reportedState?.state);
+    const locale = firstString(
+      reported.locale,
+      recordValue(reported.identity).locale,
+      recordValue(reported.device).locale,
+    );
+    const timeZone = firstString(
+      reported.timeZone,
+      reported.timezone,
+      recordValue(reported.device).timeZone,
+      recordValue(reported.device).timezone,
+    );
+    const timeZoneOffsetMinutes = firstInteger(
+      reported.timeZoneOffsetMinutes,
+      reported.timezoneOffsetMinutes,
+      reported.timezone_offset,
+      recordValue(reported.device).timeZoneOffsetMinutes,
+      recordValue(reported.device).timezoneOffsetMinutes,
+    );
     return {
       deviceId: device.id,
       tenantId: device.tenantId,
       agentId: device.agentId,
-      configVersion: device.agent?.publishedVersion ?? 0,
+      configVersion: desiredAgentConfigVersion(
+        device.desiredState?.state,
+        device.agent?.publishedVersion ?? 0,
+      ),
+      ...(locale ? { deviceLocale: locale } : {}),
+      ...(timeZone ? { deviceTimeZone: timeZone } : {}),
+      ...(timeZoneOffsetMinutes !== undefined
+        ? { deviceTimeZoneOffsetMinutes: timeZoneOffsetMinutes }
+        : {}),
     };
   }
 
@@ -949,14 +1023,20 @@ export class ControlPlaneStore {
         providerChains.flatMap((chain) => chain.providers.map((provider) => provider.id)),
       );
       const version = agent.version + 1;
+      const prompt = normalizePublishedAgentPrompt(
+        (agent.draftConfig as Record<string, unknown>).prompt,
+        { locale: agent.defaultLocale },
+      );
       const snapshot = {
         ...(agent.draftConfig as Record<string, unknown>),
         schemaVersion: 1,
         agentId: agent.id,
+        agentName: agent.name,
         version,
         defaultLocale: agent.defaultLocale,
         interactionMode: agent.interactionMode.toLowerCase(),
         persona: agent.persona,
+        prompt,
         providerChains,
         providers: providers
           .filter((provider) => selectedProviderIds.has(provider.id))
@@ -1447,7 +1527,12 @@ export class ControlPlaneStore {
   }
 
   private activationResult(
-    device: { id: string; agentId: string | null; agent: { publishedVersion: number } | null },
+    device: {
+      id: string;
+      agentId: string | null;
+      agent: { publishedVersion: number } | null;
+      desiredState: { state: Prisma.JsonValue } | null;
+    },
     token: string,
   ): DeviceActivationResult {
     return {
@@ -1455,7 +1540,10 @@ export class ControlPlaneStore {
       agentId: device.agentId,
       token,
       websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/veetee/v1/",
-      configVersion: device.agent?.publishedVersion ?? 0,
+      configVersion: desiredAgentConfigVersion(
+        device.desiredState?.state,
+        device.agent?.publishedVersion ?? 0,
+      ),
     };
   }
 

@@ -166,6 +166,12 @@ async def test_text_lab_marks_vad_asr_bypassed_and_streams_real_tts_pcm() -> Non
     assert isinstance(hello, dict)
     assert hello["type"] == "lab.hello"
     assert hello["fidelity"]["vad_asr"] == "bypassed"
+    assert hello["prompt"] == {
+        "applied": True,
+        "version": 3,
+        "language": "Tiếng Việt",
+        "personality": "local-default",
+    }
 
     await websocket.outgoing.get()  # session.opened
     await websocket.outgoing.get()  # listen.start

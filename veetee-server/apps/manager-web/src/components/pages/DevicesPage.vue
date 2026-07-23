@@ -219,7 +219,7 @@ async function assignAgent(): Promise<void> {
                 <div>
                   <small>HỒ SƠ TRỢ LÝ</small>
                   <label :for="`device-agent-${selected.id}`">Trợ lý vận hành</label>
-                  <p>Profile đã publish sẽ được đồng bộ xuống thiết bị.</p>
+                  <p>Chọn `Cập nhật vN` sau publish để đổi desired snapshot của thiết bị.</p>
                 </div>
               </div>
               <div class="device-agent-controls">

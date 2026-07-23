@@ -18,8 +18,21 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
         {
             "agentId": "agent-1",
             "version": 7,
+            "agentName": "Mây",
             "defaultLocale": "vi-VN",
             "persona": "Trợ lý gia đình ngắn gọn.",
+            "prompt": {
+                "template": (
+                    "{{agent_name}} trả lời bằng {{language}}. "
+                    "Vai trò: {{persona}}. Tính cách: {{personality}}."
+                ),
+                "language": "Tiếng Việt tự nhiên",
+                "timeZone": "Asia/Bangkok",
+                "personalityPresetId": "stubborn-reasoned",
+                "personality": "Ngang bướng có lý.",
+                "responseStyle": "Ngắn gọn.",
+                "userAddress": "bạn",
+            },
             "conversation": {
                 "firstInputSeconds": 0,
                 "betweenTurnsSeconds": 45,
@@ -40,6 +53,9 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
     )
 
     assert profile.agent_id == "agent-1"
+    assert profile.agent_name == "Mây"
+    assert profile.prompt.language == "Tiếng Việt tự nhiên"
+    assert profile.prompt.personality_preset_id == "stubborn-reasoned"
     assert profile.policy.first_input_seconds == 3.0
     assert profile.policy.between_turns_seconds == 45.0
     assert profile.policy.closing_grace_seconds == 60.0
@@ -75,6 +91,9 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
                     "tenantId": "tenant-1",
                     "agentId": "agent-1",
                     "configVersion": 3,
+                    "deviceLocale": "en-US",
+                    "deviceTimeZone": "America/New_York",
+                    "deviceTimeZoneOffsetMinutes": -240,
                 },
             )
         if request.url.path.endswith("/agent-configs/agent-1"):
@@ -84,8 +103,19 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
                 json={
                     "agentId": "agent-1",
                     "version": 3,
+                    "agentName": "Mây",
                     "defaultLocale": "vi-VN",
                     "persona": "Veetee test",
+                    "prompt": {
+                        "template": (
+                            "SNAPSHOT {{agent_name}}/{{language}}/{{persona}}/"
+                            "{{personality}}/{{config_version}}"
+                        ),
+                        "language": "Tiếng Việt kiểm thử",
+                        "timeZone": "Asia/Bangkok",
+                        "personalityPresetId": "stubborn-reasoned",
+                        "personality": "Prompt đã publish",
+                    },
                 },
             )
         return httpx.Response(404)
@@ -100,13 +130,36 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
     )
     manager = ManagerClient(settings, client=client)
     device = await manager.authenticate_device("esp32-1", "device-token")
-    assert device == DeviceContext("device-1", "tenant-1", "agent-1", 3)
+    assert device == DeviceContext(
+        "device-1",
+        "tenant-1",
+        "agent-1",
+        3,
+        "en-US",
+        "America/New_York",
+        -240,
+    )
     first = await manager.session_profile(device)
-    second = await manager.session_profile(device)
+    second = await manager.session_profile(
+        DeviceContext(
+            "lab:session-1",
+            "tenant-1",
+            "agent-1",
+            3,
+            "en-US",
+            "America/New_York",
+            -240,
+        )
+    )
     await client.aclose()
 
     assert first is second
     assert first.persona == "Veetee test"
+    assert first.device_locale == "en-US"
+    assert first.device_time_zone == "America/New_York"
+    rendered = first.render_system_prompt([])
+    assert "SNAPSHOT Mây/Tiếng Việt kiểm thử/Veetee test/Prompt đã publish/3" == rendered
+    assert second.render_system_prompt([]) == rendered
     assert config_calls == 1
 
 

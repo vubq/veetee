@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   agentSchema,
+  agentPromptCatalogSchema,
   auditEventSchema,
   apiErrorSchema,
   artifactSchema,
@@ -143,6 +144,7 @@ export const managerApi = {
   health: () => request("/health/ready", healthSchema, {}, false),
   devices: () => request("/api/v1/devices", z.array(deviceSchema)),
   agents: () => request("/api/v1/agents", z.array(agentSchema)),
+  agentPromptCatalog: () => request("/api/v1/agents/prompt-catalog", agentPromptCatalogSchema),
   providers: () => request("/api/v1/providers", z.array(providerSchema)),
   mcpTools: () => request("/api/v1/mcp/tools", z.array(mcpToolSchema)),
   deviceMcpTools: (deviceId: string) =>

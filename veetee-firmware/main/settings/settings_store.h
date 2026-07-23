@@ -12,9 +12,10 @@ namespace veetee::settings {
 struct DeviceSettings {
     char ssid[33] = {};
     char password[65] = {};
-    char bootstrap_url[257] = {};
-    char locale[16] = "vi-VN";
-    char wake_profile[65] = {};
+  char bootstrap_url[257] = {};
+  char locale[16] = "vi-VN";
+  char time_zone[65] = "Asia/Bangkok";
+  char wake_profile[65] = {};
     char client_id[37] = {};
     char activation_code[7] = {};
     char activation_challenge[129] = {};

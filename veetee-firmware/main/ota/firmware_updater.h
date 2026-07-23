@@ -80,7 +80,7 @@ private:
     TaskHandle_t task_ = nullptr;
     std::atomic<std::uint32_t> generation_{0};
     char hardware_id_[18] = {};
-    std::array<char, 32769> response_{};
+    char* response_ = nullptr;
     std::size_t response_size_ = 0;
     bool response_overflow_ = false;
     Target current_target_{};

@@ -29,7 +29,7 @@ constexpr char kPortalHtml[] = R"HTML(<!doctype html>
 <label>Tên mạng<input id="ssid" name="ssid" maxlength="32" required autocomplete="off" placeholder="Chọn ở trên hoặc nhập mạng ẩn"><span class="hint">Bạn có thể nhập thủ công nếu mạng không phát SSID.</span></label>
 <label>Mật khẩu Wi-Fi<div class="password-wrap"><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password" placeholder="Nhập mật khẩu"><button type="button" id="togglePassword">Hiện</button></div><span class="hint">Để trống nếu muốn dùng lại mật khẩu của mạng đã lưu.</span></label></section>
 <section class="section"><div class="section-head"><div><small>BƯỚC 02</small><h2>Kết nối Veetee Manager</h2></div></div><label>Bootstrap URL<input id="bootstrapUrl" name="bootstrap_url" maxlength="256" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="http://192.168.1.10:8001/veetee/ota/" required><span class="hint">Dùng địa chỉ LAN của máy đang chạy Manager API.</span></label></section>
-<details><summary>Cấu hình nâng cao <b>+</b></summary><div class="row"><label>Ngôn ngữ<input id="locale" name="locale" maxlength="15" value="vi-VN" required></label><label>Wake profile ID<input id="wakeProfile" name="wake_profile" maxlength="64" placeholder="Gán sau"></label></div></details>
+<details><summary>Cấu hình nâng cao <b>+</b></summary><div class="row"><label>Ngôn ngữ<input id="locale" name="locale" maxlength="15" value="vi-VN" required><span class="hint">Thiết bị gửi locale này cho Manager.</span></label><label>Múi giờ<input id="timeZone" name="time_zone" maxlength="64" value="Asia/Bangkok" required><span class="hint">IANA, ví dụ Asia/Bangkok.</span></label><label>Wake profile ID<input id="wakeProfile" name="wake_profile" maxlength="64" placeholder="Gán sau"></label></div></details>
 <button class="submit" type="submit"><span>Lưu và kết nối</span><b>→</b></button><div class="status" id="status" role="status" aria-live="polite"></div><footer><i></i><span>Kết nối cục bộ được bảo vệ trên thiết bị</span></footer></form></main><script src="/portal-ui.js"></script><script src="/portal.js"></script></body></html>)HTML";
 
 constexpr char kPortalCss[] = R"CSS(:root{color-scheme:light;--canvas:#f3f3ed;--paper:#fbfbf7;--white:#fff;--ink:#13272c;--ink2:#284047;--muted:#687b7f;--line:#d9ded8;--navy:#102c33;--navy2:#1a424a;--orange:#f2643c;--orange2:#d94b27;--lime:#c8f36b;--blue:#dceeee;--danger:#b9382b;--success:#18745e}
@@ -47,7 +47,7 @@ function renderNetworks(items){networkList.replaceChildren();if(!items.length){s
 
 constexpr char kPortalScript[] = R"JS(async function scan(){scanStatus.textContent='Đang quét các mạng gần đây...';networkList.replaceChildren();document.querySelector('#refresh').disabled=true;try{const response=await fetch('/api/scan',{cache:'no-store'});if(!response.ok)throw new Error();const items=await response.json();if(!items.length&&scanRetry<3){scanRetry++;scanStatus.textContent='Đang hoàn tất quét Wi-Fi...';setTimeout(scan,1200);return}scanRetry=0;renderNetworks(items)}catch{scanStatus.textContent='Bộ quét đang bận. Chạm Quét lại để thử tiếp.'}finally{document.querySelector('#refresh').disabled=false}}
 document.querySelector('#refresh').addEventListener('click',()=>{scanRetry=0;scan()});ssidInput.addEventListener('input',()=>{if(ssidInput.value!==selected){selected='';for(const item of networkList.children)item.setAttribute('aria-pressed','false')}});document.querySelector('#togglePassword').addEventListener('click',e=>{const visible=passwordInput.type==='text';passwordInput.type=visible?'password':'text';e.currentTarget.textContent=visible?'Hiện':'Ẩn'});
-fetch('/api/config',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(config=>{if(!config)return;if(config.ssid){selected=config.ssid;ssidInput.value=config.ssid}if(config.bootstrap_url)document.querySelector('#bootstrapUrl').value=config.bootstrap_url;if(config.locale)document.querySelector('#locale').value=config.locale;if(config.wake_profile)document.querySelector('#wakeProfile').value=config.wake_profile}).catch(()=>{}).finally(scan);
+fetch('/api/config',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(config=>{if(!config)return;if(config.ssid){selected=config.ssid;ssidInput.value=config.ssid}if(config.bootstrap_url)document.querySelector('#bootstrapUrl').value=config.bootstrap_url;if(config.locale)document.querySelector('#locale').value=config.locale;if(config.time_zone)document.querySelector('#timeZone').value=config.time_zone;if(config.wake_profile)document.querySelector('#wakeProfile').value=config.wake_profile}).catch(()=>{}).finally(scan);
 form.addEventListener('submit',async e=>{e.preventDefault();const bootstrap=document.querySelector('#bootstrapUrl');const missing=!ssidInput.value.trim()?ssidInput:!bootstrap.value.trim()?bootstrap:passwordInput.required&&!passwordInput.value?passwordInput:null;if(missing){setStatus(missing===bootstrap?'Hãy nhập Bootstrap URL để robot tìm thấy Veetee Manager.':missing===ssidInput?'Hãy chọn hoặc nhập tên mạng Wi-Fi.':'Hãy nhập mật khẩu Wi-Fi.',true);missing.focus();missing.scrollIntoView({behavior:'smooth',block:'center'});return}setStatus('Đang lưu cấu hình và kết nối Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Phản hồi không hợp lệ'}));setStatus(result.message||'Hoàn tất',!response.ok);if(response.ok){submit.querySelector('span').textContent='Đang kết nối...';setStatus('Đã lưu. Điện thoại có thể tự rời mạng Veetee khi robot vào Wi-Fi của bạn.')}else submit.disabled=false}catch{setStatus('Kết nối thiết lập bị gián đoạn. Hãy vào lại mạng Veetee nếu robot chưa kết nối.',true);submit.disabled=false}});)JS";
 
 static_assert(sizeof(kPortalHtml) <= 4096);
@@ -479,17 +479,19 @@ esp_err_t ProvisioningPortal::ConfigHandler(httpd_req_t* request) {
     char ssid[129] = {};
     char bootstrap_url[1025] = {};
     char locale[65] = {};
+    char time_zone[129] = {};
     char wake_profile[257] = {};
     JsonEscapeString(portal->current_.ssid, ssid, sizeof(ssid));
     JsonEscapeString(portal->current_.bootstrap_url, bootstrap_url,
                      sizeof(bootstrap_url));
     JsonEscapeString(portal->current_.locale, locale, sizeof(locale));
+    JsonEscapeString(portal->current_.time_zone, time_zone, sizeof(time_zone));
     JsonEscapeString(portal->current_.wake_profile, wake_profile,
                      sizeof(wake_profile));
     char response[1600] = {};
     std::snprintf(response, sizeof(response),
-                  "{\"ssid\":\"%s\",\"bootstrap_url\":\"%s\",\"locale\":\"%s\",\"wake_profile\":\"%s\"}",
-                  ssid, bootstrap_url, locale, wake_profile);
+                  "{\"ssid\":\"%s\",\"bootstrap_url\":\"%s\",\"locale\":\"%s\",\"time_zone\":\"%s\",\"wake_profile\":\"%s\"}",
+                  ssid, bootstrap_url, locale, time_zone, wake_profile);
     httpd_resp_set_type(request, "application/json");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     httpd_resp_set_hdr(request, "Connection", "close");
@@ -579,6 +581,8 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
         FormValue(body.data(), "bootstrap_url", candidate.bootstrap_url,
                   sizeof(candidate.bootstrap_url), true) &&
         FormValue(body.data(), "locale", candidate.locale, sizeof(candidate.locale), true) &&
+        FormValue(body.data(), "time_zone", candidate.time_zone,
+                  sizeof(candidate.time_zone), true) &&
         FormValue(body.data(), "wake_profile", candidate.wake_profile,
                   sizeof(candidate.wake_profile), false) &&
         IsHttpEndpointUrl(candidate.bootstrap_url);

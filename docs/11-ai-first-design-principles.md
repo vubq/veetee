@@ -50,6 +50,12 @@ Các thành phần sau phải lấy từ agent config/provider registry/manager 
 - timeout/cost/quality preference trong giới hạn an toàn cho phép;
 - biểu cảm, animation, voice profile và assistant behavior version.
 
+Prompt agent được quản lý như config data có version: runtime chỉ render token
+allowlist đã validate, còn persona/tính cách không được biến thành nhánh `if/else`
+theo transcript hoặc preset id. Personality chỉ điều chỉnh tone và conversational
+stance; safety, authorization, privacy và giới hạn phần cứng vẫn là policy/runtime
+deterministic.
+
 Không viết các pattern kiểu:
 
 ```cpp

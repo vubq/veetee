@@ -155,6 +155,7 @@ AP portal cần có:
 - password và optional hidden SSID;
 - server/OTA URL override trong chế độ dev;
 - locale và wake profile;
+- time zone IANA của thiết bị (báo lại trong reported state để prompt/session ưu tiên);
 - nút test kết nối và reset.
 
 HTTP server task dùng stack 12 KiB trên ESP-IDF 6.0.2. Đây là budget đã đo từ lỗi

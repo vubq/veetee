@@ -35,6 +35,10 @@ let toastId = 0;
 const health = useQuery({ queryKey: ["health"], queryFn: managerApi.health, retry: 1, refetchInterval: 15_000 });
 const devices = useQuery({ queryKey: ["devices"], queryFn: managerApi.devices, refetchInterval: 15_000 });
 const agents = useQuery({ queryKey: ["agents"], queryFn: managerApi.agents });
+const agentPromptCatalog = useQuery({
+  queryKey: ["agent-prompt-catalog"],
+  queryFn: managerApi.agentPromptCatalog,
+});
 const providers = useQuery({ queryKey: ["providers"], queryFn: managerApi.providers });
 const baselineTools = useQuery({ queryKey: ["mcp-tools"], queryFn: managerApi.mcpTools });
 const artifacts = useQuery({ queryKey: ["artifacts"], queryFn: managerApi.artifacts });
@@ -86,8 +90,8 @@ const navItems: Array<{ id: ManagerPage; label: string; short: string; icon: VtI
 
 const tools = computed(() => deviceTools.data.value ?? baselineTools.data.value ?? []);
 const ready = computed(() => health.data.value?.status === "ready");
-const hasQueryError = computed(() => [devices, agents, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts, fleetConversationEvents, operationsProfile, auditEvents].some((query) => query.isError.value));
-const initialDataReady = computed(() => [devices, agents, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts].every((query) => query.isFetched.value));
+const hasQueryError = computed(() => [devices, agents, agentPromptCatalog, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts, fleetConversationEvents, operationsProfile, auditEvents].some((query) => query.isError.value));
+const initialDataReady = computed(() => [devices, agents, agentPromptCatalog, providers, artifacts, wakeProfiles, firmwareReleases, firmwareRollouts].every((query) => query.isFetched.value));
 const apiHost = computed(() => { try { return new URL(managerApi.baseUrl).host; } catch { return managerApi.baseUrl; } });
 
 watch(
@@ -201,6 +205,7 @@ async function createAgent(input: {
   defaultLocale: string;
   interactionMode: "auto" | "manual" | "realtime";
   persona: string;
+  draftConfig?: Record<string, unknown>;
 }) {
   const agent = await managerApi.createAgent(input);
   await refresh("agents");
@@ -307,7 +312,7 @@ async function runDeviceSelfTest(deviceId: string) {
         <template v-else>
           <OverviewPage v-if="activePage === 'overview'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :events="fleetConversationEvents.data.value ?? []" :ready="ready" @navigate="navigate" @pair="pairOpen = true" />
           <DevicesPage v-else-if="activePage === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :pair-open="pairOpen" :pair-device="pairDevice" :assign-device-agent="assignDeviceAgent" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" :get-diagnostics-health="getDiagnosticsHealth" :start-audio-diagnostic="startAudioDiagnostic" :run-device-self-test="runDeviceSelfTest" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" @close-pair="pairOpen = false" />
-          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :publish-agent="publishAgent" :create-agent="createAgent" />
+          <AgentsPage v-else-if="activePage === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :prompt-catalog="agentPromptCatalog.data.value" :publish-agent="publishAgent" :create-agent="createAgent" />
           <ProvidersPage v-else-if="activePage === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
           <RealtimeLabPage v-else-if="activePage === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
           <ResourcesPage v-else-if="activePage === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :firmware-releases="firmwareReleases.data.value ?? []" :firmware-rollouts="firmwareRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" :publish-firmware-release="publishFirmwareRelease" :create-firmware-rollout="createFirmwareRollout" :pause-firmware-rollout="pauseFirmwareRollout" :resume-firmware-rollout="resumeFirmwareRollout" :rollback-firmware-rollout="rollbackFirmwareRollout" />

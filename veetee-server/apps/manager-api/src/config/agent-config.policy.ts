@@ -1,5 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 
+import { validateAgentPromptDraft } from "./agent-prompt.policy.js";
+
 const providerKinds = ["vad", "asr", "llm", "tts", "realtime", "memory"] as const;
 const requiredCascadeKinds = ["vad", "asr", "llm", "tts"] as const;
 
@@ -43,6 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function validateAgentDraftConfig(config: Record<string, unknown>): void {
+  validateAgentPromptDraft(config.prompt);
   const conversation = config.conversation;
   if (conversation === undefined) return;
   if (!isRecord(conversation)) {

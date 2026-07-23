@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     tts_apply_watermark: bool = True
     default_locale: str = "vi-VN"
     default_persona: str = ""
+    default_agent_name: str = "VeeTee"
+    default_prompt_language: str = "Tiếng Việt"
+    default_prompt_timezone: str = "Asia/Bangkok"
+    default_personality: str = (
+        "Ấm áp, tự nhiên, biết lắng nghe và phản hồi thẳng vào điều người dùng quan tâm."
+    )
     websocket_path: str = "/veetee/v1/"
     lab_websocket_path: str = "/veetee/lab/v1/"
     lab_allowed_origins: str = "http://127.0.0.1:8081,http://localhost:8081"

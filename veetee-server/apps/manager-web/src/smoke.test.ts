@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import managerShell from "./components/ManagerShell.vue?raw";
+import agentsPage from "./components/pages/AgentsPage.vue?raw";
 import devicesPage from "./components/pages/DevicesPage.vue?raw";
 import deviceUiPage from "./components/pages/DeviceUiPage.vue?raw";
 import deviceDiagnosticsPanel from "./components/device-ui/DeviceDiagnosticsPanel.vue?raw";
@@ -43,5 +44,14 @@ describe("Vue-native Manager Web", () => {
     expect(realtimeLabPage).toContain("useRealtimeLab");
     expect(realtimeLabPage).not.toContain("querySelector");
     expect(realtimeLabPage).not.toContain("innerHTML");
+  });
+
+  it("edits a versioned prompt template and personality catalog without semantic branches", () => {
+    expect(managerShell).toContain("agentPromptCatalog");
+    expect(agentsPage).toContain("promptCatalog?.variables");
+    expect(agentsPage).toContain("personalityPresets");
+    expect(agentsPage).toContain("promptTemplate");
+    expect(agentsPage).toContain("{{agent_name}}");
+    expect(agentsPage).toContain("{{language}}");
   });
 });

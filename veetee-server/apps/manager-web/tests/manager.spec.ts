@@ -58,6 +58,35 @@ async function mockManagerApi(
     if (url.pathname === "/health/ready") {
       return json({ status: "ready", components: { database: "ok", redis: "ok" } });
     }
+    if (url.pathname === "/api/v1/agents/prompt-catalog") {
+      return json({
+        schemaVersion: 1,
+        catalogVersion: 1,
+        defaultTemplate: "You are {{agent_name}}. Reply in {{language}}. Role: {{persona}}. Personality: {{personality}}.",
+        variables: [
+          { name: "agent_name", label: "Tên trợ lý", description: "Tên", required: true, dynamic: false },
+          { name: "language", label: "Ngôn ngữ", description: "Ngôn ngữ", required: true, dynamic: false },
+          { name: "locale", label: "Locale", description: "Locale", required: false, dynamic: false },
+          { name: "persona", label: "Persona", description: "Persona", required: true, dynamic: false },
+          { name: "personality", label: "Tính cách", description: "Tính cách", required: true, dynamic: false },
+          { name: "response_style", label: "Phong cách", description: "Phong cách", required: false, dynamic: false },
+          { name: "user_address", label: "Xưng hô", description: "Xưng hô", required: false, dynamic: false },
+          { name: "interaction_mode", label: "Mode", description: "Mode", required: false, dynamic: false },
+          { name: "config_version", label: "Version", description: "Version", required: false, dynamic: true },
+          { name: "current_date", label: "Date", description: "Date", required: false, dynamic: true },
+          { name: "current_time", label: "Time", description: "Time", required: false, dynamic: true },
+          { name: "timezone", label: "Timezone", description: "Timezone", required: false, dynamic: false },
+          { name: "device_locale", label: "Device locale", description: "Device locale", required: false, dynamic: true },
+          { name: "device_timezone", label: "Device timezone", description: "Device timezone", required: false, dynamic: true },
+          { name: "device_timezone_offset", label: "Device offset", description: "Device offset", required: false, dynamic: true },
+          { name: "available_tools", label: "Tools", description: "Tools", required: false, dynamic: true },
+        ],
+        personalityPresets: [
+          { id: "warm-empathetic", label: "Ấm áp, đồng cảm", summary: "Lắng nghe", accent: "coral", instructions: "Ấm áp và đồng cảm." },
+          { id: "stubborn-reasoned", label: "Ngang bướng có lý", summary: "Có chính kiến", accent: "ember", instructions: "Có chính kiến và nêu lý do." },
+        ],
+      });
+    }
     if (url.pathname === "/api/v1/operations/profile") {
       return json({
         deployment: {
@@ -1021,6 +1050,21 @@ test("creates an independent assistant draft from the manager UI", async ({ page
       defaultLocale: "vi-VN",
       interactionMode: "auto",
       persona: "Giải thích khoa học bằng tiếng Việt, thân thiện và ngắn gọn.",
+      draftConfig: {
+        prompt: {
+          schemaVersion: 1,
+          template:
+            "You are {{agent_name}}. Reply in {{language}}. Role: {{persona}}. Personality: {{personality}}.",
+          language: "Tiếng Việt",
+          timeZone: expect.any(String),
+          timeZoneSource: "device",
+          personalityPresetId: "warm-empathetic",
+          customPersonality: "",
+          responseStyle:
+            "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
+          userAddress: "",
+        },
+      },
     },
   ]);
   await expect(dialog).toBeHidden();
@@ -1170,6 +1214,12 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
               admission_llm_tts: "real",
               device_opus_transport: "not_measured",
             },
+            prompt: {
+              applied: true,
+              version: 2,
+              language: "Tiếng Việt",
+              personality: "stubborn-reasoned",
+            },
           }),
         );
         sendEvent("session.opened", { source: "web_lab" });
@@ -1208,6 +1258,7 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
 
   await page.getByRole("button", { name: "Bắt đầu phiên thử" }).click();
   await expect(page.locator("#labState")).toContainText("Đang lắng nghe");
+  await expect(page.locator("#labPromptSnapshot")).toContainText("Prompt v2 · stubborn-reasoned");
   await page.locator("#labTextInput").fill("Xin chào Veetee");
   await page.getByRole("button", { name: "Gửi lượt nói" }).click();
 
@@ -1394,6 +1445,12 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
   expect(Math.abs(nameFieldBox!.height - localeFieldBox!.height)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.x - identityGridBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.width - identityGridBox!.width)).toBeLessThanOrEqual(1);
+  await expect(page.getByLabel("Nguồn múi giờ")).toHaveValue("device");
+  await page.getByLabel("Nguồn múi giờ").selectOption("fixed");
+  await expect(page.getByLabel("Múi giờ fallback")).toBeVisible();
+  await page.getByLabel("Nguồn múi giờ").selectOption("device");
+  await expect(page.locator(".personality-grid")).toBeVisible();
+  await expect(page.locator(".prompt-render-preview")).toBeVisible();
 
   await page.locator('[data-page-link="resources"]').first().click();
   await page.getByRole("tab", { name: /Wake profiles/ }).click();

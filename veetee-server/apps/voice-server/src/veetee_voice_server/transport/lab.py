@@ -145,6 +145,12 @@ class LabConversationSink:
                     "version": context.config_version,
                     "locale": profile.locale,
                 },
+                "prompt": {
+                    "applied": True,
+                    "version": context.config_version,
+                    "language": profile.prompt.language,
+                    "personality": profile.prompt.personality_preset_id,
+                },
                 "input_mode": context.input_mode,
                 "mcp_mode": context.mcp_mode,
                 "audio": {

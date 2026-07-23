@@ -329,6 +329,8 @@ bool ReportedStateReporter::BuildBody(
                        AddNumber(root, "version", version) &&
                        AddString(root, "bootId", boot_id_.data()) &&
                        AddNumber(reported, "schemaVersion", 1) &&
+                       AddString(reported, "locale", settings_->locale) &&
+                       AddString(reported, "timeZone", settings_->time_zone) &&
                        AddString(firmware, "version",
                                  CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION) &&
                        AddString(capabilities, "board", board::kBoardName) &&

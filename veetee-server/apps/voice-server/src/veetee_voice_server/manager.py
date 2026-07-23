@@ -8,6 +8,7 @@ import httpx
 
 from veetee_voice_server.config import Settings
 from veetee_voice_server.conversation.types import ConversationPolicy
+from veetee_voice_server.prompting import PromptConfiguration
 
 
 class ManagerAuthenticationError(RuntimeError):
@@ -20,6 +21,9 @@ class DeviceContext:
     tenant_id: str
     agent_id: str | None
     config_version: int
+    locale: str | None = None
+    time_zone: str | None = None
+    time_zone_offset_minutes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +52,14 @@ class LlmEndpoint:
 class SessionProfile:
     agent_id: str | None
     config_version: int
+    agent_name: str
     locale: str
+    interaction_mode: str
     persona: str
+    prompt: PromptConfiguration
+    device_locale: str | None
+    device_time_zone: str | None
+    device_time_zone_offset_minutes: int | None
     goodbye_text: str
     policy: ConversationPolicy
     llm_chain: tuple[LlmEndpoint, ...]
@@ -66,13 +76,36 @@ class SessionProfile:
     def llm_reasoning_effort(self) -> str:
         return self.llm_chain[0].reasoning_effort
 
+    def render_system_prompt(self, tools: list[dict[str, Any]]) -> str:
+        return self.prompt.render(
+            agent_name=self.agent_name,
+            locale=self.locale,
+            persona=self.persona,
+            interaction_mode=self.interaction_mode,
+            config_version=self.config_version,
+            tools=tools,
+            device_locale=self.device_locale,
+            device_time_zone=self.device_time_zone,
+            device_time_zone_offset_minutes=self.device_time_zone_offset_minutes,
+        )
+
     @classmethod
     def defaults(cls, settings: Settings) -> SessionProfile:
         return cls(
             agent_id=None,
             config_version=0,
+            agent_name=settings.default_agent_name,
             locale=settings.default_locale,
+            interaction_mode="auto",
             persona=settings.default_persona,
+            prompt=PromptConfiguration.defaults(
+                language=settings.default_prompt_language,
+                time_zone=settings.default_prompt_timezone,
+                personality=settings.default_personality,
+            ),
+            device_locale=None,
+            device_time_zone=None,
+            device_time_zone_offset_minutes=None,
             goodbye_text=settings.goodbye_text,
             policy=ConversationPolicy(
                 first_input_seconds=settings.first_input_seconds,
@@ -114,11 +147,26 @@ class SessionProfile:
             or _optional_string(payload.get("locale"))
             or defaults.locale
         )
+        agent_name = _optional_string(payload.get("agentName")) or defaults.agent_name
+        interaction_mode = (
+            _optional_string(payload.get("interactionMode")) or defaults.interaction_mode
+        )
         return cls(
             agent_id=_optional_string(payload.get("agentId")),
             config_version=_bounded_int(payload.get("version"), 0, 0, 2_147_483_647),
+            agent_name=agent_name,
             locale=locale,
+            interaction_mode=interaction_mode,
             persona=_optional_string(payload.get("persona")) or defaults.persona,
+            prompt=PromptConfiguration.from_payload(
+                payload.get("prompt"),
+                defaults=defaults.prompt,
+            ),
+            device_locale=_optional_string(payload.get("deviceLocale")),
+            device_time_zone=_optional_string(payload.get("deviceTimeZone")),
+            device_time_zone_offset_minutes=_optional_int(
+                payload.get("deviceTimeZoneOffsetMinutes"), -840, 840
+            ),
             goodbye_text=(
                 _optional_string(conversation.get("timeoutGoodbye"))
                 or _optional_string(payload.get("goodbyeText"))
@@ -194,7 +242,9 @@ class ManagerClient:
             timeout=settings.manager_request_seconds,
         )
         self._owns_client = client is None
-        self._profile_cache: dict[tuple[str, int], SessionProfile] = {}
+        self._profile_cache: dict[
+            tuple[str, int, str | None, str | None, int | None], SessionProfile
+        ] = {}
         self._cache_lock = asyncio.Lock()
 
     async def close(self) -> None:
@@ -223,12 +273,23 @@ class ManagerClient:
             tenant_id=str(payload["tenantId"]),
             agent_id=_optional_string(payload.get("agentId")),
             config_version=_bounded_int(payload.get("configVersion"), 0, 0, 2_147_483_647),
+            locale=_optional_string(payload.get("deviceLocale")),
+            time_zone=_optional_string(payload.get("deviceTimeZone")),
+            time_zone_offset_minutes=_optional_int(
+                payload.get("deviceTimeZoneOffsetMinutes"), -840, 840
+            ),
         )
 
     async def session_profile(self, device: DeviceContext) -> SessionProfile:
         if not device.agent_id or device.config_version <= 0:
             return SessionProfile.defaults(self._settings)
-        cache_key = (device.agent_id, device.config_version)
+        cache_key = (
+            device.agent_id,
+            device.config_version,
+            device.locale,
+            device.time_zone,
+            device.time_zone_offset_minutes,
+        )
         cached = self._profile_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -265,6 +326,13 @@ class ManagerClient:
                 profile,
                 agent_id=device.agent_id,
                 config_version=device.config_version,
+                device_locale=device.locale or profile.device_locale,
+                device_time_zone=device.time_zone or profile.device_time_zone,
+                device_time_zone_offset_minutes=(
+                    device.time_zone_offset_minutes
+                    if device.time_zone_offset_minutes is not None
+                    else profile.device_time_zone_offset_minutes
+                ),
             )
             self._profile_cache[cache_key] = profile
             return profile
@@ -422,6 +490,12 @@ def _llm_endpoint(
 
 def _optional_string(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _optional_int(value: object, minimum: int, maximum: int) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return min(max(value, minimum), maximum)
 
 
 def _bounded_float(value: object, default: float, minimum: float, maximum: float) -> float:

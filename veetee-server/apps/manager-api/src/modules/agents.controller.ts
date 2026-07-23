@@ -5,6 +5,7 @@ import { IsIn, IsLocale, IsObject, IsOptional, IsString, Length } from "class-va
 import { CurrentPrincipal } from "../auth/current-principal.decorator.js";
 import { Roles } from "../auth/roles.decorator.js";
 import type { Principal, RequestWithPrincipal } from "../auth/auth.types.js";
+import { agentPromptCatalog, type AgentPromptCatalog } from "../config/agent-prompt.policy.js";
 import { ControlPlaneStore, type AgentRecord } from "../store/control-plane.store.js";
 
 class CreateAgentDto {
@@ -54,6 +55,11 @@ class UpdateAgentDto {
 @Controller("api/v1/agents")
 export class AgentsController {
   constructor(private readonly store: ControlPlaneStore) {}
+
+  @Get("prompt-catalog")
+  promptCatalog(): AgentPromptCatalog {
+    return agentPromptCatalog();
+  }
 
   @Get()
   async list(@CurrentPrincipal() principal: Principal): Promise<AgentRecord[]> {

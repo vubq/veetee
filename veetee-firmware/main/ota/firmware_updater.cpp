@@ -9,6 +9,7 @@
 #include "board/board_config.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
@@ -64,6 +65,8 @@ std::uint8_t PartitionSlot(const esp_partition_t* partition) {
 
 FirmwareUpdater::~FirmwareUpdater() {
     if (nvs_handle_ != 0) nvs_close(nvs_handle_);
+    heap_caps_free(response_);
+    response_ = nullptr;
 }
 
 esp_err_t FirmwareUpdater::Initialize(settings::DeviceSettings* settings,
@@ -91,12 +94,21 @@ esp_err_t FirmwareUpdater::Initialize(settings::DeviceSettings* settings,
     if (error != ESP_OK) return error;
     std::snprintf(hardware_id_, sizeof(hardware_id_), "%02x:%02x:%02x:%02x:%02x:%02x",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    response_ = static_cast<char*>(heap_caps_calloc(
+        kMaximumResponseBytes + 1, sizeof(char), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (response_ == nullptr) return ESP_ERR_NO_MEM;
     queue_ = xQueueCreate(1, sizeof(Target));
-    if (queue_ == nullptr) return ESP_ERR_NO_MEM;
+    if (queue_ == nullptr) {
+        heap_caps_free(response_);
+        response_ = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
     if (xTaskCreate(&FirmwareUpdater::TaskEntry, "veetee_fw_ota", 12288, this, 4,
                     &task_) != pdPASS) {
         vQueueDelete(queue_);
         queue_ = nullptr;
+        heap_caps_free(response_);
+        response_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
@@ -347,7 +359,7 @@ void FirmwareUpdater::Reconcile(const Target& target) {
     };
     VerifiedFirmwareManifest manifest{};
     const FirmwareManifestError verify = VerifyFirmwareManifest(
-        std::string_view(response_.data(), response_size_), capability, &key, 1, &manifest);
+        std::string_view(response_, response_size_), capability, &key, 1, &manifest);
     if (verify != FirmwareManifestError::kOk) {
         Emit(FirmwareOtaEvent::kFailed, target, nullptr, FirmwareManifestErrorName(verify));
         return;
@@ -375,7 +387,7 @@ esp_err_t FirmwareUpdater::HttpEventHandler(esp_http_client_event_t* event) {
             self->response_overflow_ = true;
             return ESP_ERR_NO_MEM;
         }
-        std::memcpy(self->response_.data() + self->response_size_, event->data,
+        std::memcpy(self->response_ + self->response_size_, event->data,
                     static_cast<std::size_t>(event->data_len));
         self->response_size_ += static_cast<std::size_t>(event->data_len);
         self->response_[self->response_size_] = '\0';

@@ -14,6 +14,21 @@ import { PairingService } from "../pairing/pairing.service.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./control-plane.store.js";
 
+if (process.env.VEETEE_INTEGRATION === "1") {
+  const databaseUrl = process.env.DATABASE_URL;
+  let databaseName = "";
+  try {
+    databaseName = databaseUrl ? new URL(databaseUrl).pathname.replace(/^\//, "") : "";
+  } catch {
+    databaseName = "";
+  }
+  if (!databaseName.endsWith("_test")) {
+    throw new Error(
+      "Integration tests require DATABASE_URL to point to a dedicated *_test database",
+    );
+  }
+}
+
 const reportedCapabilities = {
   capabilities: {
     board: "veetee-s3-n16r8",
@@ -202,12 +217,29 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await expect(
       store.authenticateDevice(device.id, String(activation?.token)),
     ).resolves.toMatchObject({ id: device.id });
+    const republished = await store.publishAgent(agent.id, {
+      principal,
+      requestId: "integration-republish",
+    });
+    expect(republished.publishedVersion).toBe(published.publishedVersion + 1);
+    await expect(
+      store.authenticateDeviceByHardware("esp32-integration", String(activation?.token)),
+    ).resolves.toMatchObject({ configVersion: published.publishedVersion });
+    const rolledAgent = await store.assignDeviceAgent(
+      device.id,
+      agent.id,
+      { principal, requestId: "integration-agent-rollout" },
+    );
+    expect(rolledAgent.desiredState.version).toBe(4);
+    await expect(
+      store.authenticateDeviceByHardware("esp32-integration", String(activation?.token)),
+    ).resolves.toMatchObject({ configVersion: republished.publishedVersion });
     const desired = await store.setDesiredState(
       device.id,
       { agentConfigVersion: published.publishedVersion, resourceBundleVersion: "1.0.0" },
       { principal, requestId: "integration-desired" },
     );
-    expect(desired.desiredState.version).toBe(4);
+    expect(desired.desiredState.version).toBe(5);
     const reported = await store.updateReportedState(
       device.id,
       2,
@@ -229,7 +261,13 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await expect(store.updateReportedState(device.id, 1, {})).rejects.toThrow(/stale/i);
     await expect(store.getAgentConfig(agent.id, published.publishedVersion)).resolves.toMatchObject({
       agentId: agent.id,
+      agentName: "Integration Agent",
       interactionMode: "auto",
+      prompt: {
+        schemaVersion: 1,
+        personalityPresetId: "warm-empathetic",
+        language: "vi-VN",
+      },
     });
 
     const eventId = "98bdb294-4dd1-42ce-87fa-79f414c22c59";

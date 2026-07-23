@@ -191,6 +191,10 @@ Hiển thị health của voice-server, provider, Redis/Postgres, số thiết b
 ### Agents
 
 - Persona/prompt versioning.
+- Agent base prompt template tương tự `agent-base-prompt.txt`: template raw, biến allowlist,
+  ngôn ngữ operator nhập, timezone, preview render và immutable snapshot.
+- Personality preset dạng dữ liệu (bao gồm chính kiến/tranh luận) + custom override;
+  preset không tạo nhánh semantic trong runtime.
 - Locale + wake/exit profile.
 - Activation wake profile và interrupt profile tách riêng, version theo locale/model.
 - Conversation mode: cascade/realtime.

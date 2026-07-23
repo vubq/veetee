@@ -326,6 +326,8 @@ Content-Type: application/json
   "bootId": "95eff5a6-3dcf-4cb4-a6d9-e31cd6d82f63",
   "state": {
     "schemaVersion": 1,
+    "locale": "vi-VN",
+    "timeZone": "Asia/Bangkok",
     "firmware": {"version": "0.2.0"},
     "resource": {
       "phase": "downloading",

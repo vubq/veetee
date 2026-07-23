@@ -118,6 +118,8 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
                             CONFIG_VEETEE_DEFAULT_BOOTSTRAP_URL)) != ESP_OK ||
         (error = LoadString("locale", settings->locale, sizeof(settings->locale),
                             "vi-VN")) != ESP_OK ||
+        (error = LoadString("time_zone", settings->time_zone,
+                            sizeof(settings->time_zone), "Asia/Bangkok")) != ESP_OK ||
         (error = LoadString("wake_profile", settings->wake_profile,
                             sizeof(settings->wake_profile))) != ESP_OK ||
         (error = LoadString("client_id", settings->client_id,
@@ -165,6 +167,9 @@ esp_err_t SettingsStore::SaveProvisioning(DeviceSettings* settings) {
         error = nvs_set_str(handle_, "bootstrap", settings->bootstrap_url);
     }
     if (error == ESP_OK) error = nvs_set_str(handle_, "locale", settings->locale);
+    if (error == ESP_OK) {
+        error = nvs_set_str(handle_, "time_zone", settings->time_zone);
+    }
     if (error == ESP_OK) {
         error = nvs_set_str(handle_, "wake_profile", settings->wake_profile);
     }

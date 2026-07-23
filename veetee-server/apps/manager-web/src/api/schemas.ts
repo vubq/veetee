@@ -71,6 +71,26 @@ export const agentSchema = z.object({
   publishedVersion: z.number().int().nonnegative(),
 });
 
+export const agentPromptCatalogSchema = z.object({
+  schemaVersion: z.literal(1),
+  catalogVersion: z.literal(1),
+  defaultTemplate: z.string().min(1).max(20_000),
+  variables: z.array(z.object({
+    name: z.string(),
+    label: z.string(),
+    description: z.string(),
+    required: z.boolean(),
+    dynamic: z.boolean(),
+  })),
+  personalityPresets: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    summary: z.string(),
+    accent: z.string(),
+    instructions: z.string(),
+  })).min(1),
+});
+
 export const providerSchema = z.object({
   id: z.string(),
   kind: z.enum(["vad", "asr", "llm", "tts", "realtime", "memory"]),
@@ -361,6 +381,7 @@ export const apiErrorSchema = z.object({
 export type Principal = z.infer<typeof principalSchema>;
 export type Device = z.infer<typeof deviceSchema>;
 export type Agent = z.infer<typeof agentSchema>;
+export type AgentPromptCatalog = z.infer<typeof agentPromptCatalogSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
 export type AudioDiagnosticSession = z.infer<typeof audioDiagnosticSessionSchema>;

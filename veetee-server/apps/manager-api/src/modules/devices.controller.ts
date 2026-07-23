@@ -216,6 +216,18 @@ export class ReportedDeviceStateDto {
   @Max(1)
   schemaVersion!: number;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(35)
+  @Matches(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/)
+  locale?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  @Matches(/^[A-Za-z0-9._+-]+(?:\/[A-Za-z0-9._+-]+)*$/)
+  timeZone?: string;
+
   @IsObject()
   @ValidateNested()
   @Type(() => ReportedFirmwareStateDto)

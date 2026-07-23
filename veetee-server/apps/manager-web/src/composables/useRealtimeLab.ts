@@ -22,6 +22,12 @@ interface LabHello {
   mcp_mode: LabMcpMode;
   audio: { output_sample_rate: number };
   fidelity: Record<string, string>;
+  prompt?: {
+    applied: boolean;
+    version: number;
+    language: string;
+    personality: string;
+  };
 }
 
 export interface LabMessage {
@@ -104,6 +110,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
   const state = ref("Sẵn sàng");
   const stateTone = ref<"idle" | "running" | "error">("idle");
   const prompt = ref("Chọn trợ lý và đầu vào, sau đó bắt đầu phiên.");
+  const activePrompt = ref<LabHello["prompt"]>();
   const sessionId = ref("");
   const issued = ref<IssuedLabSession>();
   const events = ref<LabEvent[]>([]);
@@ -230,6 +237,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     starting.value = false;
     sessionId.value = "";
     issued.value = undefined;
+    activePrompt.value = undefined;
     events.value = [];
     messages.value = [{ id: nextMessageId++, kind: "system", text: "Phiên Lab không lưu transcript hoặc audio vào Manager." }];
     currentAssistantId = undefined;
@@ -294,6 +302,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
 
   function handleHello(hello: LabHello): void {
     sessionId.value = hello.session_id;
+    activePrompt.value = hello.prompt;
     outputSampleRate = hello.audio.output_sample_rate;
     connected.value = true;
     listening.value = true;
@@ -440,7 +449,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
 
   return {
     agentId, inputMode, mcpMode, deviceId, connected, listening, starting, locked, canSubmit,
-    state, stateTone, prompt, sessionId, issued, events, messages, metrics, rawEvents, showRaw,
+    state, stateTone, prompt, activePrompt, sessionId, issued, events, messages, metrics, rawEvents, showRaw,
     replayFile, replayMeta, replayBusy, micActive,
     startSession, closeSession, submitText, interrupt, wake, replayAudio, toggleMicrophone,
   };

@@ -65,7 +65,7 @@ function chooseAudio(event: Event): void {
 
     <div class="lab-workspace">
       <section class="lab-console">
-        <header><div><VtBadge :tone="lab.stateTone.value === 'error' ? 'danger' : lab.stateTone.value === 'running' ? 'success' : 'neutral'" dot id="labState">{{ lab.state.value }}</VtBadge><span>{{ lab.sessionId.value ? lab.sessionId.value.slice(0, 12).toUpperCase() : "NO SESSION" }}</span></div><small>{{ selectedAgent ? `${selectedAgent.name} · v${selectedAgent.publishedVersion}` : "Chưa chọn agent" }}</small></header>
+        <header><div><VtBadge :tone="lab.stateTone.value === 'error' ? 'danger' : lab.stateTone.value === 'running' ? 'success' : 'neutral'" dot id="labState">{{ lab.state.value }}</VtBadge><span>{{ lab.sessionId.value ? lab.sessionId.value.slice(0, 12).toUpperCase() : "NO SESSION" }}</span></div><small id="labPromptSnapshot">{{ lab.activePrompt.value?.applied ? `Prompt v${lab.activePrompt.value.version} · ${lab.activePrompt.value.personality}` : selectedAgent ? `${selectedAgent.name} · v${selectedAgent.publishedVersion}` : "Chưa chọn agent" }}</small></header>
         <div class="lab-stage">
           <div class="lab-stage-copy"><span class="vt-kicker">TURNARBITER</span><h2>{{ lab.state.value }}</h2><p>{{ lab.prompt.value }}</p></div>
           <div class="lab-orb" :class="[lab.stateTone.value, { listening: lab.listening.value }]"><span></span><i></i><b>V</b></div>

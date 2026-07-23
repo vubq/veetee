@@ -77,7 +77,8 @@ class ManagerMcpCallRequest(BaseModel):
 
 
 def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
-    catalog = json.dumps(tools.list_tools(), ensure_ascii=False, separators=(",", ":"))
+    tool_catalog = tools.list_tools()
+    catalog = json.dumps(tool_catalog, ensure_ascii=False, separators=(",", ":"))
     return (
         "Return one JSON object with admission, dialogue_act and plan. admission.decision "
         "must be accepted, non_actionable, not_addressed, unclear, interrupt or end; "
@@ -111,7 +112,7 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "Only choose a tool action when its exact name exists in the available tool "
         f"catalog: {catalog}. "
         "When the catalog is empty, never invent a tool name."
-        f"\n\nAgent context:\n{profile.persona}"
+        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(tool_catalog)}"
     ).strip()
 
 
@@ -357,6 +358,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         gate = StructuredConversationGate(gate_json, locale=profile.locale)
+        system_prompt = profile.render_system_prompt(tool_broker.list_tools())
         return ConversationEngine(
             arbiter=arbiter,
             admission=gate,
@@ -366,7 +368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tools=tool_broker,
             sink=sink,
             policy=profile.policy,
-            system_prompt=profile.persona or None,
+            system_prompt=system_prompt,
         )
 
     @asynccontextmanager
