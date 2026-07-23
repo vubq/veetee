@@ -47,6 +47,7 @@ from veetee_voice_server.providers.semantic import StructuredConversationGate
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
 from veetee_voice_server.telemetry import ConversationTelemetryBuffer
+from veetee_voice_server.tools.context import with_session_context_tools
 from veetee_voice_server.transport.lab import (
     EmptyLabToolBroker,
     LabSession,
@@ -500,6 +501,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         profile: SessionProfile,
         tool_broker: ToolBroker,
     ) -> ConversationEngine:
+        tools = with_session_context_tools(profile, tool_broker)
         asr_llm = llm_for_profile(profile)
         asr_tts = runtime.get("tts")
         if not isinstance(asr_tts, VieNeuTtsProvider):
@@ -511,20 +513,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await _complete_conversation_gate_json(
                 asr_llm,
                 profile,
-                tool_broker,
+                tools,
                 payload,
                 context,
             )
 
         gate = StructuredConversationGate(gate_json, locale=profile.locale)
-        system_prompt = _response_system_prompt(profile, tool_broker)
+        system_prompt = _response_system_prompt(profile, tools)
         return ConversationEngine(
             arbiter=arbiter,
             admission=gate,
             planner=gate,
             llm=asr_llm,
             tts=asr_tts,
-            tools=tool_broker,
+            tools=tools,
             sink=sink,
             policy=profile.policy,
             system_prompt=system_prompt,

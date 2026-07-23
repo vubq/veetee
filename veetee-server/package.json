@@ -20,6 +20,7 @@
     "resources:release": "node scripts/release_resource.mjs",
     "firmware:release": "node scripts/release_firmware.mjs",
     "firmware:image:test": "node --test scripts/lib/firmware-image.test.mjs",
+    "release:metadata:test": "node --test scripts/lib/release-provenance.test.mjs",
     "ui-packs:build": "node scripts/build_ui_pack.mjs build",
     "ui-packs:inspect": "node scripts/build_ui_pack.mjs inspect",
     "ui-packs:test": "node --test scripts/lib/ui-pack.test.mjs",

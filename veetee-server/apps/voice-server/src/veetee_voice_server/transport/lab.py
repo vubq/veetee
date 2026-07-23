@@ -37,6 +37,7 @@ from veetee_voice_server.manager import LabSessionContext, SessionProfile
 from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
+from veetee_voice_server.tools.context import with_session_context_tools
 from veetee_voice_server.transport.protocol import MAX_CONTROL_FRAME_BYTES, ProtocolViolationError
 from veetee_voice_server.transport.session_registry import DeviceSessionRegistry
 
@@ -340,6 +341,9 @@ class InstrumentedLabToolBroker:
     def __init__(self, broker: ToolBroker, sink: LabConversationSink) -> None:
         self._broker = broker
         self._sink = sink
+        self.includes_session_context_tools = (
+            getattr(broker, "includes_session_context_tools", False) is True
+        )
 
     def list_tools(self) -> list[dict[str, Any]]:
         return self._broker.list_tools()
@@ -407,7 +411,8 @@ class LabSession:
             session_id=self.session_id,
             output_sample_rate=settings.wire_sample_rate,
         )
-        self.tools = InstrumentedLabToolBroker(tool_broker, self.sink)
+        session_tools = with_session_context_tools(profile, tool_broker)
+        self.tools = InstrumentedLabToolBroker(session_tools, self.sink)
         self.engine = engine_factory(self.arbiter, self.sink, profile, self.tools)
         self.asr = asr
         self.tts = tts

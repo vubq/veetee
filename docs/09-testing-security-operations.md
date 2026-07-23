@@ -219,7 +219,9 @@ Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, 
 - Contract tests pass canonical Veetee routes và các wire fixtures tương thích; runtime không publish namespace của source tham chiếu.
 - Migration up/down strategy được review và backup restore test.
 - Không có secret trong Git/traces/build artifacts.
-- Firmware build reproducible, artifact có SHA-256/signature/SBOM.
+- Firmware build reproducible, artifact có SHA-256/signature, bounded provenance và
+  SPDX 2.3 SBOM; `.complete` phải hash cả `content.bin`, `manifest.json`,
+  `provenance.json` và `sbom.spdx.json`.
 - Config/resource bundle immutable, signed, capability-compatible và rollout qua canary.
 - Wake resource và UI Pack dùng partition/journal độc lập; release evidence phải chỉ
   rõ artifact nào được apply, rollback và reported-state xác nhận.

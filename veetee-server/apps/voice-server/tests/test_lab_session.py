@@ -172,6 +172,13 @@ async def test_text_lab_marks_vad_asr_bypassed_and_streams_real_tts_pcm() -> Non
         "language": "Tiếng Việt",
         "personality": "local-default",
     }
+    assert {item["name"] for item in hello["tools"]} == {
+        "context.get_time",
+        "context.get_session",
+        "self.get_device_status",
+        "self.audio_speaker.set_volume",
+        "self.screen.set_brightness",
+    }
 
     await websocket.outgoing.get()  # session.opened
     await websocket.outgoing.get()  # listen.start

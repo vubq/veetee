@@ -3,6 +3,11 @@ import { dirname, resolve } from "node:path";
 
 import { sha256File, signResourceManifest } from "./lib/resource-manifest.mjs";
 import { inspectEsp32AppImage } from "./lib/firmware-image.mjs";
+import {
+  buildReleaseMetadata,
+  repositoryProvenance,
+  sha256Buffer,
+} from "./lib/release-provenance.mjs";
 
 const maximumSlotBytes = 0x3a0000;
 
@@ -91,15 +96,50 @@ async function main() {
     signature: { algorithm: "ed25519", key_id: keyId, security_epoch: securityEpoch, value: "" },
   };
   const signed = await signResourceManifest(manifest, privateKey);
+  const manifestText = `${JSON.stringify(signed, null, 2)}\n`;
+  const metadata = buildReleaseMetadata({
+    artifactId,
+    kind: manifest.kind,
+    version,
+    channel,
+    contentFileName: "content.bin",
+    contentBytes: inputStat.size,
+    contentSha256: hash,
+    manifestText,
+    sourceFileName: input,
+    repository: repositoryProvenance(resolve(process.cwd(), "..")),
+  });
+  const provenanceText = `${JSON.stringify(metadata.provenance, null, 2)}\n`;
+  const sbomText = `${JSON.stringify(metadata.sbom, null, 2)}\n`;
   const output = resolve(outputRoot, artifactId);
   await mkdir(dirname(output), { recursive: true });
   await newDirectory(output);
   await copyFile(input, resolve(output, "content.bin"));
-  await writeFile(resolve(output, "manifest.json"), `${JSON.stringify(signed, null, 2)}\n`, { flag: "wx", mode: 0o644 });
+  await writeFile(resolve(output, "manifest.json"), manifestText, { flag: "wx", mode: 0o644 });
+  await writeFile(resolve(output, "provenance.json"), provenanceText, { flag: "wx", mode: 0o644 });
+  await writeFile(resolve(output, "sbom.spdx.json"), sbomText, { flag: "wx", mode: 0o644 });
   const marker = await open(resolve(output, ".complete"), "wx", 0o644);
-  await marker.writeFile(`${hash}  content.bin\n`);
+  await marker.writeFile(
+    [
+      `${hash}  content.bin`,
+      `${sha256Buffer(Buffer.from(manifestText))}  manifest.json`,
+      `${sha256Buffer(Buffer.from(provenanceText))}  provenance.json`,
+      `${sha256Buffer(Buffer.from(sbomText))}  sbom.spdx.json`,
+      "",
+    ].join("\n"),
+  );
   await marker.close();
-  process.stdout.write(`${JSON.stringify({ artifactId, version, channel, bytes: inputStat.size, sha256: hash, output })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      artifactId,
+      version,
+      channel,
+      bytes: inputStat.size,
+      sha256: hash,
+      output,
+      metadata: ["provenance.json", "sbom.spdx.json"],
+    })}\n`,
+  );
 }
 
 main().catch((error) => {

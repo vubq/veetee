@@ -4,7 +4,7 @@
 > hay cam kết thứ tự triển khai. Mục đích là ghi lại những chức năng hữu ích tìm
 > thấy khi đối chiếu hai source Xiaozhi read-only với Veetee hiện tại.
 >
-> Audit source: 2026-07-23. Hai thư mục `references/xiaozhi-esp32` và
+> Audit source: 2026-07-24. Hai thư mục `references/xiaozhi-esp32` và
 > `references/xiaozhi-esp32-server` chỉ được đọc, không chỉnh sửa.
 
 ## 1. Kết luận ngắn
@@ -64,10 +64,12 @@ khai.
 
 ## 4. Firmware và chẩn đoán thiết bị
 
-### 4.1. Audio debugger có kiểm soát — ❌ P0
+### 4.1. Audio debugger có kiểm soát — ✅/🧪 P0
 
-Xiaozhi có `AudioDebugger` gửi PCM thô qua UDP. Giá trị chính là nhìn được mic
-noise floor, clipping, frame drop và dữ liệu thực tế khi ASR sai.
+Xiaozhi có `AudioDebugger` gửi PCM thô qua UDP. Veetee đã triển khai bản
+metrics-only an toàn hơn: không lưu/gửi raw PCM, chỉ thu thập noise floor,
+clipping, frame drop và các counter bounded trong một phiên ngắn. Hardware
+acceptance và việc đối chiếu với ASR vẫn cần test trên board.
 
 Veetee nên học mục đích chẩn đoán, không bật raw UDP mặc định:
 
@@ -76,12 +78,14 @@ Veetee nên học mục đích chẩn đoán, không bật raw UDP mặc định
 - tự tắt sau một số giây;
 - RMS, peak, noise floor, clipping và frame-drop metrics;
 - playback underrun, Opus error, queue high-water mark;
-- tùy chọn tải sample 3-5 giây, không lưu audio mặc định;
+- raw sample 3-5 giây chỉ là hướng mở rộng có consent, hiện chưa bật;
 - redact token, Wi-Fi password, activation secret và transcript.
 
-### 4.2. Self-test từ Manager — ❌ P0
+### 4.2. Self-test từ Manager — ✅/🧪 P0
 
-Nên có một bài test có kết quả pass/fail thay vì nhiều thao tác rời rạc:
+Veetee đã có bài test có kết quả pass/fail, gọi qua Manager và không đổi Wi-Fi
+profile hoặc NVS. Các phép đo phần mềm đã có; xác nhận mic/loa/button/LCD thật
+vẫn cần người dùng và board:
 
 - mic 5 giây: signal, DC offset, clipping, silence;
 - speaker tone/sweep;
@@ -92,10 +96,12 @@ Nên có một bài test có kết quả pass/fail thay vì nhiều thao tác r�
 
 Self-test không được đổi Wi-Fi profile hiện tại hoặc xóa NVS.
 
-### 4.3. Device health/system information — 🟡 P0
+### 4.3. Device health/system information — ✅/🧪 P0
 
 Xiaozhi expose flash size, free/min heap, task list, CPU runtime và power lock.
-Veetee MCP hiện mới có board, firmware, state và volume. Nên bổ sung:
+Veetee đã expose health snapshot bounded qua MCP/Manager gồm board, firmware,
+state, memory, network, audio, resource và task headroom. Cần tiếp tục kiểm
+tra telemetry đầy đủ trên từng firmware revision:
 
 - reset reason, uptime, firmware/resource/UI slot;
 - free/min internal RAM và PSRAM;
@@ -200,10 +206,12 @@ Chỉ làm sau khi duplex/AEC, event mapping, cancellation và cascade fallback 
 
 ## 6. Network, transport và OTA
 
-### 6.1. Signed executable firmware OTA — ❌ P0
+### 6.1. Signed executable firmware OTA — ✅/🧪 P0
 
-Manager đã trả metadata `firmware.version/url`, nhưng đây chưa phải firmware OTA
-end-to-end. Cần:
+Veetee đã có release flow tạo artifact firmware immutable, hash, detached
+signature, manifest, provenance và SPDX SBOM tối thiểu. Host-side verification
+đã được kiểm thử; bootloader/apply/rollback trên ESP32-S3 vẫn cần hardware gate.
+Cần:
 
 - immutable firmware release;
 - board/chip/version/security-epoch compatibility;
@@ -216,9 +224,11 @@ end-to-end. Cần:
 - progress và failure reason;
 - rollback chỉ tới image đã ký/policy-approved.
 
-### 6.2. Canary/percentage/pause/resume/rollback — 🟡 P0/P1
+### 6.2. Canary/percentage/pause/resume/rollback — ✅/🧪 P0/P1
 
-Resource/UI rollout hiện chủ yếu explicit-device. Cần bổ sung:
+Resource/UI rollout đã có state model và các thao tác canary/percentage,
+pause/resume và rollback ở manager-side; cần hardware/soak gate để xác nhận
+health threshold và power-loss behavior:
 
 - dev/canary/stable channel;
 - percentage rollout;
@@ -435,10 +445,11 @@ Nên có registry trong Manager:
 - audit và result size cap;
 - không arbitrary executable code.
 
-### 10.3. Server MCP registry — ❌ P1
+### 10.3. Server MCP registry — 🟡 P1
 
-Tách server tools khỏi device tools, có namespace, version/capability, policy,
-deadline, concurrency limit và structured result.
+Veetee đã có registry native cho server tools với namespace, JSON Schema
+validation, audience/safety metadata, cancellation/deadline và bounded
+structured result. Các remote endpoint/egress policy vẫn chưa bật.
 
 ### 10.4. Time/weather/web search — ❌ P1
 
@@ -484,10 +495,10 @@ plugin vào resource bundle.
 
 | Module | Trạng thái | Ưu tiên | Nội dung tham khảo |
 |---|---:|---:|---|
-| Firmware Releases | ❌ | P0 | Sign/publish/compatibility/channel/rollout/rollback. |
+| Firmware Releases | ✅/🧪 | P0 | Sign/publish/compatibility/channel/rollout/rollback; bootloader gate còn lại. |
 | Benchmark Center | ❌ | P0 | Wake/ASR/TTS/LLM/admission/end-to-end corpus và gate. |
-| Rollout Control | 🟡 | P0/P1 | Percentage, pause/resume, auto-pause, operator rollback. |
-| Device Diagnostics | ❌ | P0 | Self-test, metrics, health bundle, failure reason. |
+| Rollout Control | ✅/🧪 | P0/P1 | Percentage, pause/resume, auto-pause, operator rollback; health gate cần hardware soak. |
+| Device Diagnostics | ✅/🧪 | P0 | Self-test, metrics, health bundle, failure reason; hardware acceptance còn lại. |
 | Knowledge Base | ❌ | P1 | Upload, indexing, assistant assignment, citation test. |
 | Remote MCP Registry | ❌ | P1 | Endpoint, auth, allowlist, health, audit. |
 | Assistant Template | ❌ | P1 | Tạo assistant từ template/version đã duyệt. |
@@ -520,9 +531,9 @@ Cần kiểm thử trước khi gọi production-ready:
 - firmware OTA rollback;
 - heap/PSRAM/WS/audio soak tối thiểu 10 phút.
 
-### 12.2. Signer, provenance, SBOM — P1
+### 12.2. Signer, provenance, SBOM — ✅/🧪 P1
 
-Firmware/resource/UI nên có signer tách key, key rotation, security epoch, provenance,
+Firmware/resource/UI đã có signer tách key, key rotation, security epoch, provenance,
 SBOM/license manifest và revocation. Private signing key không nằm trong repo hoặc
 database plain text.
 

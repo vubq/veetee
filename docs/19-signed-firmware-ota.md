@@ -47,8 +47,18 @@ Output immutable:
 data/artifacts/fw-0.4.0/
   manifest.json
   content.bin
+  provenance.json
+  sbom.spdx.json
   .complete
 ```
+
+`provenance.json` records only bounded release metadata: artifact/version/channel,
+content and manifest hashes, repository commit/dirty marker and release-tool
+version. `sbom.spdx.json` is a minimal SPDX 2.3 inventory for the immutable image
+with its SHA-256; it deliberately does not claim a full transitive dependency SBOM
+until the build pipeline exports one. Neither file contains a private key, token or
+absolute source path. `.complete` lists hashes for all four release files so a
+catalog worker can verify the complete directory before publish.
 
 Release gate đọc marker `VEETEE_RELEASE_VERSION=<semver>` đã được firmware nhúng
 từ `CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION`. `--version` khác marker bị từ chối,

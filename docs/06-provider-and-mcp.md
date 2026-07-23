@@ -219,6 +219,22 @@ server-plugin   -> Python/HTTP function có timeout
 native-function -> core safe functions
 ```
 
+Source hiện đã có registry `native-function` đầu tiên dùng chung cho phiên ESP32 và
+Realtime Lab:
+
+- `context.get_time` trả ngày, giờ, thứ, IANA timezone và UTC offset; mặc định dùng
+  timezone thiết bị đã report, có thể yêu cầu một IANA timezone hợp lệ khác;
+- `context.get_session` chỉ trả agent version, locale, interaction mode và timezone
+  không nhạy cảm; không trả tenant/device identifier, token hoặc secret;
+- catalog server được merge động với device/simulated MCP, từ chối trùng tên và
+  giới hạn tổng cộng 128 tool;
+- arguments luôn qua Draft 2020-12 JSON Schema, result bounded theo kiểu dữ liệu và
+  call dùng cùng `OperationContext`/generation với turn.
+
+Hai tool này bổ sung dữ liệu realtime khi model cần truy vấn chính xác; current
+date/time trong agent prompt vẫn được render theo từng turn. Chúng không gọi mạng,
+không đi qua Manager API trong hot path và không mở remote MCP/HTTP context source.
+
 Tool call record phải có `tenant_id`, `agent_id`, `device_id`, `session_id`, `turn_id`, `tool_name`, args hash, result status, duration và actor (`model`, `user`, `system`). Raw secret trong args phải redact.
 
 Tool call thuộc cùng cancellation scope với turn. Khi button hoặc interrupt profile phát `abort`, broker phải:
