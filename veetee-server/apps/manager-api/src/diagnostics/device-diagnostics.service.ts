@@ -35,6 +35,20 @@ export interface AudioDiagnosticSession {
   counters: AudioCounters;
 }
 
+export interface TaskRuntimeHealth {
+  expected: boolean;
+  running: boolean;
+  stackFreeBytes: number;
+}
+
+export interface TaskRuntimeHealthGroup {
+  minimumStackFreeBytes: number;
+  capture: TaskRuntimeHealth;
+  playback: TaskRuntimeHealth;
+  wake: TaskRuntimeHealth;
+  websocketControl: TaskRuntimeHealth;
+}
+
 export interface DeviceHealth {
   schemaVersion: 1;
   device: {
@@ -70,6 +84,7 @@ export interface DeviceHealth {
     uiPackHealthy: boolean;
     wakeDroppedFrames: number;
   };
+  tasks?: TaskRuntimeHealthGroup;
 }
 
 export interface DeviceSelfTest {
@@ -163,10 +178,12 @@ export class DeviceDiagnosticsService {
     const network = this.record(root.network, "health.network");
     const audio = this.record(root.audio, "health.audio");
     const resources = this.record(root.resources, "health.resources");
+    const tasks =
+      root.tasks === undefined ? undefined : this.parseTaskHealthGroup(root.tasks);
     if (this.integer(root.schema_version, 1, 1, "schema_version") !== 1) {
       throw new BadGatewayException("Device health schema is unsupported");
     }
-    return {
+    const parsed: DeviceHealth = {
       schemaVersion: 1,
       device: {
         board: this.string(device.board, 1, 64, "device.board"),
@@ -262,6 +279,43 @@ export class DeviceDiagnosticsService {
         ),
       },
     };
+    if (tasks !== undefined) parsed.tasks = tasks;
+    return parsed;
+  }
+
+  private parseTaskHealthGroup(value: unknown): TaskRuntimeHealthGroup {
+    const tasks = this.record(value, "health.tasks");
+    return {
+      minimumStackFreeBytes: this.integer(
+        tasks.minimum_stack_free_bytes,
+        256,
+        65_536,
+        "tasks.minimum_stack_free_bytes",
+      ),
+      capture: this.parseTaskHealth(tasks.capture, "tasks.capture"),
+      playback: this.parseTaskHealth(tasks.playback, "tasks.playback"),
+      wake: this.parseTaskHealth(tasks.wake, "tasks.wake"),
+      websocketControl: this.parseTaskHealth(
+        tasks.websocket_control,
+        "tasks.websocket_control",
+      ),
+    };
+  }
+
+  private parseTaskHealth(value: unknown, path: string): TaskRuntimeHealth {
+    const task = this.record(value, path);
+    const expected = this.boolean(task.expected, `${path}.expected`);
+    const running = this.boolean(task.running, `${path}.running`);
+    const stackFreeBytes = this.integer(
+      task.stack_free_bytes,
+      0,
+      1_048_576,
+      `${path}.stack_free_bytes`,
+    );
+    if ((!running && stackFreeBytes !== 0) || (!expected && running)) {
+      throw new BadGatewayException(`Device diagnostic field ${path} is inconsistent`);
+    }
+    return { expected, running, stackFreeBytes };
   }
 
   private parseAudioDiagnostic(value: unknown): AudioDiagnosticSession {

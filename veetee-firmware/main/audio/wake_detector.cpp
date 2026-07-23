@@ -171,6 +171,7 @@ esp_err_t WakeDetector::Start() {
         return ESP_ERR_INVALID_STATE;
     }
     stop_requested_.store(false, std::memory_order_release);
+    stack_free_bytes_.store(0, std::memory_order_relaxed);
     task_running_.store(true, std::memory_order_release);
     if (xTaskCreateWithCaps(&WakeDetector::TaskEntry, "veetee_wake", 12 * 1024,
                             this, 5, &task_,
@@ -282,7 +283,13 @@ void WakeDetector::Run() {
     std::uint32_t active_generation = generation_.load(std::memory_order_acquire);
     std::size_t buffered_samples = 0;
 
+    stack_free_bytes_.store(
+        static_cast<std::uint32_t>(uxTaskGetStackHighWaterMark(nullptr)),
+        std::memory_order_relaxed);
     while (xQueueReceive(pcm_queue_, &frame, portMAX_DELAY) == pdTRUE) {
+        stack_free_bytes_.store(
+            static_cast<std::uint32_t>(uxTaskGetStackHighWaterMark(nullptr)),
+            std::memory_order_relaxed);
         if (stop_requested_.load(std::memory_order_acquire)) break;
         const DetectorRole current_role = role_.load(std::memory_order_acquire);
         const std::uint32_t current_generation =
@@ -339,6 +346,7 @@ void WakeDetector::Run() {
             }
         }
     }
+    stack_free_bytes_.store(0, std::memory_order_relaxed);
     task_running_.store(false, std::memory_order_release);
     // Stop() owns deletion so the task stack is reclaimed before hot reload.
     vTaskSuspend(nullptr);

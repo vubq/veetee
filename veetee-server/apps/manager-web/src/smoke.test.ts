@@ -29,6 +29,8 @@ describe("Vue-native Manager Web", () => {
     expect(devicesPage).toContain("DeviceDiagnosticsPanel");
     expect(deviceDiagnosticsPanel).toContain("raw audio không được lưu hoặc truyền");
     expect(deviceDiagnosticsPanel).toContain("runSelfTest");
+    expect(deviceDiagnosticsPanel).toContain("taskHeadroomRows");
+    expect(deviceDiagnosticsPanel).toContain("WebSocket ở đây là task điều phối của Veetee");
   });
 
   it("keeps Signal as the default UI and all three built-in themes", () => {

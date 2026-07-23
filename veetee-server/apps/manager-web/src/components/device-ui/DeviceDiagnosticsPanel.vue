@@ -8,6 +8,8 @@ import type {
 } from "../../api/schemas";
 import { VtBadge, VtButton, VtIcon, VtSelect } from "../ui";
 
+type TaskRuntimeHealth = NonNullable<DeviceHealth["tasks"]>["capture"];
+
 const props = defineProps<{
   deviceId: string;
   getHealth: (deviceId: string) => Promise<DeviceHealth>;
@@ -33,6 +35,24 @@ const remainingSeconds = computed(() => {
   if (!isRunning.value || !health.value || !diagnostic.value) return 0;
   return Math.max(0, Math.ceil((diagnostic.value.endsMs - health.value.device.uptimeMs) / 1000));
 });
+const taskHeadroomRows = computed(() => {
+  const tasks = health.value?.tasks;
+  if (!tasks) return [];
+  return [
+    { id: "capture", label: "Capture audio", task: tasks.capture },
+    { id: "playback", label: "Playback audio", task: tasks.playback },
+    { id: "wake", label: "Wake detector", task: tasks.wake },
+    { id: "websocket_control", label: "WebSocket control", task: tasks.websocketControl },
+  ];
+});
+const stackHeadroomHealthy = computed(() => {
+  const tasks = health.value?.tasks;
+  if (!tasks) return true;
+  return taskHeadroomRows.value.every(({ task }) =>
+    !task.expected ||
+    (task.running && task.stackFreeBytes >= tasks.minimumStackFreeBytes),
+  );
+});
 const softwareHealthy = computed(() => {
   const value = health.value;
   return Boolean(
@@ -40,7 +60,8 @@ const softwareHealthy = computed(() => {
       value.audio.captureTaskRunning &&
       value.audio.playbackTaskRunning &&
       value.resources.wakeResourceHealthy &&
-      value.resources.uiPackHealthy,
+      value.resources.uiPackHealthy &&
+      stackHeadroomHealthy.value,
   );
 });
 
@@ -124,6 +145,23 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(value);
 }
 
+function taskHealthy(task: TaskRuntimeHealth): boolean {
+  const minimum = health.value?.tasks?.minimumStackFreeBytes ?? 0;
+  return !task.expected ||
+    (task.running && task.stackFreeBytes >= minimum);
+}
+
+function taskStatus(task: TaskRuntimeHealth): string {
+  if (!task.expected) return "Không kích hoạt";
+  if (!task.running) return "Đã dừng";
+  return taskHealthy(task) ? "An toàn" : "Sắp cạn stack";
+}
+
+function taskStatusTone(task: TaskRuntimeHealth): "success" | "danger" | "neutral" {
+  if (!task.expected) return "neutral";
+  return taskHealthy(task) ? "success" : "danger";
+}
+
 function statusTone(status: "pass" | "fail" | "not_run"): "success" | "danger" | "warning" {
   return status === "pass" ? "success" : status === "fail" ? "danger" : "warning";
 }
@@ -185,6 +223,35 @@ onBeforeUnmount(stopPolling);
           <header><div><span class="card-kicker">AUDIO PIPELINE</span><h3>Capture / playback</h3></div><VtBadge :tone="health.audio.captureTaskRunning && health.audio.playbackTaskRunning ? 'success' : 'danger'" dot>{{ health.audio.captureTaskRunning && health.audio.playbackTaskRunning ? "Tasks alive" : "Task fault" }}</VtBadge></header>
           <div class="audio-facts"><div><b>{{ formatNumber(health.audio.lifetime.micFrames) }}</b><span>mic frames</span></div><div><b>{{ formatNumber(health.audio.lifetime.detectorFrameDrops) }}</b><span>detector drops</span></div><div><b>{{ formatNumber(health.audio.lifetime.opusEncodeFailures + health.audio.lifetime.opusDecodeFailures) }}</b><span>Opus errors</span></div><div><b>{{ formatNumber(health.audio.lifetime.playbackQueueDrops) }}</b><span>queue drops</span></div></div>
         </article>
+        <article class="diagnostics-card diagnostics-card-wide task-headroom-card">
+          <header>
+            <div><span class="card-kicker">STACK HEADROOM</span><h3>Biên an toàn của task realtime</h3></div>
+            <VtBadge
+              v-if="health.tasks"
+              :tone="stackHeadroomHealthy ? 'success' : 'danger'"
+              dot
+            >{{ stackHeadroomHealthy ? "An toàn" : "Cần xử lý" }}</VtBadge>
+            <VtBadge v-else tone="neutral">Firmware cũ</VtBadge>
+          </header>
+          <template v-if="health.tasks">
+            <div class="task-headroom-grid">
+              <div v-for="row in taskHeadroomRows" :key="row.id" class="task-headroom-row">
+                <span>
+                  <b>{{ row.label }}</b>
+                  <small>{{ row.task.expected ? "Được yêu cầu trong runtime" : "Không kích hoạt trong profile" }}</small>
+                </span>
+                <strong>{{ row.task.running ? `${formatNumber(row.task.stackFreeBytes / 1024)} KB` : "—" }}</strong>
+                <VtBadge :tone="taskStatusTone(row.task)" dot>{{ taskStatus(row.task) }}</VtBadge>
+              </div>
+            </div>
+            <p class="task-headroom-note">
+              Cảnh báo khi một task được yêu cầu bị dừng hoặc từng còn dưới
+              {{ formatNumber(health.tasks.minimumStackFreeBytes / 1024) }} KB stack.
+              WebSocket ở đây là task điều phối của Veetee.
+            </p>
+          </template>
+          <div v-else class="diagnostics-empty">Firmware hiện tại chưa gửi task headroom; các health metric khác vẫn dùng được.</div>
+        </article>
       </div>
 
       <article class="diagnostics-card self-test-card">
@@ -234,6 +301,14 @@ onBeforeUnmount(stopPolling);
 .audio-facts div, .audio-results div { display: grid; gap: 4px; border-radius: 11px; padding: 11px; background: #edf1ed; }
 .audio-facts b { font-size: 20px; }
 .audio-facts span, .audio-results span { color: var(--muted); font-size: 8px; }
+.task-headroom-card { gap: 12px; }
+.task-headroom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.task-headroom-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 11px; background: #f7f8f4; }
+.task-headroom-row > span { display: grid; min-width: 0; gap: 3px; }
+.task-headroom-row b { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-headroom-row small { color: var(--muted); font-size: 8px; }
+.task-headroom-row strong { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.task-headroom-note { border-left: 3px solid var(--navy-2); padding-left: 10px; }
 .self-test-card, .audio-debug-card { gap: 14px; }
 .self-test-card > header > div, .audio-debug-card > header > div { display: grid; gap: 4px; min-width: 0; }
 .self-test-card > header p, .audio-debug-card > header p { margin-top: 3px; }
@@ -261,5 +336,6 @@ onBeforeUnmount(stopPolling);
 .diagnostics-spinner { width: 18px; height: 18px; border: 2px solid var(--line); border-top-color: var(--navy-2); border-radius: 50%; animation: diagnostics-spin .7s linear infinite; }
 @keyframes diagnostics-spin { to { transform: rotate(360deg); } }
 @media (max-width: 800px) { .diagnostics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .diagnostics-grid { grid-template-columns: 1fr; } .diagnostics-card-wide { grid-column: auto; } }
-@media (max-width: 560px) { .diagnostics-heading, .diagnostics-card > header { flex-direction: column; align-items: stretch; } .diagnostics-heading .vt-button, .diagnostics-card > header .vt-button { align-self: flex-start; } .audio-facts, .audio-results, .self-test-checks { grid-template-columns: repeat(2, minmax(0, 1fr)); } .audio-debug-controls { align-items: stretch; flex-direction: column; } .audio-debug-controls .vt-button { align-self: flex-start; } }
+@media (max-width: 560px) { .diagnostics-heading, .diagnostics-card > header { flex-direction: column; align-items: stretch; } .diagnostics-heading .vt-button, .diagnostics-card > header .vt-button { align-self: flex-start; } .audio-facts, .audio-results, .self-test-checks, .task-headroom-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .task-headroom-row { grid-template-columns: minmax(0, 1fr) auto; } .task-headroom-row .vt-badge { grid-column: 1 / -1; justify-self: start; } .audio-debug-controls { align-items: stretch; flex-direction: column; } .audio-debug-controls .vt-button { align-self: flex-start; } }
+@media (max-width: 390px) { .task-headroom-grid { grid-template-columns: 1fr; } }
 </style>

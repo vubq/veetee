@@ -55,6 +55,8 @@ struct AudioDiagnosticSnapshot {
 struct AudioRuntimeHealth {
     bool capture_task_running = false;
     bool playback_task_running = false;
+    std::uint32_t capture_stack_free_bytes = 0;
+    std::uint32_t playback_stack_free_bytes = 0;
     AudioCounters lifetime{};
     AudioDiagnosticSnapshot diagnostic{};
 };

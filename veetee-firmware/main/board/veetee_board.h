@@ -61,6 +61,15 @@ public:
     bool StartAudioDiagnostic(std::uint32_t duration_seconds,
                               std::uint64_t now_ms);
     audio::AudioRuntimeHealth AudioHealth(std::uint64_t now_ms);
+    [[nodiscard]] bool wake_task_expected() const {
+        return wake_detector_.task_expected();
+    }
+    [[nodiscard]] bool wake_task_running() const {
+        return wake_detector_.task_running();
+    }
+    [[nodiscard]] std::uint32_t wake_stack_free_bytes() const {
+        return wake_detector_.stack_free_bytes();
+    }
     [[nodiscard]] std::uint32_t wake_dropped_frames() const {
         return wake_detector_.dropped_frames();
     }

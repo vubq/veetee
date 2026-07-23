@@ -15,6 +15,14 @@ struct DeviceStatus {
     int volume_percent;
 };
 
+struct TaskDiagnostics {
+    bool expected = false;
+    bool running = false;
+    std::uint32_t stack_free_bytes = 0;
+};
+
+inline constexpr std::uint32_t kMinimumTaskStackFreeBytes = 2 * 1024;
+
 struct DeviceDiagnostics {
     DeviceStatus device{};
     std::uint64_t uptime_ms = 0;
@@ -30,6 +38,10 @@ struct DeviceDiagnostics {
     std::uint64_t network_reconnect_attempt_count = 0;
     std::uint32_t network_last_disconnect_reason = 0;
     audio::AudioRuntimeHealth audio{};
+    TaskDiagnostics capture_task{};
+    TaskDiagnostics playback_task{};
+    TaskDiagnostics wake_task{};
+    TaskDiagnostics websocket_control_task{};
     bool wake_resource_healthy = false;
     bool ui_pack_healthy = false;
     std::uint32_t wake_dropped_frames = 0;

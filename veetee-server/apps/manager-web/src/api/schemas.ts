@@ -155,6 +155,19 @@ export const audioDiagnosticSessionSchema = z.object({
   counters: audioCountersSchema,
 });
 
+const taskRuntimeHealthSchema = z.object({
+  expected: z.boolean(),
+  running: z.boolean(),
+  stackFreeBytes: z.number().int().min(0).max(1_048_576),
+}).superRefine((task, context) => {
+  if ((!task.running && task.stackFreeBytes !== 0) || (!task.expected && task.running)) {
+    context.addIssue({
+      code: "custom",
+      message: "Task runtime health is inconsistent",
+    });
+  }
+});
+
 export const deviceHealthSchema = z.object({
   schemaVersion: z.literal(1),
   device: z.object({
@@ -190,6 +203,13 @@ export const deviceHealthSchema = z.object({
     uiPackHealthy: z.boolean(),
     wakeDroppedFrames: z.number().int().nonnegative(),
   }),
+  tasks: z.object({
+    minimumStackFreeBytes: z.number().int().min(256).max(65_536),
+    capture: taskRuntimeHealthSchema,
+    playback: taskRuntimeHealthSchema,
+    wake: taskRuntimeHealthSchema,
+    websocketControl: taskRuntimeHealthSchema,
+  }).optional(),
 });
 
 export const deviceSelfTestSchema = z.object({

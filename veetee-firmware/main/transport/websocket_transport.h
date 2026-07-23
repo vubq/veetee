@@ -48,6 +48,15 @@ public:
     bool SendAudio(const std::uint8_t* packet, std::size_t length);
     bool SendMcpPayload(const char* payload, std::size_t length);
     void Close();
+    [[nodiscard]] bool control_task_running() const {
+        return task_ != nullptr;
+    }
+    [[nodiscard]] std::uint32_t control_stack_free_bytes() const {
+        return task_ == nullptr
+                   ? 0
+                   : static_cast<std::uint32_t>(
+                         uxTaskGetStackHighWaterMark(task_));
+    }
 
 private:
     enum class CommandType : std::uint8_t {

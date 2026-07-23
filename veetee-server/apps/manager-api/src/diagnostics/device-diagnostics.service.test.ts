@@ -74,6 +74,29 @@ function health() {
       ui_pack_healthy: true,
       wake_dropped_frames: 1,
     },
+    tasks: {
+      minimum_stack_free_bytes: 2_048,
+      capture: {
+        expected: true,
+        running: true,
+        stack_free_bytes: 4_096,
+      },
+      playback: {
+        expected: true,
+        running: true,
+        stack_free_bytes: 5_120,
+      },
+      wake: {
+        expected: true,
+        running: true,
+        stack_free_bytes: 3_072,
+      },
+      websocket_control: {
+        expected: true,
+        running: true,
+        stack_free_bytes: 6_144,
+      },
+    },
   };
 }
 
@@ -99,6 +122,11 @@ describe("DeviceDiagnosticsService", () => {
     expect(result.schemaVersion).toBe(1);
     expect(result.network.ipv4).toBe("192.168.1.44");
     expect(result.audio.diagnostic.rawAudioStored).toBe(false);
+    expect(result.tasks).toMatchObject({
+      minimumStackFreeBytes: 2_048,
+      capture: { running: true, stackFreeBytes: 4_096 },
+      websocketControl: { running: true, stackFreeBytes: 6_144 },
+    });
     expect(voice.callTool).toHaveBeenCalledWith(
       "device-1",
       "self.diagnostics.get_health",
@@ -120,6 +148,47 @@ describe("DeviceDiagnosticsService", () => {
     await expect(service.health("device-1")).rejects.toBeInstanceOf(
       BadGatewayException,
     );
+  });
+
+  it("rejects unbounded or inconsistent task headroom", async () => {
+    const unbounded = health();
+    unbounded.tasks.capture.stack_free_bytes = 1_048_577;
+    const voice = {
+      callTool: vi.fn().mockResolvedValue(
+        toolPayload("self.diagnostics.get_health", unbounded),
+      ),
+    };
+    const service = new DeviceDiagnosticsService(voice as never);
+    await expect(service.health("device-1")).rejects.toBeInstanceOf(
+      BadGatewayException,
+    );
+
+    const inconsistent = health();
+    inconsistent.tasks.wake.running = false;
+    const secondVoice = {
+      callTool: vi.fn().mockResolvedValue(
+        toolPayload("self.diagnostics.get_health", inconsistent),
+      ),
+    };
+    const secondService = new DeviceDiagnosticsService(secondVoice as never);
+    await expect(secondService.health("device-1")).rejects.toBeInstanceOf(
+      BadGatewayException,
+    );
+  });
+
+  it("accepts health from an older schema-v1 device without task metrics", async () => {
+    const legacy = health();
+    const { tasks: _tasks, ...legacyHealth } = legacy;
+    const voice = {
+      callTool: vi.fn().mockResolvedValue(
+        toolPayload("self.diagnostics.get_health", legacyHealth),
+      ),
+    };
+    const service = new DeviceDiagnosticsService(voice as never);
+    await expect(service.health("device-1")).resolves.toMatchObject({
+      schemaVersion: 1,
+    });
+    await expect(service.health("device-1")).resolves.not.toHaveProperty("tasks");
   });
 
   it("parses bounded audio start and self-test results", async () => {

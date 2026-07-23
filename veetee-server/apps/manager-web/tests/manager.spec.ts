@@ -723,6 +723,90 @@ async function mockManagerApi(
         },
       ]);
     }
+    if (url.pathname === `/api/v1/devices/${deviceId}/diagnostics/health`) {
+      const counters = {
+        micFrames: 9_200,
+        micSamples: 2_944_000,
+        micReadErrors: 0,
+        micReadTimeouts: 1,
+        detectorFrameDrops: 2,
+        opusEncodeFailures: 0,
+        uplinkDrops: 0,
+        playbackQueueDrops: 0,
+        playbackQueueHighWater: 3,
+        opusDecodeFailures: 0,
+        speakerWriteFailures: 0,
+      };
+      return json({
+        schemaVersion: 1,
+        device: {
+          board: "veetee-s3-n16r8",
+          firmwareVersion: "0.3.0",
+          state: "listening",
+          assistantGateOpen: true,
+          uptimeMs: 360_000,
+          resetReason: "software",
+        },
+        memory: {
+          internalFreeBytes: 80_000,
+          internalMinFreeBytes: 60_000,
+          psramFreeBytes: 4_000_000,
+          psramMinFreeBytes: 3_500_000,
+        },
+        network: {
+          connected: true,
+          rssi: -48,
+          ipv4: "192.168.110.237",
+          disconnectCount: 2,
+          reconnectAttemptCount: 3,
+          lastDisconnectReason: 201,
+        },
+        audio: {
+          captureTaskRunning: true,
+          playbackTaskRunning: true,
+          lifetime: counters,
+          diagnostic: {
+            state: "not_run",
+            sessionId: 0,
+            durationSeconds: 0,
+            startedMs: 0,
+            endsMs: 0,
+            pcmFrames: 0,
+            sampleCount: 0,
+            rms: 0,
+            peakAbsolute: 0,
+            dcOffset: 0,
+            clippedSamples: 0,
+            clippingPercent: 0,
+            rawAudioStored: false,
+            counters: {
+              ...counters,
+              micFrames: 0,
+              micSamples: 0,
+              micReadTimeouts: 0,
+              detectorFrameDrops: 0,
+              playbackQueueHighWater: 0,
+            },
+          },
+        },
+        resources: {
+          wakeResourceHealthy: true,
+          uiPackHealthy: true,
+          wakeDroppedFrames: 2,
+        },
+        tasks: {
+          minimumStackFreeBytes: 2_048,
+          capture: { expected: true, running: true, stackFreeBytes: 4_096 },
+          playback: { expected: true, running: true, stackFreeBytes: 5_120 },
+          wake: { expected: true, running: true, stackFreeBytes: 3_072 },
+          websocketControl: {
+            expected: true,
+            running: true,
+            stackFreeBytes: 6_144,
+          },
+        },
+      });
+    }
     if (
       url.pathname ===
       `/api/v1/devices/${deviceId}/mcp/tools/self.audio_speaker.set_volume/call`
@@ -868,6 +952,32 @@ test("keeps all six device tabs usable without mobile page overflow", async ({ p
   await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await tabs.getByRole("tab", { name: /Telemetry/ }).click();
   await expect(page.locator('[data-page="telemetry"]')).toBeVisible();
+});
+
+test("renders task stack headroom without overflowing desktop or mobile", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.getByRole("tab", { name: /Chẩn đoán/ }).click();
+
+  const headroom = page.locator(".task-headroom-card");
+  await expect(headroom).toBeVisible();
+  await expect(headroom.locator(".task-headroom-row")).toHaveCount(4);
+  await expect(headroom).toContainText("Capture audio");
+  await expect(headroom).toContainText("WebSocket control");
+  await expect(headroom).toContainText("2 KB stack");
+  await expect(headroom.getByText("An toàn", { exact: true })).toHaveCount(5);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  )).toBe(true);
+  await expect.poll(async () => headroom.locator(".task-headroom-grid").evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+  )).toBe(1);
 });
 
 test("shows only the input panel selected in Realtime Lab", async ({ page }) => {

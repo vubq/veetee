@@ -64,6 +64,17 @@ Health response có các nhóm bounded:
 - `audio`: trạng thái capture/playback task, lifetime error/drop counters,
   playback queue high-water và diagnostic session current/latest;
 - `resources`: wake detector/UI health và wake detector dropped frames.
+- `tasks`: trạng thái và minimum free stack từng quan sát của capture, playback,
+  wake detector và task điều phối WebSocket của Veetee.
+
+`tasks.minimum_stack_free_bytes` là ngưỡng cảnh báo chung, hiện là 2 KiB. Mỗi task
+trả `expected`, `running` và `stack_free_bytes`; task không được profile hiện tại
+yêu cầu có `expected=false`, `running=false`, `stack_free_bytes=0` và không làm
+health suy giảm. ESP-IDF trả high-water mark theo byte, vì vậy firmware không nhân
+thêm `sizeof(StackType_t)`. `websocket_control` chỉ tên task điều phối do Veetee sở
+hữu; không giả là task nội bộ riêng của component WebSocket. Trường `tasks` là bổ
+sung tương thích trong schema V1: Manager mới vẫn chấp nhận firmware V1 cũ chưa
+gửi trường này và hiển thị trạng thái chưa có telemetry.
 
 `audio.diagnostic.state` là `not_run`, `running` hoặc `completed`. Metrics phiên:
 
@@ -82,6 +93,7 @@ Self-test trả `overall=pass|fail` và danh sách tối đa 16 check. Check V1:
 - Wi-Fi hiện đang connected;
 - capture task;
 - playback task;
+- headroom của mọi realtime task đang được yêu cầu, dùng cùng ngưỡng 2 KiB;
 - mic frame đã được quan sát;
 - internal heap;
 - PSRAM;
@@ -128,6 +140,8 @@ người dùng/board thật phải hiện riêng.
 - Firmware MCP test catalog regular/user-only, input bounds và structured result.
 - Manager API test tenant guard, parsing, malformed/unbounded result và audit.
 - Manager Web schema/component test loading, error, running và completed state.
+- Manager Web hiển thị từng task, headroom theo KiB và cảnh báo khi task dừng hoặc
+  thấp hơn ngưỡng firmware công bố.
 - ESP-IDF build trước flash. Flash/monitor không được erase NVS hoặc đổi Wi-Fi.
 - Hardware test riêng: thu giọng/im lặng/clipping, nghe loa, nhìn LCD, mất/kết nối
   lại voice session và xác nhận Manager polling trên LAN/Tailscale.

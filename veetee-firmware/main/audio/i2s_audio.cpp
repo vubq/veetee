@@ -244,6 +244,16 @@ AudioRuntimeHealth I2sAudio::Health(std::uint64_t now_ms) {
     AudioRuntimeHealth health{
         .capture_task_running = capture_task_ != nullptr,
         .playback_task_running = playback_task_ != nullptr,
+        .capture_stack_free_bytes =
+            capture_task_ == nullptr
+                ? 0
+                : static_cast<std::uint32_t>(
+                      uxTaskGetStackHighWaterMark(capture_task_)),
+        .playback_stack_free_bytes =
+            playback_task_ == nullptr
+                ? 0
+                : static_cast<std::uint32_t>(
+                      uxTaskGetStackHighWaterMark(playback_task_)),
     };
     taskENTER_CRITICAL(&diagnostics_mux_);
     health.lifetime = diagnostics_.LifetimeCounters();

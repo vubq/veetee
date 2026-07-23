@@ -45,6 +45,13 @@ public:
     [[nodiscard]] bool healthy() const {
         return profile_count_ == 0 || task_running_.load(std::memory_order_acquire);
     }
+    [[nodiscard]] bool task_expected() const { return profile_count_ > 0; }
+    [[nodiscard]] bool task_running() const {
+        return task_running_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] std::uint32_t stack_free_bytes() const {
+        return stack_free_bytes_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] DetectorRole role() const {
         return role_.load(std::memory_order_acquire);
     }
@@ -96,6 +103,7 @@ private:
     std::atomic<DetectorRole> role_{DetectorRole::kDisabled};
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<std::uint32_t> dropped_frames_{0};
+    std::atomic<std::uint32_t> stack_free_bytes_{0};
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> task_running_{false};
 };

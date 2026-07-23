@@ -17,6 +17,7 @@ struct Harness {
     std::string response;
     int volume = 70;
     std::uint32_t diagnostic_duration = 0;
+    std::uint32_t capture_stack_free_bytes = 4'096;
 };
 
 void Expect(bool condition, const char* description) {
@@ -94,9 +95,32 @@ bool ReadDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
     diagnostics->network_last_disconnect_reason = 201;
     diagnostics->audio.capture_task_running = true;
     diagnostics->audio.playback_task_running = true;
+    const auto* harness = static_cast<Harness*>(context);
+    diagnostics->audio.capture_stack_free_bytes =
+        harness->capture_stack_free_bytes;
+    diagnostics->audio.playback_stack_free_bytes = 5'120;
     diagnostics->audio.lifetime.mic_frames = 100;
     diagnostics->audio.lifetime.mic_samples = 32'000;
-    const auto* harness = static_cast<Harness*>(context);
+    diagnostics->capture_task = {
+        .expected = true,
+        .running = true,
+        .stack_free_bytes = harness->capture_stack_free_bytes,
+    };
+    diagnostics->playback_task = {
+        .expected = true,
+        .running = true,
+        .stack_free_bytes = 5'120,
+    };
+    diagnostics->wake_task = {
+        .expected = true,
+        .running = true,
+        .stack_free_bytes = 3'072,
+    };
+    diagnostics->websocket_control_task = {
+        .expected = true,
+        .running = true,
+        .stack_free_bytes = 6'144,
+    };
     if (harness->diagnostic_duration > 0) {
         diagnostics->audio.diagnostic.state =
             veetee::audio::AudioDiagnosticState::kRunning;
@@ -269,6 +293,18 @@ void TestStructuredDiagnosticsAndBounds() {
                    "diagnostic"),
                "raw_audio_stored")),
            "health explicitly reports no raw audio storage");
+    cJSON* tasks = cJSON_GetObjectItemCaseSensitive(health, "tasks");
+    Expect(cJSON_GetObjectItemCaseSensitive(
+               tasks, "minimum_stack_free_bytes")->valueint == 2'048,
+           "health publishes one bounded task stack threshold");
+    cJSON* capture =
+        cJSON_GetObjectItemCaseSensitive(tasks, "capture");
+    Expect(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(capture, "expected")) &&
+               cJSON_IsTrue(
+                   cJSON_GetObjectItemCaseSensitive(capture, "running")) &&
+               cJSON_GetObjectItemCaseSensitive(
+                   capture, "stack_free_bytes")->valueint == 4'096,
+           "health reports capture task stack headroom in bytes");
     cJSON_Delete(health);
     cJSON_Delete(response);
 
@@ -333,9 +369,19 @@ void TestStructuredDiagnosticsAndBounds() {
            "software checks pass in healthy harness");
     cJSON* checks =
         cJSON_GetObjectItemCaseSensitive(self_test_result, "checks");
-    Expect(cJSON_GetArraySize(checks) == 10,
+    Expect(cJSON_GetArraySize(checks) == 11,
            "self-test returns the bounded check catalog");
-    cJSON* speaker = cJSON_GetArrayItem(checks, 9);
+    cJSON* stack_headroom = cJSON_GetArrayItem(checks, 4);
+    Expect(std::strcmp(
+               cJSON_GetObjectItemCaseSensitive(stack_headroom, "id")
+                   ->valuestring,
+               "task_stack_headroom") == 0 &&
+               std::strcmp(
+                   cJSON_GetObjectItemCaseSensitive(stack_headroom, "status")
+                       ->valuestring,
+                   "pass") == 0,
+           "self-test evaluates the common task headroom threshold");
+    cJSON* speaker = cJSON_GetArrayItem(checks, 10);
     Expect(std::strcmp(
                cJSON_GetObjectItemCaseSensitive(speaker, "status")
                    ->valuestring,
@@ -343,6 +389,30 @@ void TestStructuredDiagnosticsAndBounds() {
                cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
                    speaker, "requires_listener")),
            "physical speaker check is not falsely reported as passed");
+    cJSON_Delete(self_test_result);
+    cJSON_Delete(response);
+
+    harness.capture_stack_free_bytes = 1'024;
+    Expect(harness.mcp.HandleEnvelope(self_test.data(), self_test.size()),
+           "low stack headroom self-test handles");
+    response = cJSON_Parse(harness.response.c_str());
+    result = cJSON_GetObjectItemCaseSensitive(response, "result");
+    content = cJSON_GetObjectItemCaseSensitive(result, "content");
+    text = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(content, 0),
+                                            "text");
+    self_test_result = cJSON_Parse(text->valuestring);
+    Expect(std::strcmp(
+               cJSON_GetObjectItemCaseSensitive(self_test_result, "overall")
+                   ->valuestring,
+               "fail") == 0,
+           "low stack headroom fails the self-test before overflow");
+    checks = cJSON_GetObjectItemCaseSensitive(self_test_result, "checks");
+    stack_headroom = cJSON_GetArrayItem(checks, 4);
+    Expect(std::strcmp(
+               cJSON_GetObjectItemCaseSensitive(stack_headroom, "status")
+                   ->valuestring,
+               "fail") == 0,
+           "low stack headroom identifies the bounded stack check");
     cJSON_Delete(self_test_result);
     cJSON_Delete(response);
 }

@@ -715,6 +715,26 @@ bool ReadDeviceDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
         network.last_disconnect_reason;
 
     diagnostics->audio = g_board.AudioHealth(diagnostics->uptime_ms);
+    diagnostics->capture_task = {
+        .expected = true,
+        .running = diagnostics->audio.capture_task_running,
+        .stack_free_bytes = diagnostics->audio.capture_stack_free_bytes,
+    };
+    diagnostics->playback_task = {
+        .expected = true,
+        .running = diagnostics->audio.playback_task_running,
+        .stack_free_bytes = diagnostics->audio.playback_stack_free_bytes,
+    };
+    diagnostics->wake_task = {
+        .expected = g_board.wake_task_expected(),
+        .running = g_board.wake_task_running(),
+        .stack_free_bytes = g_board.wake_stack_free_bytes(),
+    };
+    diagnostics->websocket_control_task = {
+        .expected = true,
+        .running = g_transport.control_task_running(),
+        .stack_free_bytes = g_transport.control_stack_free_bytes(),
+    };
     diagnostics->wake_resource_healthy = g_board.WakeResourceHealthy();
     diagnostics->ui_pack_healthy = g_board.UiPackHealthy();
     diagnostics->wake_dropped_frames = g_board.wake_dropped_frames();

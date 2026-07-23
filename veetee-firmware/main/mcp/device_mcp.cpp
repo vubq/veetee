@@ -232,6 +232,22 @@ cJSON* CreateAudioDiagnosticJson(
     return value;
 }
 
+bool AddTaskFields(cJSON* tasks, const char* name,
+                   const TaskDiagnostics& diagnostics) {
+    cJSON* task = cJSON_AddObjectToObject(tasks, name);
+    return task != nullptr &&
+           cJSON_AddBoolToObject(task, "expected", diagnostics.expected) &&
+           cJSON_AddBoolToObject(task, "running", diagnostics.running) &&
+           cJSON_AddNumberToObject(task, "stack_free_bytes",
+                                   diagnostics.stack_free_bytes);
+}
+
+bool TaskStackHealthy(const TaskDiagnostics& task) {
+    return !task.expected ||
+           (task.running &&
+            task.stack_free_bytes >= kMinimumTaskStackFreeBytes);
+}
+
 cJSON* CreateHealthJson(const DeviceDiagnostics& diagnostics) {
     cJSON* root = cJSON_CreateObject();
     cJSON* device =
@@ -244,12 +260,15 @@ cJSON* CreateHealthJson(const DeviceDiagnostics& diagnostics) {
         root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "audio");
     cJSON* resources =
         root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "resources");
+    cJSON* tasks =
+        root == nullptr ? nullptr : cJSON_AddObjectToObject(root, "tasks");
     cJSON* lifetime =
         audio == nullptr ? nullptr : cJSON_AddObjectToObject(audio, "lifetime");
     cJSON* diagnostic = CreateAudioDiagnosticJson(
         diagnostics.audio.diagnostic);
     if (root == nullptr || device == nullptr || memory == nullptr ||
         network == nullptr || audio == nullptr || resources == nullptr ||
+        tasks == nullptr ||
         lifetime == nullptr || diagnostic == nullptr ||
         !cJSON_AddNumberToObject(root, "schema_version", 1) ||
         !cJSON_AddStringToObject(device, "board", kBoardName) ||
@@ -294,6 +313,13 @@ cJSON* CreateHealthJson(const DeviceDiagnostics& diagnostics) {
                               diagnostics.ui_pack_healthy) ||
         !cJSON_AddNumberToObject(resources, "wake_dropped_frames",
                                 diagnostics.wake_dropped_frames) ||
+        !cJSON_AddNumberToObject(tasks, "minimum_stack_free_bytes",
+                                kMinimumTaskStackFreeBytes) ||
+        !AddTaskFields(tasks, "capture", diagnostics.capture_task) ||
+        !AddTaskFields(tasks, "playback", diagnostics.playback_task) ||
+        !AddTaskFields(tasks, "wake", diagnostics.wake_task) ||
+        !AddTaskFields(tasks, "websocket_control",
+                       diagnostics.websocket_control_task) ||
         !cJSON_AddItemToObject(audio, "diagnostic", diagnostic)) {
         cJSON_Delete(diagnostic);
         cJSON_Delete(root);
@@ -320,9 +346,15 @@ bool AddSelfTestCheck(cJSON* checks, const char* id, const char* status,
 
 cJSON* CreateSelfTestJson(const DeviceDiagnostics& diagnostics) {
     const bool mic_observed = diagnostics.audio.lifetime.mic_frames > 0;
+    const bool stack_headroom_healthy =
+        TaskStackHealthy(diagnostics.capture_task) &&
+        TaskStackHealthy(diagnostics.playback_task) &&
+        TaskStackHealthy(diagnostics.wake_task) &&
+        TaskStackHealthy(diagnostics.websocket_control_task);
     const bool passed = diagnostics.network_connected &&
                         diagnostics.audio.capture_task_running &&
                         diagnostics.audio.playback_task_running &&
+                        stack_headroom_healthy &&
                         mic_observed &&
                         diagnostics.internal_free_bytes > 0 &&
                         diagnostics.psram_free_bytes > 0 &&
@@ -356,6 +388,12 @@ cJSON* CreateSelfTestJson(const DeviceDiagnostics& diagnostics) {
                           diagnostics.audio.playback_task_running
                               ? "Playback task is running."
                               : "Playback task is unavailable.") ||
+        !AddSelfTestCheck(
+            checks, "task_stack_headroom",
+            stack_headroom_healthy ? "pass" : "fail",
+            stack_headroom_healthy
+                ? "Expected realtime tasks retain the configured stack margin."
+                : "A realtime task is stopped or below the configured stack margin.") ||
         !AddSelfTestCheck(checks, "mic_frames_observed",
                           mic_observed ? "pass" : "fail",
                           mic_observed
