@@ -37,13 +37,10 @@ from veetee_voice_server.providers.failover import (
     LlmProviderCandidate,
     ProviderChainUnavailableError,
 )
-from veetee_voice_server.providers.groq import GroqCloudLlmProvider
+from veetee_voice_server.providers.llm_factory import create_llm_provider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
-from veetee_voice_server.providers.nine_router import (
-    NineRouterLlmProvider,
-    NineRouterProviderError,
-)
+from veetee_voice_server.providers.nine_router import NineRouterProviderError
 from veetee_voice_server.providers.semantic import StructuredConversationGate
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
@@ -705,24 +702,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             candidate = llm_registry.get(key)
             if candidate is None:
-                adapter = endpoint.adapter.lower()
-                provider: NineRouterLlmProvider
-                if adapter == "groq-cloud" or "groq" in adapter:
-                    provider = GroqCloudLlmProvider(
-                        base_url=endpoint.base_url,
-                        model=endpoint.model,
-                        api_key=endpoint.api_key,
-                        reasoning_effort=endpoint.reasoning_effort,
-                        config=endpoint.config,
-                    )
-                else:
-                    provider = NineRouterLlmProvider(
-                        base_url=endpoint.base_url,
-                        model=endpoint.model,
-                        api_key=endpoint.api_key,
-                        reasoning_effort=endpoint.reasoning_effort,
-                        config=endpoint.config,
-                    )
+                provider = create_llm_provider(
+                    adapter=endpoint.adapter,
+                    base_url=endpoint.base_url,
+                    model=endpoint.model,
+                    api_key=endpoint.api_key,
+                    reasoning_effort=endpoint.reasoning_effort,
+                    config=endpoint.config,
+                )
                 candidate = LlmProviderCandidate(endpoint.provider_id, provider)
                 llm_registry[key] = candidate
             keys.append(key)

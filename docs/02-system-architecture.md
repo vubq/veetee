@@ -156,6 +156,7 @@ single-node hiện tại không chạy reverse proxy và dùng một Manager pro
 8001  manager-api: admin + bootstrap/config/artifact/reported-state
 8081  manager-web
 20128  9Router loopback-only, không expose trực tiếp cho ESP32/LAN
+8317  CLIProxyAPI optional, Voice Server chỉ gọi qua loopback
 ```
 
 Khi production cần tách ingress, Caddy/Nginx có thể expose admin ở `8002` và

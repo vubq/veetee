@@ -58,6 +58,14 @@ class Settings(BaseSettings):
         repr=False,
         validation_alias=AliasChoices("VEETEE_GROQ_CLOUD_API_KEY", "GROQ_API_KEY"),
     )
+    cliproxy_api_key: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices(
+            "VEETEE_CLIPROXY_API_KEY",
+            "VEETEE_CLIPROXYAPI_API_KEY",
+        ),
+    )
     llm_prewarm: bool = True
     llm_prewarm_seconds: float = Field(default=12.0, gt=0.1, le=30.0)
     planner_seconds: float = Field(default=15.0, gt=0.5, le=15.0)

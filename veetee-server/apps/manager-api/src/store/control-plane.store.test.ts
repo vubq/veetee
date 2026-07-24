@@ -4,7 +4,10 @@ import type { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
 import {
   ControlPlaneStore,
+  providerErrorCountsTowardCircuit,
   providerHealthProbeUrl,
+  providerInferenceProbeBody,
+  providerInferenceProbeUrl,
 } from "./control-plane.store.js";
 
 class FakeRedisClient {
@@ -75,8 +78,33 @@ describe("PairingService", () => {
 });
 
 describe("provider health probe", () => {
-  it("uses the authenticated model catalog without consuming completion quota", () => {
+  it("uses model catalog for non-LLM providers", () => {
     expect(providerHealthProbeUrl("https://api.groq.com/openai/v1/"))
       .toBe("https://api.groq.com/openai/v1/models");
+  });
+
+  it("probes the configured LLM model instead of trusting its public catalog", () => {
+    expect(providerInferenceProbeUrl("http://127.0.0.1:8317/v1/"))
+      .toBe("http://127.0.0.1:8317/v1/chat/completions");
+    expect(
+      providerInferenceProbeBody("gpt-5.6-terra", {
+        completionTokenParameter: "max_tokens",
+      }),
+    ).toMatchObject({
+      model: "gpt-5.6-terra",
+      stream: false,
+      max_tokens: 16,
+    });
+    expect(
+      providerInferenceProbeBody("llama-3.3-70b-versatile", {
+        completionTokenParameter: "max_completion_tokens",
+      }),
+    ).toMatchObject({ max_completion_tokens: 16 });
+  });
+
+  it("reports quota exhaustion without opening the provider failure circuit", () => {
+    expect(providerErrorCountsTowardCircuit("http_429")).toBe(false);
+    expect(providerErrorCountsTowardCircuit("http_401")).toBe(true);
+    expect(providerErrorCountsTowardCircuit("unreachable")).toBe(true);
   });
 });

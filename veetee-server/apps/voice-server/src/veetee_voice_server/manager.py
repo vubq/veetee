@@ -554,14 +554,12 @@ def _llm_endpoint(
         api_key=(
             _optional_string(runtime.get("secret"))
             or (
-                settings.groq_cloud_api_key
-                if "groq"
-                in (
+                _llm_environment_secret(
                     _optional_string(runtime.get("adapter"))
                     or _optional_string(published.get("adapter"))
-                    or ""
-                ).lower()
-                else settings.nine_router_api_key
+                    or "",
+                    settings,
+                )
             )
         ),
         # Voice turns favor predictable latency; published profiles cannot enable
@@ -569,6 +567,15 @@ def _llm_endpoint(
         reasoning_effort="none",
         config=_record(runtime.get("config") or published.get("config")),
     )
+
+
+def _llm_environment_secret(adapter: str, settings: Settings) -> str:
+    normalized = adapter.lower()
+    if "cliproxy" in normalized:
+        return settings.cliproxy_api_key
+    if "groq" in normalized:
+        return settings.groq_cloud_api_key
+    return settings.nine_router_api_key
 
 
 def _tts_endpoint(

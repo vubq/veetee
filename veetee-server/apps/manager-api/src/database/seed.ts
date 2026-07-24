@@ -73,6 +73,12 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       "llama-3.3-70b-versatile",
       "https://api.groq.com/openai/v1",
     ],
+    [
+      ProviderKind.LLM,
+      "openai-compatible-cliproxyapi",
+      "gpt-5.6-terra",
+      "http://127.0.0.1:8317/v1",
+    ],
   ] as const;
   for (const [kind, adapter, model, baseUrl] of providers) {
     const defaultConfig = defaultProviderConfig(adapter);
@@ -160,9 +166,14 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       .filter((provider) => ["silero-local", "sherpa-onnx", "openai-compatible-9router", "vieneu-local"].includes(provider.adapter))
       .map((provider) => [provider.kind.toLowerCase(), provider.id]),
   );
-  const config = defaultAgentConfig(providerIds);
+  const persistedDraft =
+    agent.draftConfig && typeof agent.draftConfig === "object" && !Array.isArray(agent.draftConfig)
+      ? agent.draftConfig as Record<string, unknown>
+      : {};
+  const initializeProviderChains = shouldInitializeProviderChains(persistedDraft);
+  const config = initializeProviderChains ? defaultAgentConfig(providerIds) : persistedDraft;
   const ttsProvider = persistedProviders.find((provider) => provider.id === providerIds.tts);
-  if (ttsProvider) {
+  if (initializeProviderChains && ttsProvider) {
     config.voice = {
       providerId: ttsProvider.id,
       voiceId: "Trúc Ly",
@@ -172,21 +183,25 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       volume: 1,
     };
   }
-  await prisma.agent.update({
-    where: { id: agent.id },
-    data: { draftConfig: config as Prisma.InputJsonValue },
-  });
+  if (initializeProviderChains) {
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { draftConfig: config as Prisma.InputJsonValue },
+    });
+  }
   await prisma.agentConfigVersion.upsert({
     where: { agentId_version: { agentId: agent.id, version: 1 } },
-    update: {
-      snapshot: agentSnapshot(agent.id, config, persistedProviders) as Prisma.InputJsonValue,
-    },
+    update: {},
     create: {
       agentId: agent.id,
       version: 1,
       snapshot: agentSnapshot(agent.id, config, persistedProviders) as Prisma.InputJsonValue,
     },
   });
+}
+
+export function shouldInitializeProviderChains(config: Record<string, unknown>): boolean {
+  return !Array.isArray(config.providerChains) || config.providerChains.length === 0;
 }
 
 export function defaultAgentConfig(providerIds: Record<string, string> = {}): Record<string, unknown> {
@@ -222,6 +237,7 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
   if (adapter === "groq-cloud") {
     return {
       serviceTier: "on_demand",
+      completionTokenParameter: "max_completion_tokens",
       maxCompletionTokens: 1_024,
       temperature: 0.2,
       topP: 0.95,
@@ -229,6 +245,18 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
       parallelToolCalls: true,
       streamProseResponse: true,
       responseFormat: "auto",
+    };
+  }
+  if (adapter === "openai-compatible-cliproxyapi") {
+    return {
+      completionTokenParameter: "max_tokens",
+      maxCompletionTokens: 1_024,
+      temperature: 0.2,
+      topP: 0.95,
+      reasoningEffort: "none",
+      parallelToolCalls: true,
+      streamProseResponse: true,
+      responseFormat: "json_schema",
     };
   }
   if (adapter === "vieneu-local") {

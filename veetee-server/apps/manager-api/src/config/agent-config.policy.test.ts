@@ -105,7 +105,7 @@ describe("validateAgentDraftConfig", () => {
 });
 
 describe("provider and voice config", () => {
-  it("accepts bounded Groq parameters and rejects secret-shaped config", () => {
+  it("accepts bounded LLM parameters and rejects secret-shaped config", () => {
     expect(
       validateProviderConfig("llm", "groq-cloud", {
         temperature: 0.2,
@@ -115,6 +115,17 @@ describe("provider and voice config", () => {
         streamProseResponse: true,
       }),
     ).toMatchObject({ maxCompletionTokens: 1024 });
+    expect(
+      validateProviderConfig("llm", "openai-compatible-cliproxyapi", {
+        temperature: 0.2,
+        maxCompletionTokens: 1024,
+        responseFormat: "json_schema",
+        completionTokenParameter: "max_tokens",
+      }),
+    ).toMatchObject({
+      responseFormat: "json_schema",
+      completionTokenParameter: "max_tokens",
+    });
     expect(() =>
       validateProviderConfig("llm", "groq-cloud", { apiKey: "must-not-live-here" }),
     ).toThrow(BadRequestException);

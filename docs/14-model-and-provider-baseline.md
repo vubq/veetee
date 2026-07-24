@@ -12,6 +12,7 @@ Tài liệu này ghi baseline AI được chọn cho Veetee V1. Nó bổ sung ch
 | ASR nhanh | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | voice-server local | đường chính, streaming/chunk để giảm latency |
 | ASR chất lượng | ChunkFormer-CTC-Large-Vie | voice-server local | re-decode khi Zipformer không đủ tin cậy |
 | LLM | `openai-compatible-9router` | 9router local hoặc endpoint LAN | development/default candidate, có thể thay model/provider bằng Manager |
+| LLM thử nghiệm | `openai-compatible-cliproxyapi` | CLIProxyAPI local | binding độc lập để benchmark/switch theo agent, không phải fallback ngầm |
 | TTS tiếng Việt | VieNeu-TTS v3 Turbo | voice-server local | primary `vi-VN`, sentence/stream chunk tùy khả năng runtime |
 
 Manager có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat Completions).
@@ -235,6 +236,40 @@ giữ nguyên.
 - Không retry request đã abort. Chỉ retry lỗi retryable khi còn `total_turn_deadline`.
 - Chọn model/temperature/context theo agent config; không đóng đinh tên model trong
   firmware hoặc code trung tâm.
+
+### 2.4 CLIProxyAPI local
+
+CLIProxyAPI `7.2.97` trên host hiện chạy cổng `8317`; Veetee gọi loopback qua
+`http://127.0.0.1:8317/v1` bằng adapter
+`openai-compatible-cliproxyapi`. Binding mặc định dùng `gpt-5.6-terra`, nhưng model
+vẫn là dữ liệu Manager và có thể đổi độc lập với 9Router. Catalog tại thời điểm
+kiểm tra gồm `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna` và `gpt-5.6-terra`.
+
+Conformance ngày 2026-07-24 đã pass authenticated `/models`, Chat Completions SSE,
+cancellation, JSON Object Mode, strict JSON Schema và forced tool call. Một số mẫu
+ban đầu cho `gpt-5.6-terra` đạt structured JSON khoảng 1,34--3,19 giây và prose
+hoàn tất khoảng 1,87 giây. Cùng probe đơn lẻ, 9Router đạt structured khoảng
+1,46 giây và prose khoảng 2,15 giây. Số mẫu này chưa đủ để kết luận gateway nào
+nhanh hơn.
+
+Sau các probe conformance, toàn bộ model CLIProxyAPI trả HTTP `429
+usage_limit_reached` từ upstream account. Benchmark xen kẽ vì vậy không có đủ mẫu
+CLIPROXYAPI; 9Router vẫn đạt structured khoảng 1,49 giây, first token khoảng
+0,97 giây và prose hoàn tất khoảng 1,16 giây trong lượt xác minh cuối. Trạng thái
+hiện tại là CLIPROXYAPI chưa vượt benchmark gate, không phải chậm hơn đã được chứng
+minh. Manager giữ binding để switch nhưng đánh dấu `degraded/http_429` cho đến khi
+quota/account upstream hoạt động lại. HTTP 429 không tăng failure count hoặc mở
+circuit vì quota exhaustion không chứng minh endpoint hỏng.
+
+Lệnh benchmark tái lập là `npm run providers:benchmark:gateways`; client key
+CLIProxyAPI phải được truyền qua `VEETEE_CLIPROXY_API_KEY`, không ghi vào repo hoặc
+command log. Script đo structured latency, first-token, prose-total và gom lỗi bounded
+thay vì dừng ở lỗi provider đầu tiên.
+
+CLIProxyAPI hiện listen trên mọi interface của host, dù Veetee chỉ gọi loopback.
+Trước khi dùng ngoài môi trường local phải giữ client-key authentication, giới hạn
+firewall hoặc đổi bind host về loopback. ESP32 và Manager Web không gọi trực tiếp
+cổng `8317`; OAuth token/upstream credential không được sao chép vào Veetee.
 
 ## 3. ASR cascade tiếng Việt
 

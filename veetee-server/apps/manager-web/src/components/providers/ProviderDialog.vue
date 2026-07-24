@@ -18,6 +18,7 @@ const form = reactive({
   secretAction: "keep" as "keep" | "rotate" | "clear", secret: "",
   temperature: 0.2, topP: 0.95, maxCompletionTokens: 1024,
   serviceTier: "on_demand", reasoningEffort: "none", streamProseResponse: true,
+  parallelToolCalls: true, responseFormat: "auto", completionTokenParameter: "max_tokens",
   voice: "", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
 });
 const busy = ref(false);
@@ -36,7 +37,8 @@ const healthLabels: Record<Provider["health"], string> = {
   unknown: "Chưa đo",
 };
 const dialogTitle = computed(() => props.provider ? `Cấu hình ${props.provider.kind.toUpperCase()}` : "Cấu hình provider");
-const isGroq = computed(() => props.provider?.adapter.toLowerCase().includes("groq") ?? false);
+const isLlm = computed(() => props.provider?.kind === "llm");
+const isGroq = computed(() => form.adapter.toLowerCase().includes("groq"));
 const isTts = computed(() => props.provider?.kind === "tts");
 const isVieNeu = computed(() => form.adapter.toLowerCase().includes("vieneu"));
 const supportsPitch = computed(() => props.provider?.config?.supportsPitch !== false);
@@ -71,6 +73,9 @@ watch(
     form.serviceTier = String(config.serviceTier ?? "on_demand");
     form.reasoningEffort = String(config.reasoningEffort ?? "none");
     form.streamProseResponse = config.streamProseResponse !== false;
+    form.parallelToolCalls = config.parallelToolCalls !== false;
+    form.responseFormat = String(config.responseFormat ?? "auto");
+    form.completionTokenParameter = String(config.completionTokenParameter ?? "max_tokens");
     form.voice = String(config.voice ?? config.voiceId ?? "");
     form.rate = Number(config.rate ?? 1);
     form.pitchHz = Number(config.pitchHz ?? 0);
@@ -91,15 +96,19 @@ async function submit(): Promise<void> {
   error.value = "";
   try {
     const config = { ...(props.provider.config ?? {}) } as Record<string, unknown>;
-    if (isGroq.value) {
+    if (isLlm.value) {
       Object.assign(config, {
         temperature: Number(form.temperature),
         topP: Number(form.topP),
         maxCompletionTokens: Number(form.maxCompletionTokens),
-        serviceTier: form.serviceTier,
         reasoningEffort: form.reasoningEffort,
+        parallelToolCalls: form.parallelToolCalls,
         streamProseResponse: form.streamProseResponse,
+        responseFormat: form.responseFormat,
+        completionTokenParameter: form.completionTokenParameter,
+        ...(isGroq.value ? { serviceTier: form.serviceTier } : {}),
       });
+      if (!isGroq.value) delete config.serviceTier;
     }
     if (isTts.value) {
       Object.assign(config, {
@@ -116,7 +125,7 @@ async function submit(): Promise<void> {
       locales: form.locales.split(",").map((value) => value.trim()).filter(Boolean),
       secretAction: form.secretAction,
       ...(form.secretAction === "rotate" ? { secret: form.secret } : {}),
-      ...(isGroq.value || isTts.value ? { config } : {}),
+      ...(isLlm.value || isTts.value ? { config } : {}),
     });
     emit("close");
   } catch (exception) {
@@ -154,14 +163,17 @@ async function submit(): Promise<void> {
         </div>
       </section>
 
-      <section v-if="isGroq || isTts" class="provider-form-section">
+      <section v-if="isLlm || isTts" class="provider-form-section">
         <header><span>03</span><div><h3>Tham số provider</h3><p>Giá trị được validate và đóng băng vào agent snapshot khi publish.</p></div></header>
-        <div v-if="isGroq" class="form-grid two">
+        <div v-if="isLlm" class="form-grid two">
           <VtField label="Temperature" hint="0–2"><VtInput v-model="form.temperature" type="number" min="0" max="2" step="0.05" /></VtField>
           <VtField label="Top P" hint="0–1"><VtInput v-model="form.topP" type="number" min="0" max="1" step="0.05" /></VtField>
           <VtField label="Max completion tokens" hint="64–16.384"><VtInput v-model="form.maxCompletionTokens" type="number" min="64" max="16384" /></VtField>
-          <VtField label="Service tier"><VtSelect v-model="form.serviceTier"><option value="on_demand">On demand</option><option value="auto">Auto</option><option value="flex">Flex</option><option value="performance">Performance</option></VtSelect></VtField>
+          <VtField v-if="isGroq" label="Service tier"><VtSelect v-model="form.serviceTier"><option value="on_demand">On demand</option><option value="auto">Auto</option><option value="flex">Flex</option><option value="performance">Performance</option></VtSelect></VtField>
           <VtField label="Reasoning effort"><VtSelect v-model="form.reasoningEffort"><option value="none">None</option><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></VtSelect></VtField>
+          <VtField label="Structured response"><VtSelect v-model="form.responseFormat"><option value="auto">Auto</option><option value="json_schema">Strict JSON Schema</option><option value="json_object">JSON Object</option></VtSelect></VtField>
+          <VtField label="Token parameter"><VtSelect v-model="form.completionTokenParameter"><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></VtSelect></VtField>
+          <div class="provider-switch span-two"><VtSwitch v-model="form.parallelToolCalls" label="Cho phép parallel tool calls" description="Provider có thể đề xuất nhiều tool; schema và policy MCP vẫn kiểm tra từng lệnh." /></div>
           <div class="provider-switch span-two"><VtSwitch v-model="form.streamProseResponse" label="Stream câu trả lời sang TTS" description="Planner chỉ quyết định luồng; nội dung trả lời được stream theo từng câu để TTS bắt đầu sớm." /></div>
         </div>
         <div v-else class="form-grid two">

@@ -174,6 +174,38 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
     assert profile.tts_endpoint.config["outputSampleRate"] == 24000
 
 
+def test_session_profile_uses_cliproxy_secret_without_reusing_9router_key() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        VEETEE_9ROUTER_API_KEY="router-key",  # type: ignore[call-arg]
+        VEETEE_CLIPROXY_API_KEY="cliproxy-key",  # type: ignore[call-arg]
+    )
+    profile = SessionProfile.from_payload(
+        {
+            "providerChains": [
+                {
+                    "kind": "llm",
+                    "locale": "vi-VN",
+                    "providers": [
+                        {
+                            "id": "cliproxy-provider",
+                            "kind": "llm",
+                            "adapter": "openai-compatible-cliproxyapi",
+                            "model": "gpt-5.6-terra",
+                            "baseUrl": "http://127.0.0.1:8317/v1",
+                        }
+                    ],
+                }
+            ]
+        },
+        settings,
+    )
+
+    assert profile.llm_chain[0].api_key == "cliproxy-key"
+    assert profile.llm_chain[0].api_key != "router-key"
+
+
 @pytest.mark.asyncio
 async def test_manager_authenticates_device_and_caches_immutable_config() -> None:
     config_calls = 0

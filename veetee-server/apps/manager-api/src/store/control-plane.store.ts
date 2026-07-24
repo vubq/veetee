@@ -1381,14 +1381,15 @@ export class ControlPlaneStore {
     const startedAt = Date.now();
     const result = await this.probeProvider(provider);
     const healthLatencyMs = Date.now() - startedAt;
+    const countsTowardCircuit = providerErrorCountsTowardCircuit(result.errorCode);
     const failureCount =
-      result.health === ProviderHealth.HEALTHY
+      result.health === ProviderHealth.HEALTHY || !countsTowardCircuit
         ? 0
         : result.health === ProviderHealth.DEGRADED
           ? provider.failureCount + 1
           : provider.failureCount;
     const circuitState =
-      result.health === ProviderHealth.HEALTHY
+      result.health === ProviderHealth.HEALTHY || !countsTowardCircuit
         ? ProviderCircuitState.CLOSED
         : failureCount >= 3
           ? ProviderCircuitState.OPEN
@@ -1667,10 +1668,24 @@ export class ControlPlaneStore {
     }
     try {
       const baseUrl = provider.baseUrl.replace(/\/$/, "");
-      const response = await fetch(providerHealthProbeUrl(baseUrl), {
-        headers,
-        signal: AbortSignal.timeout(3_000),
-      });
+      const llmProbe = provider.kind === ProviderKind.LLM;
+      const response = await fetch(
+        llmProbe ? providerInferenceProbeUrl(baseUrl) : providerHealthProbeUrl(baseUrl),
+        llmProbe
+          ? {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify(
+                providerInferenceProbeBody(provider.model, recordValue(provider.config)),
+              ),
+              signal: AbortSignal.timeout(15_000),
+            }
+          : {
+              headers,
+              signal: AbortSignal.timeout(3_000),
+            },
+      );
+      await response.body?.cancel();
       return response.ok
         ? { health: ProviderHealth.HEALTHY, errorCode: null }
         : { health: ProviderHealth.DEGRADED, errorCode: `http_${response.status}` };
@@ -1747,4 +1762,33 @@ export class ControlPlaneStore {
 
 export function providerHealthProbeUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/$/, "")}/models`;
+}
+
+export function providerInferenceProbeUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+}
+
+export function providerInferenceProbeBody(
+  model: string,
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const configuredParameter = config.completionTokenParameter;
+  const tokenParameter =
+    configuredParameter === "max_completion_tokens" ? configuredParameter : "max_tokens";
+  return {
+    model,
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: "Reply with OK only. This is a provider readiness probe.",
+      },
+    ],
+    temperature: 0,
+    [tokenParameter]: 16,
+  };
+}
+
+export function providerErrorCountsTowardCircuit(errorCode: string | null): boolean {
+  return errorCode !== "http_429";
 }

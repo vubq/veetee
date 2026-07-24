@@ -85,6 +85,11 @@ registry phải khai báo `streaming=false` để planner không hứa first-res
   conformance test cho streaming, structured output, tool calling, cancellation,
   concurrency và usage metadata. Voice profile mặc định dùng
   `reasoning_effort=none`; không đưa reasoning content vào TTS.
+- `openai-compatible-cliproxyapi`: binding local/dev độc lập cho CLIProxyAPI,
+  endpoint mặc định `http://127.0.0.1:8317/v1`. Agent phải chọn binding này tường
+  minh; registry không tự đổi từ 9Router sang CLIProxyAPI. OAuth/upstream credential
+  tiếp tục do CLIProxyAPI quản lý, còn Veetee chỉ giữ client key của gateway trong
+  encrypted provider secret.
 - `openai-compatible`: adapter chung cho OpenAI Platform, DeepSeek, Qwen, GLM,
   OpenRouter và self-hosted gateway.
 - `gemini`: adapter native khi cần multimodal/live.
@@ -163,10 +168,11 @@ rate limit là budget theo model/account có cửa sổ phục hồi riêng, kh�
 endpoint bị hỏng. Nhờ vậy provider được thử lại ở lượt sau ngay khi quota hồi thay vì
 bị che bởi `ProviderChainUnavailable`.
 
-Health probe của LLM chỉ gọi authenticated model catalog, không tạo completion và
-không tiêu tốn token generation. `healthLatencyMs` vì vậy là network/endpoint
-round-trip, không phải time-to-first-token hay tốc độ sinh. Latency hội thoại phải đọc
-từ `conversation_llm_first_token` và `tts.first_audio`.
+Nút Test runtime của LLM tạo một completion tối thiểu bằng đúng model và secret đã
+cấu hình. Chỉ `/models` không đủ chứng minh inference còn quota hoặc model route dùng
+được. Phép đo này có thể tiêu tốn một lượng token rất nhỏ; `healthLatencyMs` là tổng
+thời gian readiness inference, vẫn không thay thế benchmark time-to-first-token.
+Latency hội thoại phải đọc từ `conversation_llm_first_token` và `tts.first_audio`.
 ASR chain đã có contract/config nhưng ChunkFormer vẫn chỉ được bật sau benchmark
 conditional re-decode; source không chạy hai ASR song song trên mọi utterance.
 

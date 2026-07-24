@@ -85,7 +85,7 @@ function authLabel(provider: Provider): string {
     </div>
 
     <dl class="provider-facts">
-      <div><dt title="Thời gian gọi health endpoint, không phải thời gian sinh token">Health round-trip</dt><dd>{{ provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "Chưa đo" }}</dd></div>
+      <div><dt title="LLM được kiểm tra bằng một inference tối thiểu; provider khác dùng readiness endpoint">Runtime probe</dt><dd>{{ provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "Chưa đo" }}</dd></div>
       <div><dt>Circuit breaker</dt><dd>{{ circuitLabel(provider.circuitState) }}</dd></div>
       <div><dt>Ngôn ngữ</dt><dd>{{ provider.locales.join(", ") || "—" }}</dd></div>
       <div><dt>Xác thực</dt><dd>{{ authLabel(provider) }}</dd></div>

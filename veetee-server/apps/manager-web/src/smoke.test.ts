@@ -5,6 +5,7 @@ import agentsPage from "./components/pages/AgentsPage.vue?raw";
 import devicesPage from "./components/pages/DevicesPage.vue?raw";
 import deviceUiPage from "./components/pages/DeviceUiPage.vue?raw";
 import deviceDiagnosticsPanel from "./components/device-ui/DeviceDiagnosticsPanel.vue?raw";
+import providerDialog from "./components/providers/ProviderDialog.vue?raw";
 import realtimeLabPage from "./components/pages/RealtimeLabPage.vue?raw";
 import firmwareContract from "./device-ui/firmware-contract.ts?raw";
 
@@ -63,5 +64,13 @@ describe("Vue-native Manager Web", () => {
     expect(agentsPage).toContain("deletePersonalityPreset");
     expect(agentsPage).toContain("voiceQualityWarnings");
     expect(agentsPage).toContain("có nguy cơ clipping");
+  });
+
+  it("configures every LLM binding without coupling parameters to one vendor", () => {
+    expect(providerDialog).toContain('props.provider?.kind === "llm"');
+    expect(providerDialog).toContain("form.responseFormat");
+    expect(providerDialog).toContain("form.completionTokenParameter");
+    expect(providerDialog).toContain("form.parallelToolCalls");
+    expect(providerDialog).toContain("streamProseResponse");
   });
 });

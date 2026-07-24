@@ -84,15 +84,21 @@ export function validateProviderConfig(
     normalized[key] = item;
   }
 
-  if (kind === "llm" && (adapter === "groq-cloud" || adapter.includes("groq"))) {
+  if (kind === "llm") {
     boundedNumber(normalized, "temperature", 0, 2);
     boundedNumber(normalized, "topP", 0, 1);
     boundedInteger(normalized, "maxCompletionTokens", 64, 16_384);
-    boundedEnum(normalized, "serviceTier", ["auto", "on_demand", "flex", "performance"]);
+    if (normalized.serviceTier !== undefined) {
+      boundedEnum(normalized, "serviceTier", ["auto", "on_demand", "flex", "performance"]);
+    }
     boundedEnum(normalized, "reasoningEffort", ["none", "default", "low", "medium", "high"]);
     boundedBoolean(normalized, "parallelToolCalls");
     boundedBoolean(normalized, "streamProseResponse");
     boundedEnum(normalized, "responseFormat", ["auto", "json_object", "json_schema"]);
+    boundedEnum(normalized, "completionTokenParameter", [
+      "max_tokens",
+      "max_completion_tokens",
+    ]);
   }
   if (kind === "tts") {
     boundedNumber(normalized, "rate", 0.5, 2.0);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasAuthoritativeVoiceCatalogDrift,
   hasProviderConfigVersionUpgrade,
+  shouldInitializeProviderChains,
 } from "./seed.js";
 
 describe("provider seed config", () => {
@@ -20,5 +21,21 @@ describe("provider seed config", () => {
     expect(hasProviderConfigVersionUpgrade(2, 3)).toBe(true);
     expect(hasProviderConfigVersionUpgrade(3, 3)).toBe(false);
     expect(hasProviderConfigVersionUpgrade(4, 3)).toBe(false);
+  });
+
+  it("never overwrites an agent provider chain during bootstrap", () => {
+    expect(shouldInitializeProviderChains({})).toBe(true);
+    expect(shouldInitializeProviderChains({ providerChains: [] })).toBe(true);
+    expect(
+      shouldInitializeProviderChains({
+        providerChains: [
+          {
+            kind: "llm",
+            locale: "vi-VN",
+            providerIds: ["user-selected-provider"],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });
