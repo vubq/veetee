@@ -60,6 +60,27 @@ def test_groq_payload_uses_cloud_specific_parameters_without_changing_context() 
     assert "reasoningEffort" not in provider._config
 
 
+def test_groq_reasoning_is_preserved_for_supported_model_families() -> None:
+    provider = GroqCloudLlmProvider(
+        base_url="https://api.groq.com/openai/v1",
+        model="openai/gpt-oss-20b",
+        config={"reasoningEffort": "medium"},
+    )
+    payload = provider._payload(
+        LlmRequest(
+            transcript=Transcript("Giải thích ngắn gọn.", "vi-VN"),
+            plan=ConversationPlan(
+                PlanAction.RESPOND,
+                DialogueAct.QUESTION,
+                "vi-VN",
+                "explain",
+                True,
+            ),
+        )
+    )
+    assert payload["reasoning_effort"] == "medium"
+
+
 @pytest.mark.asyncio
 async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
     observed: dict[str, object] = {}

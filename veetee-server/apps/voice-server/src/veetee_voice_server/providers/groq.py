@@ -30,21 +30,30 @@ class GroqCloudLlmProvider(NineRouterLlmProvider):
         # is supported by the general-purpose Llama model used by the seed.
         normalized_config = dict(config or {})
         normalized_config["responseFormat"] = "json_object"
-        normalized_config.pop("reasoningEffort", None)
+        supports_reasoning = self._supports_reasoning_model(model)
+        if not supports_reasoning:
+            normalized_config.pop("reasoningEffort", None)
         super().__init__(
             base_url=base_url,
             model=model,
             api_key=api_key,
-            reasoning_effort="",
+            reasoning_effort=reasoning_effort if supports_reasoning else "",
             config=normalized_config,
             provider_label="Groq Cloud",
             completion_token_parameter="max_completion_tokens",
             client=client,
         )
+        self._supports_reasoning = supports_reasoning
 
     def _payload(self, request: Any) -> dict[str, Any]:
         # Groq rejects the OpenAI-compatible metadata extension used by 9router.
         payload = super()._payload(request)
         payload.pop("metadata", None)
-        payload.pop("reasoning_effort", None)
+        if not self._supports_reasoning:
+            payload.pop("reasoning_effort", None)
         return payload
+
+    @staticmethod
+    def _supports_reasoning_model(model: str) -> bool:
+        normalized = model.lower()
+        return normalized.startswith("qwen/") or normalized.startswith("openai/gpt-oss-")
