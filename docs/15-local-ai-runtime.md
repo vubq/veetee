@@ -8,10 +8,10 @@ state machine.
 ## Host profile
 
 The benchmark host has an Intel i5-10300H (4 physical / 8 logical CPU threads),
-15 GiB RAM and an NVIDIA GTX 1650 Ti with 4 GiB VRAM. The production environment
-uses ONNX Runtime CPU. A separate CUDA 12 / ONNX Runtime GPU environment was also
-measured against the same models and fixed random seeds; it did not improve this
-INT8 workload on the GTX 1650 Ti.
+15 GiB RAM and an NVIDIA GTX 1650 Ti with 4 GiB VRAM. VAD/ASR and the MOSS codec
+use ONNX Runtime CPU; the active host TTS uses VieNeu native C++ CPU. A separate
+CUDA 12 / ONNX Runtime GPU environment was also measured against the same models
+and fixed random seeds; it did not improve this workload on the GTX 1650 Ti.
 
 All model workers run directly in the voice-server virtual environment. Docker is
 not required for speech inference. Model files are under `veetee-server/models/`
@@ -25,14 +25,16 @@ uses them.
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
 | ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at neutral 1.0x tempo with 16-frame lead-in | stable pitch, bounded startup buffer, incremental audio and cancellation |
-| TTS benchmark option | VieNeu-TTS.cpp native CPU | llama.cpp native SIMD + ONNX MOSS codec | faster complete synthesis on this host, but the current C ABI is batch-only |
+| TTS active host | VieNeu-TTS.cpp native CPU | 4 threads, llama.cpp SIMD + ONNX MOSS codec, 24/40 lead and 48/72 steady batch bounds | Small lead chunk lowers first audio; exact configured tempo, measured headroom and bounded playback queue |
+| TTS compatibility default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at neutral 1.0x tempo with 16-frame lead-in | clone-safe default when native library/model pack is absent |
 
-The default TTS remains the ONNX path even though the native benchmark is faster
-for complete audio. Realtime conversation requires incremental audio and a clear
-barge-in cancellation boundary; selecting a batch-only native call would make
-that behavior worse. Native C++ is therefore an opt-in worker profile until its
-stream callback and cancellation API are implemented and benchmarked.
+Repository examples retain ONNX as the portable default, while this development
+host selects `VEETEE_TTS_BACKEND=native`. The native C ABI is batch-only, so the
+adapter releases a 24/40-character lead chunk and bounds steady batches at 48/72
+characters, buffers five seconds of paced device audio, schedules browser PCM
+ahead, and serializes the native worker. Abort clears
+speaker/browser audio and rejects the generation immediately; an in-flight C call
+may finish silently under its worker lock because native code cannot be force-killed.
 
 ## Measured results
 
@@ -61,7 +63,8 @@ the audio buffer without making inference faster, so it is not the default.
 | --- | ---: | ---: | ---: | ---: |
 | VieNeu ONNX INT8 CPU, stream lead-in 16 | 2 | 1.56 / 1.72 s | 3.98 / 4.24 s | 1.148 / 1.205 |
 | VieNeu ONNX INT8 CUDA with CPU fallback | 2 | 696 / 1,365 ms | 4.06 / 5.05 s | 1.303 / 1.804 |
-| VieNeu native C++ CPU | 4 | batch-only | 2.22 s historical run | 0.75 historical run |
+| VieNeu native C++ CPU, 75-character probe | 4 | batch complete in 3.22 s | 3.22 s | 0.745 |
+| VieNeu native C++ CPU, 190-character probe | 4 | batch complete in 9.65 s | 9.65 s | 0.957 |
 
 The CUDA graph produced many CPU/GPU copy boundaries, used only about 4--10% GPU,
 and peaked near 1 GiB VRAM during the sampled run. The current VieNeu INT8 export
@@ -76,11 +79,17 @@ ten runs. The lead-in trades a few hundred milliseconds of first audio for a
 continuous stream; the old 1.5x profile shortened playback but caused gaps because
 the autoregressive generator remained slower than the speaker clock.
 
-The native run used a 630 MiB model pack and peaked at about 959 MiB RSS. A
-one-shot CLI process took about 5.4 s wall time because model loading dominates;
-production must keep the engine resident. The native profile currently exposes
-`vieneu_synthesize_v3()` only, so it cannot meet the same first-audio and
-user-stop guarantees as the ONNX streaming profile.
+The current native run uses the 630 MiB model pack and peaked near 1.68 GiB RSS
+including initialization. The 190-character one-shot CLI took 13.92 s wall time,
+of which 9.65 s was synthesis, so production keeps the context resident. A live
+Groq + native Lab run produced 854 characters/37.41 s PCM without provider errors,
+then answered a separate `1 + 1` turn in 1.82 s. A 2026-07-24 direct native probe
+measured 24 characters in 1.07--1.44 s, 50 characters in 1.95--2.13 s and
+82 characters in 3.32--3.79 s across Trúc Ly/Ngọc Linh, with RTF 0.72--0.75.
+Those measurements drive the smaller lead/steady bounds. Tempo is no longer
+adaptively reduced: `effective_speed` equals the published request, while
+`realtime_speed_ceiling` reports whether a long response may drain its playback
+buffer.
 
 ### Thread sweep for local speech
 
@@ -97,27 +106,33 @@ first-audio expectations:
 | 6 | 82.32 / 141.58 ms | 516 / 654 ms | 1.239 / 1.348 |
 | 8 | 108.28 / 158.63 ms | not selected | not selected |
 
-The selected profile uses two ASR threads and two TTS threads. Six TTS threads had
-a similar median first-audio result but worse p95, worse complete RTF and much
-higher sustained CPU temperature. More logical threads do not improve this
-recurrent INT8 workload on the four-core host.
+The ONNX compatibility profile uses two ASR threads and two TTS threads. Six ONNX
+TTS threads had a similar median first-audio result but worse p95, worse complete
+RTF and much higher sustained CPU temperature. The active native profile uses four
+threads, matching the native benchmark on this four-core host.
 
 ## Runtime controls
 
 ```env
 VEETEE_MODELS_ROOT=models
 VEETEE_ASR_THREADS=2
-VEETEE_TTS_THREADS=2
+VEETEE_TTS_THREADS=4
+VEETEE_TTS_BACKEND=native
 VEETEE_TTS_VOICE="Trúc Ly"
+VEETEE_TTS_STYLE=tu_nhien
 VEETEE_TTS_SPEED=1.0
 VEETEE_TTS_STREAM_LEADIN_FRAMES=16
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
+VEETEE_TTS_NATIVE_MODEL_DIR=models/vieneu-v3-turbo-native
+VEETEE_TTS_NATIVE_LIBRARY_PATH=.cache/local-ai/VieNeu-TTS.cpp/build-cpu/libvieneu-tts.so
+VEETEE_TTS_NATIVE_REALTIME_HEADROOM=1.15
+VEETEE_TTS_PLAYBACK_QUEUE_SECONDS=5
 VEETEE_LLM_PREWARM=true
 VEETEE_LLM_PREWARM_SECONDS=12
 VEETEE_PLANNER_SECONDS=8
 VEETEE_9ROUTER_MODEL=cx/gpt-5.6-terra
-VEETEE_DEFAULT_PERSONA="You are Veetee, a concise voice assistant. Reply in the user's language using one to three short spoken sentences. Do not use Markdown or expose hidden reasoning."
+VEETEE_DEFAULT_PERSONA="You are Veetee, a natural voice assistant. Reply in the user's language with as much detail as the request needs. Start speaking promptly, continue until the answer is complete, and do not use Markdown or expose hidden reasoning."
 ```
 
 Prepare the default stack:
@@ -214,8 +229,13 @@ answer must be grounded in the real MCP result. This hybrid removes one sequenti
 provider call from common knowledge/social turns without fabricating tool success.
 Static planner responses, clarification and goodbye text still pass through the
 same Vietnamese sentence chunker as streamed prose. Each sentence receives a
-bounded TTS operation context while the device sees one continuous
-`tts:start`/audio/`tts:stop` lifecycle.
+refreshed synthesis-idle deadline while the device sees one continuous
+`tts:start`/audio/`tts:stop` lifecycle. Native VieNeu emits an initial chunk with
+24/40 target/maximum characters, then coalesces steady chunks toward 48 characters
+with a 72-character maximum and reserves its single worker for the complete speech
+turn. Queue wait is cancellation-aware but does not consume the synthesis-idle
+deadline, so concurrent Lab/device sessions cannot alternate the model after every
+sentence or fail merely because another response is still speaking.
 
 The latest cancellation run sent abort on the first downlink frame. `tts:stop` and
 the next `listen:start` arrived in about 6.4 ms on loopback (earlier warm samples
@@ -223,8 +243,10 @@ were about 0.5--2.1 ms). At most two more
 frames from the three-frame prebuffer were already on the wire; firmware closes
 its local playback generation before sending abort, so those stale frames do not
 reach the speaker. The paced sender now runs independently from TTS inference,
-allowing synthesis and playback to overlap while keeping a bounded 12-frame
-server queue.
+allowing synthesis and playback to overlap while keeping a configurable, bounded
+five-second server queue. Lab sends PCM ahead but delays normal `tts.stop` until
+the scheduled PCM duration has elapsed; cancelled stop clears browser playback
+immediately.
 
 The MCP full-loop run discovered the regular device catalog, mapped the Vietnamese
 request to `self.audio_speaker.set_volume({"volume":55})`, normalized the device
@@ -235,8 +257,7 @@ ms and emitted no stale LLM text, TTS or follow-up tool call. No `tts:stop` is
 expected in this scenario because playback had not started; an abort during active
 playback still follows the `tts:stop` contract above.
 
-Prepare the optional native benchmark pack (about 630 MiB; still ignored by
-Git):
+Prepare the native model pack (about 630 MiB; still ignored by Git):
 
 ```bash
 cd veetee-server
@@ -245,18 +266,22 @@ npm run models:prepare-native
 
 The native build cache and ONNX Runtime C++ SDK are intentionally kept under
 `veetee-server/.cache/local-ai/`. They are not application dependencies and are
-not copied into firmware or committed to the repository.
+not copied into firmware or committed to the repository. Native mode fails
+readiness when the configured library or assets are missing; it never silently
+falls back to another voice backend.
 
 ## Production decision and next optimization
 
-1. Keep Zipformer + Silero + VieNeu ONNX INT8 as the V1 local speech baseline.
+1. Keep Zipformer + Silero on ONNX CPU; use VieNeu native CPU on this host and
+   retain VieNeu ONNX as the portable compatibility backend.
 2. Prewarm all three sessions during voice-server startup and expose each state
    through `/health/ready`.
 3. Stream sentence-sized TTS chunks, clear the playback queue on arbiter abort,
    and never wait for a full LLM answer before starting the first sentence.
-4. Add a native TTS stream callback that emits decoded PCM per text/audio chunk,
-   accepts a cancellation token, and preserves the same `OperationContext` as
-   the Python provider. Only then can the native 0.75 RTF result replace ONNX.
+4. Upstream a native stream/progress callback with cooperative cancellation. The
+   current bounded-batch adapter is realtime-safe through generation rejection,
+   worker serialization and playback buffering, but cannot terminate C inference
+   in the middle of a batch.
 5. Install ChunkFormer in a separate environment only when a labeled Vietnamese
    noise/name/number corpus shows a meaningful WER gain. Its CC BY-NC license
    must remain visible in Manager before any redistribution or commercial use.

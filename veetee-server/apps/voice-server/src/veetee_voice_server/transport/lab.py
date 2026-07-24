@@ -68,6 +68,8 @@ class LabConversationSink:
         self._cancel_generation = 0
         self._tts_generation: int | None = None
         self._first_audio_generation: int | None = None
+        self._playback_until = 0.0
+        self._playback_cancelled = asyncio.Event()
 
     async def emit(self, output: ConversationOutput) -> None:
         if output.generation < self._cancel_generation:
@@ -99,6 +101,8 @@ class LabConversationSink:
         if output.kind is OutputKind.TTS_START:
             self._tts_generation = output.generation
             self._first_audio_generation = None
+            self._playback_until = monotonic()
+            self._playback_cancelled = asyncio.Event()
             await self.send_event(
                 "tts.start", {}, turn_id=output.turn_id, generation=output.generation
             )
@@ -109,11 +113,21 @@ class LabConversationSink:
         if output.kind is OutputKind.TTS_STOP:
             if self._tts_generation != output.generation:
                 return
+            if output.payload.get("cancelled") is True:
+                self._playback_cancelled.set()
+            else:
+                await self._wait_for_browser_playback()
+            if self._tts_generation != output.generation:
+                return
             await self.send_event(
-                "tts.stop", {}, turn_id=output.turn_id, generation=output.generation
+                "tts.stop",
+                output.payload,
+                turn_id=output.turn_id,
+                generation=output.generation,
             )
             self._tts_generation = None
             self._first_audio_generation = None
+            self._playback_until = 0.0
             return
         if output.kind is OutputKind.ERROR:
             await self.send_event(
@@ -182,6 +196,7 @@ class LabConversationSink:
 
     async def cancel_tts(self, generation: int) -> None:
         self._cancel_generation = max(self._cancel_generation, generation)
+        self._playback_cancelled.set()
         if self._tts_generation is not None:
             await self.send_event(
                 "tts.stop",
@@ -190,9 +205,11 @@ class LabConversationSink:
             )
         self._tts_generation = None
         self._first_audio_generation = None
+        self._playback_until = 0.0
 
     def mark_cancelled(self, generation: int) -> None:
         self._cancel_generation = max(self._cancel_generation, generation)
+        self._playback_cancelled.set()
 
     async def _send_audio(self, output: ConversationOutput) -> None:
         audio = output.audio
@@ -220,6 +237,19 @@ class LabConversationSink:
             )
         async with self._wire_lock:
             await self._websocket.send_bytes(pcm)
+        duration_seconds = len(pcm) / (self._output_sample_rate * 2)
+        self._playback_until = (
+            max(self._playback_until, monotonic()) + duration_seconds
+        )
+
+    async def _wait_for_browser_playback(self) -> None:
+        remaining = self._playback_until - monotonic()
+        if remaining <= 0:
+            return
+        try:
+            await asyncio.wait_for(self._playback_cancelled.wait(), timeout=remaining)
+        except TimeoutError:
+            pass
 
     async def _send_json(self, payload: dict[str, Any]) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -824,7 +854,7 @@ class LabSession:
             f"goodbye:{self.session_id}",
             self.arbiter.snapshot.generation,
             CancellationToken(),
-            monotonic() + self.profile.policy.tts_seconds,
+            monotonic() + self.profile.policy.tts_stream_idle_seconds,
         )
         started = False
         failure: Exception | None = None

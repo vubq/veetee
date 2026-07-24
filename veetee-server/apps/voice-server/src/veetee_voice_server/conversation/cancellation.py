@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
 
@@ -110,11 +110,44 @@ async def await_operation[T](awaitable: Awaitable[T], context: OperationContext)
 
 
 async def iterate_operation[T](
-    stream: AsyncIterator[T], context: OperationContext
+    stream: AsyncIterator[T],
+    context: OperationContext,
+    *,
+    idle_timeout_seconds: float | None = None,
+    first_item_timeout_seconds: float | None = None,
+    is_progress: Callable[[T], bool] | None = None,
 ) -> AsyncIterator[T]:
+    if idle_timeout_seconds is not None and idle_timeout_seconds <= 0:
+        raise ValueError("idle_timeout_seconds must be positive")
+    if first_item_timeout_seconds is not None and first_item_timeout_seconds <= 0:
+        raise ValueError("first_item_timeout_seconds must be positive")
+    waiting_for_first_progress = True
+    progress_deadline_at: float | None = None
     while True:
+        if progress_deadline_at is None:
+            timeout_seconds = (
+                first_item_timeout_seconds
+                if waiting_for_first_progress and first_item_timeout_seconds is not None
+                else idle_timeout_seconds
+            )
+            operation_context = (
+                context.child(timeout_seconds) if timeout_seconds is not None else context
+            )
+            progress_deadline_at = operation_context.deadline_at
+        else:
+            operation_context = OperationContext(
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                generation=context.generation,
+                token=context.token,
+                deadline_at=min(context.deadline_at, progress_deadline_at),
+            )
         try:
-            item = await await_operation(anext(stream), context)
+            item = await await_operation(anext(stream), operation_context)
         except StopAsyncIteration:
             return
+        made_progress = is_progress(item) if is_progress is not None else True
+        if made_progress:
+            waiting_for_first_progress = False
+            progress_deadline_at = None
         yield item

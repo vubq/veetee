@@ -6,7 +6,7 @@ Vertical slice hiện chạy thật tại `/veetee/v1/`:
 
 ```text
 Opus -> Silero VAD -> Zipformer Vietnamese INT8 -> local admission
-     -> structured planner/9Router -> streaming LLM -> VieNeu ONNX INT8
+     -> structured planner/9Router -> streaming LLM -> VieNeu native/ONNX
      -> Opus
 ```
 
@@ -25,6 +25,17 @@ cp .env.example .env
 npm run models:prepare
 npm run dev:voice
 ```
+
+Clone mới dùng `VEETEE_TTS_BACKEND=onnx`. Host đã benchmark có thể chạy
+`npm run models:prepare-native`, build thư viện VieNeu-TTS.cpp đã pin và đặt
+`VEETEE_TTS_BACKEND=native`; voice-server sẽ fail readiness nếu model hoặc shared
+library không đủ thay vì âm thầm đổi backend.
+
+VieNeu native dùng lead chunk 24–40 ký tự rồi batch duy trì 48–72 ký tự để LLM
+stream vừa đủ một cụm tự nhiên là bắt đầu TTS. `VEETEE_TTS_STYLE=tu_nhien` là
+style hội thoại mặc định; agent có thể chọn riêng `doc_truyen` hoặc `tin_tuc`.
+Tempo từ agent được áp dụng đúng, còn runtime chỉ log headroom và cảnh báo nếu
+speed cao hơn throughput CPU.
 
 Nếu 9Router bật `Require API key`, đặt key riêng của app trong
 `VEETEE_9ROUTER_API_KEY`; không commit key và không đưa key xuống firmware.

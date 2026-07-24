@@ -100,6 +100,7 @@ class FakeTtsEngine:
     def infer_stream(self, text: str, **kwargs: Any) -> Iterator[np.ndarray[Any, Any]]:
         assert text == "Xin chào"
         assert kwargs["voice"] == "Ngọc Linh"
+        assert kwargs["style"] == "tu_nhien"
         yield np.full(4_800, 0.25, dtype=np.float32)
 
 
@@ -163,15 +164,114 @@ async def test_vieneu_profile_views_share_inference_lock_and_report_risky_postpr
     )
     profile = base.with_profile(
         voice="Trúc Ly",
+        style="doc_truyen",
         speed=1.5,
         volume=1.25,
     )
 
     assert profile._inference_lock is base._inference_lock
+    assert profile._turn_lock is base._turn_lock
+    assert profile._turn_scope_active is base._turn_scope_active
+    assert profile._worker_lock is base._worker_lock
+    assert profile._style == "doc_truyen"
     assert profile.quality_warnings == (
         "postprocess_rate_starvation_risk",
         "amplification_clipping_risk",
     )
+
+
+async def test_vieneu_native_profile_uses_shorter_batch_chunks() -> None:
+    base = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        backend="native",
+        native_model_dir=Path("native-model"),
+        native_library_path=Path("libvieneu-tts.so"),
+        engine=ToneTtsEngine(),
+    )
+    profile = base.with_profile(voice="Trúc Ly", speed=1.0)
+
+    assert base.preferred_text_chunk_characters == 48
+    assert profile.preferred_text_chunk_characters == 48
+    assert base.maximum_text_chunk_characters == 72
+    assert profile.maximum_text_chunk_characters == 72
+    assert base.initial_text_chunk_characters == 24
+    assert profile.initial_maximum_text_chunk_characters == 40
+    assert profile._backend == "native"
+    assert profile._native_model_dir == Path("native-model")
+    assert profile._native_library_path == Path("libvieneu-tts.so")
+
+
+async def test_vieneu_native_honors_requested_speed_without_feedback_slowdown() -> None:
+    class SlowNativeBatchEngine:
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text, kwargs
+            sleep(0.12)
+            yield np.zeros(48_000, dtype=np.float32)
+
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        speed=1.5,
+        backend="native",
+        native_model_dir=Path("native-model"),
+        native_library_path=Path("libvieneu-tts.so"),
+        native_realtime_headroom=1.15,
+        engine=SlowNativeBatchEngine(),
+    )
+
+    chunks = [
+        chunk
+        async for chunk in provider.synthesize("Xin chào", "vi-VN", context())
+    ]
+
+    assert chunks
+    duration = len(b"".join(chunk.data for chunk in chunks)) / 2 / 24_000
+    assert 0.6 < duration < 0.75
+    assert provider._speed == 1.5
+
+
+async def test_vieneu_cancelled_native_work_cannot_overlap_the_next_batch() -> None:
+    class SlowNativeEngine:
+        def __init__(self) -> None:
+            self.active = 0
+            self.maximum_active = 0
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text, kwargs
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            try:
+                sleep(0.08)
+            finally:
+                self.active -= 1
+            yield np.zeros(4_800, dtype=np.float32)
+
+    engine = SlowNativeEngine()
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        backend="native",
+        native_model_dir=Path("native-model"),
+        native_library_path=Path("libvieneu-tts.so"),
+        engine=engine,
+    )
+    first_stream = provider.synthesize("Lượt cũ", "vi-VN", context())
+    first = asyncio.create_task(anext(first_stream))
+    await asyncio.sleep(0.01)
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+
+    second_stream = provider.synthesize("Lượt mới", "vi-VN", context())
+    second = await asyncio.wait_for(anext(second_stream), timeout=1.0)
+    await second_stream.aclose()
+
+    assert second.data
+    assert engine.maximum_active == 1
 
 
 async def test_vieneu_counts_samples_clipped_by_profile_amplification() -> None:

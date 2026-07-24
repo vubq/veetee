@@ -178,6 +178,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       providerId: ttsProvider.id,
       voiceId: "Trúc Ly",
       gender: "female",
+      style: "tu_nhien",
       rate: 1,
       pitchHz: 0,
       volume: 1,
@@ -206,7 +207,7 @@ export function shouldInitializeProviderChains(config: Record<string, unknown>):
 
 export function defaultAgentConfig(providerIds: Record<string, string> = {}): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     locale: "vi-VN",
     interactionMode: "auto",
     conversation: {
@@ -217,8 +218,10 @@ export function defaultAgentConfig(providerIds: Record<string, string> = {}): Re
       totalTurnSeconds: 0,
       admissionSeconds: 1,
       plannerSeconds: 15,
-      llmSeconds: 20,
-      ttsSeconds: 10,
+      llmFirstTokenSeconds: 5,
+      llmStreamIdleSeconds: 20,
+      ttsFirstAudioSeconds: 5,
+      ttsStreamIdleSeconds: 10,
       mcpSeconds: 10,
     },
     ...(Object.keys(providerIds).length
@@ -234,11 +237,23 @@ export function defaultAgentConfig(providerIds: Record<string, string> = {}): Re
 }
 
 function defaultProviderConfig(adapter: string): Record<string, unknown> {
+  if (adapter === "openai-compatible-9router") {
+    return {
+      completionTokenParameter: "max_tokens",
+      maxCompletionTokens: 16_384,
+      temperature: 0.2,
+      topP: 0.95,
+      reasoningEffort: "none",
+      parallelToolCalls: true,
+      streamProseResponse: true,
+      responseFormat: "json_schema",
+    };
+  }
   if (adapter === "groq-cloud") {
     return {
       serviceTier: "on_demand",
       completionTokenParameter: "max_completion_tokens",
-      maxCompletionTokens: 1_024,
+      maxCompletionTokens: 16_384,
       temperature: 0.2,
       topP: 0.95,
       reasoningEffort: "none",
@@ -250,7 +265,7 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
   if (adapter === "openai-compatible-cliproxyapi") {
     return {
       completionTokenParameter: "max_tokens",
-      maxCompletionTokens: 1_024,
+      maxCompletionTokens: 16_384,
       temperature: 0.2,
       topP: 0.95,
       reasoningEffort: "none",
@@ -262,25 +277,31 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
   if (adapter === "vieneu-local") {
     return {
       voice: "Trúc Ly",
+      style: "tu_nhien",
       rate: 1,
       volume: 1,
       outputSampleRate: 24_000,
       supportsPitch: false,
+      styles: [
+        { id: "tu_nhien", label: "Tự nhiên / hội thoại" },
+        { id: "doc_truyen", label: "Đọc truyện" },
+        { id: "tin_tuc", label: "Tin tức" },
+      ],
       voices: [
-        { id: "Minh Đức", label: "Minh Đức", locale: "vi-VN", gender: "male" },
-        { id: "Phạm Tuyên", label: "Phạm Tuyên", locale: "vi-VN", gender: "male" },
-        { id: "Thái Sơn", label: "Thái Sơn", locale: "vi-VN", gender: "male" },
-        { id: "Xuân Vĩnh", label: "Xuân Vĩnh", locale: "vi-VN", gender: "male" },
-        { id: "Thanh Bình", label: "Thanh Bình", locale: "vi-VN", gender: "male" },
-        { id: "Trúc Ly", label: "Trúc Ly", locale: "vi-VN", gender: "female" },
-        { id: "Ngọc Linh", label: "Ngọc Linh", locale: "vi-VN", gender: "female" },
-        { id: "Đoan Trang", label: "Đoan Trang", locale: "vi-VN", gender: "female" },
-        { id: "Mai Anh", label: "Mai Anh", locale: "vi-VN", gender: "female" },
-        { id: "Thục Đoan", label: "Thục Đoan", locale: "vi-VN", gender: "female" },
-        { id: "Minh Triết", label: "Minh Triết", locale: "vi-VN", gender: "male" },
-        { id: "Thùy Dung", label: "Thùy Dung", locale: "vi-VN", gender: "female" },
-        { id: "Quang Sơn", label: "Quang Sơn", locale: "vi-VN", gender: "male" },
-        { id: "Ngọc Trân", label: "Ngọc Trân", locale: "vi-VN", gender: "female" },
+        { id: "Minh Đức", label: "Minh Đức", locale: "vi-VN", gender: "male", style: "tin_tuc" },
+        { id: "Phạm Tuyên", label: "Phạm Tuyên", locale: "vi-VN", gender: "male", style: "tu_nhien" },
+        { id: "Thái Sơn", label: "Thái Sơn", locale: "vi-VN", gender: "male", style: "doc_truyen" },
+        { id: "Xuân Vĩnh", label: "Xuân Vĩnh", locale: "vi-VN", gender: "male", style: "tu_nhien" },
+        { id: "Thanh Bình", label: "Thanh Bình", locale: "vi-VN", gender: "male", style: "doc_truyen" },
+        { id: "Trúc Ly", label: "Trúc Ly", locale: "vi-VN", gender: "female", style: "tu_nhien" },
+        { id: "Ngọc Linh", label: "Ngọc Linh", locale: "vi-VN", gender: "female", style: "doc_truyen" },
+        { id: "Đoan Trang", label: "Đoan Trang", locale: "vi-VN", gender: "female", style: "tu_nhien" },
+        { id: "Mai Anh", label: "Mai Anh", locale: "vi-VN", gender: "female", style: "tin_tuc" },
+        { id: "Thục Đoan", label: "Thục Đoan", locale: "vi-VN", gender: "female", style: "doc_truyen" },
+        { id: "Minh Triết", label: "Minh Triết", locale: "vi-VN", gender: "male", style: "tu_nhien" },
+        { id: "Thùy Dung", label: "Thùy Dung", locale: "vi-VN", gender: "female", style: "tu_nhien" },
+        { id: "Quang Sơn", label: "Quang Sơn", locale: "vi-VN", gender: "male", style: "tu_nhien" },
+        { id: "Ngọc Trân", label: "Ngọc Trân", locale: "vi-VN", gender: "female", style: "tu_nhien" },
       ],
     };
   }

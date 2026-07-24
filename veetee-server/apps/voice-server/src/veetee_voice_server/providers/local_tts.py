@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import soxr  # type: ignore[import-untyped]
@@ -14,7 +17,10 @@ import structlog
 from audiotsm import wsola  # type: ignore[import-untyped]
 from audiotsm.io.array import ArrayReader, ArrayWriter  # type: ignore[import-untyped]
 
-from veetee_voice_server.conversation.cancellation import OperationContext
+from veetee_voice_server.conversation.cancellation import (
+    OperationContext,
+    await_operation,
+)
 from veetee_voice_server.conversation.types import AudioChunk
 
 logger = structlog.get_logger(__name__)
@@ -28,6 +34,7 @@ class VieNeuTtsProvider:
         model_dir: Path,
         *,
         voice: str,
+        style: Literal["tu_nhien", "doc_truyen", "tin_tuc"] = "tu_nhien",
         speed: float = 1.0,
         pitch_hz: float = 0.0,
         volume: float = 1.0,
@@ -37,9 +44,17 @@ class VieNeuTtsProvider:
         stream_leadin_frames: int = 16,
         engine: Any | None = None,
         inference_lock: asyncio.Lock | None = None,
+        turn_lock: asyncio.Lock | None = None,
+        turn_scope_active: ContextVar[bool] | None = None,
+        worker_lock: threading.Lock | None = None,
+        backend: Literal["onnx", "native"] = "onnx",
+        native_model_dir: Path | None = None,
+        native_library_path: Path | None = None,
+        native_realtime_headroom: float = 1.15,
     ) -> None:
         self._model_dir = model_dir
         self._voice = voice
+        self._style = style
         if speed <= 0:
             raise ValueError("TTS speed must be greater than zero")
         self._speed = speed
@@ -54,9 +69,21 @@ class VieNeuTtsProvider:
         if not 4 <= stream_leadin_frames <= 25:
             raise ValueError("VieNeu stream lead-in must contain 4 to 25 acoustic frames")
         self._stream_leadin_frames = stream_leadin_frames
+        self._backend: Literal["onnx", "native"] = backend
+        self._native_model_dir = native_model_dir
+        self._native_library_path = native_library_path
+        if native_realtime_headroom < 1.0:
+            raise ValueError("VieNeu native realtime headroom must be at least 1.0")
+        self._native_realtime_headroom = native_realtime_headroom
         self._engine = engine
         self._load_lock = threading.Lock()
         self._inference_lock = inference_lock or asyncio.Lock()
+        self._turn_lock = turn_lock or asyncio.Lock()
+        self._turn_scope_active = turn_scope_active or ContextVar(
+            f"vieneu_turn_scope_{id(self)}",
+            default=False,
+        )
+        self._worker_lock = worker_lock or threading.Lock()
         self._conversion_samples = 0
         self._conversion_clipped_samples = 0
         for warning in self.quality_warnings:
@@ -67,6 +94,24 @@ class VieNeuTtsProvider:
                 speed=self._speed,
                 volume=self._volume,
             )
+
+    @property
+    def preferred_text_chunk_characters(self) -> int:
+        # Native remains faster than playback around one natural clause while
+        # keeping the next batch ready before the current audio drains.
+        return 48 if self._backend == "native" else 72
+
+    @property
+    def maximum_text_chunk_characters(self) -> int:
+        return 72 if self._backend == "native" else 112
+
+    @property
+    def initial_text_chunk_characters(self) -> int:
+        return 24
+
+    @property
+    def initial_maximum_text_chunk_characters(self) -> int:
+        return 40
 
     @property
     def quality_warnings(self) -> tuple[str, ...]:
@@ -81,6 +126,7 @@ class VieNeuTtsProvider:
         self,
         *,
         voice: str,
+        style: Literal["tu_nhien", "doc_truyen", "tin_tuc"] = "tu_nhien",
         speed: float,
         pitch_hz: float = 0.0,
         volume: float = 1.0,
@@ -89,6 +135,7 @@ class VieNeuTtsProvider:
         return VieNeuTtsProvider(
             self._model_dir,
             voice=voice,
+            style=style,
             speed=speed,
             pitch_hz=pitch_hz,
             volume=volume,
@@ -98,10 +145,36 @@ class VieNeuTtsProvider:
             stream_leadin_frames=self._stream_leadin_frames,
             engine=self._engine,
             inference_lock=self._inference_lock,
+            turn_lock=self._turn_lock,
+            turn_scope_active=self._turn_scope_active,
+            worker_lock=self._worker_lock,
+            backend=self._backend,
+            native_model_dir=self._native_model_dir,
+            native_library_path=self._native_library_path,
+            native_realtime_headroom=self._native_realtime_headroom,
         )
 
     async def prewarm(self) -> None:
         await asyncio.to_thread(self._load_engine)
+
+    async def close(self) -> None:
+        engine = self._engine
+        close = getattr(engine, "close", None)
+        if close is not None:
+            await asyncio.to_thread(self._close_serialized, close)
+
+    @asynccontextmanager
+    async def speech_turn(self, context: OperationContext) -> AsyncGenerator[None]:
+        """Reserve the single local engine for one uninterrupted spoken turn."""
+        if self._turn_scope_active.get():
+            yield
+            return
+        async with _operation_lock(self._turn_lock, context):
+            token = self._turn_scope_active.set(True)
+            try:
+                yield
+            finally:
+                self._turn_scope_active.reset(token)
 
     async def synthesize(
         self, text: str, locale: str, context: OperationContext
@@ -110,7 +183,7 @@ class VieNeuTtsProvider:
         if not text.strip():
             return
         context.checkpoint()
-        async with self._inference_lock:
+        async with self._synthesis_access(context):
             started_at = monotonic()
             self._conversion_samples = 0
             self._conversion_clipped_samples = 0
@@ -119,6 +192,7 @@ class VieNeuTtsProvider:
                 engine.infer_stream,
                 text,
                 voice=self._voice,
+                style=self._style,
                 apply_watermark=self._apply_watermark,
             )
             resampler = soxr.ResampleStream(
@@ -128,15 +202,30 @@ class VieNeuTtsProvider:
                 dtype="float32",
                 quality="HQ",
             )
-            tempo = _StreamingTempo(self._speed) if self._speed != 1.0 else None
+            effective_speed = self._speed
+            native_realtime_speed_ceiling: float | None = None
+            tempo = (
+                _StreamingTempo(self._speed)
+                if self._speed != 1.0
+                else None
+            )
             sequence = 0
             try:
                 while True:
-                    has_chunk, source = await asyncio.to_thread(self._next_chunk, stream)
+                    has_chunk, source = await self._next_chunk_cancellation_safe(
+                        stream,
+                        context,
+                    )
                     if not has_chunk:
                         break
                     context.checkpoint()
                     assert source is not None
+                    if self._backend == "native":
+                        source_seconds = source.size / self.source_sample_rate
+                        synthesis_seconds = max(monotonic() - started_at, 0.001)
+                        native_realtime_speed_ceiling = source_seconds / (
+                            synthesis_seconds * self._native_realtime_headroom
+                        )
                     if tempo is not None:
                         source = tempo.process(source)
                         if source.size == 0:
@@ -183,7 +272,20 @@ class VieNeuTtsProvider:
                 logger.info(
                     "vieneu_tts_completed",
                     voice=self._voice,
-                    speed=self._speed,
+                    style=self._style,
+                    requested_speed=self._speed,
+                    effective_speed=round(effective_speed, 3),
+                    realtime_speed_ceiling=(
+                        round(native_realtime_speed_ceiling, 3)
+                        if native_realtime_speed_ceiling is not None
+                        else None
+                    ),
+                    realtime_headroom_met=(
+                        self._speed <= native_realtime_speed_ceiling
+                        if native_realtime_speed_ceiling is not None
+                        else None
+                    ),
+                    backend=self._backend,
                     volume=self._volume,
                     duration_ms=round((monotonic() - started_at) * 1_000, 1),
                     audio_ms=round(
@@ -193,11 +295,42 @@ class VieNeuTtsProvider:
                     clipping_ratio=round(clipping_ratio, 6),
                 )
 
+    @asynccontextmanager
+    async def _synthesis_access(
+        self, context: OperationContext
+    ) -> AsyncGenerator[None]:
+        if self._turn_scope_active.get():
+            async with self._inference_lock:
+                yield
+            return
+        async with _operation_lock(self._turn_lock, context):
+            async with self._inference_lock:
+                yield
+
     def _load_engine(self) -> Any:
         if self._engine is not None:
             return self._engine
         with self._load_lock:
             if self._engine is not None:
+                return self._engine
+            if self._backend == "native":
+                if self._native_model_dir is None or self._native_library_path is None:
+                    raise ValueError(
+                        "VieNeu native backend requires model and library paths"
+                    )
+                self._engine = _NativeVieNeuEngine(
+                    self._native_library_path,
+                    self._native_model_dir,
+                    num_threads=self._num_threads,
+                )
+                available = {
+                    voice_id for _, voice_id in self._engine.list_preset_voices()
+                }
+                if self._voice not in available:
+                    choices = sorted(available)
+                    raise ValueError(
+                        f"VieNeu voice {self._voice!r} is unavailable; choose one of {choices}"
+                    )
                 return self._engine
             onnx_dir = self._model_dir / "onnx_int8"
             codec_dir = self._model_dir / "codec"
@@ -241,6 +374,37 @@ class VieNeuTtsProvider:
         except StopIteration:
             return False, None
 
+    def _next_chunk_serialized(
+        self,
+        stream: Iterator[Any],
+        context: OperationContext,
+    ) -> tuple[bool, np.ndarray[Any, Any] | None]:
+        with self._worker_lock:
+            context.checkpoint()
+            return self._next_chunk(stream)
+
+    async def _next_chunk_cancellation_safe(
+        self,
+        stream: Iterator[Any],
+        context: OperationContext,
+    ) -> tuple[bool, np.ndarray[Any, Any] | None]:
+        worker = asyncio.create_task(
+            asyncio.to_thread(self._next_chunk_serialized, stream, context)
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Native C synthesis cannot be force-killed. Keep the provider locks
+            # until the active call really exits so later turns cannot enqueue
+            # abandoned work behind it, while the cancelled turn returns through
+            # its detached generator task immediately.
+            await asyncio.gather(worker, return_exceptions=True)
+            raise
+
+    def _close_serialized(self, close: Any) -> None:
+        with self._worker_lock:
+            close()
+
     def _float_to_pcm(self, samples: np.ndarray[Any, Any]) -> bytes:
         if samples.size == 0:
             return b""
@@ -251,12 +415,218 @@ class VieNeuTtsProvider:
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
 
 
+@asynccontextmanager
+async def _operation_lock(
+    lock: asyncio.Lock,
+    context: OperationContext,
+) -> AsyncGenerator[None]:
+    acquire_task = asyncio.create_task(lock.acquire())
+    acquired = False
+    try:
+        try:
+            await await_operation(acquire_task, context)
+            context.checkpoint()
+            acquired = True
+        except BaseException:
+            await asyncio.gather(acquire_task, return_exceptions=True)
+            if (
+                acquire_task.done()
+                and not acquire_task.cancelled()
+                and acquire_task.exception() is None
+                and acquire_task.result()
+            ):
+                lock.release()
+            raise
+        yield
+    finally:
+        if acquired:
+            lock.release()
+
+
 def _configure_stream_leadin(module: Any, frames: int) -> None:
     """Tune the pinned VieNeu stream to build enough audio before playback starts."""
     current = getattr(module, "_STREAM_LEADIN_FRAMES", None)
     if not isinstance(current, int):
         raise RuntimeError("VieNeu 3.2.3 streaming lead-in contract is unavailable")
     module._STREAM_LEADIN_FRAMES = frames
+
+
+class _NativeInitParams(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_int),
+        ("profile", ctypes.c_char_p),
+        ("model_dir", ctypes.c_char_p),
+        ("onnx_dir", ctypes.c_char_p),
+        ("codec_dir", ctypes.c_char_p),
+        ("config_path", ctypes.c_char_p),
+        ("tokenizer_path", ctypes.c_char_p),
+        ("voices_json_path", ctypes.c_char_p),
+        ("n_threads", ctypes.c_int),
+    ]
+
+
+class _NativeTtsParams(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_int),
+        ("text", ctypes.c_char_p),
+        ("voice_id", ctypes.c_char_p),
+        ("ref_audio_path", ctypes.c_char_p),
+        ("style", ctypes.c_char_p),
+        ("temperature", ctypes.c_float),
+        ("top_k", ctypes.c_int),
+        ("top_p", ctypes.c_float),
+        ("max_new_frames", ctypes.c_int),
+        ("repetition_penalty", ctypes.c_float),
+        ("max_chars", ctypes.c_int),
+        ("denoise_ref", ctypes.c_bool),
+        ("use_ref_codes", ctypes.c_bool),
+        ("apply_watermark", ctypes.c_bool),
+    ]
+
+
+class _NativeAudio(ctypes.Structure):
+    _fields_ = [
+        ("samples", ctypes.POINTER(ctypes.c_float)),
+        ("n_samples", ctypes.c_int),
+        ("sample_rate", ctypes.c_int),
+        ("channels", ctypes.c_int),
+    ]
+
+
+class _NativeVieNeuEngine:
+    def __init__(
+        self,
+        library_path: Path,
+        model_dir: Path,
+        *,
+        num_threads: int,
+    ) -> None:
+        if not library_path.is_file():
+            raise FileNotFoundError(f"Missing VieNeu native library: {library_path}")
+        required = (
+            model_dir / "backbone.gguf",
+            model_dir / "config.json",
+            model_dir / "tokenizer.json",
+            model_dir / "voices_v3_turbo.json",
+            model_dir / "codec",
+        )
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"Missing VieNeu native assets: {missing}")
+
+        self._library = ctypes.CDLL(str(library_path.resolve()))
+        self._configure_abi()
+        self._model_dir = model_dir.resolve()
+        self._voices_path = self._model_dir / "voices_v3_turbo.json"
+        voices_document = json.loads(self._voices_path.read_text(encoding="utf-8"))
+        presets = voices_document.get("presets", {})
+        if not isinstance(presets, dict):
+            raise ValueError("VieNeu native voices catalog is invalid")
+        self._voices = presets
+        self._context = self._initialize(num_threads)
+        self._closed = False
+
+    def _configure_abi(self) -> None:
+        self._library.vieneu_last_error.argtypes = []
+        self._library.vieneu_last_error.restype = ctypes.c_char_p
+        self._library.vieneu_init_v2_default_params.argtypes = [
+            ctypes.POINTER(_NativeInitParams)
+        ]
+        self._library.vieneu_init_v2_default_params.restype = None
+        self._library.vieneu_init_v2.argtypes = [ctypes.POINTER(_NativeInitParams)]
+        self._library.vieneu_init_v2.restype = ctypes.c_void_p
+        self._library.vieneu_tts_v3_default_params.argtypes = [
+            ctypes.POINTER(_NativeTtsParams)
+        ]
+        self._library.vieneu_tts_v3_default_params.restype = None
+        self._library.vieneu_synthesize_v3.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(_NativeTtsParams),
+            ctypes.POINTER(_NativeAudio),
+        ]
+        self._library.vieneu_synthesize_v3.restype = ctypes.c_int
+        self._library.vieneu_audio_free.argtypes = [ctypes.POINTER(_NativeAudio)]
+        self._library.vieneu_audio_free.restype = None
+        self._library.vieneu_free.argtypes = [ctypes.c_void_p]
+        self._library.vieneu_free.restype = None
+
+    def _initialize(self, num_threads: int) -> int:
+        params = _NativeInitParams()
+        self._library.vieneu_init_v2_default_params(ctypes.byref(params))
+        encoded = {
+            "profile": b"vieneu-v3-native",
+            "model_dir": str(self._model_dir).encode(),
+            "codec_dir": str(self._model_dir / "codec").encode(),
+            "voices": str(self._voices_path).encode(),
+        }
+        params.profile = encoded["profile"]
+        params.model_dir = encoded["model_dir"]
+        params.codec_dir = encoded["codec_dir"]
+        params.voices_json_path = encoded["voices"]
+        params.n_threads = num_threads
+        context = self._library.vieneu_init_v2(ctypes.byref(params))
+        if not context:
+            raise RuntimeError(f"VieNeu native initialization failed: {self._last_error()}")
+        return int(context)
+
+    def list_preset_voices(self) -> list[tuple[str, str]]:
+        return [(str(name), str(name)) for name in self._voices]
+
+    def infer_stream(
+        self,
+        text: str,
+        *,
+        voice: str,
+        style: str,
+        apply_watermark: bool,
+    ) -> Iterator[np.ndarray[Any, Any]]:
+        if self._closed:
+            raise RuntimeError("VieNeu native engine is closed")
+        preset = self._voices.get(voice)
+        if not isinstance(preset, dict):
+            raise ValueError(f"VieNeu native voice {voice!r} is unavailable")
+        params = _NativeTtsParams()
+        self._library.vieneu_tts_v3_default_params(ctypes.byref(params))
+        encoded_text = text.encode()
+        encoded_voice = voice.encode()
+        encoded_style = style.encode()
+        params.text = encoded_text
+        params.voice_id = encoded_voice
+        params.style = encoded_style
+        params.apply_watermark = apply_watermark
+        audio = _NativeAudio()
+        status = self._library.vieneu_synthesize_v3(
+            self._context,
+            ctypes.byref(params),
+            ctypes.byref(audio),
+        )
+        if status != 0:
+            raise RuntimeError(f"VieNeu native synthesis failed: {self._last_error()}")
+        try:
+            if (
+                not audio.samples
+                or audio.n_samples <= 0
+                or audio.sample_rate != 48_000
+                or audio.channels != 1
+            ):
+                raise RuntimeError("VieNeu native synthesis returned invalid mono 48 kHz audio")
+            samples = np.ctypeslib.as_array(
+                audio.samples,
+                shape=(audio.n_samples,),
+            ).copy()
+        finally:
+            self._library.vieneu_audio_free(ctypes.byref(audio))
+        yield np.asarray(samples, dtype=np.float32)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._library.vieneu_free(self._context)
+
+    def _last_error(self) -> str:
+        raw = self._library.vieneu_last_error()
+        return raw.decode(errors="replace") if raw else "unknown native error"
 
 
 class _StreamingTempo:
@@ -288,7 +658,7 @@ class _LocalStreamingV3Engine:
         return [(name, name) for name in self._voices]
 
     def infer_stream(
-        self, text: str, *, voice: str, apply_watermark: bool
+        self, text: str, *, voice: str, style: str, apply_watermark: bool
     ) -> Iterator[np.ndarray[Any, Any]]:
         from vieneu_utils.phonemize_text import (  # type: ignore[import-untyped]
             normalize_to_chunks_v3,
@@ -298,14 +668,14 @@ class _LocalStreamingV3Engine:
         preset = self._voices[voice]
         speaker_emb = np.asarray(preset["speaker_emb"], dtype=np.float32)
         ref_codes = np.asarray(preset["codes"], dtype=np.int64)
-        style = str(preset.get("style", "tu_nhien"))
+        resolved_style = style or str(preset.get("style", "tu_nhien"))
         for chunk in normalize_to_chunks_v3(text, max_chars=256):
             phonemes = phonemize_text_with_emotions(chunk)
             for audio in self._engine.infer_stream(
                 phonemes=phonemes,
                 speaker_emb=speaker_emb,
                 ref_codes=ref_codes,
-                style=style,
+                style=resolved_style,
                 use_ref_codes=True,
             ):
                 if audio is None or len(audio) == 0:

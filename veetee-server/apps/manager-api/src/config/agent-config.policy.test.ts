@@ -18,6 +18,10 @@ describe("validateAgentDraftConfig", () => {
           closingGraceSeconds: 5,
           maxSessionSeconds: 0,
           totalTurnSeconds: 0,
+          llmFirstTokenSeconds: 5,
+          llmStreamIdleSeconds: 20,
+          ttsFirstAudioSeconds: 5,
+          ttsStreamIdleSeconds: 10,
           contextMessageLimit: 12,
           contextMessageCharacters: 1200,
           timeoutGoodbye: "Tạm biệt, hẹn gặp lại.",
@@ -33,8 +37,13 @@ describe("validateAgentDraftConfig", () => {
     ["closingGraceSeconds", 61],
     ["maxSessionSeconds", 3_601],
     ["totalTurnSeconds", 61],
+    ["llmFirstTokenSeconds", 0.1],
+    ["llmStreamIdleSeconds", 46],
     ["plannerSeconds", "8"],
+    ["ttsFirstAudioSeconds", 31],
+    ["ttsStreamIdleSeconds", 0.5],
     ["contextMessageLimit", 1],
+    ["contextMessageCharacters", 128.5],
     ["contextMessageCharacters", 4_001],
   ])("rejects unsafe %s values", (field, value) => {
     expect(() =>
@@ -132,12 +141,32 @@ describe("provider and voice config", () => {
     expect(
       validateProviderConfig("tts", "vieneu-local", {
         voice: "Trúc Ly",
+        style: "tu_nhien",
         rate: 1,
         volume: 1,
         outputSampleRate: 24_000,
         supportsPitch: false,
+        styles: [
+          { id: "tu_nhien", label: "Tự nhiên / hội thoại" },
+          { id: "doc_truyen", label: "Đọc truyện" },
+        ],
       }),
-    ).toMatchObject({ voice: "Trúc Ly", outputSampleRate: 24_000 });
+    ).toMatchObject({
+      voice: "Trúc Ly",
+      style: "tu_nhien",
+      outputSampleRate: 24_000,
+    });
+    expect(
+      validateProviderConfig("tts", "external-tts", {
+        style: "cheerful",
+        styles: [{ id: "cheerful", label: "Cheerful" }],
+      }),
+    ).toMatchObject({ style: "cheerful" });
+    expect(() =>
+      validateProviderConfig("tts", "vieneu-local", {
+        styles: [{ label: "Missing id" }],
+      }),
+    ).toThrow(BadRequestException);
   });
 
   it("requires the selected voice provider to be part of the TTS chain", () => {
@@ -149,6 +178,7 @@ describe("provider and voice config", () => {
             providerId: "tts-1",
             voiceId: "vi-VN-HoaiMyNeural",
             gender: "female",
+            style: "tu_nhien",
             rate: 1.1,
             pitchHz: 5,
             volume: 1,
@@ -157,7 +187,7 @@ describe("provider and voice config", () => {
         [tts],
         "vi-VN",
       ),
-    ).toMatchObject({ providerId: "tts-1", rate: 1.1 });
+    ).toMatchObject({ providerId: "tts-1", style: "tu_nhien", rate: 1.1 });
     expect(() =>
       validateAgentVoiceConfig(
         { voice: { providerId: "tts-other", voiceId: "voice" } },

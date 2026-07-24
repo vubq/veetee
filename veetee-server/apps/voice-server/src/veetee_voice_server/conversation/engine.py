@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Literal
@@ -34,6 +36,7 @@ from veetee_voice_server.conversation.types import (
 )
 from veetee_voice_server.providers.contracts import (
     AdmissionProvider,
+    LlmEvent,
     LlmProvider,
     LlmRequest,
     LlmTextDelta,
@@ -85,8 +88,13 @@ class ConversationEngine:
             maxlen=max(2, min(self._policy.context_message_limit, 32))
         )
 
+    @property
+    def context(self) -> tuple[ConversationMessage, ...]:
+        return tuple(self._context)
+
     async def handle_transcript(self, transcript: Transcript) -> AdmissionDisposition | None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
+        admitted_disposition: AdmissionDisposition | None = None
         try:
             contextual_transcript = replace(transcript, context=tuple(self._context))
             admission_seconds = (
@@ -142,6 +150,7 @@ class ConversationEngine:
                 await self._arbiter.finish_cancellation(receipt)
                 return decision.disposition
 
+            admitted_disposition = decision.disposition
             self._remember("user", contextual_transcript.text)
             planner_started_at = monotonic()
             plan = await await_operation(
@@ -196,7 +205,7 @@ class ConversationEngine:
             )
             await self._speak_recovery_if_possible(context, transcript)
             await self._emit_if_current_error(context, "provider_deadline", "provider")
-            return None
+            return admitted_disposition
         except _SemanticProviderUnavailableError:
             logger.warning(
                 "conversation_semantic_provider_unavailable",
@@ -209,7 +218,7 @@ class ConversationEngine:
                 "semantic_provider_unavailable",
                 "semantic",
             )
-            return None
+            return admitted_disposition
         except Exception as error:
             logger.warning(
                 "conversation_turn_failed",
@@ -222,7 +231,7 @@ class ConversationEngine:
             )
             await self._speak_recovery_if_possible(context, transcript)
             await self._emit_if_current_error(context, "conversation_failed", "conversation")
-            return None
+            return admitted_disposition
         finally:
             await self._arbiter.complete_turn(context)
 
@@ -282,7 +291,6 @@ class ConversationEngine:
                 self._remember("assistant", response_text)
 
     async def _stream_response(self, request: LlmRequest, context: OperationContext) -> str:
-        llm_context = context.child(self._policy.llm_seconds)
         speech = _SpeechLifecycle()
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue(
             maxsize=self._policy.speech_queue_capacity
@@ -291,13 +299,24 @@ class ConversationEngine:
             self._drain_speech_queue(speech_queue, request.plan.locale, context, speech),
             name=f"speech-stream:{context.session_id}:{context.turn_id}",
         )
-        response_parts: list[str] = []
+        response_tail = ""
+        response_characters = 0
         stream_started_at = monotonic()
         first_delta_at: float | None = None
         chunker = self._new_sentence_chunker()
+        completed = False
         try:
+            llm_context = (
+                context.child(self._policy.llm_total_seconds)
+                if self._policy.llm_total_seconds > 0
+                else context
+            )
             async for event in iterate_operation(
-                self._llm.stream(request, llm_context), llm_context
+                self._llm.stream(request, llm_context),
+                llm_context,
+                first_item_timeout_seconds=self._policy.llm_first_token_seconds,
+                idle_timeout_seconds=self._policy.llm_stream_idle_seconds,
+                is_progress=self._is_spoken_llm_progress,
             ):
                 if not isinstance(event, LlmTextDelta):
                     # Planner-owned tool calls are handled before this prose stream in MVP.
@@ -310,7 +329,12 @@ class ConversationEngine:
                         turn_id=context.turn_id,
                         duration_ms=round((first_delta_at - stream_started_at) * 1_000, 1),
                     )
-                response_parts.append(event.text)
+                if len(event.text) > self._policy.llm_delta_max_characters:
+                    raise ValueError("LLM delta exceeds the bounded streaming contract")
+                response_characters += len(event.text)
+                response_tail = (response_tail + event.text)[
+                    -max(1, self._policy.context_message_characters) :
+                ]
                 await self._emit(
                     context,
                     ConversationOutput(
@@ -330,19 +354,20 @@ class ConversationEngine:
                 session_id=context.session_id,
                 turn_id=context.turn_id,
                 duration_ms=round((monotonic() - stream_started_at) * 1_000, 1),
-                response_characters=sum(len(part) for part in response_parts),
+                response_characters=response_characters,
             )
             remainder = chunker.flush()
             if remainder:
                 await self._enqueue_speech(speech_queue, remainder, speech_task, context)
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
+            completed = True
         finally:
             if not speech_task.done():
                 speech_task.cancel()
             await asyncio.gather(speech_task, return_exceptions=True)
-            await self._finish_speech(context, speech)
-        return "".join(response_parts).strip()
+            await self._finish_speech(context, speech, cancelled=not completed)
+        return response_tail.strip()
 
     async def _drain_speech_queue(
         self,
@@ -351,11 +376,26 @@ class ConversationEngine:
         context: OperationContext,
         speech: _SpeechLifecycle,
     ) -> None:
-        while True:
-            text = await await_operation(queue.get(), context)
-            if text is None:
-                return
-            await self._speak_text(text, locale, context, speech)
+        text = await await_operation(queue.get(), context)
+        if text is None:
+            return
+        async with self._speech_turn_scope(context):
+            while True:
+                await self._speak_text(text, locale, context, speech)
+                text = await await_operation(queue.get(), context)
+                if text is None:
+                    return
+
+    @asynccontextmanager
+    async def _speech_turn_scope(
+        self, context: OperationContext
+    ) -> AsyncGenerator[None]:
+        scope_factory = getattr(self._tts, "speech_turn", None)
+        if scope_factory is None:
+            yield
+            return
+        async with scope_factory(context):
+            yield
 
     async def _enqueue_speech(
         self,
@@ -397,6 +437,7 @@ class ConversationEngine:
             name=f"speech-once:{context.session_id}:{context.turn_id}",
         )
         chunker = self._new_sentence_chunker()
+        completed = False
         try:
             for sentence in chunker.push(text):
                 await self._enqueue_speech(speech_queue, sentence, speech_task, context)
@@ -405,11 +446,12 @@ class ConversationEngine:
                 await self._enqueue_speech(speech_queue, remainder, speech_task, context)
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
+            completed = True
         finally:
             if not speech_task.done():
                 speech_task.cancel()
             await asyncio.gather(speech_task, return_exceptions=True)
-            await self._finish_speech(context, speech)
+            await self._finish_speech(context, speech, cancelled=not completed)
 
     async def _speak_planned_text(self, text: str, locale: str, context: OperationContext) -> None:
         await self._emit(
@@ -430,7 +472,6 @@ class ConversationEngine:
         context: OperationContext,
         speech: _SpeechLifecycle,
     ) -> None:
-        tts_context = context.child(self._policy.tts_seconds)
         started_at = monotonic()
         first_audio_logged = False
         provider = type(self._tts).__name__
@@ -442,10 +483,21 @@ class ConversationEngine:
             text_characters=len(text),
         )
         try:
+            tts_context = (
+                context.child(self._policy.tts_total_seconds)
+                if self._policy.tts_total_seconds > 0
+                else context
+            )
             async for audio in iterate_operation(
-                self._tts.synthesize(text, locale, tts_context), tts_context
+                self._tts.synthesize(text, locale, tts_context),
+                tts_context,
+                first_item_timeout_seconds=self._policy.tts_first_audio_seconds,
+                idle_timeout_seconds=self._policy.tts_stream_idle_seconds,
+                is_progress=lambda chunk: bool(chunk.data),
             ):
-                if audio.data and not first_audio_logged:
+                if not audio.data:
+                    continue
+                if not first_audio_logged:
                     first_audio_logged = True
                     logger.info(
                         "conversation_tts_first_audio",
@@ -490,6 +542,10 @@ class ConversationEngine:
             )
             raise
 
+    @staticmethod
+    def _is_spoken_llm_progress(event: LlmEvent) -> bool:
+        return isinstance(event, LlmTextDelta) and bool(event.text)
+
     def _new_sentence_chunker(self) -> SentenceChunker:
         provider_target = getattr(
             self._tts,
@@ -500,9 +556,35 @@ class ConversationEngine:
             self._policy.speech_chunk_target_characters,
             int(provider_target),
         )
-        max_characters = max(
+        provider_maximum = getattr(
+            self._tts,
+            "maximum_text_chunk_characters",
             self._policy.speech_chunk_max_characters,
+        )
+        max_characters = max(
             target_characters,
+            min(self._policy.speech_chunk_max_characters, int(provider_maximum)),
+        )
+        has_initial_chunk_capability = hasattr(
+            self._tts, "initial_text_chunk_characters"
+        )
+        provider_initial_target = getattr(
+            self._tts,
+            "initial_text_chunk_characters",
+            target_characters,
+        )
+        initial_target_characters = max(
+            self._policy.sentence_min_characters,
+            min(target_characters, int(provider_initial_target)),
+        )
+        provider_initial_maximum = getattr(
+            self._tts,
+            "initial_maximum_text_chunk_characters",
+            max_characters,
+        )
+        initial_max_characters = max(
+            initial_target_characters,
+            min(max_characters, int(provider_initial_maximum)),
         )
         return SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
@@ -514,9 +596,26 @@ class ConversationEngine:
                 if hasattr(self._tts, "preferred_text_chunk_characters")
                 else self._policy.sentence_min_characters
             ),
+            initial_target_characters=initial_target_characters,
+            initial_max_characters=initial_max_characters,
+            initial_punctuation_min_characters=(
+                self._policy.sentence_min_characters
+                if has_initial_chunk_capability
+                else (
+                    target_characters
+                    if hasattr(self._tts, "preferred_text_chunk_characters")
+                    else self._policy.sentence_min_characters
+                )
+            ),
         )
 
-    async def _finish_speech(self, context: OperationContext, speech: _SpeechLifecycle) -> None:
+    async def _finish_speech(
+        self,
+        context: OperationContext,
+        speech: _SpeechLifecycle,
+        *,
+        cancelled: bool,
+    ) -> None:
         if not speech.started or not self._arbiter.is_current(context):
             return
         await self._emit(
@@ -525,6 +624,7 @@ class ConversationEngine:
                 kind=OutputKind.TTS_STOP,
                 turn_id=context.turn_id,
                 generation=context.generation,
+                payload={"cancelled": True} if cancelled else {},
             ),
         )
 

@@ -82,6 +82,7 @@ class WebSocketConversationSink:
         telemetry: ConversationTelemetry | None = None,
         output_sample_rate: int = 24_000,
         frame_duration_ms: int = 60,
+        playback_queue_seconds: float = 5.0,
     ) -> None:
         self._websocket = websocket
         self._session_id = session_id
@@ -96,7 +97,10 @@ class WebSocketConversationSink:
         self._audio_stream: _PacedAudioStream | None = None
         self._pending_pcm = bytearray()
         self._prebuffer_frames = 3
-        self._queue_frames = 12
+        self._queue_frames = max(
+            self._prebuffer_frames,
+            round(playback_queue_seconds * 1_000 / frame_duration_ms),
+        )
 
     async def emit(self, output: ConversationOutput) -> None:
         if output.generation < self._cancel_generation:
@@ -126,7 +130,10 @@ class WebSocketConversationSink:
             await self._send_audio(output)
             return
         if output.kind is OutputKind.TTS_STOP:
-            await self._stop_tts(output.generation, flush=True)
+            if output.payload.get("cancelled") is True:
+                await self.cancel_tts(output.generation)
+            else:
+                await self._stop_tts(output.generation, flush=True)
             return
         async with self._lock:
             if output.generation < self._cancel_generation:
@@ -437,6 +444,7 @@ class VoiceSession:
             telemetry=telemetry,
             output_sample_rate=settings.wire_sample_rate,
             frame_duration_ms=settings.wire_frame_duration_ms,
+            playback_queue_seconds=settings.tts_playback_queue_seconds,
         )
         self.asr = asr
         self.tts = tts
@@ -835,7 +843,7 @@ class VoiceSession:
             f"goodbye:{uuid4().hex}",
             self.arbiter.snapshot.generation,
             token,
-            monotonic() + self.profile.policy.tts_seconds,
+            monotonic() + self.profile.policy.tts_stream_idle_seconds,
         )
         started = False
         failure: Exception | None = None

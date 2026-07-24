@@ -39,6 +39,11 @@ const conversationNumberBounds = {
   totalTurnSeconds: [0, 60],
   admissionSeconds: [0.1, 5],
   plannerSeconds: [0.5, 15],
+  llmFirstTokenSeconds: [0.5, 30],
+  llmStreamIdleSeconds: [1, 45],
+  ttsFirstAudioSeconds: [0.5, 30],
+  ttsStreamIdleSeconds: [1, 30],
+  // Legacy schema-v1 absolute per-operation ceilings. V2 publishes explicit idle fields above.
   llmSeconds: [1, 45],
   ttsSeconds: [1, 30],
   mcpSeconds: [0.5, 30],
@@ -106,6 +111,13 @@ export function validateProviderConfig(
     boundedNumber(normalized, "volume", 0, 1.5);
     boundedInteger(normalized, "outputSampleRate", 8_000, 48_000);
     boundedBoolean(normalized, "supportsPitch");
+    if (normalized.style !== undefined) {
+      if (adapter === "vieneu-local") {
+        boundedEnum(normalized, "style", ["tu_nhien", "doc_truyen", "tin_tuc"]);
+      } else {
+        boundedString(normalized, "style", 1, 160);
+      }
+    }
     if (normalized.voice !== undefined) boundedString(normalized, "voice", 1, 160);
     if (normalized.voiceId !== undefined) boundedString(normalized, "voiceId", 1, 160);
     if (normalized.gender !== undefined) {
@@ -124,6 +136,33 @@ export function validateProviderConfig(
         boundedString(voice, "label", 1, 160);
         boundedString(voice, "locale", 2, 35);
         if (voice.gender !== undefined) boundedEnum(voice, "gender", ["female", "male", "neutral"]);
+        if (voice.style !== undefined) {
+          if (adapter === "vieneu-local") {
+            boundedEnum(voice, "style", ["tu_nhien", "doc_truyen", "tin_tuc"]);
+          } else {
+            boundedString(voice, "style", 1, 160);
+          }
+        }
+      }
+    }
+    const styles = normalized.styles;
+    if (styles !== undefined) {
+      if (!Array.isArray(styles) || styles.length > 16) {
+        throw new BadRequestException("Provider config styles must contain at most 16 entries");
+      }
+      for (const [index, style] of styles.entries()) {
+        if (!isRecord(style)) {
+          throw new BadRequestException(`Provider config styles[${index}] must be an object`);
+        }
+        if (style.id === undefined) {
+          throw new BadRequestException(`Provider config styles[${index}].id is required`);
+        }
+        if (adapter === "vieneu-local") {
+          boundedEnum(style, "id", ["tu_nhien", "doc_truyen", "tin_tuc"]);
+        } else {
+          boundedString(style, "id", 1, 160);
+        }
+        boundedString(style, "label", 1, 160);
       }
     }
   }
@@ -284,10 +323,25 @@ export function validateAgentVoiceConfig(
   if (raw.pitchHz !== undefined && raw.pitchHz !== 0 && provider.config?.supportsPitch === false) {
     throw new BadRequestException("Selected TTS provider does not support pitch adjustment");
   }
+  const style = raw.style;
+  if (style !== undefined) {
+    if (typeof style !== "string" || !style.trim() || style.length > 160) {
+      throw new BadRequestException("Agent voice.style is invalid");
+    }
+    const configuredStyles = Array.isArray(provider.config?.styles)
+      ? provider.config.styles
+          .map((entry) => isRecord(entry) ? entry.id : undefined)
+          .filter((id): id is string => typeof id === "string")
+      : [];
+    if (configuredStyles.length > 0 && !configuredStyles.includes(style.trim())) {
+      throw new BadRequestException("Agent voice.style is not in the provider catalog");
+    }
+  }
   return {
     providerId,
     voiceId: voiceId.trim(),
     ...(gender !== undefined ? { gender } : {}),
+    ...(typeof style === "string" ? { style: style.trim() } : {}),
     ...(raw.rate !== undefined ? { rate: raw.rate } : {}),
     ...(raw.pitchHz !== undefined ? { pitchHz: raw.pitchHz } : {}),
     ...(raw.volume !== undefined ? { volume: raw.volume } : {}),
@@ -316,6 +370,12 @@ export function validateAgentDraftConfig(
       throw new BadRequestException(
         `Agent conversation ${field} must be between ${minimum} and ${maximum}`,
       );
+    }
+    if (
+      (field === "contextMessageLimit" || field === "contextMessageCharacters") &&
+      !Number.isInteger(value)
+    ) {
+      throw new BadRequestException(`Agent conversation ${field} must be an integer`);
     }
   }
   const goodbye = conversation.timeoutGoodbye;

@@ -42,6 +42,26 @@ def test_sentence_chunker_never_exceeds_max_after_late_clause_pause() -> None:
     assert all(len(chunk) <= 32 for chunk in chunks)
 
 
+def test_sentence_chunker_bounds_a_long_sentence_when_punctuation_arrives() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=32,
+        punctuation_min_characters=24,
+    )
+
+    chunks = chunker.push(
+        "Đây là một câu rất dài được mô hình gửi liền mạch cho tới khi dấu chấm xuất hiện."
+    )
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 32 for chunk in chunks)
+    assert " ".join(chunks) == (
+        "Đây là một câu rất dài được mô hình gửi liền mạch cho tới khi dấu chấm "
+        "xuất hiện."
+    )
+
+
 def test_sentence_chunker_bounds_unbroken_token_stream() -> None:
     chunker = SentenceChunker(min_characters=4, target_characters=8, max_characters=16)
 
@@ -79,4 +99,22 @@ def test_sentence_chunker_can_coalesce_short_sentences_for_cloud_tts() -> None:
     assert chunker.push("Câu đầu ngắn. Câu thứ hai cũng ngắn. ") == []
     assert chunker.push("Đủ thành một đoạn tự nhiên.") == [
         "Câu đầu ngắn. Câu thứ hai cũng ngắn. Đủ thành một đoạn tự nhiên."
+    ]
+
+
+def test_sentence_chunker_releases_a_small_lead_chunk_then_uses_steady_batches() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=48,
+        max_characters=72,
+        punctuation_min_characters=48,
+        initial_target_characters=16,
+        initial_max_characters=24,
+        initial_punctuation_min_characters=8,
+    )
+
+    assert chunker.push("Tôi nghe rồi. ") == ["Tôi nghe rồi."]
+    assert chunker.push("Đây là câu ngắn chưa đủ target. ") == []
+    assert chunker.push("Thêm một ý nữa nhé.") == [
+        "Đây là câu ngắn chưa đủ target. Thêm một ý nữa nhé."
     ]

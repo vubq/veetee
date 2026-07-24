@@ -39,7 +39,10 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
                 "closingGraceSeconds": 999,
                 "maxSessionSeconds": 0,
                 "totalTurnSeconds": 0,
-                "llmSeconds": 12,
+                "llmFirstTokenSeconds": 4,
+                "llmStreamIdleSeconds": 12,
+                "ttsFirstAudioSeconds": 6,
+                "ttsStreamIdleSeconds": 9,
             },
             "providers": [
                 {
@@ -62,8 +65,42 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
     assert profile.policy.closing_grace_seconds == 60.0
     assert profile.policy.max_session_seconds == 0.0
     assert profile.policy.total_turn_seconds == 0.0
+    assert profile.policy.llm_first_token_seconds == 4.0
+    assert profile.policy.llm_stream_idle_seconds == 12.0
+    assert profile.policy.llm_total_seconds == 0.0
+    assert profile.policy.tts_first_audio_seconds == 6.0
+    assert profile.policy.tts_stream_idle_seconds == 9.0
+    assert profile.policy.tts_total_seconds == 0.0
     assert profile.llm_model == "cx/configured-model"
     assert profile.llm_reasoning_effort == "none"
+
+
+def test_session_profile_defaults_to_incremental_prose_streaming() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+
+    profile = SessionProfile.defaults(settings)
+
+    assert profile.llm_chain[0].config["streamProseResponse"] is True
+
+
+def test_session_profile_enables_incremental_prose_for_legacy_provider_config() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+
+    profile = SessionProfile.from_payload(
+        {
+            "providers": [
+                {
+                    "kind": "llm",
+                    "baseUrl": "http://127.0.0.1:20128/v1",
+                    "model": "cx/configured-model",
+                    "config": {},
+                }
+            ]
+        },
+        settings,
+    )
+
+    assert profile.llm_chain[0].config["streamProseResponse"] is True
 
 
 def test_session_profile_uses_configurable_local_persona_fallback() -> None:
@@ -76,6 +113,20 @@ def test_session_profile_uses_configurable_local_persona_fallback() -> None:
     profile = SessionProfile.defaults(settings)
     assert profile.persona == "Configured local persona"
     assert profile.policy.max_session_seconds == 720
+
+def test_legacy_v1_stream_seconds_remain_absolute_provider_ceilings() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+
+    profile = SessionProfile.from_payload(
+        {"conversation": {"llmSeconds": 12, "ttsSeconds": 7}},
+        settings,
+    )
+
+    assert profile.policy.llm_total_seconds == 12.0
+    assert profile.policy.tts_total_seconds == 7.0
+    assert profile.policy.llm_stream_idle_seconds == 20.0
+    assert profile.policy.tts_stream_idle_seconds == 10.0
+
 
 def test_session_profile_treats_zero_parent_turn_ceiling_as_unlimited() -> None:
     settings = Settings(environment="test", require_device_auth=False)
@@ -136,6 +187,7 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
                             "model": "vieneu-tts-v3-turbo",
                             "config": {
                                 "voice": "Trúc Ly",
+                                "style": "tu_nhien",
                                 "supportsPitch": False,
                                 "outputSampleRate": 24000,
                             },
@@ -147,6 +199,7 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
                 "providerId": "vieneu-provider",
                 "voiceId": "Trúc Ly",
                 "gender": "female",
+                "style": "doc_truyen",
                 "rate": 1.1,
                 "pitchHz": 0,
                 "volume": 1,
@@ -161,6 +214,7 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
                 "model": "vieneu-tts-v3-turbo",
                 "config": {
                     "voice": "Trúc Ly",
+                    "style": "tu_nhien",
                     "supportsPitch": False,
                     "outputSampleRate": 24000,
                 },
@@ -169,6 +223,7 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
     )
     assert profile.voice is not None
     assert profile.voice.voice_id == "Trúc Ly"
+    assert profile.voice.style == "doc_truyen"
     assert profile.tts_endpoint is not None
     assert profile.tts_endpoint.adapter == "vieneu-local"
     assert profile.tts_endpoint.config["outputSampleRate"] == 24000

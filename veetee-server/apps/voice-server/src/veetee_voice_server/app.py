@@ -682,7 +682,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     llm_chain_registry: dict[
         tuple[tuple[str, str, str, str, str, str], ...], FailoverLlmProvider
     ] = {}
-    tts_registry: dict[tuple[str, str, str, str, float, float, float], TtsProvider] = {}
+    tts_registry: dict[
+        tuple[str, str, str, str, str, float, float, float], TtsProvider
+    ] = {}
     device_sessions = DeviceSessionRegistry()
     lab_capacity_lock = asyncio.Lock()
     active_lab_sessions = 0
@@ -732,6 +734,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config = dict(endpoint.config)
         config.update(
             voice=voice.voice_id,
+            style=voice.style,
             rate=voice.rate,
             pitchHz=voice.pitch_hz,
             volume=voice.volume,
@@ -740,6 +743,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             endpoint.provider_id,
             endpoint.adapter,
             voice.voice_id,
+            voice.style,
             json.dumps(config, sort_keys=True, ensure_ascii=False),
             voice.rate,
             voice.pitch_hz,
@@ -753,6 +757,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ):
             provider = default_tts.with_profile(
                 voice=voice.voice_id,
+                style=voice.style,
                 speed=voice.rate,
                 pitch_hz=voice.pitch_hz,
                 volume=voice.volume,
@@ -823,11 +828,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tts = VieNeuTtsProvider(
                 resolved_settings.models_root / "vieneu-v3-turbo",
                 voice=resolved_settings.tts_voice,
+                style=resolved_settings.tts_style,
                 speed=resolved_settings.tts_speed,
                 output_sample_rate=resolved_settings.tts_output_sample_rate,
                 num_threads=resolved_settings.tts_threads,
                 apply_watermark=resolved_settings.tts_apply_watermark,
                 stream_leadin_frames=resolved_settings.tts_stream_leadin_frames,
+                backend=resolved_settings.tts_backend,
+                native_model_dir=resolved_settings.tts_native_model_dir,
+                native_library_path=resolved_settings.tts_native_library_path,
+                native_realtime_headroom=resolved_settings.tts_native_realtime_headroom,
             )
             default_llm = llm_for_profile(SessionProfile.defaults(resolved_settings))
             runtime.update(asr=asr, vad_model=vad_model, tts=tts)
@@ -864,6 +874,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.gather(
             *(candidate.provider.close() for candidate in llm_registry.values())
         )
+        runtime_tts = runtime.get("tts")
+        if isinstance(runtime_tts, VieNeuTtsProvider):
+            await runtime_tts.close()
         await manager.close()
         logger.info("voice_server_stopped")
 

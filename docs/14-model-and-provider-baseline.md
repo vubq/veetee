@@ -232,6 +232,8 @@ giữ nguyên.
 - Dùng streaming output, `max_output_tokens` thấp cho câu trả lời thoại và structured
   output cho planner/tool call.
 - Tách planner/tool decision khỏi prose TTS; không phát chain-of-thought ra loa.
+- Áp dụng `llmSeconds` như first-token/inter-event idle deadline được làm mới, không
+  dùng nó làm absolute ceiling cho câu trả lời đang tiếp tục sinh hoặc TTS đang drain.
 - Khi user abort, hủy request và tăng generation; token đến trễ bị drop.
 - Không retry request đã abort. Chỉ retry lỗi retryable khi còn `total_turn_deadline`.
 - Chọn model/temperature/context theo agent config; không đóng đinh tên model trong
@@ -369,17 +371,30 @@ chỉ hỗ trợ batch, sentence chunking vẫn cho UX incremental nhưng latenc
 không giả định “Turbo” tự động có streaming. Adapter phải có `cancel()` và trả
 sample-rate/format rõ ràng.
 
-Giọng production mặc định là Trúc Ly với tempo `1.0`. VieNeu engine được cấu hình
-lead-in 16 acoustic frames trước khi phát để giữ đủ audio đệm khi CPU inference
-chậm hơn playback; đây là yếu tố tránh hụt tiếng quan trọng hơn việc rút ngắn
-thời lượng bằng WSOLA. Tempo vẫn là cấu hình server, không thay đổi giao thức
-PCM/Opus 24 kHz với firmware.
+Giọng production mặc định là Trúc Ly với tempo `1.0`. ONNX compatibility backend
+dùng lead-in 16 acoustic frames; host hiện tại chọn native C++ CPU batch 4 threads
+vì RTF đoạn ngắn thấp hơn 1. Native adapter dùng lead chunk 24/40 ký tự
+target/maximum rồi batch duy trì 48/72 ký tự, prewarm context một lần và đẩy PCM
+vào browser/device playback queue trong lúc synthesize batch kế tiếp. Tempo được
+áp dụng đúng theo agent config bằng WSOLA giữ cao độ; runtime đo
+`realtime_speed_ceiling` với headroom `1.15` và cảnh báo starvation thay vì tự đổi
+tốc độ đã publish. Giao thức PCM/Opus 24 kHz với firmware không đổi.
+
+Voice và style là hai tham số độc lập. Style mặc định `tu_nhien` dành cho hội thoại;
+`doc_truyen` và `tin_tuc` chỉ dùng khi agent chọn rõ. Vì vậy một voice có reference
+gốc kiểu đọc truyện như Ngọc Linh không tự ép mọi hội thoại sang nhịp đọc truyện.
 
 Mọi profile VieNeu dùng chung một inference lock của engine để không chạy đồng thời
 trên model state dùng chung. Runtime cảnh báo `postprocess_rate_starvation_risk` khi
 tempo lớn hơn `1.2` và `amplification_clipping_risk` khi volume lớn hơn `1.0`; Manager
 hiển thị cảnh báo trước khi publish nhưng không tự sửa desired config. Sau mỗi
 synthesis, adapter log số sample/audio duration và clipping ratio thực tế đã redact.
+Runtime giữ thêm turn-level reservation từ speech chunk đầu tới hết lượt. Cách này
+tránh hai session thay nhau chiếm model sau từng câu; session đang chờ reservation
+không tiêu thụ `ttsSeconds`. Sau khi nhận worker, `ttsSeconds` được làm mới theo
+mỗi audio chunk để chỉ bắt provider thực sự đứng im, không giới hạn độ dài lời đáp.
+Native C call đang chạy không thể bị kill an toàn: abort loại output theo generation
+ngay, còn worker-owned lock giữ model tới khi call thoát để lượt sau không overlap.
 
 Đã benchmark lại trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB)
 bằng mười lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first
@@ -387,11 +402,11 @@ audio median/p95 khoảng 1,56/1,72 giây, RTF 1.148/1.205 và không có playba
 starvation trong cả mười lượt. CUDA 12 với ONNX Runtime
 GPU chậm hơn: 696/1,365 ms first audio và RTF 1.303/1.804 do nhiều đoạn graph phải
 sao chép hoặc fallback qua CPU; GPU chỉ được dùng khoảng 4--10%. Zipformer INT8
-decode 1,55 giây audio trong 38/44 ms median/p95 ở 2 threads. Vì vậy V1 giữ
-Zipformer và VieNeu ONNX INT8 trên CPU với 2 threads cho mỗi provider. VieNeu
-native C++ vẫn chỉ là benchmark/opt-in worker cho tới khi có streaming callback
-và cancellation tương đương. Chi tiết và lệnh tái lập nằm ở
-`docs/15-local-ai-runtime.md`.
+decode 1,55 giây audio trong 38/44 ms median/p95 ở 2 threads. Vì vậy Zipformer giữ
+ONNX INT8 CPU 2 threads; VieNeu ONNX vẫn là compatibility default cho clone mới,
+còn deployment host này bật native C++ CPU 4 threads sau khi có adapter batch,
+playback buffer, generation cancellation và serialized worker. Chi tiết và lệnh
+tái lập nằm ở `docs/15-local-ai-runtime.md`.
 
 Model TTS phải được benchmark về first-audio, real-time factor, CPU/RAM/VRAM,
 phát âm tên riêng/số/ngày, chất lượng giọng, output sample rate, license và khả năng

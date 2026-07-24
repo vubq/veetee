@@ -73,7 +73,8 @@ const form = reactive({
   userAddress: "", promptTemplate: "",
   firstInput: 180, betweenTurns: 180, closingGrace: 5, maxSession: 0,
   vad: "", asr: "", llm: "", tts: "",
-  voiceId: "", voiceGender: "female", voiceRate: 1, voicePitch: 0, voiceVolume: 1,
+  voiceId: "", voiceGender: "female", voiceStyle: "tu_nhien",
+  voiceRate: 1, voicePitch: 0, voiceVolume: 1,
 });
 
 const selected = computed(() => props.agents.find((agent) => agent.id === selectedId.value) ?? props.agents[0]);
@@ -100,7 +101,7 @@ const voiceQualityWarnings = computed(() => {
   if (!ttsProvider.value?.adapter.toLowerCase().includes("vieneu")) return [];
   const warnings: string[] = [];
   if (Number(form.voiceRate) > 1.2) {
-    warnings.push("Tốc độ trên 1,2× dùng WSOLA sau inference: câu đọc ngắn hơn nhưng model không sinh nhanh hơn, nên có thể thiếu audio đệm.");
+    warnings.push("Tốc độ được áp dụng đúng bằng WSOLA, nhưng trên 1,2× có thể phát nhanh hơn khả năng sinh của CPU và tạo khoảng nghỉ ở câu trả lời rất dài.");
   }
   if (Number(form.voiceVolume) > 1) {
     warnings.push("Âm lượng trên 1,0 khuếch đại PCM và có nguy cơ clipping. Ưu tiên chỉnh âm lượng loa trên thiết bị.");
@@ -111,6 +112,14 @@ const voiceOptions = computed(() => {
   const voices = ttsProvider.value?.config?.voices;
   if (!Array.isArray(voices)) return [];
   return voices.filter((voice): voice is Record<string, unknown> => Boolean(voice) && typeof voice === "object" && !Array.isArray(voice));
+});
+const voiceStyleOptions = computed(() => {
+  const styles = ttsProvider.value?.config?.styles;
+  if (!Array.isArray(styles)) return [];
+  return styles.filter(
+    (style): style is Record<string, unknown> =>
+      Boolean(style) && typeof style === "object" && !Array.isArray(style),
+  );
 });
 
 watch(
@@ -125,6 +134,7 @@ watch(
       : [];
     form.voiceId = stringValue(provider?.config?.voice) || stringValue(voices[0]?.id);
     form.voiceGender = stringValue(provider?.config?.gender, stringValue(voices[0]?.gender, "female"));
+    form.voiceStyle = stringValue(provider?.config?.style, "tu_nhien");
     form.voiceRate = Number(provider?.config?.rate ?? 1);
     form.voicePitch = provider?.config?.supportsPitch === false
       ? 0
@@ -220,6 +230,7 @@ watch(
     const fallbackVoice = stringValue(selectedTts?.config?.voice) || stringValue(voiceOptions.value[0]?.id);
     form.voiceId = configuredVoice || fallbackVoice;
     form.voiceGender = stringValue(voice.gender, stringValue(voiceOptions.value[0]?.gender, "female"));
+    form.voiceStyle = stringValue(voice.style, stringValue(selectedTts?.config?.style, "tu_nhien"));
     form.voiceRate = Number(voice.rate ?? selectedTts?.config?.rate ?? 1);
     form.voicePitch = Number(voice.pitchHz ?? selectedTts?.config?.pitchHz ?? 0);
     form.voiceVolume = Number(voice.volume ?? selectedTts?.config?.volume ?? 1);
@@ -271,6 +282,7 @@ async function publish(): Promise<void> {
                 providerId: form.tts,
                 voiceId: form.voiceId,
                 gender: form.voiceGender || undefined,
+                style: form.voiceStyle,
                 rate: Number(form.voiceRate),
                 pitchHz: Number(form.voicePitch),
                 volume: Number(form.voiceVolume),
@@ -651,6 +663,7 @@ const promptPreview = computed(() => {
               <div class="form-grid two">
                 <VtField label="Voice"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">Chưa chọn</option><option v-if="form.voiceId && !voiceOptions.some((voice) => String(voice.id) === form.voiceId)" :value="form.voiceId">{{ form.voiceId }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ String(voice.label ?? voice.id) }} · {{ String(voice.gender ?? "neutral") }}</option></VtSelect></VtField>
                 <VtField label="Giới tính"><VtSelect v-model="form.voiceGender"><option value="female">Nữ</option><option value="male">Nam</option><option value="neutral">Trung tính</option></VtSelect></VtField>
+                <VtField label="Phong cách đọc" hint="Tự nhiên phù hợp hội thoại"><VtSelect v-model="form.voiceStyle" :disabled="!voiceStyleOptions.length"><option v-if="!voiceStyleOptions.length" value="tu_nhien">Tự nhiên / hội thoại</option><option v-for="style in voiceStyleOptions" :key="String(style.id)" :value="String(style.id)">{{ String(style.label ?? style.id) }}</option></VtSelect></VtField>
                 <VtField label="Tốc độ" hint="0,5–2,0"><VtInput v-model="form.voiceRate" type="number" min="0.5" max="2" step="0.05" /></VtField>
                 <VtField label="Cao độ (Hz)" :hint="ttsSupportsPitch ? 'Điều chỉnh từ -100 đến +100 Hz' : 'Provider này không hỗ trợ đổi cao độ'"><VtInput v-model="form.voicePitch" type="number" min="-100" max="100" step="1" :disabled="!ttsSupportsPitch" /></VtField>
                 <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>

@@ -19,7 +19,7 @@ const form = reactive({
   temperature: 0.2, topP: 0.95, maxCompletionTokens: 1024,
   serviceTier: "on_demand", reasoningEffort: "none", streamProseResponse: true,
   parallelToolCalls: true, responseFormat: "auto", completionTokenParameter: "max_tokens",
-  voice: "", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
+  voice: "", style: "tu_nhien", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
 });
 const busy = ref(false);
 const error = ref("");
@@ -46,7 +46,7 @@ const ttsQualityWarnings = computed(() => {
   if (!isTts.value || !isVieNeu.value) return [];
   const warnings: string[] = [];
   if (Number(form.rate) > 1.2) {
-    warnings.push("Rate cao chỉ tăng tempo sau inference và có thể làm hàng đợi phát bị đói.");
+    warnings.push("Rate được áp dụng đúng sau inference; trên 1,2× có thể phát nhanh hơn throughput CPU và làm thiếu audio đệm.");
   }
   if (Number(form.volume) > 1) {
     warnings.push("Volume trên 1,0 có thể clipping; không làm model TTS rõ hơn.");
@@ -77,6 +77,7 @@ watch(
     form.responseFormat = String(config.responseFormat ?? "auto");
     form.completionTokenParameter = String(config.completionTokenParameter ?? "max_tokens");
     form.voice = String(config.voice ?? config.voiceId ?? "");
+    form.style = String(config.style ?? (isVieNeu.value ? "tu_nhien" : ""));
     form.rate = Number(config.rate ?? 1);
     form.pitchHz = Number(config.pitchHz ?? 0);
     form.volume = Number(config.volume ?? 1);
@@ -113,6 +114,7 @@ async function submit(): Promise<void> {
     if (isTts.value) {
       Object.assign(config, {
         voice: form.voice.trim() || undefined,
+        ...(isVieNeu.value ? { style: form.style } : {}),
         rate: Number(form.rate),
         pitchHz: Number(form.pitchHz),
         volume: Number(form.volume),
@@ -178,6 +180,7 @@ async function submit(): Promise<void> {
         </div>
         <div v-else class="form-grid two">
           <VtField label="Voice mặc định" hint="Preset giọng của VieNeu local"><VtInput v-model="form.voice" placeholder="Trúc Ly" /></VtField>
+          <VtField v-if="isVieNeu" label="Phong cách mặc định"><VtSelect v-model="form.style"><option value="tu_nhien">Tự nhiên / hội thoại</option><option value="doc_truyen">Đọc truyện</option><option value="tin_tuc">Tin tức</option></VtSelect></VtField>
           <VtField label="Tốc độ" hint="1,0 cho chất lượng và stream ổn định nhất"><VtInput v-model="form.rate" type="number" min="0.5" max="2" step="0.05" /></VtField>
           <VtField v-if="supportsPitch" label="Cao độ Hz"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
           <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>

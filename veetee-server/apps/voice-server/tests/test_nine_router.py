@@ -104,6 +104,20 @@ async def test_payload_includes_structured_turn_context_for_prose_response() -> 
     assert metadata["input_evidence"]["wake_source"] == "button"
     assert metadata["context_message_count"] == 1
     assert payload["messages"][0] == {"role": "system", "content": "published"}
+    assert "max_tokens" not in payload
+    await provider.close()
+
+
+async def test_prose_payload_uses_configured_completion_limit_without_imposing_a_default() -> None:
+    provider = NineRouterLlmProvider(
+        base_url="http://router/v1",
+        model="test",
+        config={"maxCompletionTokens": 16_384},
+    )
+
+    payload = provider._payload(request())  # type: ignore[arg-type]
+
+    assert payload["max_tokens"] == 16_384
     await provider.close()
 
 

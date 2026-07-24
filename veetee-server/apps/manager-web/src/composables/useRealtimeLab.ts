@@ -127,6 +127,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
   let outputSampleRate = 24_000;
   let audioContext: AudioContext | undefined;
   let nextPlaybackAt = 0;
+  const playbackLeadSeconds = 0.2;
   const playbackSources = new Set<AudioBufferSourceNode>();
   let audioSendGeneration = 0;
   let micStream: MediaStream | undefined;
@@ -214,7 +215,9 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
-    const startAt = Math.max(context.currentTime + 0.015, nextPlaybackAt);
+    const startAt = nextPlaybackAt <= context.currentTime
+      ? context.currentTime + playbackLeadSeconds
+      : nextPlaybackAt;
     nextPlaybackAt = startAt + buffer.duration;
     playbackSources.add(source);
     source.onended = () => playbackSources.delete(source);

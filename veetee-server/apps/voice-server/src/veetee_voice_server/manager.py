@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -13,6 +13,9 @@ from veetee_voice_server.prompting import PromptConfiguration
 
 class ManagerAuthenticationError(RuntimeError):
     pass
+
+
+VoiceStyle = Literal["tu_nhien", "doc_truyen", "tin_tuc"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +67,7 @@ class VoiceProfile:
     provider_id: str
     voice_id: str
     gender: str | None
+    style: VoiceStyle
     rate: float
     pitch_hz: float
     volume: float
@@ -140,8 +144,12 @@ class SessionProfile:
                 total_turn_seconds=0.0,
                 admission_seconds=1.0,
                 planner_seconds=settings.planner_seconds,
-                llm_seconds=20.0,
-                tts_seconds=10.0,
+                llm_first_token_seconds=5.0,
+                llm_stream_idle_seconds=20.0,
+                llm_total_seconds=0.0,
+                tts_first_audio_seconds=5.0,
+                tts_stream_idle_seconds=10.0,
+                tts_total_seconds=0.0,
                 mcp_seconds=10.0,
             ),
             llm_chain=(
@@ -152,7 +160,7 @@ class SessionProfile:
                     model=settings.nine_router_model,
                     api_key=settings.nine_router_api_key,
                     reasoning_effort="none",
-                    config={},
+                    config={"streamProseResponse": True},
                 ),
             ),
             tts_endpoint=TtsEndpoint(
@@ -163,6 +171,7 @@ class SessionProfile:
                 api_key="",
                 config={
                     "voice": settings.tts_voice,
+                    "style": settings.tts_style,
                     "rate": settings.tts_speed,
                     "volume": 1.0,
                     "outputSampleRate": settings.tts_output_sample_rate,
@@ -172,6 +181,7 @@ class SessionProfile:
                 provider_id="settings:vieneu",
                 voice_id=settings.tts_voice,
                 gender="female",
+                style=settings.tts_style,
                 rate=settings.tts_speed,
                 pitch_hz=0.0,
                 volume=1.0,
@@ -277,8 +287,46 @@ class SessionProfile:
                     0.5,
                     15.0,
                 ),
-                llm_seconds=_bounded_float(conversation.get("llmSeconds"), 20.0, 1.0, 45.0),
-                tts_seconds=_bounded_float(conversation.get("ttsSeconds"), 10.0, 1.0, 30.0),
+                llm_first_token_seconds=_bounded_float(
+                    conversation.get("llmFirstTokenSeconds"),
+                    defaults.policy.llm_first_token_seconds,
+                    0.5,
+                    30.0,
+                ),
+                llm_stream_idle_seconds=_bounded_float(
+                    conversation.get("llmStreamIdleSeconds"),
+                    defaults.policy.llm_stream_idle_seconds,
+                    1.0,
+                    45.0,
+                ),
+                llm_total_seconds=_bounded_float(
+                    conversation.get("llmSeconds")
+                    if "llmStreamIdleSeconds" not in conversation
+                    else 0.0,
+                    defaults.policy.llm_total_seconds,
+                    0.0,
+                    45.0,
+                ),
+                tts_first_audio_seconds=_bounded_float(
+                    conversation.get("ttsFirstAudioSeconds"),
+                    defaults.policy.tts_first_audio_seconds,
+                    0.5,
+                    30.0,
+                ),
+                tts_stream_idle_seconds=_bounded_float(
+                    conversation.get("ttsStreamIdleSeconds"),
+                    defaults.policy.tts_stream_idle_seconds,
+                    1.0,
+                    30.0,
+                ),
+                tts_total_seconds=_bounded_float(
+                    conversation.get("ttsSeconds")
+                    if "ttsStreamIdleSeconds" not in conversation
+                    else 0.0,
+                    defaults.policy.tts_total_seconds,
+                    0.0,
+                    30.0,
+                ),
                 mcp_seconds=_bounded_float(conversation.get("mcpSeconds"), 10.0, 0.5, 30.0),
                 context_message_limit=_bounded_int(
                     conversation.get("contextMessageLimit"),
@@ -515,21 +563,20 @@ def _llm_chain(
                     endpoint
                     for provider in providers
                     if isinstance(provider, dict)
-                    and (endpoint := _llm_endpoint(provider, runtime_by_id, defaults, settings))
+                    and (endpoint := _llm_endpoint(provider, runtime_by_id, settings))
                     is not None
                 )
                 if endpoints:
                     return endpoints
 
     legacy = _find_llm(payload)
-    endpoint = _llm_endpoint(legacy, runtime_by_id, defaults, settings)
+    endpoint = _llm_endpoint(legacy, runtime_by_id, settings)
     return (endpoint,) if endpoint is not None else defaults.llm_chain
 
 
 def _llm_endpoint(
     published: dict[str, Any],
     runtime_by_id: dict[str, dict[str, Any]],
-    defaults: SessionProfile,
     settings: Settings,
 ) -> LlmEndpoint | None:
     provider_id = _optional_string(published.get("id"))
@@ -542,6 +589,8 @@ def _llm_endpoint(
     )
     if not model or not base_url:
         return None
+    config = _record(runtime.get("config") or published.get("config"))
+    config.setdefault("streamProseResponse", True)
     return LlmEndpoint(
         provider_id=provider_id or f"legacy:{model}",
         adapter=(
@@ -565,7 +614,7 @@ def _llm_endpoint(
         # Voice turns favor predictable latency; published profiles cannot enable
         # hidden model reasoning unless Veetee introduces an explicit policy later.
         reasoning_effort="none",
-        config=_record(runtime.get("config") or published.get("config")),
+        config=config,
     )
 
 
@@ -643,6 +692,10 @@ def _voice_profile(payload: dict[str, Any], defaults: SessionProfile) -> VoicePr
         provider_id=provider_id,
         voice_id=voice_id,
         gender=_optional_string(raw.get("gender")),
+        style=_voice_style(
+            raw.get("style"),
+            defaults.voice.style if defaults.voice else "tu_nhien",
+        ),
         rate=_bounded_float(
             raw.get("rate"), defaults.voice.rate if defaults.voice else 1.0, 0.5, 2.0
         ),
@@ -668,6 +721,10 @@ def _voice_from_endpoint(
         provider_id=endpoint.provider_id,
         voice_id=voice_id,
         gender=_optional_string(endpoint.config.get("gender")),
+        style=_voice_style(
+            endpoint.config.get("style"),
+            fallback.style if fallback else "tu_nhien",
+        ),
         rate=_bounded_float(
             endpoint.config.get("rate"), fallback.rate if fallback else 1.0, 0.5, 2.0
         ),
@@ -689,6 +746,16 @@ def _record(value: object) -> dict[str, Any]:
 
 def _optional_string(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _voice_style(value: object, default: VoiceStyle) -> VoiceStyle:
+    if value == "tu_nhien":
+        return "tu_nhien"
+    if value == "doc_truyen":
+        return "doc_truyen"
+    if value == "tin_tuc":
+        return "tin_tuc"
+    return default
 
 
 def _optional_int(value: object, minimum: int, maximum: int) -> int | None:

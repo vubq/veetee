@@ -129,6 +129,11 @@ class NoResultEngine:
         return
 
 
+class AcceptedResultEngine:
+    async def handle_transcript(self, _: Transcript) -> AdmissionDisposition:
+        return AdmissionDisposition.ACCEPTED
+
+
 def make_session(websocket: FakeWebSocket) -> LabSession:
     settings = Settings(
         environment="test",
@@ -167,6 +172,66 @@ def make_session(websocket: FakeWebSocket) -> LabSession:
         tool_broker=SimulatedLabToolBroker(),
         engine_factory=engine_factory,
     )
+
+
+async def test_cancelled_tts_stop_tells_lab_to_clear_scheduled_audio() -> None:
+    websocket = FakeWebSocket()
+    sink = LabConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="lab-session",
+        output_sample_rate=24_000,
+    )
+
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.TTS_STOP,
+            "turn-1",
+            2,
+            payload={"cancelled": True},
+        )
+    )
+
+    start = await websocket.outgoing.get()
+    stop = await websocket.outgoing.get()
+    assert isinstance(start, dict) and start["event"] == "tts.start"
+    assert isinstance(stop, dict) and stop["event"] == "tts.stop"
+    assert stop["payload"] == {"cancelled": True}
+
+
+async def test_normal_tts_stop_waits_until_browser_audio_has_played() -> None:
+    websocket = FakeWebSocket()
+    sink = LabConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="lab-session",
+        output_sample_rate=1_000,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(
+                0,
+                1_000,
+                "pcm_s16le",
+                b"\0\0" * 50,
+                final=True,
+            ),
+        )
+    )
+
+    started_at = asyncio.get_running_loop().time()
+    await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+
+    assert asyncio.get_running_loop().time() - started_at >= 0.04
+    events = [
+        item["event"]
+        for item in list(websocket.outgoing._queue)
+        if isinstance(item, dict)
+    ]
+    assert events == ["tts.start", "tts.first_audio", "tts.stop"]
 
 
 async def test_text_lab_marks_vad_asr_bypassed_and_streams_real_tts_pcm() -> None:
@@ -253,6 +318,34 @@ async def test_provider_failure_rearms_lab_inactivity_timeout() -> None:
         await session._run_transcript(Transcript("xin chào", "vi-VN", 0.99, 1.0))
 
     candidate_rejected.assert_awaited_once()
+    await session.inactivity.close()
+
+
+async def test_accepted_turn_restarts_inactivity_after_processing_finishes() -> None:
+    session = make_session(FakeWebSocket())
+    session.engine = AcceptedResultEngine()  # type: ignore[assignment]
+    valid_user_activity = AsyncMock()
+    turn_completed = AsyncMock()
+    candidate_rejected = AsyncMock()
+
+    with (
+        patch.object(
+            session.inactivity,
+            "valid_user_activity",
+            valid_user_activity,
+        ),
+        patch.object(session.inactivity, "turn_completed", turn_completed),
+        patch.object(
+            session.inactivity,
+            "candidate_rejected",
+            candidate_rejected,
+        ),
+    ):
+        await session._run_transcript(Transcript("xin chào", "vi-VN", 0.99, 1.0))
+
+    valid_user_activity.assert_awaited_once()
+    turn_completed.assert_awaited_once()
+    candidate_rejected.assert_not_awaited()
     await session.inactivity.close()
 
 

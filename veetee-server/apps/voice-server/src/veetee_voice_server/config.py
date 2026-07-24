@@ -73,11 +73,19 @@ class Settings(BaseSettings):
     models_root: Path = Path("models")
     asr_threads: int = Field(default=2, ge=1, le=8)
     tts_threads: int = Field(default=2, ge=1, le=8)
+    tts_backend: Literal["onnx", "native"] = "onnx"
     tts_voice: str = "Trúc Ly"
+    tts_style: Literal["tu_nhien", "doc_truyen", "tin_tuc"] = "tu_nhien"
     tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
     tts_stream_leadin_frames: int = Field(default=16, ge=4, le=25)
     tts_output_sample_rate: int = Field(default=24_000, ge=16_000, le=48_000)
     tts_apply_watermark: bool = True
+    tts_native_model_dir: Path = Path("models/vieneu-v3-turbo-native")
+    tts_native_library_path: Path = Path(
+        ".cache/local-ai/VieNeu-TTS.cpp/build-cpu/libvieneu-tts.so"
+    )
+    tts_native_realtime_headroom: float = Field(default=1.15, ge=1.0, le=2.0)
+    tts_playback_queue_seconds: float = Field(default=5.0, ge=1.0, le=15.0)
     default_locale: str = "vi-VN"
     default_persona: str = ""
     default_agent_name: str = "VeeTee"

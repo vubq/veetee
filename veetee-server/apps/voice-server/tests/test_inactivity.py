@@ -106,6 +106,36 @@ async def test_rejected_candidate_resumes_original_timeout_deadline() -> None:
     await controller.close()
 
 
+async def test_valid_turn_gets_full_between_turns_timeout_after_processing() -> None:
+    arbiter = TurnArbiter("session-long-turn")
+    goodbye = asyncio.Event()
+
+    async def on_goodbye(_: str) -> None:
+        goodbye.set()
+
+    controller = InactivityController(
+        arbiter=arbiter,
+        first_input_seconds=0.03,
+        between_turns_seconds=0.05,
+        closing_grace_seconds=0.01,
+        max_session_seconds=0,
+        goodbye=on_goodbye,
+    )
+    await controller.assistant_opened(WakeSource.BUTTON)
+    await asyncio.sleep(0.015)
+    await controller.candidate_started()
+
+    # Processing may outlive the old deadline without consuming post-turn idle time.
+    await asyncio.sleep(0.04)
+    await controller.valid_user_activity()
+    await controller.turn_completed()
+    await asyncio.sleep(0.025)
+
+    assert not goodbye.is_set()
+    await asyncio.wait_for(goodbye.wait(), timeout=0.05)
+    await controller.close()
+
+
 async def test_absolute_session_ceiling_cancels_an_active_turn() -> None:
     arbiter = TurnArbiter("session-1")
     goodbye_reasons: list[str] = []

@@ -402,7 +402,7 @@ async def test_goodbye_always_emits_sleep_when_tts_is_slow_or_fails(tts: object)
     profile = SessionProfile.defaults(settings)
     profile = replace(
         profile,
-        policy=replace(profile.policy, closing_grace_seconds=0.11, tts_seconds=0.3),
+        policy=replace(profile.policy, closing_grace_seconds=0.11, tts_stream_idle_seconds=0.3),
     )
     voice_session = VoiceSession(
         websocket,  # type: ignore[arg-type]
@@ -463,6 +463,40 @@ async def test_websocket_sink_wraps_audio_in_one_tts_lifecycle() -> None:
     assert len(websocket.sent_bytes) == 2
 
 
+async def test_websocket_sink_buffers_a_native_sentence_while_next_batch_synthesizes() -> None:
+    websocket = FakeWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-native-batch",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+        playback_queue_seconds=5.0,
+    )
+    try:
+        await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+        await asyncio.wait_for(
+            sink.emit(
+                ConversationOutput(
+                    OutputKind.AUDIO,
+                    "turn-1",
+                    2,
+                    audio=AudioChunk(
+                        0,
+                        24_000,
+                        "pcm_s16le",
+                        b"\0\0" * (24_000 * 4),
+                    ),
+                )
+            ),
+            timeout=0.5,
+        )
+        assert sink._audio_stream is not None
+        assert sink._audio_stream.queue.qsize() > 50
+        await sink.cancel_tts(3)
+    finally:
+        sink.close()
+
+
 async def test_cancelled_generation_stops_paced_audio_before_late_frames() -> None:
     websocket = FakeWebSocket()
     sink = WebSocketConversationSink(
@@ -487,6 +521,45 @@ async def test_cancelled_generation_stops_paced_audio_before_late_frames() -> No
     await sink.cancel_tts(3)
     await audio_task
     await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+    sink.close()
+
+    assert len(websocket.sent_bytes) == 3
+    assert json.loads(websocket.sent_text[-1]) == {
+        "session_id": "session-1",
+        "type": "tts",
+        "state": "stop",
+    }
+
+
+async def test_failed_turn_stop_discards_paced_audio_before_stale_frames() -> None:
+    websocket = FakeWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-1",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    audio_task = asyncio.create_task(
+        sink.emit(
+            ConversationOutput(
+                OutputKind.AUDIO,
+                "turn-1",
+                2,
+                audio=AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 14_400),
+            )
+        )
+    )
+    await websocket.three_audio_frames_sent.wait()
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.TTS_STOP,
+            "turn-1",
+            2,
+            payload={"cancelled": True},
+        )
+    )
+    await audio_task
     sink.close()
 
     assert len(websocket.sent_bytes) == 3

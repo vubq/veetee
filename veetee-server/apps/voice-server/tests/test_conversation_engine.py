@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -170,6 +171,20 @@ class FailingTts:
         if False:
             yield AudioChunk(0, 24000, "pcm_s16le", b"", final=True)
         raise RuntimeError("tts fixture failure")
+
+
+class TurnScopedTts(FakeTts):
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def speech_turn(
+        self, context: OperationContext
+    ) -> AsyncGenerator[None]:
+        context.checkpoint()
+        async with self.turn_lock:
+            yield
 
 
 class FakeTools:
@@ -430,6 +445,362 @@ async def test_llm_stream_continues_while_tts_speaks_previous_chunk() -> None:
     assert tts.calls == ["Đây là câu đầu tiên.", "Đây là câu thứ hai."]
 
 
+async def test_tts_chunk_capability_coalesces_short_sentences_for_natural_pacing() -> None:
+    class CoalescingTts(FakeTts):
+        preferred_text_chunk_characters = 44
+
+    arbiter = TurnArbiter("session-natural-pacing")
+    tts = CoalescingTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=FakeLlm(("Đây là câu ngắn đầu tiên.", " Đây là câu ngắn thứ hai.")),
+        tts=tts,
+        tools=FakeTools(),
+        sink=MemoryConversationSink(),
+        policy=ConversationPolicy(
+            sentence_min_characters=1,
+            speech_chunk_target_characters=20,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("fixture", "vi-VN"))
+
+    assert tts.calls == ["Đây là câu ngắn đầu tiên. Đây là câu ngắn thứ hai."]
+
+
+async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail() -> None:
+    arbiter = TurnArbiter("session-unbounded-response")
+    sink = MemoryConversationSink()
+    deltas = tuple(f"Đây là phần trả lời số {index}. " for index in range(60))
+
+    class ProgressiveLlm:
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta]:
+            del request, context
+            for delta in deltas:
+                await asyncio.sleep(0.004)
+                yield LlmTextDelta(delta)
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=ProgressiveLlm(),
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            llm_first_token_seconds=0.02,
+            llm_stream_idle_seconds=0.01,
+            context_message_characters=96,
+            sentence_min_characters=1,
+            speech_queue_capacity=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("Kể một câu chuyện dài.", "vi-VN")),
+        timeout=2.0,
+    )
+
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TEXT_DELTA]) == 60
+    assert len(engine.context[-1].text) <= 96
+    assert engine.context[-1].text.endswith("Đây là phần trả lời số 59.")
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
+async def test_first_token_deadline_is_shorter_than_stream_idle_deadline() -> None:
+    arbiter = TurnArbiter("session-first-token-timeout")
+    sink = MemoryConversationSink()
+
+    class SlowFirstTokenLlm:
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta]:
+            del request, context
+            await asyncio.sleep(0.04)
+            yield LlmTextDelta("Quá muộn.")
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=SlowFirstTokenLlm(),
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            llm_first_token_seconds=0.02,
+            llm_stream_idle_seconds=0.2,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    assert [output.payload for output in sink.outputs if output.kind is OutputKind.ERROR] == [
+        {"code": "provider_deadline", "stage": "provider"}
+    ]
+    assert not any(output.kind is OutputKind.TTS_START for output in sink.outputs)
+
+
+async def test_empty_tts_chunks_do_not_open_a_false_speaking_lifecycle() -> None:
+    arbiter = TurnArbiter("session-empty-tts")
+    sink = MemoryConversationSink()
+
+    class EmptyTts:
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del text, locale, context
+            yield AudioChunk(0, 24_000, "pcm_s16le", b"", final=True)
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=EmptyTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("fixture", "vi-VN"))
+
+    assert not any(
+        output.kind in {OutputKind.TTS_START, OutputKind.AUDIO, OutputKind.TTS_STOP}
+        for output in sink.outputs
+    )
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_llm_idle_deadline_does_not_limit_long_tts_backpressure() -> None:
+    arbiter = TurnArbiter("session-long-response")
+    tts = BlockingTts()
+    sink = MemoryConversationSink()
+    sentences = tuple(f"Đây là đoạn truyện thứ {index}." for index in range(1, 7))
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=FakeLlm(sentences),
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            llm_stream_idle_seconds=0.02,
+            sentence_min_characters=1,
+            speech_queue_capacity=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    task = asyncio.create_task(engine.handle_transcript(Transcript("Kể chuyện.", "vi-VN")))
+
+    await asyncio.wait_for(tts.started.wait(), timeout=1.0)
+    await asyncio.sleep(0.05)
+    tts.release.set()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert tts.calls == list(sentences)
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+    stop = next(output for output in sink.outputs if output.kind is OutputKind.TTS_STOP)
+    assert stop.payload == {}
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_tts_queue_wait_does_not_consume_synthesis_idle_deadline() -> None:
+    arbiter = TurnArbiter("session-tts-queue")
+    tts = TurnScopedTts()
+    sink = MemoryConversationSink()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            tts_first_audio_seconds=0.02,
+            tts_stream_idle_seconds=0.02,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    await tts.turn_lock.acquire()
+    task = asyncio.create_task(
+        engine.handle_transcript(Transcript("fixture", "vi-VN"))
+    )
+
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    tts.turn_lock.release()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert tts.calls == ["Đây là câu trả lời."]
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
+async def test_tts_first_audio_deadline_precedes_stream_idle_watchdog() -> None:
+    arbiter = TurnArbiter("session-first-audio-timeout")
+    sink = MemoryConversationSink()
+
+    class SlowFirstAudioTts:
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del text, locale, context
+            await asyncio.sleep(0.04)
+            yield AudioChunk(0, 24_000, "pcm_s16le", b"audio")
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=SlowFirstAudioTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            tts_first_audio_seconds=0.02,
+            tts_stream_idle_seconds=0.2,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    assert [output.payload for output in sink.outputs if output.kind is OutputKind.ERROR] == [
+        {"code": "provider_deadline", "stage": "provider"}
+    ]
+    assert not any(output.kind is OutputKind.TTS_START for output in sink.outputs)
+
+
+async def test_tts_idle_deadline_refreshes_while_audio_keeps_progressing() -> None:
+    arbiter = TurnArbiter("session-progressive-tts")
+    sink = MemoryConversationSink()
+
+    class ProgressiveTts:
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del text, locale, context
+            for sequence in range(4):
+                await asyncio.sleep(0.012)
+                yield AudioChunk(sequence, 24_000, "pcm_s16le", b"audio")
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=ProgressiveTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(tts_stream_idle_seconds=0.02, sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    audio = [output for output in sink.outputs if output.kind is OutputKind.AUDIO]
+    assert len(audio) == 4
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
+async def test_tts_idle_deadline_cancels_playback_when_audio_stalls() -> None:
+    arbiter = TurnArbiter("session-stalled-tts")
+    sink = MemoryConversationSink()
+
+    class StalledTts:
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del text, locale, context
+            yield AudioChunk(0, 24_000, "pcm_s16le", b"audio")
+            await asyncio.Event().wait()
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=StalledTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(tts_stream_idle_seconds=0.02, sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    errors = [output for output in sink.outputs if output.kind is OutputKind.ERROR]
+    assert [output.payload for output in errors] == [
+        {"code": "provider_deadline", "stage": "provider"}
+    ]
+    stop = next(output for output in sink.outputs if output.kind is OutputKind.TTS_STOP)
+    assert stop.payload == {"cancelled": True}
+
+
+async def test_llm_idle_deadline_stops_stalled_stream_and_cancels_playback() -> None:
+    arbiter = TurnArbiter("session-stalled-response")
+    sink = MemoryConversationSink()
+
+    class StalledLlm:
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta]:
+            del request, context
+            yield LlmTextDelta("Đây là đoạn đầu tiên.")
+            await asyncio.Event().wait()
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=StalledLlm(),
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(llm_stream_idle_seconds=0.02, sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("Kể chuyện.", "vi-VN")),
+        timeout=1.0,
+    )
+
+    errors = [output for output in sink.outputs if output.kind is OutputKind.ERROR]
+    assert [output.payload for output in errors] == [
+        {"code": "provider_deadline", "stage": "provider"}
+    ]
+    stop = next(output for output in sink.outputs if output.kind is OutputKind.TTS_STOP)
+    assert stop.payload == {"cancelled": True}
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
 async def test_tts_failure_does_not_leave_llm_producer_blocked_on_full_queue() -> None:
     arbiter = TurnArbiter("session-tts-failure")
     tts = FailingTts()
@@ -445,12 +816,13 @@ async def test_tts_failure_does_not_leave_llm_producer_blocked_on_full_queue() -
     )
     await arbiter.open_assistant(WakeSource.BUTTON)
 
-    await asyncio.wait_for(
+    result = await asyncio.wait_for(
         engine.handle_transcript(Transcript("fixture", "vi-VN")),
         timeout=1.0,
     )
 
     assert tts.calls == 1
+    assert result is AdmissionDisposition.ACCEPTED
     assert arbiter.snapshot.state is ConversationState.LISTENING
 
 

@@ -85,6 +85,32 @@ sau khi sentinel đã được đưa vào queue và toàn bộ chunk hợp lệ 
 trường hợp lỗi/hủy được phép phát stop để dọn playback. Output của generation cũ
 vẫn bị loại ngay cả khi provider không dừng kịp.
 
+`llmSeconds` là deadline không hoạt động: áp dụng khi chờ first token và được làm
+mới trước mỗi SSE event/delta tiếp theo. Thời gian TTS đang drain queue hoặc tổng
+thời lượng câu trả lời không tiêu thụ một absolute LLM deadline. Vì vậy một câu
+trả lời dài tiếp tục cho tới khi stream hoàn tất; chỉ provider im lặng quá
+`llmSeconds`, parent ceiling explicit, user abort hoặc lỗi transport mới dừng turn.
+Nếu turn dừng bất thường sau khi audio đã bắt đầu, `tts.stop` phải mang trạng thái
+cancelled cho Lab và server phải bỏ paced-audio queue của device để audio cũ không
+chạy đè lên câu trả lời của lượt mới.
+
+`ttsSeconds` cũng là deadline không hoạt động, được làm mới trước khi chờ mỗi audio
+chunk. Với VieNeu local dùng một inference worker, thời gian một lượt phải chờ lượt
+đang nói trước đó không tiêu thụ deadline này. Khi bắt đầu phát, lượt giữ worker cho
+tới hết speech queue để các phiên đồng thời không giành model sau từng câu và tạo
+khoảng lặng dài. Backend native nhả chunk mở đầu ở mục tiêu/tối đa 24/40 ký tự,
+sau đó dùng batch duy trì 48/72 ký tự; vì vậy LLM vừa sinh đủ một cụm nói tự nhiên
+thì TTS bắt đầu, không chờ toàn bộ câu trả lời hoặc một câu văn quá dài. Tốc độ
+voice config được áp dụng đúng bằng post-processing giữ cao độ, không tự giảm trong
+lượt. Adapter đo và log tốc độ realtime tối đa theo RTF/headroom; Manager cảnh báo
+khi cấu hình trên 1,2x có thể phát nhanh hơn throughput CPU, nhưng không âm thầm
+đổi giá trị người dùng đã publish.
+
+Lab gửi PCM sớm để browser lập lịch liền mạch nhưng chỉ phát `tts.stop` và
+`listen.start` sau thời lượng PCM đã lên lịch. Device sink tương tự giữ Opus queue
+5 giây có giới hạn rồi đợi paced sender drain; abort/cancel đánh thức cả hai ngay,
+xóa audio cũ và không phải chờ playback bình thường.
+
 Voice-server ghi hai mốc metric đã redact cho từng turn:
 
 - `conversation_llm_first_token`: ASR/planner xong đến delta LLM đầu tiên.
@@ -366,8 +392,10 @@ chạy inactivity timer:
 | `admission_deadline` | 1 s | gate không giữ turn vô hạn |
 | `asr_deadline` | 8 s | tính từ VAD final đến ASR final |
 | `planner_deadline` | 15 s ceiling | structured plan/intent; mục tiêu LAN <6 s |
-| `llm_first_token_deadline` | 5 s | fallback nếu model không stream |
-| `tts_first_audio_deadline` | 5 s | fallback hoặc text-only error |
+| `llm_first_token_deadline` (`llmFirstTokenSeconds`) | 5 s | fallback nếu model không bắt đầu stream |
+| `llm_stream_idle_deadline` (`llmSeconds`) | 20 s safety default | làm mới theo mỗi event, không giới hạn tổng câu trả lời |
+| `tts_first_audio_deadline` (`ttsFirstAudioSeconds`) | 5 s | fallback nếu provider chưa sinh audio đầu tiên |
+| `tts_stream_idle_deadline` (`ttsSeconds`) | 10 s safety default | làm mới theo mỗi audio chunk sau khi worker đã được cấp |
 | `mcp_deadline` | 10 s mặc định | override theo tool trong safe range |
 | `total_turn_deadline` | `0` | disabled parent ceiling; provider deadlines bên dưới vẫn độc lập |
 
@@ -389,6 +417,11 @@ ngoài asyncio event loop và telemetry ghi một lần tại speech end với
 `endpoint_reason` cùng tổng processing time, không phát metric theo từng frame.
 
 Chỉ user activity hợp lệ mới reset inactivity timer. Raw energy, VAD false positive, input bị admission reject hoặc self-echo không được giữ session sống mãi. Một clarification hợp lệ được reset timer tối đa theo `maxClarificationAttempts`; sau đó hệ thống quay lại listening hoặc kết thúc lịch sự theo policy.
+
+Nếu admission đã chấp nhận lượt người dùng nhưng LLM/TTS phía sau lỗi, lượt đó vẫn
+là hoạt động hội thoại hợp lệ. Sau recovery, `between_turns_timeout` phải được arm
+lại đầy đủ từ lúc runtime thực sự quay về `LISTENING`; không được khôi phục deadline
+cũ đã chạy trong thời gian xử lý/phát câu trả lời dài.
 
 VAD session giữ pre-roll PCM có giới hạn để không cắt phụ âm đầu khi detector đổi
 từ silence sang speech. Baseline là 320 ms qua `VEETEE_VAD_PRE_ROLL_MS`; đây là
@@ -519,3 +552,9 @@ nằm tại `veetee-server/packages/contracts/fixtures/lab/`.
     budget; protocol error/user cancel không reconnect và không kẹt `CONNECTING`.
 15. ASR/TTS/goodbye lỗi trong Device hoặc Lab -> error code/stage bounded, đóng
     closing grace đúng hạn và cho phép lượt mới; public payload không lộ exception.
+16. Câu trả lời dài hơn `llmSeconds` trong lúc TTS queue back-pressure vẫn phát hết;
+    provider ngừng gửi event quá `llmSeconds` phải hủy turn và dọn audio cũ trước
+    khi chấp nhận câu mới.
+17. Hai phiên dùng chung VieNeu không xen kẽ sentence chunk; chờ TTS worker lâu hơn
+    `ttsSeconds` không làm hỏng turn, còn worker đã nhận lượt nhưng ngừng phát audio
+    quá `ttsSeconds` phải hủy và dọn playback.

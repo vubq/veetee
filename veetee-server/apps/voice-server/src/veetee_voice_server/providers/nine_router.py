@@ -412,6 +412,11 @@ class NineRouterLlmProvider:
         ):
             if source in self._config:
                 payload[target] = self._config[source]
+        if "maxCompletionTokens" in self._config:
+            payload[self._completion_token_parameter] = max(
+                64,
+                min(int(self._config["maxCompletionTokens"]), 131_072),
+            )
         if request.plan.intent:
             payload["metadata"] = {"veetee_intent": request.plan.intent}
         return payload
