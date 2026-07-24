@@ -19,6 +19,7 @@ from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationMessage,
     DialogueAct,
+    InputEvidence,
     InputSource,
     PlanAction,
     Transcript,
@@ -300,6 +301,129 @@ async def test_accepted_noop_is_streamed_as_a_natural_turn() -> None:
     assert plan.action is PlanAction.RESPOND
     assert plan.response_required is True
     assert plan.response_text is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Đấm nhau không?",
+        "Đù",
+        "Ghê vậy sao?",
+        "Ủa?",
+        "Kể tiếp đi",
+        "Thế à?",
+    ],
+)
+async def test_explicit_conversational_text_survives_semantic_false_rejection(
+    text: str,
+) -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            decision="not_addressed",
+            action="noop",
+            dialogue_act="social",
+            reason_code="not_addressed",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript(
+        text,
+        "vi-VN",
+        confidence=1.0,
+        stability=1.0,
+        input_evidence=InputEvidence(
+            source=InputSource.TYPED_TEXT,
+            wake_source=WakeSource.BUTTON,
+        ),
+    )
+    decision = await gate.evaluate(transcript, operation)
+    plan = await gate.plan(transcript, decision, operation)
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert decision.reason_code == "speech_relevant"
+    assert plan.action is PlanAction.RESPOND
+    assert plan.response_required is True
+    assert plan.response_text is None
+
+
+async def test_active_voice_context_recovers_uncertain_social_follow_up() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            decision="unclear",
+            action="noop",
+            dialogue_act="social",
+            reason_code="unclear",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript(
+        "Ghê vậy sao?",
+        "vi-VN",
+        context=(ConversationMessage("assistant", "Tôi vừa kể một chuyện bất ngờ."),),
+        input_evidence=InputEvidence(
+            source=InputSource.DEVICE_MIC,
+            wake_source=WakeSource.WAKE_WORD,
+        ),
+    )
+    decision = await gate.evaluate(transcript, operation)
+    plan = await gate.plan(transcript, decision, operation)
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert plan.action is PlanAction.RESPOND
+
+
+async def test_active_voice_context_keeps_concrete_signal_rejection() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            decision="non_actionable",
+            action="noop",
+            reason_code="self_echo",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript(
+        "fixture",
+        "vi-VN",
+        context=(ConversationMessage("assistant", "Tôi đang nói."),),
+        input_evidence=InputEvidence(
+            source=InputSource.DEVICE_MIC,
+            wake_source=WakeSource.BUTTON,
+            aec_enabled=True,
+            self_echo_probability=0.96,
+        ),
+    )
+    decision = await gate.evaluate(transcript, operation)
+
+    assert decision.disposition is AdmissionDisposition.NON_ACTIONABLE
+    with pytest.raises(ValueError, match="unavailable"):
+        await gate.plan(transcript, decision, operation)
+
+
+async def test_active_voice_context_keeps_explicit_speaker_mismatch() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            decision="not_addressed",
+            action="noop",
+            reason_code="not_addressed",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    transcript = Transcript(
+        "fixture",
+        "vi-VN",
+        context=(ConversationMessage("assistant", "Tôi đang nghe."),),
+        input_evidence=InputEvidence(
+            source=InputSource.DEVICE_MIC,
+            wake_source=WakeSource.BUTTON,
+            target_speaker_probability=0.05,
+        ),
+    )
+    decision = await gate.evaluate(transcript, context())
+
+    assert decision.disposition is AdmissionDisposition.NOT_ADDRESSED
 
 
 async def test_cancelled_structured_gate_does_not_leave_cached_plan() -> None:

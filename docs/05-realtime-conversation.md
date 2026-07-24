@@ -72,6 +72,12 @@ trắng khi stream dài nhưng thiếu dấu câu. `speech_chunk_target_characte
 `speech_chunk_max_characters` chỉ là pacing/back-pressure bounds; chúng không giới
 hạn độ dài câu người dùng, độ dài câu trả lời, số lượt hay thời lượng phiên.
 
+Provider có thể khai báo capability về chi phí khởi tạo mỗi đoạn văn. Với TTS cloud
+không giữ được một kết nối text incremental (ví dụ Edge TTS), runtime gom các câu
+ngắn đến `minimumChunkCharacters` trước khi mở request tiếp theo để tránh khoảng
+ngắt mạng giữa các câu; audio bên trong từng request vẫn được phát streaming. TTS
+local có thể giữ chunk nhỏ hơn để giảm thời gian tới audio đầu tiên.
+
 Queue có giới hạn để giữ memory và latency ổn định. Nếu TTS lỗi, hết deadline hoặc
 turn bị abort, producer đang chờ queue phải được đánh thức và hủy cùng generation;
 không được để một task treo giữ phiên. Khi hoàn tất bình thường, `tts.stop` chỉ phát
@@ -182,6 +188,13 @@ chất lượng ASR/signal không đủ, là self-echo/duplicate hoặc không c
 hướng tới assistant. “Quạt”, “TV”, “tiếng xe” và các nguồn môi trường khác chỉ là nhãn
 benchmark/telemetry; runtime dùng feature chất lượng và semantic model tổng quát, không
 hard-code danh sách nguồn hay cụm từ.
+
+Khi input đến từ `typed_text`, đó là một lượt người dùng chủ động gửi nên không được
+đánh dấu `not_addressed` chỉ vì ngắn, đùa hoặc không có intent đã biết. Với audio trong
+phiên đã mở bằng button/wake-word hoặc có context hội thoại, cùng nguyên tắc được áp
+dụng nếu không có bằng chứng cụ thể về self-echo, duplicate, signal hỏng hay speech
+không dùng được. Đây là lớp hòa giải bằng evidence/context sau model, không phải danh
+sách phrase.
 
 ### 3.1.1 Bằng chứng được truyền vào semantic context
 

@@ -46,6 +46,12 @@ class EdgeTtsProvider:
             self._config.get("firstAudioTimeoutSeconds", 4), 1, 15
         )
         self._max_attempts = _bounded_int(self._config.get("maxAttempts", 2), 1, 3)
+        # Each text segment opens a new cloud synthesis request. Coalescing short
+        # sentences avoids repeated network setup and audible gaps while audio
+        # bytes within each request still stream immediately.
+        self.preferred_text_chunk_characters = _bounded_int(
+            self._config.get("minimumChunkCharacters", 96), 24, 320
+        )
         self._local_prosody = self._config.get("localProsodyProcessing", True) is not False
         self._ffmpeg_binary = ffmpeg_binary
 

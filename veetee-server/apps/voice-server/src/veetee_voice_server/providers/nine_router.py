@@ -122,7 +122,10 @@ class NineRouterLlmProvider:
         if "parallelToolCalls" in self._config:
             payload["parallel_tool_calls"] = self._config["parallelToolCalls"]
         if max_output_tokens is not None:
-            configured_limit = self._config.get("maxCompletionTokens", max_output_tokens)
+            configured_limit = min(
+                int(self._config.get("maxCompletionTokens", max_output_tokens)),
+                max_output_tokens,
+            )
             payload[self._completion_token_parameter] = max(
                 64,
                 min(int(configured_limit), 16_384),

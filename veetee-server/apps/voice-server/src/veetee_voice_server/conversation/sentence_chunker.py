@@ -9,6 +9,7 @@ class SentenceChunker:
         *,
         target_characters: int = 72,
         max_characters: int = 160,
+        punctuation_min_characters: int | None = None,
     ) -> None:
         if min_characters < 1:
             raise ValueError("min_characters must be positive")
@@ -16,9 +17,15 @@ class SentenceChunker:
             raise ValueError("target_characters must be at least min_characters")
         if max_characters < target_characters:
             raise ValueError("max_characters must be at least target_characters")
+        resolved_punctuation_min = punctuation_min_characters or min_characters
+        if not min_characters <= resolved_punctuation_min <= max_characters:
+            raise ValueError(
+                "punctuation_min_characters must be between min_characters and max_characters"
+            )
         self._min_characters = min_characters
         self._target_characters = target_characters
         self._max_characters = max_characters
+        self._punctuation_min_characters = resolved_punctuation_min
         self._abbreviations = tuple(item.casefold() for item in abbreviations)
         self._buffer = ""
 
@@ -30,7 +37,10 @@ class SentenceChunker:
             if character not in ".!?;:\n":
                 continue
             candidate = self._buffer[start : index + 1].strip()
-            if len(candidate) < self._min_characters or self._is_abbreviation(candidate):
+            if (
+                len(candidate) < self._punctuation_min_characters
+                or self._is_abbreviation(candidate)
+            ):
                 continue
             chunks.append(candidate)
             start = index + 1

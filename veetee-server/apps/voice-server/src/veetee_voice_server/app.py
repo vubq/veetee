@@ -132,6 +132,11 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     agent_context = json.dumps(
         _published_agent_context(profile), ensure_ascii=False, separators=(",", ":")
     )
+    published_prompt = (
+        ""
+        if streams_prose
+        else f"\n\nPublished agent prompt:\n{profile.render_system_prompt(prompt_tool_names)}"
+    )
     return (
         "Return exactly one JSON object with admission, dialogue_act and plan. "
         "admission.decision: accepted|non_actionable|not_addressed|unclear|interrupt|end. "
@@ -146,6 +151,12 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "Use transcript, recent context, ASR and input_evidence together. A short reaction, "
         "slang, joke, correction, confirmation or follow-up is accepted when it is a natural "
         "part of this conversation; it need not be a standalone command or question. If an "
+        "input_evidence.source is typed_text, the user intentionally submitted the linguistic "
+        "turn to the assistant, so never classify it as non_actionable or not_addressed. "
+        "A button/wake-word-opened session and recent dialogue are strong addressing evidence; "
+        "do not reject a usable linguistic turn merely because it is informal, terse, playful "
+        "or socially ambiguous. Only override that evidence when signal, self-echo, duplicate, "
+        "target-speaker or clearly incidental-speech evidence actually conflicts. If an "
         "assistant-directed turn is ambiguous or missing details, admission must be accepted "
         "and action ask_clarification. unclear is only for genuinely conflicting admission "
         "evidence. non_actionable is only unusable linguistic signal, self-echo or duplicate; "
@@ -156,7 +167,7 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "Only use an exact tool name from this available tool catalog: "
         f"{catalog}. When the catalog is empty, never invent a tool name."
         f"\n\nPublished agent runtime context (JSON): {agent_context}"
-        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(prompt_tool_names)}"
+        f"{published_prompt}"
         "\n\nRuntime boundaries override conflicting published text: keep admission "
         "general and context-aware; never invent tool names/results; never expose secrets, "
         "internal scores or hidden reasoning; and pass every side effect through the "

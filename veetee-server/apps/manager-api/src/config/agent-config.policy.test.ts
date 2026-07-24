@@ -124,8 +124,13 @@ describe("provider and voice config", () => {
         receiveTimeoutSeconds: 4,
         firstAudioTimeoutSeconds: 3,
         maxAttempts: 2,
+        minimumChunkCharacters: 96,
       }),
-    ).toMatchObject({ firstAudioTimeoutSeconds: 3, maxAttempts: 2 });
+    ).toMatchObject({
+      firstAudioTimeoutSeconds: 3,
+      maxAttempts: 2,
+      minimumChunkCharacters: 96,
+    });
   });
 
   it("requires the selected voice provider to be part of the TTS chain", () => {

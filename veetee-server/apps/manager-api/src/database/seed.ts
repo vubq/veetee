@@ -143,6 +143,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
                   receiveTimeoutSeconds: defaultConfig.receiveTimeoutSeconds,
                   firstAudioTimeoutSeconds: defaultConfig.firstAudioTimeoutSeconds,
                   maxAttempts: defaultConfig.maxAttempts,
+                  minimumChunkCharacters: defaultConfig.minimumChunkCharacters,
                   transportPolicyVersion: defaultConfig.transportPolicyVersion,
                 }
               : {}),
@@ -259,7 +260,8 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
       receiveTimeoutSeconds: 8,
       firstAudioTimeoutSeconds: 4,
       maxAttempts: 2,
-      transportPolicyVersion: 3,
+      minimumChunkCharacters: 96,
+      transportPolicyVersion: 4,
       localProsodyProcessing: true,
       supportsPitch: true,
       voices: [

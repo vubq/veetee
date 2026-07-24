@@ -139,11 +139,13 @@ async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
         ),
         schema={"type": "object", "properties": {"accepted": {"type": "boolean"}}},
         schema_transport="json_schema",
+        max_output_tokens=256,
     )
     await client.aclose()
 
     assert value == {"accepted": True}
     assert observed["response_format"] == {"type": "json_object"}
+    assert observed["max_completion_tokens"] == 256
     assert "reasoning_effort" not in observed
 
 

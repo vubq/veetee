@@ -20,7 +20,7 @@ const form = reactive({
   serviceTier: "on_demand", reasoningEffort: "none", streamProseResponse: true,
   voice: "", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
   connectTimeoutSeconds: 3, receiveTimeoutSeconds: 8, firstAudioTimeoutSeconds: 4,
-  maxAttempts: 2,
+  maxAttempts: 2, minimumChunkCharacters: 96,
 });
 const busy = ref(false);
 const error = ref("");
@@ -70,6 +70,7 @@ watch(
     form.receiveTimeoutSeconds = Number(config.receiveTimeoutSeconds ?? 8);
     form.firstAudioTimeoutSeconds = Number(config.firstAudioTimeoutSeconds ?? 4);
     form.maxAttempts = Number(config.maxAttempts ?? 2);
+    form.minimumChunkCharacters = Number(config.minimumChunkCharacters ?? 96);
     error.value = "";
   },
   { immediate: true },
@@ -108,6 +109,7 @@ async function submit(): Promise<void> {
               receiveTimeoutSeconds: Number(form.receiveTimeoutSeconds),
               firstAudioTimeoutSeconds: Number(form.firstAudioTimeoutSeconds),
               maxAttempts: Number(form.maxAttempts),
+              minimumChunkCharacters: Number(form.minimumChunkCharacters),
             }
           : {}),
       });
@@ -176,6 +178,7 @@ async function submit(): Promise<void> {
           <VtField v-if="isEdgeTts" label="Receive timeout" hint="1–30 giây"><VtInput v-model="form.receiveTimeoutSeconds" type="number" min="1" max="30" /></VtField>
           <VtField v-if="isEdgeTts" label="Audio đầu tiên" hint="Thử lại nếu chưa có audio sau 1–15 giây"><VtInput v-model="form.firstAudioTimeoutSeconds" type="number" min="1" max="15" /></VtField>
           <VtField v-if="isEdgeTts" label="Số lần thử" hint="1–3"><VtInput v-model="form.maxAttempts" type="number" min="1" max="3" /></VtField>
+          <VtField v-if="isEdgeTts" label="Độ dài đoạn TTS" hint="24–320 ký tự; Edge gom câu ngắn để tránh ngắt quãng"><VtInput v-model="form.minimumChunkCharacters" type="number" min="24" max="320" /></VtField>
         </div>
       </section>
 

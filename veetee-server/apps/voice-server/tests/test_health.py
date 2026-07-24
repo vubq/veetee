@@ -109,6 +109,7 @@ async def test_streaming_planner_does_not_generate_a_response_that_will_be_disca
     assert "response_text must be null" in prompt
     assert "runtime starts a separate prose stream" in prompt
     assert "For a complete short answer" not in prompt
+    assert "Published agent prompt:" not in prompt
 
 
 async def test_conversation_gate_forces_the_full_structured_schema() -> None:

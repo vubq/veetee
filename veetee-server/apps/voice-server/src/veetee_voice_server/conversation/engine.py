@@ -267,12 +267,7 @@ class ConversationEngine:
         response_parts: list[str] = []
         stream_started_at = monotonic()
         first_delta_at: float | None = None
-        chunker = SentenceChunker(
-            min_characters=self._policy.sentence_min_characters,
-            abbreviations=self._policy.sentence_abbreviations,
-            target_characters=self._policy.speech_chunk_target_characters,
-            max_characters=self._policy.speech_chunk_max_characters,
-        )
+        chunker = self._new_sentence_chunker()
         try:
             async for event in iterate_operation(
                 self._llm.stream(request, llm_context), llm_context
@@ -374,12 +369,7 @@ class ConversationEngine:
             self._drain_speech_queue(speech_queue, locale, context, speech),
             name=f"speech-once:{context.session_id}:{context.turn_id}",
         )
-        chunker = SentenceChunker(
-            min_characters=self._policy.sentence_min_characters,
-            abbreviations=self._policy.sentence_abbreviations,
-            target_characters=self._policy.speech_chunk_target_characters,
-            max_characters=self._policy.speech_chunk_max_characters,
-        )
+        chunker = self._new_sentence_chunker()
         try:
             for sentence in chunker.push(text):
                 await self._enqueue_speech(speech_queue, sentence, speech_task, context)
@@ -472,6 +462,32 @@ class ConversationEngine:
                 error=type(error).__name__,
             )
             raise
+
+    def _new_sentence_chunker(self) -> SentenceChunker:
+        provider_target = getattr(
+            self._tts,
+            "preferred_text_chunk_characters",
+            self._policy.speech_chunk_target_characters,
+        )
+        target_characters = max(
+            self._policy.speech_chunk_target_characters,
+            int(provider_target),
+        )
+        max_characters = max(
+            self._policy.speech_chunk_max_characters,
+            target_characters,
+        )
+        return SentenceChunker(
+            min_characters=self._policy.sentence_min_characters,
+            abbreviations=self._policy.sentence_abbreviations,
+            target_characters=target_characters,
+            max_characters=max_characters,
+            punctuation_min_characters=(
+                target_characters
+                if hasattr(self._tts, "preferred_text_chunk_characters")
+                else self._policy.sentence_min_characters
+            ),
+        )
 
     async def _finish_speech(self, context: OperationContext, speech: _SpeechLifecycle) -> None:
         if not speech.started or not self._arbiter.is_current(context):

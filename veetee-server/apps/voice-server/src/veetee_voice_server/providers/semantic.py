@@ -11,6 +11,7 @@ from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationPlan,
     DialogueAct,
+    InputSource,
     PlanAction,
     ToolCall,
     Transcript,
@@ -177,6 +178,7 @@ class StructuredConversationGate:
         )
         context.checkpoint()
         decision, plan = self._parse_gate(value, transcript.locale or self._locale)
+        decision, plan = self._reconcile_active_turn(transcript, decision, plan)
         if decision.disposition in {AdmissionDisposition.ACCEPTED, AdmissionDisposition.END}:
             self._cached = (
                 context.turn_id,
@@ -288,3 +290,80 @@ class StructuredConversationGate:
             ),
             plan,
         )
+
+    @staticmethod
+    def _reconcile_active_turn(
+        transcript: Transcript,
+        decision: AdmissionDecision,
+        plan: ConversationPlan,
+    ) -> tuple[AdmissionDecision, ConversationPlan]:
+        """Keep intentional conversation turns from disappearing on model uncertainty.
+
+        The semantic model still owns end, interrupt, tool and clear signal-quality
+        decisions. Runtime only resolves an admission conflict when the transport or
+        active session already proves user intent and there is no concrete unusable
+        audio reason. This is source/context evidence, not phrase matching.
+        """
+
+        if decision.disposition not in {
+            AdmissionDisposition.NON_ACTIONABLE,
+            AdmissionDisposition.NOT_ADDRESSED,
+            AdmissionDisposition.UNCLEAR,
+        }:
+            return decision, plan
+
+        evidence = transcript.input_evidence
+        explicit_text = evidence is not None and evidence.source is InputSource.TYPED_TEXT
+        active_conversation = bool(transcript.context) or (
+            evidence is not None and evidence.wake_source is not None
+        )
+        if not explicit_text and not active_conversation:
+            return decision, plan
+
+        signal_reasons = {"non_speech", "low_quality", "self_echo", "duplicate"}
+        if not explicit_text and decision.reason_code in signal_reasons:
+            return decision, plan
+        if not explicit_text and evidence is not None:
+            if (
+                evidence.self_echo_probability is not None
+                and evidence.self_echo_probability >= 0.8
+            ):
+                return decision, plan
+            if (
+                evidence.target_speaker_probability is not None
+                and evidence.target_speaker_probability <= 0.2
+            ):
+                return decision, plan
+            if evidence.server_buffer_truncated or evidence.audio_overrun is True:
+                return decision, plan
+            if evidence.packet_loss_ratio is not None and evidence.packet_loss_ratio >= 0.25:
+                return decision, plan
+        if (
+            not explicit_text
+            and decision.reason_code == "low_confidence"
+            and (
+                (transcript.confidence is not None and transcript.confidence < 0.5)
+                or (transcript.stability is not None and transcript.stability < 0.5)
+            )
+        ):
+            return decision, plan
+
+        addressed_to_robot = max(decision.addressed_to_robot or 0.0, 0.75)
+        reconciled_decision = AdmissionDecision(
+            AdmissionDisposition.ACCEPTED,
+            max(decision.confidence, 0.75),
+            "speech_relevant",
+            addressed_to_robot,
+        )
+        reconciled_plan = replace(
+            plan,
+            action=(
+                PlanAction.ASK_CLARIFICATION
+                if plan.action is PlanAction.ASK_CLARIFICATION
+                else PlanAction.RESPOND
+            ),
+            response_required=True,
+            response_text=None,
+            tool_call=None,
+        )
+        return reconciled_decision, reconciled_plan

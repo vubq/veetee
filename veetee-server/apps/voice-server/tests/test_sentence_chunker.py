@@ -66,3 +66,17 @@ def test_sentence_chunker_rejects_invalid_bounds(
             target_characters=target_characters,
             max_characters=max_characters,
         )
+
+
+def test_sentence_chunker_can_coalesce_short_sentences_for_cloud_tts() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=48,
+        max_characters=96,
+        punctuation_min_characters=48,
+    )
+
+    assert chunker.push("Câu đầu ngắn. Câu thứ hai cũng ngắn. ") == []
+    assert chunker.push("Đủ thành một đoạn tự nhiên.") == [
+        "Câu đầu ngắn. Câu thứ hai cũng ngắn. Đủ thành một đoạn tự nhiên."
+    ]
