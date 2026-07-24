@@ -25,6 +25,8 @@ class VieNeuTtsProvider:
         *,
         voice: str,
         speed: float = 1.0,
+        pitch_hz: float = 0.0,
+        volume: float = 1.0,
         output_sample_rate: int = 24_000,
         num_threads: int = 4,
         apply_watermark: bool = True,
@@ -35,12 +37,38 @@ class VieNeuTtsProvider:
         if speed <= 0:
             raise ValueError("TTS speed must be greater than zero")
         self._speed = speed
+        if pitch_hz:
+            raise ValueError("VieNeu local TTS does not support pitch adjustment")
+        if not 0 <= volume <= 1.5:
+            raise ValueError("TTS volume must be between 0 and 1.5")
+        self._volume = volume
         self._output_sample_rate = output_sample_rate
         self._num_threads = num_threads
         self._apply_watermark = apply_watermark
         self._engine = engine
         self._load_lock = threading.Lock()
         self._inference_lock = asyncio.Lock()
+
+    def with_profile(
+        self,
+        *,
+        voice: str,
+        speed: float,
+        pitch_hz: float = 0.0,
+        volume: float = 1.0,
+    ) -> VieNeuTtsProvider:
+        """Create a profile view while reusing the prewarmed local engine."""
+        return VieNeuTtsProvider(
+            self._model_dir,
+            voice=voice,
+            speed=speed,
+            pitch_hz=pitch_hz,
+            volume=volume,
+            output_sample_rate=self._output_sample_rate,
+            num_threads=self._num_threads,
+            apply_watermark=self._apply_watermark,
+            engine=self._engine,
+        )
 
     async def prewarm(self) -> None:
         await asyncio.to_thread(self._load_engine)
@@ -159,11 +187,10 @@ class VieNeuTtsProvider:
         except StopIteration:
             return False, None
 
-    @staticmethod
-    def _float_to_pcm(samples: np.ndarray[Any, Any]) -> bytes:
+    def _float_to_pcm(self, samples: np.ndarray[Any, Any]) -> bytes:
         if samples.size == 0:
             return b""
-        clipped = np.clip(samples, -1.0, 1.0)
+        clipped = np.clip(samples * self._volume, -1.0, 1.0)
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
 
 

@@ -46,6 +46,27 @@ class LlmEndpoint:
     model: str
     api_key: str
     reasoning_effort: str
+    config: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class TtsEndpoint:
+    provider_id: str
+    adapter: str
+    model: str
+    base_url: str
+    api_key: str
+    config: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceProfile:
+    provider_id: str
+    voice_id: str
+    gender: str | None
+    rate: float
+    pitch_hz: float
+    volume: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +85,8 @@ class SessionProfile:
     conversation_error_text: str
     policy: ConversationPolicy
     llm_chain: tuple[LlmEndpoint, ...]
+    tts_endpoint: TtsEndpoint | None
+    voice: VoiceProfile | None
 
     @property
     def llm_base_url(self) -> str:
@@ -129,7 +152,29 @@ class SessionProfile:
                     model=settings.nine_router_model,
                     api_key=settings.nine_router_api_key,
                     reasoning_effort="none",
+                    config={},
                 ),
+            ),
+            tts_endpoint=TtsEndpoint(
+                provider_id="settings:vieneu",
+                adapter="vieneu-local",
+                model="vieneu-tts-v3-turbo",
+                base_url="",
+                api_key="",
+                config={
+                    "voice": settings.tts_voice,
+                    "rate": settings.tts_speed,
+                    "volume": 1.0,
+                    "outputSampleRate": settings.tts_output_sample_rate,
+                },
+            ),
+            voice=VoiceProfile(
+                provider_id="settings:vieneu",
+                voice_id=settings.tts_voice,
+                gender="female",
+                rate=settings.tts_speed,
+                pitch_hz=0.0,
+                volume=1.0,
             ),
         )
 
@@ -153,6 +198,15 @@ class SessionProfile:
         interaction_mode = (
             _optional_string(payload.get("interactionMode")) or defaults.interaction_mode
         )
+        runtime = runtime_providers or []
+        tts_endpoint = _tts_endpoint(payload, runtime, locale, defaults)
+        voice = _voice_profile(payload, defaults)
+        if tts_endpoint is not None and (
+            not isinstance(payload.get("voice"), dict)
+            or voice is None
+            or voice.provider_id != tts_endpoint.provider_id
+        ):
+            voice = _voice_from_endpoint(tts_endpoint, defaults)
         return cls(
             agent_id=_optional_string(payload.get("agentId")),
             config_version=_bounded_int(payload.get("version"), 0, 0, 2_147_483_647),
@@ -239,7 +293,9 @@ class SessionProfile:
                     4_000,
                 ),
             ),
-            llm_chain=_llm_chain(payload, runtime_providers or [], locale, defaults, settings),
+            llm_chain=_llm_chain(payload, runtime, locale, defaults, settings),
+            tts_endpoint=tts_endpoint,
+            voice=voice,
         )
 
 
@@ -495,11 +551,133 @@ def _llm_endpoint(
         ),
         base_url=base_url,
         model=model,
-        api_key=_optional_string(runtime.get("secret")) or settings.nine_router_api_key,
+        api_key=(
+            _optional_string(runtime.get("secret"))
+            or (
+                settings.groq_cloud_api_key
+                if "groq"
+                in (
+                    _optional_string(runtime.get("adapter"))
+                    or _optional_string(published.get("adapter"))
+                    or ""
+                ).lower()
+                else settings.nine_router_api_key
+            )
+        ),
         # Voice turns favor predictable latency; published profiles cannot enable
         # hidden model reasoning unless Veetee introduces an explicit policy later.
         reasoning_effort="none",
+        config=_record(runtime.get("config") or published.get("config")),
     )
+
+
+def _tts_endpoint(
+    payload: dict[str, Any],
+    runtime_providers: list[dict[str, Any]],
+    locale: str,
+    defaults: SessionProfile,
+) -> TtsEndpoint | None:
+    runtime_by_id = {
+        provider_id: provider
+        for provider in runtime_providers
+        if (provider_id := _optional_string(provider.get("id")))
+    }
+    selected_voice = (
+        _voice_profile(payload, defaults) if isinstance(payload.get("voice"), dict) else None
+    )
+    chains = payload.get("providerChains")
+    candidates: list[dict[str, Any]] = []
+    if isinstance(chains, list):
+        for selected_locale in (locale, "*"):
+            for chain in chains:
+                if (
+                    not isinstance(chain, dict)
+                    or chain.get("kind") != "tts"
+                    or chain.get("locale") != selected_locale
+                ):
+                    continue
+                providers = chain.get("providers")
+                if isinstance(providers, list):
+                    candidates = [item for item in providers if isinstance(item, dict)]
+                    break
+            if candidates:
+                break
+    if selected_voice is not None:
+        candidates.sort(key=lambda item: 0 if item.get("id") == selected_voice.provider_id else 1)
+    for published in candidates:
+        provider_id = _optional_string(published.get("id"))
+        runtime = runtime_by_id.get(provider_id or "", published)
+        model = _optional_string(runtime.get("model")) or _optional_string(published.get("model"))
+        adapter = _optional_string(runtime.get("adapter")) or _optional_string(
+            published.get("adapter")
+        )
+        if not provider_id or not model or not adapter:
+            continue
+        return TtsEndpoint(
+            provider_id=provider_id,
+            adapter=adapter,
+            model=model,
+            base_url=_optional_string(runtime.get("baseUrl")) or "",
+            api_key=_optional_string(runtime.get("secret")) or "",
+            config=_record(runtime.get("config") or published.get("config")),
+        )
+    return defaults.tts_endpoint
+
+
+def _voice_profile(payload: dict[str, Any], defaults: SessionProfile) -> VoiceProfile | None:
+    raw = payload.get("voice")
+    if not isinstance(raw, dict):
+        return defaults.voice
+    provider_id = _optional_string(raw.get("providerId"))
+    voice_id = _optional_string(raw.get("voiceId"))
+    if not provider_id or not voice_id:
+        return defaults.voice
+    return VoiceProfile(
+        provider_id=provider_id,
+        voice_id=voice_id,
+        gender=_optional_string(raw.get("gender")),
+        rate=_bounded_float(
+            raw.get("rate"), defaults.voice.rate if defaults.voice else 1.0, 0.5, 2.0
+        ),
+        pitch_hz=_bounded_float(
+            raw.get("pitchHz"), defaults.voice.pitch_hz if defaults.voice else 0.0, -100.0, 100.0
+        ),
+        volume=_bounded_float(
+            raw.get("volume"), defaults.voice.volume if defaults.voice else 1.0, 0.0, 1.5
+        ),
+    )
+
+
+def _voice_from_endpoint(
+    endpoint: TtsEndpoint, defaults: SessionProfile
+) -> VoiceProfile | None:
+    fallback = defaults.voice
+    voice_id = _optional_string(endpoint.config.get("voice")) or _optional_string(
+        endpoint.config.get("voiceId")
+    )
+    if voice_id is None:
+        return fallback
+    return VoiceProfile(
+        provider_id=endpoint.provider_id,
+        voice_id=voice_id,
+        gender=_optional_string(endpoint.config.get("gender")),
+        rate=_bounded_float(
+            endpoint.config.get("rate"), fallback.rate if fallback else 1.0, 0.5, 2.0
+        ),
+        pitch_hz=_bounded_float(
+            endpoint.config.get("pitchHz"),
+            fallback.pitch_hz if fallback else 0.0,
+            -100.0,
+            100.0,
+        ),
+        volume=_bounded_float(
+            endpoint.config.get("volume"), fallback.volume if fallback else 1.0, 0.0, 1.5
+        ),
+    )
+
+
+def _record(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _optional_string(value: object) -> str | None:

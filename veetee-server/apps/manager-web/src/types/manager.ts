@@ -23,6 +23,7 @@ export interface ProviderUpdateInput {
   enabled: boolean;
   priority: number;
   locales: string[];
+  config?: Record<string, unknown>;
   secretAction: "keep" | "rotate" | "clear";
   secret?: string;
 }

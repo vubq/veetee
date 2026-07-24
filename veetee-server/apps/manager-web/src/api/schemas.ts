@@ -101,6 +101,7 @@ export const providerSchema = z.object({
   adapter: z.string(),
   model: z.string(),
   baseUrl: z.string().optional(),
+  config: jsonObject.default({}),
   secretConfigured: z.boolean(),
   enabled: z.boolean(),
   priority: z.number().int().min(0).max(1_000),

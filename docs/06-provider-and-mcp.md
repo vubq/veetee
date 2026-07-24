@@ -105,6 +105,10 @@ LAN gọi.
 
 - `vieneu-local`: primary local `vi-VN`, model `vieneu-tts-v3-turbo`; capability
   `streaming` phải probe, có sentence chunk fallback nếu chỉ batch.
+- `edge-tts`: cloud TTS độc lập dùng `edge-tts` voice catalog, chuyển MP3 stream
+  thành PCM16 ở voice-server; chỉ dùng khi agent chọn provider/voice và tenant
+  chấp nhận đưa nội dung ra dịch vụ bên ngoài. Các tham số rate, pitch, volume và
+  output sample rate được validate trong provider config.
 - `azure-neural`: có voice `vi-VN`, streaming và SSML.
 - `google-cloud`: locale/voice matrix rõ.
 - `openai-tts`: fallback khi cần một API chung.

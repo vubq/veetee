@@ -67,9 +67,17 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       "http://127.0.0.1:20128/v1",
     ],
     [ProviderKind.TTS, "vieneu-local", "vieneu-tts-v3-turbo", null],
+    [
+      ProviderKind.LLM,
+      "groq-cloud",
+      "llama-3.3-70b-versatile",
+      "https://api.groq.com/openai/v1",
+    ],
+    [ProviderKind.TTS, "edge-tts", "edge-tts-cloud", null],
   ] as const;
   for (const [kind, adapter, model, baseUrl] of providers) {
-    await prisma.providerBinding.upsert({
+    const defaultConfig = defaultProviderConfig(adapter);
+    const persisted = await prisma.providerBinding.upsert({
       where: { tenantId_kind_adapter_model: { tenantId: tenant.id, kind, adapter, model } },
       update: {},
       create: {
@@ -83,17 +91,88 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
         priority: 100,
         locales: ["vi-VN"],
         health: ProviderHealth.UNKNOWN,
+        config: defaultConfig as Prisma.InputJsonValue,
       },
     });
+    const currentConfig =
+      persisted.config && typeof persisted.config === "object" && !Array.isArray(persisted.config)
+        ? persisted.config as Record<string, unknown>
+        : {};
+    const defaultVoices = Array.isArray(defaultConfig.voices) ? defaultConfig.voices : [];
+    const currentVoices = Array.isArray(currentConfig.voices) ? currentConfig.voices : [];
+    const currentVoiceIds = new Set(
+      currentVoices
+        .map((voice) =>
+          voice && typeof voice === "object" && !Array.isArray(voice)
+            ? (voice as Record<string, unknown>).id
+            : undefined,
+        )
+        .filter((id): id is string => typeof id === "string"),
+    );
+    const authoritativeVoices = ["edge-tts", "vieneu-local"].includes(adapter);
+    const hasMissingConfig =
+      Object.keys(defaultConfig).some((key) => currentConfig[key] === undefined) ||
+      defaultVoices.some(
+        (voice) =>
+          voice &&
+          typeof voice === "object" &&
+          !Array.isArray(voice) &&
+          !currentVoiceIds.has(String((voice as Record<string, unknown>).id)),
+      );
+    const hasAuthoritativeVoiceDrift = hasAuthoritativeVoiceCatalogDrift(
+      currentVoices,
+      defaultVoices,
+      authoritativeVoices,
+    );
+    if (hasMissingConfig || hasAuthoritativeVoiceDrift) {
+      await prisma.providerBinding.update({
+        where: { id: persisted.id },
+        data: {
+          config: {
+            ...defaultConfig,
+            ...currentConfig,
+            ...(defaultVoices.length
+              ? {
+                  voices: authoritativeVoices
+                    ? defaultVoices
+                    : [
+                        ...defaultVoices.filter(
+                          (voice) =>
+                            voice &&
+                            typeof voice === "object" &&
+                            !Array.isArray(voice) &&
+                            !currentVoiceIds.has(String((voice as Record<string, unknown>).id)),
+                        ),
+                        ...currentVoices,
+                      ],
+                }
+              : {}),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
   }
   const persistedProviders = await prisma.providerBinding.findMany({
     where: { tenantId: tenant.id, enabled: true },
     orderBy: [{ kind: "asc" }, { priority: "asc" }],
   });
   const providerIds = Object.fromEntries(
-    persistedProviders.map((provider) => [provider.kind.toLowerCase(), provider.id]),
+    persistedProviders
+      .filter((provider) => ["silero-local", "sherpa-onnx", "openai-compatible-9router", "vieneu-local"].includes(provider.adapter))
+      .map((provider) => [provider.kind.toLowerCase(), provider.id]),
   );
   const config = defaultAgentConfig(providerIds);
+  const ttsProvider = persistedProviders.find((provider) => provider.id === providerIds.tts);
+  if (ttsProvider) {
+    config.voice = {
+      providerId: ttsProvider.id,
+      voiceId: "Trúc Ly",
+      gender: "female",
+      rate: 1.2,
+      pitchHz: 0,
+      volume: 1,
+    };
+  }
   await prisma.agent.update({
     where: { id: agent.id },
     data: { draftConfig: config as Prisma.InputJsonValue },
@@ -140,6 +219,69 @@ export function defaultAgentConfig(providerIds: Record<string, string> = {}): Re
   };
 }
 
+function defaultProviderConfig(adapter: string): Record<string, unknown> {
+  if (adapter === "groq-cloud") {
+    return {
+      serviceTier: "on_demand",
+      maxCompletionTokens: 1_024,
+      temperature: 0.2,
+      topP: 0.95,
+      reasoningEffort: "none",
+      parallelToolCalls: true,
+      responseFormat: "auto",
+    };
+  }
+  if (adapter === "edge-tts") {
+    return {
+      voice: "vi-VN-HoaiMyNeural",
+      gender: "female",
+      rate: 1,
+      pitchHz: 0,
+      volume: 1,
+      outputSampleRate: 24_000,
+      supportsPitch: true,
+      voices: [
+        { id: "vi-VN-HoaiMyNeural", label: "Hoài My", locale: "vi-VN", gender: "female" },
+        { id: "vi-VN-NamMinhNeural", label: "Nam Minh", locale: "vi-VN", gender: "male" },
+      ],
+    };
+  }
+  if (adapter === "vieneu-local") {
+    return {
+      voice: "Trúc Ly",
+      rate: 1.2,
+      volume: 1,
+      outputSampleRate: 24_000,
+      supportsPitch: false,
+      voices: [
+        { id: "Minh Đức", label: "Minh Đức", locale: "vi-VN", gender: "male" },
+        { id: "Phạm Tuyên", label: "Phạm Tuyên", locale: "vi-VN", gender: "male" },
+        { id: "Thái Sơn", label: "Thái Sơn", locale: "vi-VN", gender: "male" },
+        { id: "Xuân Vĩnh", label: "Xuân Vĩnh", locale: "vi-VN", gender: "male" },
+        { id: "Thanh Bình", label: "Thanh Bình", locale: "vi-VN", gender: "male" },
+        { id: "Trúc Ly", label: "Trúc Ly", locale: "vi-VN", gender: "female" },
+        { id: "Ngọc Linh", label: "Ngọc Linh", locale: "vi-VN", gender: "female" },
+        { id: "Đoan Trang", label: "Đoan Trang", locale: "vi-VN", gender: "female" },
+        { id: "Mai Anh", label: "Mai Anh", locale: "vi-VN", gender: "female" },
+        { id: "Thục Đoan", label: "Thục Đoan", locale: "vi-VN", gender: "female" },
+        { id: "Minh Triết", label: "Minh Triết", locale: "vi-VN", gender: "male" },
+        { id: "Thùy Dung", label: "Thùy Dung", locale: "vi-VN", gender: "female" },
+        { id: "Quang Sơn", label: "Quang Sơn", locale: "vi-VN", gender: "male" },
+        { id: "Ngọc Trân", label: "Ngọc Trân", locale: "vi-VN", gender: "female" },
+      ],
+    };
+  }
+  return {};
+}
+
+export function hasAuthoritativeVoiceCatalogDrift(
+  currentVoices: unknown[],
+  defaultVoices: unknown[],
+  authoritative: boolean,
+): boolean {
+  return authoritative && JSON.stringify(currentVoices) !== JSON.stringify(defaultVoices);
+}
+
 export function agentSnapshot(
   agentId: string,
   config: Record<string, unknown>,
@@ -152,6 +294,7 @@ export function agentSnapshot(
     secretConfigured: boolean;
     priority: number;
     locales: string[];
+    config: Prisma.JsonValue;
   }> = [],
 ): Record<string, unknown> {
   const snapshots = providers.map((provider) => ({
@@ -160,6 +303,7 @@ export function agentSnapshot(
     adapter: provider.adapter,
     model: provider.model,
     ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+    config: provider.config,
     secretConfigured: provider.secretConfigured,
     priority: provider.priority,
     locales: provider.locales,

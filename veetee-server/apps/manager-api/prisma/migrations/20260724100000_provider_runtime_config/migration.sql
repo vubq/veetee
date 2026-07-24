@@ -1,0 +1,2 @@
+ALTER TABLE "ProviderBinding"
+ADD COLUMN "config" JSONB NOT NULL DEFAULT '{}';

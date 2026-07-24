@@ -241,6 +241,7 @@ model ProviderBinding {
   enabled          Boolean        @default(true)
   priority         Int            @default(100)
   locales          String[]       @default(["*"])
+  config           Json           @default("{}")
   health           ProviderHealth @default(UNKNOWN)
   healthLatencyMs  Int?
   healthErrorCode  String?

@@ -118,6 +118,54 @@ def test_session_profile_preserves_an_explicitly_empty_agent_persona() -> None:
     assert profile.prompt.personality == ""
 
 
+def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+    profile = SessionProfile.from_payload(
+        {
+            "version": 9,
+            "defaultLocale": "vi-VN",
+            "providerChains": [
+                {
+                    "kind": "tts",
+                    "locale": "vi-VN",
+                    "providers": [
+                        {
+                            "id": "edge-provider",
+                            "kind": "tts",
+                            "adapter": "edge-tts",
+                            "model": "edge-tts-cloud",
+                            "config": {"voice": "vi-VN-HoaiMyNeural"},
+                        }
+                    ],
+                }
+            ],
+            "voice": {
+                "providerId": "edge-provider",
+                "voiceId": "vi-VN-ThanhHaNeural",
+                "gender": "female",
+                "rate": 1.1,
+                "pitchHz": 12,
+                "volume": 0.9,
+            },
+        },
+        settings,
+        runtime_providers=[
+            {
+                "id": "edge-provider",
+                "kind": "tts",
+                "adapter": "edge-tts",
+                "model": "edge-tts-cloud",
+                "config": {"voice": "vi-VN-HoaiMyNeural", "outputSampleRate": 24000},
+            }
+        ],
+    )
+    assert profile.voice is not None
+    assert profile.voice.voice_id == "vi-VN-ThanhHaNeural"
+    assert profile.tts_endpoint is not None
+    assert profile.tts_endpoint.adapter == "edge-tts"
+    assert profile.tts_endpoint.config["outputSampleRate"] == 24000
+
+
 @pytest.mark.asyncio
 async def test_manager_authenticates_device_and_caches_immutable_config() -> None:
     config_calls = 0

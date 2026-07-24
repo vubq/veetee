@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUrl,
@@ -57,6 +58,10 @@ class CreateProviderDto {
   @ArrayMaxSize(16)
   @IsString({ each: true })
   locales?: string[];
+
+  @IsOptional()
+  @IsObject()
+  config?: Record<string, unknown>;
 }
 
 class UpdateProviderDto {
@@ -91,6 +96,10 @@ class UpdateProviderDto {
   @ArrayMaxSize(16)
   @IsString({ each: true })
   locales?: string[];
+
+  @IsOptional()
+  @IsObject()
+  config?: Record<string, unknown>;
 
   @IsOptional()
   @IsIn(["keep", "rotate", "clear"])

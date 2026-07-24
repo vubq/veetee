@@ -13,7 +13,13 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: [] }>();
 
-const form = reactive({ adapter: "", model: "", baseUrl: "", enabled: true, priority: 10, locales: "vi-VN", secretAction: "keep" as "keep" | "rotate" | "clear", secret: "" });
+const form = reactive({
+  adapter: "", model: "", baseUrl: "", enabled: true, priority: 10, locales: "vi-VN",
+  secretAction: "keep" as "keep" | "rotate" | "clear", secret: "",
+  temperature: 0.2, topP: 0.95, maxCompletionTokens: 1024,
+  serviceTier: "on_demand", reasoningEffort: "none",
+  voice: "", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
+});
 const busy = ref(false);
 const error = ref("");
 const kindLabels: Record<Provider["kind"], string> = {
@@ -30,6 +36,8 @@ const healthLabels: Record<Provider["health"], string> = {
   unknown: "Chưa đo",
 };
 const dialogTitle = computed(() => props.provider ? `Cấu hình ${props.provider.kind.toUpperCase()}` : "Cấu hình provider");
+const isGroq = computed(() => props.provider?.adapter.toLowerCase().includes("groq") ?? false);
+const isTts = computed(() => props.provider?.kind === "tts");
 
 watch(
   () => [props.open, props.provider] as const,
@@ -43,6 +51,17 @@ watch(
     form.locales = props.provider.locales.join(", ");
     form.secretAction = "keep";
     form.secret = "";
+    const config = props.provider.config ?? {};
+    form.temperature = Number(config.temperature ?? 0.2);
+    form.topP = Number(config.topP ?? 0.95);
+    form.maxCompletionTokens = Number(config.maxCompletionTokens ?? 1024);
+    form.serviceTier = String(config.serviceTier ?? "on_demand");
+    form.reasoningEffort = String(config.reasoningEffort ?? "none");
+    form.voice = String(config.voice ?? config.voiceId ?? "");
+    form.rate = Number(config.rate ?? 1);
+    form.pitchHz = Number(config.pitchHz ?? 0);
+    form.volume = Number(config.volume ?? 1);
+    form.outputSampleRate = Number(config.outputSampleRate ?? 24000);
     error.value = "";
   },
   { immediate: true },
@@ -57,12 +76,32 @@ async function submit(): Promise<void> {
   busy.value = true;
   error.value = "";
   try {
+    const config = { ...(props.provider.config ?? {}) } as Record<string, unknown>;
+    if (isGroq.value) {
+      Object.assign(config, {
+        temperature: Number(form.temperature),
+        topP: Number(form.topP),
+        maxCompletionTokens: Number(form.maxCompletionTokens),
+        serviceTier: form.serviceTier,
+        reasoningEffort: form.reasoningEffort,
+      });
+    }
+    if (isTts.value) {
+      Object.assign(config, {
+        voice: form.voice.trim() || undefined,
+        rate: Number(form.rate),
+        pitchHz: Number(form.pitchHz),
+        volume: Number(form.volume),
+        outputSampleRate: Number(form.outputSampleRate),
+      });
+    }
     await props.save(props.provider.id, {
       adapter: form.adapter.trim(), model: form.model.trim(), baseUrl: form.baseUrl.trim() || null,
       enabled: form.enabled, priority: Number(form.priority),
       locales: form.locales.split(",").map((value) => value.trim()).filter(Boolean),
       secretAction: form.secretAction,
       ...(form.secretAction === "rotate" ? { secret: form.secret } : {}),
+      ...(isGroq.value || isTts.value ? { config } : {}),
     });
     emit("close");
   } catch (exception) {
@@ -100,8 +139,26 @@ async function submit(): Promise<void> {
         </div>
       </section>
 
+      <section v-if="isGroq || isTts" class="provider-form-section">
+        <header><span>03</span><div><h3>Tham số provider</h3><p>Giá trị được validate và đóng băng vào agent snapshot khi publish.</p></div></header>
+        <div v-if="isGroq" class="form-grid two">
+          <VtField label="Temperature" hint="0–2"><VtInput v-model="form.temperature" type="number" min="0" max="2" step="0.05" /></VtField>
+          <VtField label="Top P" hint="0–1"><VtInput v-model="form.topP" type="number" min="0" max="1" step="0.05" /></VtField>
+          <VtField label="Max completion tokens" hint="64–16.384"><VtInput v-model="form.maxCompletionTokens" type="number" min="64" max="16384" /></VtField>
+          <VtField label="Service tier"><VtSelect v-model="form.serviceTier"><option value="on_demand">On demand</option><option value="auto">Auto</option><option value="flex">Flex</option><option value="performance">Performance</option></VtSelect></VtField>
+          <VtField label="Reasoning effort"><VtSelect v-model="form.reasoningEffort"><option value="none">None</option><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></VtSelect></VtField>
+        </div>
+        <div v-else class="form-grid two">
+          <VtField label="Voice mặc định" hint="Edge voice ID hoặc preset local"><VtInput v-model="form.voice" placeholder="vi-VN-HoaiMyNeural" /></VtField>
+          <VtField label="Tốc độ" hint="0,5–2"><VtInput v-model="form.rate" type="number" min="0.5" max="2" step="0.05" /></VtField>
+          <VtField label="Cao độ Hz" hint="Edge TTS hỗ trợ"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
+          <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>
+          <VtField label="Sample rate" hint="8.000–48.000 Hz"><VtInput v-model="form.outputSampleRate" type="number" min="8000" max="48000" step="1000" /></VtField>
+        </div>
+      </section>
+
       <section class="provider-form-section">
-        <header><span>03</span><div><h3>Credential</h3><p>Manager chỉ cho phép giữ, thay hoặc xóa secret; giá trị hiện tại không bao giờ được đọc ngược.</p></div></header>
+        <header><span>04</span><div><h3>Credential</h3><p>Manager chỉ cho phép giữ, thay hoặc xóa secret; giá trị hiện tại không bao giờ được đọc ngược.</p></div></header>
         <div class="form-grid two">
           <VtField label="Xử lý secret"><VtSelect v-model="form.secretAction" name="secretAction"><option value="keep">Giữ nguyên</option><option value="rotate">Thay secret</option><option value="clear">Xóa secret</option></VtSelect></VtField>
           <VtField v-if="form.secretAction === 'rotate'" label="Secret mới" :error="error" required><VtInput v-model="form.secret" type="password" autocomplete="new-password" /></VtField>

@@ -22,7 +22,9 @@ import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
 import {
   expandProviderChains,
+  validateAgentVoiceConfig,
   validateAgentDraftConfig,
+  validateProviderConfig,
   type ProviderPolicyBinding,
 } from "../config/agent-config.policy.js";
 import {
@@ -78,6 +80,7 @@ export interface ProviderRecord {
   adapter: string;
   model: string;
   baseUrl?: string;
+  config: Record<string, unknown>;
   secretConfigured: boolean;
   enabled: boolean;
   priority: number;
@@ -96,6 +99,7 @@ export interface ProviderRuntimeRecord {
   adapter: string;
   model: string;
   baseUrl?: string;
+  config: Record<string, unknown>;
   secret?: string;
   priority: number;
   locales: string[];
@@ -193,6 +197,7 @@ interface ProviderInput {
   enabled: boolean;
   priority?: number;
   locales?: string[];
+  config?: Record<string, unknown>;
 }
 
 interface ProviderPatch {
@@ -202,6 +207,7 @@ interface ProviderPatch {
   enabled?: boolean;
   priority?: number;
   locales?: string[];
+  config?: Record<string, unknown>;
   secretAction?: "keep" | "rotate" | "clear";
   secret?: string;
 }
@@ -1138,6 +1144,13 @@ export class ControlPlaneStore {
         agent.defaultLocale,
         agent.interactionMode.toLowerCase() as AgentRecord["interactionMode"],
       );
+      const voice = validateAgentVoiceConfig(
+        agent.draftConfig as Record<string, unknown>,
+        providerChains
+          .filter((chain) => chain.kind === "tts")
+          .flatMap((chain) => chain.providers),
+        agent.defaultLocale,
+      );
       const selectedProviderIds = new Set(
         providerChains.flatMap((chain) => chain.providers.map((provider) => provider.id)),
       );
@@ -1158,6 +1171,7 @@ export class ControlPlaneStore {
         persona: agent.persona,
         prompt,
         providerChains,
+        ...(voice ? { voice } : {}),
         providers: providers
           .filter((provider) => selectedProviderIds.has(provider.id))
           .map((provider) => this.toProviderSnapshot(provider)),
@@ -1212,6 +1226,7 @@ export class ControlPlaneStore {
   async createProvider(input: ProviderInput, context: MutationContext): Promise<ProviderRecord> {
     if (input.baseUrl) this.validateProviderUrl(input.baseUrl);
     const locales = this.validateProviderLocales(input.locales ?? ["*"]);
+    const config = validateProviderConfig(input.kind, input.adapter, input.config);
     return this.prisma.$transaction(async (transaction) => {
       const provider = await transaction.providerBinding.create({
         data: {
@@ -1226,6 +1241,7 @@ export class ControlPlaneStore {
           enabled: input.enabled,
           priority: input.priority ?? 100,
           locales,
+          config: config as Prisma.InputJsonValue,
         },
       });
       await this.audit.record(
@@ -1250,6 +1266,18 @@ export class ControlPlaneStore {
     context: MutationContext,
   ): Promise<ProviderRecord> {
     if (input.baseUrl) this.validateProviderUrl(input.baseUrl);
+    const current = await this.prisma.providerBinding.findFirst({
+      where: { id, tenantId: context.principal.tenantId },
+      select: { kind: true, adapter: true },
+    });
+    if (!current) throw new NotFoundException("Provider not found");
+    const config = input.config === undefined
+      ? undefined
+      : validateProviderConfig(
+          current.kind.toLowerCase() as ProviderRecord["kind"],
+          input.adapter ?? current.adapter,
+          input.config,
+        );
     const locales = input.locales
       ? this.validateProviderLocales(input.locales)
       : undefined;
@@ -1282,6 +1310,7 @@ export class ControlPlaneStore {
           ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
           ...(input.priority !== undefined ? { priority: input.priority } : {}),
           ...(locales ? { locales } : {}),
+          ...(config ? { config: config as Prisma.InputJsonValue } : {}),
           ...secretUpdate,
           health: ProviderHealth.UNKNOWN,
           healthLatencyMs: null,
@@ -1334,6 +1363,7 @@ export class ControlPlaneStore {
         adapter: provider.adapter,
         model: provider.model,
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+        config: recordValue(provider.config),
         ...(provider.secretCiphertext
           ? { secret: this.secretCrypto.decrypt(provider.secretCiphertext) }
           : {}),
@@ -1522,6 +1552,7 @@ export class ControlPlaneStore {
     adapter: string;
     model: string;
     baseUrl: string | null;
+    config: Prisma.JsonValue;
     secretConfigured: boolean;
     enabled: boolean;
     priority: number;
@@ -1539,6 +1570,7 @@ export class ControlPlaneStore {
       adapter: provider.adapter,
       model: provider.model,
       ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+      config: recordValue(provider.config),
       secretConfigured: provider.secretConfigured,
       enabled: provider.enabled,
       priority: provider.priority,
@@ -1560,6 +1592,7 @@ export class ControlPlaneStore {
     adapter: string;
     model: string;
     baseUrl: string | null;
+    config: Prisma.JsonValue;
     secretConfigured: boolean;
     enabled: boolean;
     priority: number;
@@ -1571,6 +1604,7 @@ export class ControlPlaneStore {
       adapter: provider.adapter,
       model: provider.model,
       ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+      config: recordValue(provider.config),
       secretConfigured: provider.secretConfigured,
       enabled: provider.enabled,
       priority: provider.priority,
@@ -1612,6 +1646,9 @@ export class ControlPlaneStore {
       return { health: ProviderHealth.DEGRADED, errorCode: "disabled" };
     }
     if (!provider.baseUrl) {
+      if (provider.kind === ProviderKind.TTS && provider.adapter.includes("edge")) {
+        return { health: ProviderHealth.UNKNOWN, errorCode: "external_probe_unavailable" };
+      }
       const componentName = providerKindToVoiceComponent.get(provider.kind);
       if (!componentName) {
         return { health: ProviderHealth.UNKNOWN, errorCode: "runtime_probe_unavailable" };
@@ -1633,14 +1670,17 @@ export class ControlPlaneStore {
     try {
       const baseUrl = provider.baseUrl.replace(/\/$/, "");
       const response =
-        provider.kind === ProviderKind.LLM && provider.adapter.includes("openai-compatible")
+        provider.kind === ProviderKind.LLM &&
+        (provider.adapter.includes("openai-compatible") || provider.adapter.includes("groq"))
           ? await fetch(`${baseUrl}/chat/completions`, {
               method: "POST",
               headers: { ...headers, "content-type": "application/json" },
               body: JSON.stringify({
                 model: provider.model,
                 stream: false,
-                max_tokens: 4,
+                ...(provider.adapter.includes("groq")
+                  ? { max_completion_tokens: 4 }
+                  : { max_tokens: 4 }),
                 reasoning_effort: "none",
                 messages: [{ role: "user", content: "Reply with OK." }],
               }),

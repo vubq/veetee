@@ -31,12 +31,14 @@ from veetee_voice_server.manager import (
     ManagerClient,
     SessionProfile,
 )
-from veetee_voice_server.providers.contracts import ToolBroker
+from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
+from veetee_voice_server.providers.edge_tts import EdgeTtsProvider
 from veetee_voice_server.providers.failover import (
     FailoverLlmProvider,
     LlmProviderCandidate,
     ProviderChainUnavailableError,
 )
+from veetee_voice_server.providers.groq import GroqCloudLlmProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
 from veetee_voice_server.providers.nine_router import (
@@ -456,14 +458,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(resolved_settings)
     readiness = ReadinessRegistry()
     runtime: dict[str, object] = {}
-    llm_registry: dict[tuple[str, str, str, str, str], LlmProviderCandidate] = {}
-    llm_chain_registry: dict[tuple[tuple[str, str, str, str, str], ...], FailoverLlmProvider] = {}
+    llm_registry: dict[tuple[str, str, str, str, str, str], LlmProviderCandidate] = {}
+    llm_chain_registry: dict[
+        tuple[tuple[str, str, str, str, str, str], ...], FailoverLlmProvider
+    ] = {}
+    tts_registry: dict[tuple[str, str, str, str, float, float, float], TtsProvider] = {}
     device_sessions = DeviceSessionRegistry()
     lab_capacity_lock = asyncio.Lock()
     active_lab_sessions = 0
 
     def llm_for_profile(profile: SessionProfile) -> FailoverLlmProvider:
-        keys: list[tuple[str, str, str, str, str]] = []
+        keys: list[tuple[str, str, str, str, str, str]] = []
         candidates: list[LlmProviderCandidate] = []
         for endpoint in profile.llm_chain:
             secret_fingerprint = hashlib.sha256(endpoint.api_key.encode()).hexdigest()[:16]
@@ -473,18 +478,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 endpoint.model,
                 endpoint.reasoning_effort,
                 secret_fingerprint,
+                json.dumps(endpoint.config, sort_keys=True, ensure_ascii=False),
             )
             candidate = llm_registry.get(key)
             if candidate is None:
-                candidate = LlmProviderCandidate(
-                    endpoint.provider_id,
-                    NineRouterLlmProvider(
+                adapter = endpoint.adapter.lower()
+                provider: NineRouterLlmProvider
+                if adapter == "groq-cloud" or "groq" in adapter:
+                    provider = GroqCloudLlmProvider(
                         base_url=endpoint.base_url,
                         model=endpoint.model,
                         api_key=endpoint.api_key,
                         reasoning_effort=endpoint.reasoning_effort,
-                    ),
-                )
+                        config=endpoint.config,
+                    )
+                else:
+                    provider = NineRouterLlmProvider(
+                        base_url=endpoint.base_url,
+                        model=endpoint.model,
+                        api_key=endpoint.api_key,
+                        reasoning_effort=endpoint.reasoning_effort,
+                        config=endpoint.config,
+                    )
+                candidate = LlmProviderCandidate(endpoint.provider_id, provider)
                 llm_registry[key] = candidate
             keys.append(key)
             candidates.append(candidate)
@@ -495,6 +511,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             llm_chain_registry[chain_key] = chain
         return chain
 
+    def tts_for_profile(profile: SessionProfile) -> TtsProvider:
+        endpoint = profile.tts_endpoint
+        voice = profile.voice
+        default_tts = runtime.get("tts")
+        if endpoint is None or voice is None:
+            if default_tts is None:
+                raise RuntimeError("voice runtime is not ready")
+            return cast(TtsProvider, default_tts)
+        config = dict(endpoint.config)
+        config.update(
+            voice=voice.voice_id,
+            rate=voice.rate,
+            pitchHz=voice.pitch_hz,
+            volume=voice.volume,
+        )
+        key = (
+            endpoint.provider_id,
+            endpoint.adapter,
+            voice.voice_id,
+            json.dumps(config, sort_keys=True, ensure_ascii=False),
+            voice.rate,
+            voice.pitch_hz,
+            voice.volume,
+        )
+        provider = tts_registry.get(key)
+        if provider is not None:
+            return provider
+        if (
+            endpoint.adapter.lower() in {"edge-tts", "edge_tts"}
+            or "edge" in endpoint.adapter.lower()
+        ):
+            provider = EdgeTtsProvider(
+                voice=voice.voice_id,
+                rate=voice.rate,
+                pitch_hz=voice.pitch_hz,
+                volume=voice.volume,
+                output_sample_rate=resolved_settings.wire_sample_rate,
+                config=config,
+            )
+        elif isinstance(default_tts, VieNeuTtsProvider):
+            provider = default_tts.with_profile(
+                voice=voice.voice_id,
+                speed=voice.rate,
+                pitch_hz=voice.pitch_hz,
+                volume=voice.volume,
+            )
+        else:
+            raise RuntimeError(f"Unsupported TTS adapter: {endpoint.adapter}")
+        tts_registry[key] = provider
+        return provider
+
     def engine_factory(
         arbiter: TurnArbiter,
         sink: ConversationSink,
@@ -503,9 +570,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> ConversationEngine:
         tools = with_session_context_tools(profile, tool_broker)
         asr_llm = llm_for_profile(profile)
-        asr_tts = runtime.get("tts")
-        if not isinstance(asr_tts, VieNeuTtsProvider):
-            raise RuntimeError("voice runtime is not ready")
+        asr_tts = tts_for_profile(profile)
 
         async def gate_json(
             payload: dict[str, object], context: OperationContext
@@ -638,7 +703,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             profile=profile,
             asr=cast(SherpaZipformerAsrProvider, runtime["asr"]),
             vad_model=cast(SileroVadModel, runtime["vad_model"]),
-            tts=cast(VieNeuTtsProvider, runtime["tts"]),
+            tts=tts_for_profile(profile),
             telemetry=(
                 ConversationTelemetryBuffer(
                     cast(ManagerClient, runtime["manager"]),
@@ -727,7 +792,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 profile=profile,
                 asr=cast(SherpaZipformerAsrProvider, runtime["asr"]),
                 vad_model=cast(SileroVadModel, runtime["vad_model"]),
-                tts=cast(VieNeuTtsProvider, runtime["tts"]),
+                tts=tts_for_profile(profile),
                 tool_broker=tool_broker,
                 engine_factory=engine_factory,
             )

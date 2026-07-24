@@ -21,6 +21,7 @@ dependencies = [
     "uvicorn[standard]>=0.51.0",
     "vieneu>=3.2.3",
     "audiotsm==0.1.2",
+    "edge-tts>=7.2.7",
 ]
 
 [project.scripts]

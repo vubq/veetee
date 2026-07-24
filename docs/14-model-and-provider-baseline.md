@@ -14,6 +14,14 @@ Tài liệu này ghi baseline AI được chọn cho Veetee V1. Nó bổ sung ch
 | LLM | `openai-compatible-9router` | 9router local hoặc endpoint LAN | development/default candidate, có thể thay model/provider bằng Manager |
 | TTS tiếng Việt | VieNeu-TTS v3 Turbo | voice-server local | primary `vi-VN`, sentence/stream chunk tùy khả năng runtime |
 
+Manager cũng có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat
+Completions) và `edge-tts` (Microsoft Edge online TTS). Hai binding này chỉ được
+dùng khi agent chọn primary provider tương ứng; không tự chèn vào fallback chain.
+Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `topP`,
+`reasoningEffort` và `parallelToolCalls`. Edge TTS nhận voice ID, giới tính,
+rate, pitch Hz, volume và sample rate. Secret chỉ nằm trong encrypted Manager
+provider binding; agent snapshot chỉ chứa metadata/config đã validate.
+
 ASR, VAD và TTS không chạy trên ESP32-S3. Firmware chỉ thu/phát audio, Opus,
 wake/interrupt local, state machine và transport. Cách chia này phù hợp giới hạn
 RAM/PSRAM/CPU của ESP32-S3 N16R8 và giữ provider có thể thay thế.

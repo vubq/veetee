@@ -73,6 +73,7 @@ const form = reactive({
   userAddress: "", promptTemplate: "",
   firstInput: 180, betweenTurns: 180, closingGrace: 5, maxSession: 0,
   vad: "", asr: "", llm: "", tts: "",
+  voiceId: "", voiceGender: "female", voiceRate: 1, voicePitch: 0, voiceVolume: 1,
 });
 
 const selected = computed(() => props.agents.find((agent) => agent.id === selectedId.value) ?? props.agents[0]);
@@ -93,6 +94,34 @@ const selectedPersonalityAccent = computed(
   () => personalityAccents.find((accent) => accent.id === personalityForm.accent) ?? personalityAccents[0],
 );
 const enabledProviders = (kind: Provider["kind"]) => props.providers.filter((provider) => provider.kind === kind && provider.enabled);
+const ttsProvider = computed(() => props.providers.find((provider) => provider.id === form.tts));
+const ttsSupportsPitch = computed(() => ttsProvider.value?.config?.supportsPitch !== false);
+const voiceOptions = computed(() => {
+  const voices = ttsProvider.value?.config?.voices;
+  if (!Array.isArray(voices)) return [];
+  return voices.filter((voice): voice is Record<string, unknown> => Boolean(voice) && typeof voice === "object" && !Array.isArray(voice));
+});
+
+watch(
+  () => form.tts,
+  (providerId) => {
+    const provider = props.providers.find((candidate) => candidate.id === providerId);
+    const voices = Array.isArray(provider?.config?.voices)
+      ? provider.config.voices.filter(
+          (voice): voice is Record<string, unknown> =>
+            Boolean(voice) && typeof voice === "object" && !Array.isArray(voice),
+        )
+      : [];
+    form.voiceId = stringValue(provider?.config?.voice) || stringValue(voices[0]?.id);
+    form.voiceGender = stringValue(provider?.config?.gender, stringValue(voices[0]?.gender, "female"));
+    form.voiceRate = Number(provider?.config?.rate ?? 1);
+    form.voicePitch = provider?.config?.supportsPitch === false
+      ? 0
+      : Number(provider?.config?.pitchHz ?? 0);
+    form.voiceVolume = Number(provider?.config?.volume ?? 1);
+  },
+  { flush: "sync" },
+);
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -174,6 +203,15 @@ watch(
     form.asr = chainProvider(agent, "asr");
     form.llm = chainProvider(agent, "llm");
     form.tts = chainProvider(agent, "tts");
+    const voice = objectValue(agent.draftConfig.voice);
+    const selectedTts = props.providers.find((provider) => provider.id === form.tts);
+    const configuredVoice = stringValue(voice.voiceId);
+    const fallbackVoice = stringValue(selectedTts?.config?.voice) || stringValue(voiceOptions.value[0]?.id);
+    form.voiceId = configuredVoice || fallbackVoice;
+    form.voiceGender = stringValue(voice.gender, stringValue(voiceOptions.value[0]?.gender, "female"));
+    form.voiceRate = Number(voice.rate ?? selectedTts?.config?.rate ?? 1);
+    form.voicePitch = Number(voice.pitchHz ?? selectedTts?.config?.pitchHz ?? 0);
+    form.voiceVolume = Number(voice.volume ?? selectedTts?.config?.volume ?? 1);
     error.value = "";
   },
   { immediate: true },
@@ -216,6 +254,18 @@ async function publish(): Promise<void> {
           // Product conversation has no parent turn ceiling; provider deadlines stay internal.
           totalTurnSeconds: 0,
         },
+        ...(form.tts && form.voiceId
+          ? {
+              voice: {
+                providerId: form.tts,
+                voiceId: form.voiceId,
+                gender: form.voiceGender || undefined,
+                rate: Number(form.voiceRate),
+                pitchHz: Number(form.voicePitch),
+                volume: Number(form.voiceVolume),
+              },
+            }
+          : {}),
       },
     });
   } catch (exception) {
@@ -584,6 +634,17 @@ const promptPreview = computed(() => {
                 <VtField label="LLM"><VtSelect v-model="form.llm"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('llm')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
                 <VtField label="TTS"><VtSelect v-model="form.tts"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('tts')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
               </div>
+            </section>
+            <section class="agent-runtime-card agent-voice-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="mic" :size="17" /></span><div><b>Giọng trợ lý</b><small>Voice, giới tính và nhịp đọc của TTS đã chọn</small></div></header>
+              <div class="form-grid two">
+                <VtField label="Voice"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">Chưa chọn</option><option v-if="form.voiceId && !voiceOptions.some((voice) => String(voice.id) === form.voiceId)" :value="form.voiceId">{{ form.voiceId }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ String(voice.label ?? voice.id) }} · {{ String(voice.gender ?? "neutral") }}</option></VtSelect></VtField>
+                <VtField label="Giới tính"><VtSelect v-model="form.voiceGender"><option value="female">Nữ</option><option value="male">Nam</option><option value="neutral">Trung tính</option></VtSelect></VtField>
+                <VtField label="Tốc độ" hint="0,5–2,0"><VtInput v-model="form.voiceRate" type="number" min="0.5" max="2" step="0.05" /></VtField>
+                <VtField label="Cao độ (Hz)" :hint="ttsSupportsPitch ? 'Điều chỉnh từ -100 đến +100 Hz' : 'Provider này không hỗ trợ đổi cao độ'"><VtInput v-model="form.voicePitch" type="number" min="-100" max="100" step="1" :disabled="!ttsSupportsPitch" /></VtField>
+                <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>
+              </div>
+              <p v-if="form.tts && !voiceOptions.length" class="agent-runtime-hint">Provider này chưa công bố catalog voice; có thể nhập voice ID ở cấu hình provider trước.</p>
             </section>
             <section class="agent-runtime-card">
               <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Inactivity hội thoại</b><small>Không giới hạn tổng phiên hoặc tổng lượt</small></div></header>
@@ -1078,6 +1139,25 @@ const promptPreview = computed(() => {
 
 .agent-runtime-card .form-grid {
   gap: 12px;
+}
+
+.agent-voice-card {
+  order: 3;
+  grid-column: 1 / -1;
+}
+
+.agent-runtime-card:last-child {
+  order: 2;
+}
+
+.agent-runtime-hint {
+  margin: 0;
+  border-radius: 10px;
+  padding: 9px 11px;
+  color: var(--muted);
+  background: #eef2ec;
+  font-size: 9px;
+  line-height: 1.55;
 }
 
 .sticky-publish {

@@ -51,12 +51,18 @@ class NineRouterLlmProvider:
         model: str,
         api_key: str = "",
         reasoning_effort: str = "none",
+        config: Mapping[str, Any] | None = None,
+        provider_label: str = "9router",
+        completion_token_parameter: str = "max_tokens",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
         self._reasoning_effort = reasoning_effort
+        self._config = dict(config or {})
+        self._provider_label = provider_label
+        self._completion_token_parameter = completion_token_parameter
         self._client = client or httpx.AsyncClient(timeout=None)
         self._owns_client = client is None
 
@@ -79,7 +85,9 @@ class NineRouterLlmProvider:
             context=context,
         )
         if result.get("ready") is not True:
-            raise NineRouterProviderError("9router prewarm returned an invalid response")
+            raise NineRouterProviderError(
+                f"{self._provider_label} prewarm returned an invalid response"
+            )
 
     async def complete_json(
         self,
@@ -102,14 +110,31 @@ class NineRouterLlmProvider:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "reasoning_effort": self._reasoning_effort,
-            "temperature": 0,
+            "reasoning_effort": self._config.get("reasoningEffort", self._reasoning_effort),
+            "temperature": self._config.get("temperature", 0),
         }
+        if "topP" in self._config:
+            payload["top_p"] = self._config["topP"]
+        if "serviceTier" in self._config:
+            payload["service_tier"] = self._config["serviceTier"]
+        if "parallelToolCalls" in self._config:
+            payload["parallel_tool_calls"] = self._config["parallelToolCalls"]
         if max_output_tokens is not None:
-            payload["max_tokens"] = max(64, min(max_output_tokens, 4_096))
-        if schema is None or schema_transport == "json_object":
+            configured_limit = self._config.get("maxCompletionTokens", max_output_tokens)
+            payload[self._completion_token_parameter] = max(
+                64,
+                min(int(configured_limit), 16_384),
+            )
+        configured_transport = self._config.get("responseFormat")
+        effective_transport = (
+            configured_transport
+            if configured_transport in {"json_object", "json_schema", "auto"}
+            and configured_transport != "auto"
+            else schema_transport
+        )
+        if schema is None or effective_transport == "json_object":
             payload["response_format"] = {"type": "json_object"}
-        elif schema_transport == "json_schema":
+        elif effective_transport == "json_schema":
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -147,7 +172,7 @@ class NineRouterLlmProvider:
             if response.is_error:
                 detail = (await response.aread())[:500].decode(errors="replace")
                 raise NineRouterProviderError(
-                    f"9router returned HTTP {response.status_code}: {detail}",
+                    f"{self._provider_label} returned HTTP {response.status_code}: {detail}",
                     code="http_error",
                     status_code=response.status_code,
                     retryable=response.status_code in {408, 409, 425, 429}
@@ -161,7 +186,7 @@ class NineRouterLlmProvider:
                     event = json.loads(data)
                 except json.JSONDecodeError as error:
                     raise NineRouterProviderError(
-                        "Invalid JSON in 9router structured SSE event",
+                        f"Invalid JSON in {self._provider_label} structured SSE event",
                         code="invalid_sse_json",
                     ) from error
                 for parsed_event in self._events_from_payload(event):
@@ -177,7 +202,7 @@ class NineRouterLlmProvider:
         raw_value = "".join(argument_parts or content_parts)
         if not raw_value.strip():
             raise NineRouterProviderError(
-                "9router structured response was empty",
+                f"{self._provider_label} structured response was empty",
                 code="empty_structured_output",
                 finish_reason=finish_reason,
             )
@@ -185,7 +210,7 @@ class NineRouterLlmProvider:
             parsed = json.loads(raw_value)
         except json.JSONDecodeError as error:
             raise NineRouterProviderError(
-                "9router structured response was not valid JSON",
+                f"{self._provider_label} structured response was not valid JSON",
                 code=(
                     "structured_output_truncated"
                     if finish_reason in {"length", "max_tokens"}
@@ -196,18 +221,19 @@ class NineRouterLlmProvider:
             ) from error
         if not isinstance(parsed, dict):
             raise NineRouterProviderError(
-                "9router structured response was not an object",
+                f"{self._provider_label} structured response was not an object",
                 code="structured_not_object",
                 finish_reason=finish_reason,
                 output_characters=len(raw_value),
             )
         if schema is not None and validate_schema:
-            validation_error = next(
-                Draft202012Validator(dict(schema)).iter_errors(parsed), None
-            )
+            validation_error = next(Draft202012Validator(dict(schema)).iter_errors(parsed), None)
             if validation_error is not None:
                 raise NineRouterProviderError(
-                    "9router structured response did not match the requested schema",
+                    (
+                        f"{self._provider_label} structured response did not match "
+                        "the requested schema"
+                    ),
                     code="structured_schema_mismatch",
                     retryable=True,
                     finish_reason=finish_reason,
@@ -237,7 +263,7 @@ class NineRouterLlmProvider:
                 body = await response.aread()
                 detail = body[:500].decode(errors="replace")
                 raise NineRouterProviderError(
-                    f"9router returned HTTP {response.status_code}: {detail}",
+                    f"{self._provider_label} returned HTTP {response.status_code}: {detail}",
                     code="http_error",
                     status_code=response.status_code,
                     retryable=response.status_code in {408, 409, 425, 429}
@@ -252,7 +278,7 @@ class NineRouterLlmProvider:
                     event = json.loads(data)
                 except json.JSONDecodeError as error:
                     raise NineRouterProviderError(
-                        "Invalid JSON in 9router SSE event",
+                        f"Invalid JSON in {self._provider_label} SSE event",
                         code="invalid_sse_json",
                     ) from error
                 for parsed in self._events_from_payload(event):
@@ -370,7 +396,17 @@ class NineRouterLlmProvider:
             "messages": messages,
         }
         if self._reasoning_effort:
-            payload["reasoning_effort"] = self._reasoning_effort
+            payload["reasoning_effort"] = self._config.get(
+                "reasoningEffort", self._reasoning_effort
+            )
+        for source, target in (
+            ("temperature", "temperature"),
+            ("topP", "top_p"),
+            ("serviceTier", "service_tier"),
+            ("parallelToolCalls", "parallel_tool_calls"),
+        ):
+            if source in self._config:
+                payload[target] = self._config[source]
         if request.plan.intent:
             payload["metadata"] = {"veetee_intent": request.plan.intent}
         return payload

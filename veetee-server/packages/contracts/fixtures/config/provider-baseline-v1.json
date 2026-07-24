@@ -24,6 +24,20 @@
   },
   "llm": {
     "provider_id": "openai-compatible-9router",
+    "alternatives": [
+      {
+        "provider_id": "groq-cloud",
+        "api_style": "openai-compatible",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model_ref": "llama-3.3-70b-versatile",
+        "streaming": true,
+        "structured_output": true,
+        "tool_calling": true,
+        "reasoning_effort": "none",
+        "service_tier": "on_demand",
+        "auth_mode": "encrypted_manager_secret"
+      }
+    ],
     "api_style": "chat_completions_or_responses",
     "base_url_env": "VEETEE_9ROUTER_BASE_URL",
     "model_ref": "cx/gpt-5.6-terra",
@@ -35,6 +49,20 @@
   },
   "tts": {
     "provider_id": "vieneu-local",
+    "alternatives": [
+      {
+        "provider_id": "edge-tts",
+        "model_ref": "edge-tts-cloud",
+        "streaming": true,
+        "audio_format": "pcm_s16le",
+        "locale": "vi-VN",
+        "voice_catalog": [
+          {"id": "vi-VN-HoaiMyNeural", "gender": "female"},
+          {"id": "vi-VN-NamMinhNeural", "gender": "male"}
+        ],
+        "external": true
+      }
+    ],
     "model_ref": "vieneu-tts-v3-turbo",
     "streaming": "probe_then_enable",
     "audio_format": "pcm_s16le",

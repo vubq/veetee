@@ -1,7 +1,12 @@
 import { BadRequestException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 
-import { expandProviderChains, validateAgentDraftConfig } from "./agent-config.policy.js";
+import {
+  expandProviderChains,
+  validateAgentDraftConfig,
+  validateAgentVoiceConfig,
+  validateProviderConfig,
+} from "./agent-config.policy.js";
 
 describe("validateAgentDraftConfig", () => {
   it("accepts bounded conversation policy and extension fields", () => {
@@ -94,6 +99,49 @@ describe("validateAgentDraftConfig", () => {
         [{ ...binding("llm-1", "llm"), enabled: false }],
         "vi-VN",
         "auto",
+      ),
+    ).toThrow(BadRequestException);
+  });
+});
+
+describe("provider and voice config", () => {
+  it("accepts bounded Groq parameters and rejects secret-shaped config", () => {
+    expect(
+      validateProviderConfig("llm", "groq-cloud", {
+        temperature: 0.2,
+        topP: 0.95,
+        maxCompletionTokens: 1024,
+        serviceTier: "on_demand",
+      }),
+    ).toMatchObject({ maxCompletionTokens: 1024 });
+    expect(() =>
+      validateProviderConfig("llm", "groq-cloud", { apiKey: "must-not-live-here" }),
+    ).toThrow(BadRequestException);
+  });
+
+  it("requires the selected voice provider to be part of the TTS chain", () => {
+    const tts = binding("tts-1", "tts");
+    expect(
+      validateAgentVoiceConfig(
+        {
+          voice: {
+            providerId: "tts-1",
+            voiceId: "vi-VN-HoaiMyNeural",
+            gender: "female",
+            rate: 1.1,
+            pitchHz: 5,
+            volume: 1,
+          },
+        },
+        [tts],
+        "vi-VN",
+      ),
+    ).toMatchObject({ providerId: "tts-1", rate: 1.1 });
+    expect(() =>
+      validateAgentVoiceConfig(
+        { voice: { providerId: "tts-other", voiceId: "voice" } },
+        [tts],
+        "vi-VN",
       ),
     ).toThrow(BadRequestException);
   });

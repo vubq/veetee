@@ -311,6 +311,7 @@ export const managerApi = {
       Pick<Provider, "adapter" | "model" | "enabled" | "priority" | "locales">
     > & {
       baseUrl?: string | null;
+      config?: Record<string, unknown>;
       secretAction?: "keep" | "rotate" | "clear";
       secret?: string;
     },
