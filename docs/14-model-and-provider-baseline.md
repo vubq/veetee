@@ -252,14 +252,21 @@ hoàn tất khoảng 1,87 giây. Cùng probe đơn lẻ, 9Router đạt structur
 1,46 giây và prose khoảng 2,15 giây. Số mẫu này chưa đủ để kết luận gateway nào
 nhanh hơn.
 
-Sau các probe conformance, toàn bộ model CLIProxyAPI trả HTTP `429
-usage_limit_reached` từ upstream account. Benchmark xen kẽ vì vậy không có đủ mẫu
-CLIPROXYAPI; 9Router vẫn đạt structured khoảng 1,49 giây, first token khoảng
-0,97 giây và prose hoàn tất khoảng 1,16 giây trong lượt xác minh cuối. Trạng thái
-hiện tại là CLIPROXYAPI chưa vượt benchmark gate, không phải chậm hơn đã được chứng
-minh. Manager giữ binding để switch nhưng đánh dấu `degraded/http_429` cho đến khi
-quota/account upstream hoạt động lại. HTTP 429 không tăng failure count hoặc mở
-circuit vì quota exhaustion không chứng minh endpoint hỏng.
+Upstream account đầu tiên sau đó trả HTTP `429 usage_limit_reached`; Manager đã xác
+nhận đúng `degraded/http_429` mà không tăng failure count hoặc mở circuit. Sau khi
+người dùng đổi account ngày 2026-07-24, binding trở lại `healthy` và benchmark xen
+kẽ năm lượt cho cùng model/prompt đạt:
+
+| Gateway | Structured median/p95 | First token median/p95 | Prose total median/p95 |
+|---|---:|---:|---:|
+| 9Router | 1,54 / 3,06 giây | 1,25 / 1,91 giây | 2,05 / 2,08 giây |
+| CLIProxyAPI | 1,66 / 2,62 giây | 2,00 / 3,18 giây | 2,15 / 3,30 giây |
+
+Cả 20 request đều thành công. CLIProxyAPI có structured p95 tốt hơn trong mẫu nhỏ,
+nhưng 9Router đưa first token ra sớm hơn khoảng 0,76 giây ở median và có prose p95
+ổn định hơn khoảng 1,23 giây. Vì trải nghiệm thoại phụ thuộc mạnh vào first token,
+9Router tiếp tục là default dev/LAN; CLIProxyAPI là lựa chọn độc lập để A/B test,
+không tự thay thế hoặc fallback cho 9Router.
 
 Lệnh benchmark tái lập là `npm run providers:benchmark:gateways`; client key
 CLIProxyAPI phải được truyền qua `VEETEE_CLIPROXY_API_KEY`, không ghi vào repo hoặc
