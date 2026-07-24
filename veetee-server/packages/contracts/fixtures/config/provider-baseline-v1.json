@@ -32,8 +32,9 @@
         "model_ref": "llama-3.3-70b-versatile",
         "streaming": true,
         "structured_output": true,
+        "structured_transport": "json_object_streaming",
         "tool_calling": true,
-        "reasoning_effort": "none",
+        "reasoning_effort": "model_specific_not_sent_for_llama_default",
         "service_tier": "on_demand",
         "auth_mode": "encrypted_manager_secret"
       }

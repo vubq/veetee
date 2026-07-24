@@ -110,9 +110,11 @@ class NineRouterLlmProvider:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "reasoning_effort": self._config.get("reasoningEffort", self._reasoning_effort),
             "temperature": self._config.get("temperature", 0),
         }
+        reasoning_effort = self._config.get("reasoningEffort", self._reasoning_effort)
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         if "topP" in self._config:
             payload["top_p"] = self._config["topP"]
         if "serviceTier" in self._config:

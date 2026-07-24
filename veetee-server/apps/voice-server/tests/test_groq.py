@@ -5,6 +5,7 @@ import json
 from time import monotonic
 
 import edge_tts
+import httpx
 import pytest
 
 from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
@@ -50,10 +51,55 @@ def test_groq_payload_uses_cloud_specific_parameters_without_changing_context() 
     assert payload["top_p"] == 0.95
     assert payload["service_tier"] == "on_demand"
     assert payload["parallel_tool_calls"] is True
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
+    assert "metadata" not in payload
     assert json.loads(payload["messages"][-1]["content"].split("Turn metadata (JSON): ", 1)[1])[
         "dialogue_act"
     ] == "question"
+    assert provider._config["responseFormat"] == "json_object"
+    assert "reasoningEffort" not in provider._config
+
+
+@pytest.mark.asyncio
+async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
+    observed: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{\\"accepted\\":true}"},'
+                b'"finish_reason":"stop"}]}\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = GroqCloudLlmProvider(
+        base_url="https://api.groq.com/openai/v1",
+        model="llama-3.3-70b-versatile",
+        config={"responseFormat": "auto", "reasoningEffort": "none"},
+        client=client,
+    )
+    value = await provider.complete_json(
+        system_prompt="Return JSON",
+        user_prompt="Xin chào",
+        context=OperationContext(
+            "session-1",
+            "session-1:1",
+            1,
+            CancellationToken(),
+            monotonic() + 5,
+        ),
+        schema={"type": "object", "properties": {"accepted": {"type": "boolean"}}},
+        schema_transport="json_schema",
+    )
+    await client.aclose()
+
+    assert value == {"accepted": True}
+    assert observed["response_format"] == {"type": "json_object"}
+    assert "reasoning_effort" not in observed
 
 
 def test_edge_tts_voice_controls_map_to_provider_format() -> None:
