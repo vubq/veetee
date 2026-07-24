@@ -127,6 +127,29 @@ async def test_open_circuit_skips_primary_until_recovery_window() -> None:
     assert provider_chain.health["provider-0"] == "open"
 
 
+async def test_rate_limit_falls_back_without_poisoning_provider_circuit() -> None:
+    primary = FakeProvider(
+        error=NineRouterProviderError(
+            "rate limited",
+            status_code=429,
+            retryable=True,
+        )
+    )
+    fallback = FakeProvider(events=("fallback",))
+    provider_chain = chain(primary, fallback)
+
+    for _ in range(4):
+        result = await provider_chain.complete_json(
+            system_prompt="fixture",
+            user_prompt="fixture",
+            context=operation_context(),
+        )
+        assert result == {"provider": "fallback"}
+
+    assert primary.json_calls == 4
+    assert provider_chain.health["provider-0"] == "closed"
+
+
 async def test_cancelled_half_open_probe_does_not_lock_provider_forever() -> None:
     primary = FakeProvider(error=TurnCancelledError("button_interrupt"))
     candidate = LlmProviderCandidate(

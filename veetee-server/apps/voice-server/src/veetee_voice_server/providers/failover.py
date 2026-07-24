@@ -112,7 +112,10 @@ class FailoverLlmProvider:
             except (TurnCancelledError, OperationDeadlineExceededError):
                 raise
             except Exception as error:
-                candidate.circuit.record_failure(time.monotonic())
+                if _should_trip_circuit(error):
+                    candidate.circuit.record_failure(time.monotonic())
+                elif half_open_probe:
+                    candidate.circuit.release_probe()
                 last_error = error
                 if not _is_retryable(error):
                     raise
@@ -156,7 +159,10 @@ class FailoverLlmProvider:
             except (TurnCancelledError, OperationDeadlineExceededError):
                 raise
             except Exception as error:
-                candidate.circuit.record_failure(time.monotonic())
+                if _should_trip_circuit(error):
+                    candidate.circuit.record_failure(time.monotonic())
+                elif half_open_probe:
+                    candidate.circuit.release_probe()
                 last_error = error
                 if emitted or not _is_retryable(error):
                     raise
@@ -208,3 +214,13 @@ def _is_retryable(error: Exception) -> bool:
     if isinstance(error, NineRouterProviderError):
         return error.retryable
     return isinstance(error, (httpx.TimeoutException, httpx.NetworkError))
+
+
+def _should_trip_circuit(error: Exception) -> bool:
+    # Rate limits describe a bounded account/model budget, not a broken
+    # endpoint. Opening the transport circuit would hide a provider that may
+    # recover as soon as its rolling token window resets.
+    return not (
+        isinstance(error, NineRouterProviderError)
+        and error.status_code == 429
+    )

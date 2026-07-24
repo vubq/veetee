@@ -1670,19 +1670,10 @@ export class ControlPlaneStore {
     }
     try {
       const baseUrl = provider.baseUrl.replace(/\/$/, "");
-      const response =
-        provider.kind === ProviderKind.LLM &&
-        (provider.adapter.includes("openai-compatible") || provider.adapter.includes("groq"))
-          ? await fetch(`${baseUrl}/chat/completions`, {
-              method: "POST",
-              headers: { ...headers, "content-type": "application/json" },
-              body: JSON.stringify(providerChatProbePayload(provider)),
-              signal: AbortSignal.timeout(8_000),
-            })
-          : await fetch(`${baseUrl}/models`, {
-              headers,
-              signal: AbortSignal.timeout(3_000),
-            });
+      const response = await fetch(providerHealthProbeUrl(baseUrl), {
+        headers,
+        signal: AbortSignal.timeout(3_000),
+      });
       return response.ok
         ? { health: ProviderHealth.HEALTHY, errorCode: null }
         : { health: ProviderHealth.DEGRADED, errorCode: `http_${response.status}` };
@@ -1757,31 +1748,6 @@ export class ControlPlaneStore {
   }
 }
 
-export function providerChatProbePayload(provider: {
-  adapter: string;
-  model: string;
-  config: Prisma.JsonValue;
-}): Record<string, unknown> {
-  const isGroq = provider.adapter.toLowerCase().includes("groq");
-  const config = recordValue(provider.config);
-  const payload: Record<string, unknown> = {
-    model: provider.model,
-    stream: false,
-    ...(isGroq ? { max_completion_tokens: 4 } : { max_tokens: 4 }),
-    messages: [{ role: "user", content: "Reply with OK." }],
-  };
-  if (!isGroq) {
-    payload.reasoning_effort = "none";
-    return payload;
-  }
-  const normalizedModel = provider.model.toLowerCase();
-  const supportsReasoning =
-    normalizedModel.startsWith("qwen/") ||
-    normalizedModel.startsWith("openai/gpt-oss-");
-  if (supportsReasoning) {
-    const effort = config.reasoningEffort;
-    payload.reasoning_effort =
-      typeof effort === "string" && effort.length > 0 ? effort : "none";
-  }
-  return payload;
+export function providerHealthProbeUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/models`;
 }

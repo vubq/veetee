@@ -43,7 +43,7 @@ async function test(id: string): Promise<void> {
       <VtOperationsHero
         eyebrow="RUNTIME CONTROL"
         title="Hệ điều phối AI"
-        description="Mỗi capability có provider riêng, health probe riêng và circuit breaker độc lập. Provider local được kiểm tra trực tiếp qua readiness của Voice Server."
+        description="Health probe chỉ đo kết nối endpoint, không phải tốc độ sinh token. Time-to-first-token và audio đầu tiên được đo trong Realtime Lab."
         :value="enabled"
         value-label="Provider đang bật"
         :value-hint="`${providers.length} cấu hình trong catalog`"

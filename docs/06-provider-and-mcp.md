@@ -162,6 +162,15 @@ LLM failover hiện đã chạy trong cùng `OperationContext`: circuit mở sau
 tiếp, thử half-open sau 30 giây, chỉ fallback với timeout/network/HTTP retryable và
 chỉ trước output đầu tiên. Sau khi đã có token user-visible, lỗi được trả về turn hiện
 tại thay vì nối câu trả lời từ model khác. `abort`/deadline không bao giờ fallback.
+HTTP `429` vẫn được phép fallback nếu chain đã cấu hình nhưng không làm mở circuit:
+rate limit là budget theo model/account có cửa sổ phục hồi riêng, không chứng minh
+endpoint bị hỏng. Nhờ vậy provider được thử lại ở lượt sau ngay khi quota hồi thay vì
+bị che bởi `ProviderChainUnavailable`.
+
+Health probe của LLM chỉ gọi authenticated model catalog, không tạo completion và
+không tiêu tốn token generation. `healthLatencyMs` vì vậy là network/endpoint
+round-trip, không phải time-to-first-token hay tốc độ sinh. Latency hội thoại phải đọc
+từ `conversation_llm_first_token` và `tts.first_audio`.
 ASR chain đã có contract/config nhưng ChunkFormer vẫn chỉ được bật sau benchmark
 conditional re-decode; source không chạy hai ASR song song trên mọi utterance.
 

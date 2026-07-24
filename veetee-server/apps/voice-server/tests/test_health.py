@@ -10,6 +10,7 @@ from veetee_voice_server.app import (
     _complete_conversation_gate_json,
     _LlmReadinessProbe,
     _planner_system_prompt,
+    _response_system_prompt,
     create_app,
 )
 from veetee_voice_server.config import Settings
@@ -112,6 +113,29 @@ async def test_streaming_planner_does_not_generate_a_response_that_will_be_disca
     assert "Published agent prompt:" not in prompt
 
 
+async def test_response_prompt_omits_tool_input_schemas_from_prose_call() -> None:
+    class ToolBroker:
+        def list_tools(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "name": "self.fixture",
+                    "description": "A compact fixture tool.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                    },
+                }
+            ]
+
+    profile = SessionProfile.defaults(Settings(environment="test", require_device_auth=False))
+    prompt = _response_system_prompt(profile, ToolBroker())  # type: ignore[arg-type]
+
+    assert "self.fixture" in prompt
+    assert "A compact fixture tool." in prompt
+    assert "inputSchema" not in prompt
+    assert '"properties"' not in prompt
+
+
 async def test_conversation_gate_forces_the_full_structured_schema() -> None:
     class CapturingLlm:
         def __init__(self) -> None:
@@ -162,7 +186,7 @@ async def test_conversation_gate_forces_the_full_structured_schema() -> None:
     assert llm.arguments["schema_transport"] == "json_schema"
     assert llm.arguments["validate_schema"] is False
     assert llm.arguments["max_output_tokens"] == 512
-    assert '"published_agent"' in str(llm.arguments["user_prompt"])
+    assert '"published_agent"' not in str(llm.arguments["user_prompt"])
     assert "Published agent runtime context" in str(llm.arguments["system_prompt"])
     assert result["admission"]["decision"] == "accepted"  # type: ignore[index]
 

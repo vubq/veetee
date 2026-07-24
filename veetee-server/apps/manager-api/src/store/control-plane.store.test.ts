@@ -4,7 +4,7 @@ import type { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
 import {
   ControlPlaneStore,
-  providerChatProbePayload,
+  providerHealthProbeUrl,
 } from "./control-plane.store.js";
 
 class FakeRedisClient {
@@ -75,28 +75,8 @@ describe("PairingService", () => {
 });
 
 describe("provider health probe", () => {
-  it("does not send unsupported reasoning controls to the default Groq Llama model", () => {
-    const payload = providerChatProbePayload({
-      adapter: "groq-cloud",
-      model: "llama-3.3-70b-versatile",
-      config: { reasoningEffort: "none" },
-    });
-
-    expect(payload).toMatchObject({
-      model: "llama-3.3-70b-versatile",
-      max_completion_tokens: 4,
-      stream: false,
-    });
-    expect(payload).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("keeps Groq reasoning controls for a model family that supports them", () => {
-    const payload = providerChatProbePayload({
-      adapter: "groq-cloud",
-      model: "openai/gpt-oss-20b",
-      config: { reasoningEffort: "medium" },
-    });
-
-    expect(payload.reasoning_effort).toBe("medium");
+  it("uses the authenticated model catalog without consuming completion quota", () => {
+    expect(providerHealthProbeUrl("https://api.groq.com/openai/v1/"))
+      .toBe("https://api.groq.com/openai/v1/models");
   });
 });

@@ -179,6 +179,14 @@ def _response_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     agent_context = json.dumps(
         _published_agent_context(profile), ensure_ascii=False, separators=(",", ":")
     )
+    compact_tools = [
+        {
+            "name": item["name"],
+            "description": str(item.get("description", ""))[:240],
+        }
+        for item in tools.list_tools()
+        if isinstance(item.get("name"), str)
+    ]
     return (
         "Generate the assistant's natural spoken response for the current turn. "
         "Follow the published agent prompt, locale, personality and conversation context. "
@@ -187,7 +195,7 @@ def _response_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "succeeded unless the supplied tool result says so. Keep the response directly "
         "speakable and appropriate for the current dialogue. "
         f"\n\nPublished agent runtime context (JSON): {agent_context}"
-        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(tools.list_tools())}"
+        f"\n\nPublished agent prompt:\n{profile.render_system_prompt(compact_tools)}"
         "\n\nRuntime boundaries override conflicting published text: never expose internal "
         "scores, hidden reasoning or secrets, and never claim an unconfirmed tool result."
     ).strip()
@@ -535,7 +543,6 @@ async def _complete_conversation_gate_json(
 ) -> dict[str, Any]:
     schema = _planner_output_schema(tools)
     system_prompt = _planner_system_prompt(profile, tools)
-    payload = {**payload, "published_agent": _published_agent_context(profile)}
     user_prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     conversation_context = payload.get("conversation_context")
     context_message_count = (
