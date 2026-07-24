@@ -268,6 +268,17 @@ nhưng 9Router đưa first token ra sớm hơn khoảng 0,76 giây ở median v�
 9Router tiếp tục là default dev/LAN; CLIProxyAPI là lựa chọn độc lập để A/B test,
 không tự thay thế hoặc fallback cho 9Router.
 
+CLIProxyAPI/Codex không nhận `reasoning_effort=none` như 9Router: gateway ánh xạ nó
+thành thinking budget 0 và full strict conversation schema trả HTTP 400. Adapter
+CLIPROXYAPI vì vậy bỏ hẳn field reasoning khi policy là `none`; các mức reasoning
+khác vẫn là cấu hình tường minh và phải qua capability probe trước khi dùng.
+Codex strict JSON Schema còn yêu cầu mọi object phải đóng bằng
+`additionalProperties: false` và khai báo toàn bộ property trong `required`. Schema
+conversation có `tool_call.arguments` động nên adapter dùng JSON Object Mode cho
+schema không đạt ràng buộc này, sau đó Voice Server vẫn chuẩn hóa và validate bằng
+schema/tool policy gốc trước khi cho phép MCP. Schema đóng tương thích vẫn dùng strict
+JSON Schema.
+
 Lệnh benchmark tái lập là `npm run providers:benchmark:gateways`; client key
 CLIProxyAPI phải được truyền qua `VEETEE_CLIPROXY_API_KEY`, không ghi vào repo hoặc
 command log. Script đo structured latency, first-token, prose-total và gom lỗi bounded
