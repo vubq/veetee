@@ -160,4 +160,7 @@ class ConversationPolicy:
     context_message_limit: int = 12
     context_message_characters: int = 1200
     sentence_min_characters: int = 24
+    speech_chunk_target_characters: int = 72
+    speech_chunk_max_characters: int = 160
+    speech_queue_capacity: int = 4
     sentence_abbreviations: tuple[str, ...] = ()

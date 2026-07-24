@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from dataclasses import dataclass, replace
 from time import monotonic
@@ -257,10 +258,21 @@ class ConversationEngine:
     async def _stream_response(self, request: LlmRequest, context: OperationContext) -> str:
         llm_context = context.child(self._policy.llm_seconds)
         speech = _SpeechLifecycle()
+        speech_queue: asyncio.Queue[str | None] = asyncio.Queue(
+            maxsize=self._policy.speech_queue_capacity
+        )
+        speech_task = asyncio.create_task(
+            self._drain_speech_queue(speech_queue, request.plan.locale, context, speech),
+            name=f"speech-stream:{context.session_id}:{context.turn_id}",
+        )
         response_parts: list[str] = []
+        stream_started_at = monotonic()
+        first_delta_at: float | None = None
         chunker = SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
             abbreviations=self._policy.sentence_abbreviations,
+            target_characters=self._policy.speech_chunk_target_characters,
+            max_characters=self._policy.speech_chunk_max_characters,
         )
         try:
             async for event in iterate_operation(
@@ -269,6 +281,14 @@ class ConversationEngine:
                 if not isinstance(event, LlmTextDelta):
                     # Planner-owned tool calls are handled before this prose stream in MVP.
                     continue
+                if first_delta_at is None:
+                    first_delta_at = monotonic()
+                    logger.info(
+                        "conversation_llm_first_token",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        duration_ms=round((first_delta_at - stream_started_at) * 1_000, 1),
+                    )
                 response_parts.append(event.text)
                 await self._emit(
                     context,
@@ -280,28 +300,92 @@ class ConversationEngine:
                     ),
                 )
                 for sentence in chunker.push(event.text):
-                    await self._speak_text(sentence, request.plan.locale, context, speech)
+                    await self._enqueue_speech(
+                        speech_queue, sentence, speech_task, context
+                    )
 
             remainder = chunker.flush()
             if remainder:
-                await self._speak_text(remainder, request.plan.locale, context, speech)
+                await self._enqueue_speech(speech_queue, remainder, speech_task, context)
+            await self._enqueue_speech(speech_queue, None, speech_task, context)
+            await await_operation(speech_task, context)
         finally:
+            if not speech_task.done():
+                speech_task.cancel()
+            await asyncio.gather(speech_task, return_exceptions=True)
             await self._finish_speech(context, speech)
         return "".join(response_parts).strip()
 
+    async def _drain_speech_queue(
+        self,
+        queue: asyncio.Queue[str | None],
+        locale: str,
+        context: OperationContext,
+        speech: _SpeechLifecycle,
+    ) -> None:
+        while True:
+            text = await await_operation(queue.get(), context)
+            if text is None:
+                return
+            await self._speak_text(text, locale, context, speech)
+
+    async def _enqueue_speech(
+        self,
+        queue: asyncio.Queue[str | None],
+        text: str | None,
+        speech_task: asyncio.Task[None],
+        context: OperationContext,
+    ) -> None:
+        context.checkpoint()
+        if speech_task.done():
+            await speech_task
+        put_task = asyncio.create_task(queue.put(text))
+        try:
+            # A failed TTS consumer must wake a producer that is blocked on a
+            # full queue instead of waiting for the turn deadline forever.
+            done, _ = await await_operation(
+                asyncio.wait(
+                    {put_task, speech_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                ),
+                context,
+            )
+            if speech_task in done:
+                await speech_task
+            await put_task
+        finally:
+            if not put_task.done():
+                put_task.cancel()
+            await asyncio.gather(put_task, return_exceptions=True)
+        context.checkpoint()
+
     async def _speak_once(self, text: str, locale: str, context: OperationContext) -> None:
         speech = _SpeechLifecycle()
+        speech_queue: asyncio.Queue[str | None] = asyncio.Queue(
+            maxsize=self._policy.speech_queue_capacity
+        )
+        speech_task = asyncio.create_task(
+            self._drain_speech_queue(speech_queue, locale, context, speech),
+            name=f"speech-once:{context.session_id}:{context.turn_id}",
+        )
         chunker = SentenceChunker(
             min_characters=self._policy.sentence_min_characters,
             abbreviations=self._policy.sentence_abbreviations,
+            target_characters=self._policy.speech_chunk_target_characters,
+            max_characters=self._policy.speech_chunk_max_characters,
         )
         try:
             for sentence in chunker.push(text):
-                await self._speak_text(sentence, locale, context, speech)
+                await self._enqueue_speech(speech_queue, sentence, speech_task, context)
             remainder = chunker.flush()
             if remainder:
-                await self._speak_text(remainder, locale, context, speech)
+                await self._enqueue_speech(speech_queue, remainder, speech_task, context)
+            await self._enqueue_speech(speech_queue, None, speech_task, context)
+            await await_operation(speech_task, context)
         finally:
+            if not speech_task.done():
+                speech_task.cancel()
+            await asyncio.gather(speech_task, return_exceptions=True)
             await self._finish_speech(context, speech)
 
     async def _speak_planned_text(self, text: str, locale: str, context: OperationContext) -> None:

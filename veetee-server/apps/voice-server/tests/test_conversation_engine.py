@@ -116,6 +116,36 @@ class FakeTts:
         yield AudioChunk(0, 24000, "pcm_s16le", text.encode(), final=True)
 
 
+class BlockingTts:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def synthesize(
+        self, text: str, locale: str, context: OperationContext
+    ) -> AsyncIterator[AudioChunk]:
+        del locale, context
+        self.calls.append(text)
+        self.started.set()
+        await self.release.wait()
+        yield AudioChunk(0, 24000, "pcm_s16le", text.encode(), final=True)
+
+
+class FailingTts:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def synthesize(
+        self, text: str, locale: str, context: OperationContext
+    ) -> AsyncIterator[AudioChunk]:
+        del text, locale, context
+        self.calls += 1
+        if False:
+            yield AudioChunk(0, 24000, "pcm_s16le", b"", final=True)
+        raise RuntimeError("tts fixture failure")
+
+
 class FakeTools:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -306,6 +336,77 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     assert not any(
         output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP} for output in sink.outputs
     )
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_llm_stream_continues_while_tts_speaks_previous_chunk() -> None:
+    arbiter = TurnArbiter("session-pipeline")
+    admission = FakeAdmission(AdmissionDisposition.ACCEPTED)
+    planner = FakePlanner(response_plan())
+    tts = BlockingTts()
+    sink = MemoryConversationSink()
+
+    class StreamingLlm:
+        def __init__(self) -> None:
+            self.second_delta = asyncio.Event()
+
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta]:
+            del request, context
+            yield LlmTextDelta("Đây là câu đầu tiên.")
+            self.second_delta.set()
+            yield LlmTextDelta(" Đây là câu thứ hai.")
+
+    llm = StreamingLlm()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=admission,
+        planner=planner,
+        llm=llm,
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            sentence_min_characters=1,
+            speech_queue_capacity=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    task = asyncio.create_task(engine.handle_transcript(Transcript("fixture", "vi-VN")))
+
+    await asyncio.wait_for(
+        asyncio.gather(tts.started.wait(), llm.second_delta.wait()),
+        timeout=1.0,
+    )
+    assert tts.calls == ["Đây là câu đầu tiên."]
+
+    tts.release.set()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert tts.calls == ["Đây là câu đầu tiên.", "Đây là câu thứ hai."]
+
+
+async def test_tts_failure_does_not_leave_llm_producer_blocked_on_full_queue() -> None:
+    arbiter = TurnArbiter("session-tts-failure")
+    tts = FailingTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=FakeLlm(("Một câu đầu tiên.", " Một câu thứ hai.", " Một câu thứ ba.")),
+        tts=tts,
+        tools=FakeTools(),
+        sink=MemoryConversationSink(),
+        policy=ConversationPolicy(sentence_min_characters=1, speech_queue_capacity=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    assert tts.calls == 1
     assert arbiter.snapshot.state is ConversationState.LISTENING
 
 

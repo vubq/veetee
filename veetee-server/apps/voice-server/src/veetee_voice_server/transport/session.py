@@ -67,6 +67,7 @@ logger = structlog.get_logger(__name__)
 @dataclass(slots=True)
 class _PacedAudioStream:
     generation: int
+    turn_id: str | None
     queue: asyncio.Queue[bytes | None]
     cancelled: asyncio.Event
     task: asyncio.Task[None] | None = None
@@ -119,7 +120,7 @@ class WebSocketConversationSink:
                 payload=output.payload,
             )
         if output.kind is OutputKind.TTS_START:
-            await self._start_tts(output.generation)
+            await self._start_tts(output.generation, output.turn_id)
             return
         if output.kind is OutputKind.AUDIO and output.audio is not None:
             await self._send_audio(output)
@@ -203,7 +204,7 @@ class WebSocketConversationSink:
         if stream is not None:
             await self._send_text(tts_payload(self._session_id, "stop"))
 
-    async def _start_tts(self, generation: int) -> None:
+    async def _start_tts(self, generation: int, turn_id: str | None) -> None:
         async with self._lock:
             if generation < self._cancel_generation:
                 return
@@ -216,6 +217,7 @@ class WebSocketConversationSink:
                 return
             stream = _PacedAudioStream(
                 generation=generation,
+                turn_id=turn_id,
                 queue=asyncio.Queue(maxsize=self._queue_frames),
                 cancelled=asyncio.Event(),
             )
@@ -326,6 +328,17 @@ class WebSocketConversationSink:
                 or self._audio_stream is not stream
             ):
                 return
+            if sequence == 0:
+                self._telemetry.record(
+                    self._session_id,
+                    "tts.first_audio",
+                    generation=stream.generation,
+                    turn_id=stream.turn_id,
+                    payload={
+                        "sample_rate": self._output_sample_rate,
+                        "frame_duration_ms": self._frame_duration_ms,
+                    },
+                )
             await self._send_bytes(packet)
             sequence += 1
 

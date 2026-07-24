@@ -56,6 +56,39 @@ core. Nó phải pass structured output, tool calling, SSE và cancellation conf
 ChatGPT Plus/Codex login/token không được đưa trực tiếp vào firmware hay provider
 secret. Xem `docs/14-model-and-provider-baseline.md` để biết điều kiện freeze.
 
+### 2.1 Streaming liên tục giữa LLM và TTS
+
+Sau khi admission/planner chấp nhận lượt, prose LLM và TTS chạy theo mô hình
+producer/consumer có queue giới hạn:
+
+```text
+LLM delta -> text delta -> sentence/clause chunker -> bounded speech queue
+                                                        └-> TTS stream -> audio
+```
+
+Producer tiếp tục đọc delta trong khi consumer đang tổng hợp/phát chunk trước đó.
+Chunker ưu tiên dấu kết câu và dấu ngắt mệnh đề, sau đó dùng điểm ngắt theo khoảng
+trắng khi stream dài nhưng thiếu dấu câu. `speech_chunk_target_characters` và
+`speech_chunk_max_characters` chỉ là pacing/back-pressure bounds; chúng không giới
+hạn độ dài câu người dùng, độ dài câu trả lời, số lượt hay thời lượng phiên.
+
+Queue có giới hạn để giữ memory và latency ổn định. Nếu TTS lỗi, hết deadline hoặc
+turn bị abort, producer đang chờ queue phải được đánh thức và hủy cùng generation;
+không được để một task treo giữ phiên. Khi hoàn tất bình thường, `tts.stop` chỉ phát
+sau khi sentinel đã được đưa vào queue và toàn bộ chunk hợp lệ của turn đã drain;
+trường hợp lỗi/hủy được phép phát stop để dọn playback. Output của generation cũ
+vẫn bị loại ngay cả khi provider không dừng kịp.
+
+Voice-server ghi hai mốc metric đã redact cho từng turn:
+
+- `conversation_llm_first_token`: ASR/planner xong đến delta LLM đầu tiên.
+- `tts.first_audio`: bắt đầu gửi packet audio thực tế đến sink/device.
+
+Các mốc này dùng để đo p50/p95 và phát hiện provider chậm; không phải timeout mới
+hay điều kiện tự đóng phiên. Provider deadline của LLM/TTS vẫn độc lập, còn
+`max_utterance_duration`, `max_session_duration` và `total_turn_deadline` mặc định
+đều tắt.
+
 ### Realtime engine (P1)
 
 ```text
