@@ -33,6 +33,7 @@
         "streaming": true,
         "structured_output": true,
         "structured_transport": "json_object_streaming",
+        "stream_prose_response": true,
         "tool_calling": true,
         "reasoning_effort": "model_specific_not_sent_for_llama_default",
         "service_tier": "on_demand",
@@ -57,6 +58,10 @@
         "streaming": true,
         "audio_format": "pcm_s16le",
         "locale": "vi-VN",
+        "connect_timeout_seconds": 3,
+        "receive_timeout_seconds": 8,
+        "max_attempts": 2,
+        "local_prosody_processing": true,
         "voice_catalog": [
           {"id": "vi-VN-HoaiMyNeural", "gender": "female"},
           {"id": "vi-VN-NamMinhNeural", "gender": "male"}

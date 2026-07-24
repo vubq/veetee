@@ -110,6 +110,12 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
         .filter((id): id is string => typeof id === "string"),
     );
     const authoritativeVoices = ["edge-tts", "vieneu-local"].includes(adapter);
+    const upgradeEdgeTransportPolicy =
+      adapter === "edge-tts" &&
+      hasProviderConfigVersionUpgrade(
+        currentConfig.transportPolicyVersion,
+        defaultConfig.transportPolicyVersion,
+      );
     const hasMissingConfig =
       Object.keys(defaultConfig).some((key) => currentConfig[key] === undefined) ||
       defaultVoices.some(
@@ -131,6 +137,14 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
           config: {
             ...defaultConfig,
             ...currentConfig,
+            ...(upgradeEdgeTransportPolicy
+              ? {
+                  connectTimeoutSeconds: defaultConfig.connectTimeoutSeconds,
+                  receiveTimeoutSeconds: defaultConfig.receiveTimeoutSeconds,
+                  maxAttempts: defaultConfig.maxAttempts,
+                  transportPolicyVersion: defaultConfig.transportPolicyVersion,
+                }
+              : {}),
             ...(defaultVoices.length
               ? {
                   voices: authoritativeVoices
@@ -228,6 +242,7 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
       topP: 0.95,
       reasoningEffort: "none",
       parallelToolCalls: true,
+      streamProseResponse: true,
       responseFormat: "auto",
     };
   }
@@ -239,6 +254,11 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
       pitchHz: 0,
       volume: 1,
       outputSampleRate: 24_000,
+      connectTimeoutSeconds: 3,
+      receiveTimeoutSeconds: 8,
+      maxAttempts: 2,
+      transportPolicyVersion: 2,
+      localProsodyProcessing: true,
       supportsPitch: true,
       voices: [
         { id: "vi-VN-HoaiMyNeural", label: "Hoài My", locale: "vi-VN", gender: "female" },
@@ -280,6 +300,20 @@ export function hasAuthoritativeVoiceCatalogDrift(
   authoritative: boolean,
 ): boolean {
   return authoritative && JSON.stringify(currentVoices) !== JSON.stringify(defaultVoices);
+}
+
+export function hasProviderConfigVersionUpgrade(
+  currentVersion: unknown,
+  targetVersion: unknown,
+): boolean {
+  return (
+    typeof targetVersion === "number" &&
+    Number.isInteger(targetVersion) &&
+    targetVersion > 0 &&
+    (typeof currentVersion !== "number" ||
+      !Number.isInteger(currentVersion) ||
+      currentVersion < targetVersion)
+  );
 }
 
 export function agentSnapshot(

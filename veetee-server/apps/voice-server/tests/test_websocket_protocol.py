@@ -528,7 +528,7 @@ async def test_provider_failure_rearms_inactivity_after_candidate_started() -> N
     await voice_session.close()
 
 
-async def test_invalid_semantic_schema_falls_back_to_safe_unclear_without_tool() -> None:
+async def test_explicit_unclear_admission_stays_rejected_without_tool() -> None:
     schema = _planner_output_schema(SimulatedLabToolBroker())
     output = _validated_planner_output(
         {
@@ -547,11 +547,30 @@ async def test_invalid_semantic_schema_falls_back_to_safe_unclear_without_tool()
 
     assert output["admission"] == {
         "decision": "unclear",
-        "confidence": 0.0,
+        "confidence": 0.8,
         "addressed_to_robot": 0.0,
         "reason_code": "invalid_model_output",
     }
     assert output["plan"]["action"] == "noop"
+    assert output["plan"]["response_required"] is False
+    assert output["plan"]["tool_call"] is None
+
+
+async def test_invalid_admission_decision_degrades_to_safe_response_without_tool() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {"decision": "maybe"},
+            "dialogue_act": "statement",
+            "plan": {"action": "invented_tool"},
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"]["decision"] == "accepted"
+    assert output["admission"]["reason_code"] == "invalid_model_output"
+    assert output["plan"]["action"] == "respond"
     assert output["plan"]["tool_call"] is None
 
 
@@ -610,3 +629,62 @@ async def test_semantic_schema_recovers_omitted_safe_plan_action() -> None:
     assert output["admission"]["decision"] == "accepted"
     assert output["plan"]["action"] == "respond"
     assert output["plan"]["response_text"] == "Tôi vẫn đang nghe đây."
+
+
+async def test_semantic_schema_repairs_nullable_intent_and_unknown_dialogue_act() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": "0.94",
+                "addressed_to_robot": 0.91,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "statement",
+            "plan": {
+                "action": "respond",
+                "locale": "vi-VN",
+                "intent": None,
+                "response_required": True,
+                "response_text": "Tôi nghe đây.",
+                "tool_call": None,
+            },
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"]["decision"] == "accepted"
+    assert output["admission"]["confidence"] == 0.94
+    assert output["dialogue_act"] == "answer"
+    assert output["plan"]["intent"] == ""
+
+
+async def test_semantic_schema_can_force_regular_response_through_prose_stream() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": 0.95,
+                "addressed_to_robot": 0.95,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "question",
+            "plan": {
+                "action": "respond",
+                "locale": "vi-VN",
+                "intent": "conversation.answer",
+                "response_required": True,
+                "response_text": "Câu trả lời đã được planner sinh đầy đủ.",
+                "tool_call": None,
+            },
+        },
+        schema,
+        "vi-VN",
+        stream_response=True,
+    )
+
+    assert output["plan"]["response_text"] is None
+    assert output["plan"]["response_required"] is True

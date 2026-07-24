@@ -19,13 +19,19 @@ Completions) và `edge-tts` (Microsoft Edge online TTS). Hai binding này chỉ 
 dùng khi agent chọn primary provider tương ứng; không tự chèn vào fallback chain.
 Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `topP`,
 `reasoningEffort` và `parallelToolCalls`. Edge TTS nhận voice ID, giới tính,
-rate, pitch Hz, volume và sample rate. Secret chỉ nằm trong encrypted Manager
-provider binding; agent snapshot chỉ chứa metadata/config đã validate.
+rate, pitch Hz, volume, sample rate, connect/receive timeout và số lần thử trước
+first audio. Secret chỉ nằm trong encrypted Manager provider binding; agent
+snapshot chỉ chứa metadata/config đã validate.
+Edge mặc định yêu cầu cloud synthesize ở rate/volume chuẩn rồi áp dụng rate và
+volume bằng ffmpeg streaming local; cách này giữ profile người dùng nhưng tránh
+độ trễ first-audio tăng mạnh khi dịch vụ cloud xử lý rate cao.
 Với model mặc định `llama-3.3-70b-versatile`, adapter không gửi
 `reasoning_effort` hoặc metadata tùy biến vì Groq sẽ trả HTTP 400; semantic gate
 dùng JSON Object Mode streaming và vẫn validate lại schema tại voice-server.
 Groq Structured Outputs (`json_schema`) hiện không được dùng cho đường streaming
-này.
+này. `streamProseResponse=true` giữ gate ở vai trò admission/planner và đưa prose
+stream qua sentence chunker để TTS bắt đầu trước khi model hoàn thành toàn câu trả
+lời.
 
 ASR, VAD và TTS không chạy trên ESP32-S3. Firmware chỉ thu/phát audio, Opus,
 wake/interrupt local, state machine và transport. Cách chia này phù hợp giới hạn

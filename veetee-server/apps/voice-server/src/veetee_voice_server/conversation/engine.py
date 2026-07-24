@@ -214,10 +214,9 @@ class ConversationEngine:
                 self._remember("assistant", plan.response_text)
             await self._arbiter.close_assistant("semantic_end")
             return
-        if plan.action is PlanAction.ASK_CLARIFICATION:
-            if plan.response_text:
-                await self._speak_planned_text(plan.response_text, plan.locale, context)
-                self._remember("assistant", plan.response_text)
+        if plan.action is PlanAction.ASK_CLARIFICATION and plan.response_text:
+            await self._speak_planned_text(plan.response_text, plan.locale, context)
+            self._remember("assistant", plan.response_text)
             return
         if plan.action is PlanAction.RESPOND and plan.response_text:
             await self._speak_planned_text(plan.response_text, plan.locale, context)
@@ -304,6 +303,13 @@ class ConversationEngine:
                         speech_queue, sentence, speech_task, context
                     )
 
+            logger.info(
+                "conversation_llm_stream_complete",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                duration_ms=round((monotonic() - stream_started_at) * 1_000, 1),
+                response_characters=sum(len(part) for part in response_parts),
+            )
             remainder = chunker.flush()
             if remainder:
                 await self._enqueue_speech(speech_queue, remainder, speech_task, context)
@@ -408,30 +414,64 @@ class ConversationEngine:
         speech: _SpeechLifecycle,
     ) -> None:
         tts_context = context.child(self._policy.tts_seconds)
-        async for audio in iterate_operation(
-            self._tts.synthesize(text, locale, tts_context), tts_context
-        ):
-            if not speech.started:
-                await self._arbiter.mark_speaking(context)
+        started_at = monotonic()
+        first_audio_logged = False
+        provider = type(self._tts).__name__
+        logger.info(
+            "conversation_tts_request",
+            session_id=context.session_id,
+            turn_id=context.turn_id,
+            provider=provider,
+            text_characters=len(text),
+        )
+        try:
+            async for audio in iterate_operation(
+                self._tts.synthesize(text, locale, tts_context), tts_context
+            ):
+                if audio.data and not first_audio_logged:
+                    first_audio_logged = True
+                    logger.info(
+                        "conversation_tts_first_audio",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        provider=provider,
+                        text_characters=len(text),
+                        duration_ms=round((monotonic() - started_at) * 1_000, 1),
+                    )
+                if not speech.started:
+                    await self._arbiter.mark_speaking(context)
+                    await self._emit(
+                        context,
+                        ConversationOutput(
+                            kind=OutputKind.TTS_START,
+                            turn_id=context.turn_id,
+                            generation=context.generation,
+                        ),
+                    )
+                    speech.started = True
                 await self._emit(
                     context,
                     ConversationOutput(
-                        kind=OutputKind.TTS_START,
+                        kind=OutputKind.AUDIO,
                         turn_id=context.turn_id,
                         generation=context.generation,
+                        payload={"text": text, "locale": locale},
+                        audio=audio,
                     ),
                 )
-                speech.started = True
-            await self._emit(
-                context,
-                ConversationOutput(
-                    kind=OutputKind.AUDIO,
-                    turn_id=context.turn_id,
-                    generation=context.generation,
-                    payload={"text": text, "locale": locale},
-                    audio=audio,
-                ),
+        except (TurnCancelledError, StaleTurnError):
+            raise
+        except Exception as error:
+            logger.warning(
+                "conversation_tts_failed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                provider=provider,
+                text_characters=len(text),
+                duration_ms=round((monotonic() - started_at) * 1_000, 1),
+                error=type(error).__name__,
             )
+            raise
 
     async def _finish_speech(self, context: OperationContext, speech: _SpeechLifecycle) -> None:
         if not speech.started or not self._arbiter.is_current(context):

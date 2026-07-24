@@ -17,8 +17,9 @@ const form = reactive({
   adapter: "", model: "", baseUrl: "", enabled: true, priority: 10, locales: "vi-VN",
   secretAction: "keep" as "keep" | "rotate" | "clear", secret: "",
   temperature: 0.2, topP: 0.95, maxCompletionTokens: 1024,
-  serviceTier: "on_demand", reasoningEffort: "none",
+  serviceTier: "on_demand", reasoningEffort: "none", streamProseResponse: true,
   voice: "", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
+  connectTimeoutSeconds: 3, receiveTimeoutSeconds: 8, maxAttempts: 2,
 });
 const busy = ref(false);
 const error = ref("");
@@ -38,6 +39,7 @@ const healthLabels: Record<Provider["health"], string> = {
 const dialogTitle = computed(() => props.provider ? `Cấu hình ${props.provider.kind.toUpperCase()}` : "Cấu hình provider");
 const isGroq = computed(() => props.provider?.adapter.toLowerCase().includes("groq") ?? false);
 const isTts = computed(() => props.provider?.kind === "tts");
+const isEdgeTts = computed(() => props.provider?.adapter.toLowerCase().includes("edge") ?? false);
 
 watch(
   () => [props.open, props.provider] as const,
@@ -57,11 +59,15 @@ watch(
     form.maxCompletionTokens = Number(config.maxCompletionTokens ?? 1024);
     form.serviceTier = String(config.serviceTier ?? "on_demand");
     form.reasoningEffort = String(config.reasoningEffort ?? "none");
+    form.streamProseResponse = config.streamProseResponse !== false;
     form.voice = String(config.voice ?? config.voiceId ?? "");
     form.rate = Number(config.rate ?? 1);
     form.pitchHz = Number(config.pitchHz ?? 0);
     form.volume = Number(config.volume ?? 1);
     form.outputSampleRate = Number(config.outputSampleRate ?? 24000);
+    form.connectTimeoutSeconds = Number(config.connectTimeoutSeconds ?? 3);
+    form.receiveTimeoutSeconds = Number(config.receiveTimeoutSeconds ?? 8);
+    form.maxAttempts = Number(config.maxAttempts ?? 2);
     error.value = "";
   },
   { immediate: true },
@@ -84,6 +90,7 @@ async function submit(): Promise<void> {
         maxCompletionTokens: Number(form.maxCompletionTokens),
         serviceTier: form.serviceTier,
         reasoningEffort: form.reasoningEffort,
+        streamProseResponse: form.streamProseResponse,
       });
     }
     if (isTts.value) {
@@ -93,6 +100,13 @@ async function submit(): Promise<void> {
         pitchHz: Number(form.pitchHz),
         volume: Number(form.volume),
         outputSampleRate: Number(form.outputSampleRate),
+        ...(isEdgeTts.value
+          ? {
+              connectTimeoutSeconds: Number(form.connectTimeoutSeconds),
+              receiveTimeoutSeconds: Number(form.receiveTimeoutSeconds),
+              maxAttempts: Number(form.maxAttempts),
+            }
+          : {}),
       });
     }
     await props.save(props.provider.id, {
@@ -147,6 +161,7 @@ async function submit(): Promise<void> {
           <VtField label="Max completion tokens" hint="64–16.384"><VtInput v-model="form.maxCompletionTokens" type="number" min="64" max="16384" /></VtField>
           <VtField label="Service tier"><VtSelect v-model="form.serviceTier"><option value="on_demand">On demand</option><option value="auto">Auto</option><option value="flex">Flex</option><option value="performance">Performance</option></VtSelect></VtField>
           <VtField label="Reasoning effort"><VtSelect v-model="form.reasoningEffort"><option value="none">None</option><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></VtSelect></VtField>
+          <div class="provider-switch span-two"><VtSwitch v-model="form.streamProseResponse" label="Stream câu trả lời sang TTS" description="Planner chỉ quyết định luồng; nội dung trả lời được stream theo từng câu để TTS bắt đầu sớm." /></div>
         </div>
         <div v-else class="form-grid two">
           <VtField label="Voice mặc định" hint="Edge voice ID hoặc preset local"><VtInput v-model="form.voice" placeholder="vi-VN-HoaiMyNeural" /></VtField>
@@ -154,6 +169,9 @@ async function submit(): Promise<void> {
           <VtField label="Cao độ Hz" hint="Edge TTS hỗ trợ"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
           <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>
           <VtField label="Sample rate" hint="8.000–48.000 Hz"><VtInput v-model="form.outputSampleRate" type="number" min="8000" max="48000" step="1000" /></VtField>
+          <VtField v-if="isEdgeTts" label="Connect timeout" hint="1–10 giây"><VtInput v-model="form.connectTimeoutSeconds" type="number" min="1" max="10" /></VtField>
+          <VtField v-if="isEdgeTts" label="Receive timeout" hint="1–30 giây"><VtInput v-model="form.receiveTimeoutSeconds" type="number" min="1" max="30" /></VtField>
+          <VtField v-if="isEdgeTts" label="Số lần thử" hint="1–3"><VtInput v-model="form.maxAttempts" type="number" min="1" max="3" /></VtField>
         </div>
       </section>
 

@@ -91,6 +91,7 @@ export function validateProviderConfig(
     boundedEnum(normalized, "serviceTier", ["auto", "on_demand", "flex", "performance"]);
     boundedEnum(normalized, "reasoningEffort", ["none", "default", "low", "medium", "high"]);
     boundedBoolean(normalized, "parallelToolCalls");
+    boundedBoolean(normalized, "streamProseResponse");
     boundedEnum(normalized, "responseFormat", ["auto", "json_object", "json_schema"]);
   }
   if (kind === "tts") {
@@ -98,6 +99,11 @@ export function validateProviderConfig(
     boundedNumber(normalized, "pitchHz", -100, 100);
     boundedNumber(normalized, "volume", 0, 1.5);
     boundedInteger(normalized, "outputSampleRate", 8_000, 48_000);
+    boundedInteger(normalized, "connectTimeoutSeconds", 1, 10);
+    boundedInteger(normalized, "receiveTimeoutSeconds", 1, 30);
+    boundedInteger(normalized, "maxAttempts", 1, 3);
+    boundedInteger(normalized, "transportPolicyVersion", 1, 1_000);
+    boundedBoolean(normalized, "localProsodyProcessing");
     boundedBoolean(normalized, "supportsPitch");
     if (normalized.voice !== undefined) boundedString(normalized, "voice", 1, 160);
     if (normalized.voiceId !== undefined) boundedString(normalized, "voiceId", 1, 160);

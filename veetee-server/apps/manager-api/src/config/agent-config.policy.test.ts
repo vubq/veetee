@@ -112,11 +112,19 @@ describe("provider and voice config", () => {
         topP: 0.95,
         maxCompletionTokens: 1024,
         serviceTier: "on_demand",
+        streamProseResponse: true,
       }),
     ).toMatchObject({ maxCompletionTokens: 1024 });
     expect(() =>
       validateProviderConfig("llm", "groq-cloud", { apiKey: "must-not-live-here" }),
     ).toThrow(BadRequestException);
+    expect(
+      validateProviderConfig("tts", "edge-tts", {
+        connectTimeoutSeconds: 2,
+        receiveTimeoutSeconds: 4,
+        maxAttempts: 2,
+      }),
+    ).toMatchObject({ maxAttempts: 2 });
   });
 
   it("requires the selected voice provider to be part of the TTS chain", () => {

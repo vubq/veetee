@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from contextlib import suppress
 from typing import Any
+
+import structlog
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.types import AudioChunk
+
+logger = structlog.get_logger(__name__)
 
 
 class EdgeTtsProvider:
@@ -30,6 +35,14 @@ class EdgeTtsProvider:
         self._sample_rate = max(
             8_000, min(int(self._config.get("outputSampleRate", output_sample_rate)), 48_000)
         )
+        self._connect_timeout = _bounded_int(
+            self._config.get("connectTimeoutSeconds", 3), 1, 10
+        )
+        self._receive_timeout = _bounded_int(
+            self._config.get("receiveTimeoutSeconds", 8), 1, 30
+        )
+        self._max_attempts = _bounded_int(self._config.get("maxAttempts", 2), 1, 3)
+        self._local_prosody = self._config.get("localProsodyProcessing", True) is not False
         self._ffmpeg_binary = ffmpeg_binary
 
     async def prewarm(self) -> None:
@@ -52,15 +65,7 @@ class EdgeTtsProvider:
         except ImportError as error:
             raise RuntimeError("edge-tts is not installed") from error
 
-        communicate = edge_tts.Communicate(
-            text,
-            voice=self._voice,
-            rate=_edge_percent(self._rate),
-            volume=_edge_percent(self._volume),
-            pitch=_edge_pitch(self._pitch_hz),
-        )
-        process = await asyncio.create_subprocess_exec(
-            self._ffmpeg_binary,
+        ffmpeg_arguments = [
             "-hide_banner",
             "-loglevel",
             "error",
@@ -68,13 +73,28 @@ class EdgeTtsProvider:
             "mp3",
             "-i",
             "pipe:0",
-            "-f",
-            "s16le",
-            "-ac",
-            "1",
-            "-ar",
-            str(self._sample_rate),
-            "pipe:1",
+        ]
+        if self._local_prosody:
+            ffmpeg_arguments.extend(
+                [
+                    "-filter:a",
+                    f"atempo={self._rate:.3f},volume={self._volume:.3f}",
+                ]
+            )
+        ffmpeg_arguments.extend(
+            [
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-ar",
+                str(self._sample_rate),
+                "pipe:1",
+            ]
+        )
+        process = await asyncio.create_subprocess_exec(
+            self._ffmpeg_binary,
+            *ffmpeg_arguments,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -110,29 +130,82 @@ class EdgeTtsProvider:
             return output
 
         try:
-            async for event in communicate.stream():
+            for attempt in range(1, self._max_attempts + 1):
                 context.checkpoint()
-                if event.get("type") != "audio":
-                    continue
-                audio = event.get("data")
-                if not isinstance(audio, bytes) or not audio:
-                    continue
-                process.stdin.write(audio)
-                await process.stdin.drain()
-                while not queue.empty():
-                    pcm = queue.get_nowait()
-                    if pcm is None:
-                        reader_done_seen = True
-                        break
-                    pcm = aligned_pcm(pcm)
-                    if pcm:
-                        yield AudioChunk(
-                            sequence=sequence,
-                            sample_rate=self._sample_rate,
-                            encoding="pcm_s16le",
-                            data=pcm,
-                        )
-                        sequence += 1
+                remaining = context.remaining_seconds
+                connect_timeout = min(
+                    self._connect_timeout,
+                    max(1, int(remaining / 4)),
+                )
+                receive_timeout = min(
+                    self._receive_timeout,
+                    max(1, int(remaining - connect_timeout - 0.25)),
+                )
+                communicate = edge_tts.Communicate(
+                    text,
+                    voice=self._voice,
+                    rate=_edge_percent(1.0 if self._local_prosody else self._rate),
+                    volume=_edge_percent(1.0 if self._local_prosody else self._volume),
+                    pitch=_edge_pitch(self._pitch_hz),
+                    connect_timeout=connect_timeout,
+                    receive_timeout=receive_timeout,
+                )
+                attempt_received_audio = False
+                stream = communicate.stream()
+                try:
+                    while True:
+                        context.checkpoint()
+                        try:
+                            event = await asyncio.wait_for(
+                                anext(stream),
+                                timeout=min(
+                                    float(receive_timeout),
+                                    context.remaining_seconds,
+                                ),
+                            )
+                        except StopAsyncIteration:
+                            break
+                        if event.get("type") != "audio":
+                            continue
+                        audio = event.get("data")
+                        if not isinstance(audio, bytes) or not audio:
+                            continue
+                        attempt_received_audio = True
+                        process.stdin.write(audio)
+                        await process.stdin.drain()
+                        while not queue.empty():
+                            pcm = queue.get_nowait()
+                            if pcm is None:
+                                reader_done_seen = True
+                                break
+                            pcm = aligned_pcm(pcm)
+                            if pcm:
+                                yield AudioChunk(
+                                    sequence=sequence,
+                                    sample_rate=self._sample_rate,
+                                    encoding="pcm_s16le",
+                                    data=pcm,
+                                )
+                                sequence += 1
+                    break
+                except (
+                    edge_tts.exceptions.EdgeTTSException,
+                    TimeoutError,
+                    OSError,
+                ) as error:
+                    if attempt_received_audio or attempt >= self._max_attempts:
+                        raise
+                    logger.warning(
+                        "edge_tts_retry",
+                        attempt=attempt,
+                        max_attempts=self._max_attempts,
+                        error=type(error).__name__,
+                        voice=self._voice,
+                    )
+                    await asyncio.sleep(min(0.05, context.remaining_seconds))
+                finally:
+                    with suppress(Exception):
+                        await stream.aclose()
             process.stdin.close()
             await process.wait()
             if not reader_done_seen:
@@ -175,6 +248,14 @@ class EdgeTtsProvider:
 def _bounded_float(value: object, minimum: float, maximum: float) -> float:
     try:
         number = float(value) if isinstance(value, (int, float)) else minimum
+    except (TypeError, ValueError):
+        return minimum
+    return min(max(number, minimum), maximum)
+
+
+def _bounded_int(value: object, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value) if isinstance(value, int | float) else minimum
     except (TypeError, ValueError):
         return minimum
     return min(max(number, minimum), maximum)

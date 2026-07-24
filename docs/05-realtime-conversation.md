@@ -409,6 +409,11 @@ sót (ví dụ `plan.action`) được chuẩn hóa an toàn từ chính structu
 validate cuối; không suy diễn từ exact transcript. Nếu gate provider hỏng, input đã qua
 local signal admission được chuyển sang prose response không có tool; nếu cả prose cũng
 hỏng, server phát localized recovery response và giữ assistant gate mở thay vì im lặng.
+Field nullable hoặc enum mở rộng từ JSON Object Mode được chuẩn hóa theo contract;
+output không thể phục hồi cũng đi qua prose response không tool, không tự biến speech
+hợp lệ thành `unclear`. Provider có `streamProseResponse=true` không dùng
+`plan.response_text` cho lượt trả lời thường: prose token được tách theo câu và đưa vào
+TTS queue trong lúc LLM vẫn tiếp tục sinh phần sau.
 
 Mục tiêu cascade trên Wi-Fi tốt:
 

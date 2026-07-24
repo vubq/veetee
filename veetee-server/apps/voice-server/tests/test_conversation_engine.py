@@ -248,6 +248,24 @@ async def test_planner_response_text_uses_sentence_sized_tts_requests() -> None:
     assert kinds.count(OutputKind.TTS_STOP) == 1
 
 
+async def test_clarification_without_planned_text_uses_the_prose_stream() -> None:
+    plan = ConversationPlan(
+        action=PlanAction.ASK_CLARIFICATION,
+        dialogue_act=DialogueAct.QUESTION,
+        locale="vi-VN",
+        intent="conversation.clarify",
+        response_required=True,
+        response_text=None,
+    )
+    engine, arbiter, _, _, llm, tts, _ = create_engine(plan=plan)
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Ý tôi là cái kia", "vi-VN"))
+
+    assert llm.calls == 1
+    assert tts.calls
+
+
 async def test_contextual_follow_up_keeps_recent_user_and_assistant_turns() -> None:
     engine, arbiter, admission, _, _, _, _ = create_engine(
         plan=response_plan("Tôi vừa nói một câu đùa.")

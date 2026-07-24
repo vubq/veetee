@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { hasAuthoritativeVoiceCatalogDrift } from "./seed.js";
+import {
+  hasAuthoritativeVoiceCatalogDrift,
+  hasProviderConfigVersionUpgrade,
+} from "./seed.js";
 
 describe("provider seed config", () => {
   it("refreshes an authoritative voice catalog when a removed voice remains persisted", () => {
@@ -10,5 +13,12 @@ describe("provider seed config", () => {
     expect(hasAuthoritativeVoiceCatalogDrift(current, canonical, true)).toBe(true);
     expect(hasAuthoritativeVoiceCatalogDrift(canonical, canonical, true)).toBe(false);
     expect(hasAuthoritativeVoiceCatalogDrift(current, canonical, false)).toBe(false);
+  });
+
+  it("upgrades built-in operational defaults only when the target version advances", () => {
+    expect(hasProviderConfigVersionUpgrade(undefined, 2)).toBe(true);
+    expect(hasProviderConfigVersionUpgrade(1, 2)).toBe(true);
+    expect(hasProviderConfigVersionUpgrade(2, 2)).toBe(false);
+    expect(hasProviderConfigVersionUpgrade(3, 2)).toBe(false);
   });
 });

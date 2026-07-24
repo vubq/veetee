@@ -289,62 +289,148 @@ def _planner_output_schema(tools: ToolBroker) -> dict[str, object]:
 
 
 def _validated_planner_output(
-    value: dict[str, Any], schema: dict[str, object], locale: str
+    value: dict[str, Any],
+    schema: dict[str, object],
+    locale: str,
+    *,
+    stream_response: bool = False,
 ) -> dict[str, Any]:
-    normalized = dict(value)
     admission = value.get("admission")
-    if isinstance(admission, dict):
-        normalized_admission = dict(admission)
-        addressed_to_robot = normalized_admission.get("addressed_to_robot")
-        if isinstance(addressed_to_robot, bool):
-            normalized_admission["addressed_to_robot"] = float(addressed_to_robot)
-        normalized["admission"] = normalized_admission
-    else:
-        normalized_admission = None
-
+    if not isinstance(admission, dict):
+        return _degraded_conversation_gate(locale)
+    decision = admission.get("decision")
+    valid_decisions = {
+        "accepted",
+        "non_actionable",
+        "not_addressed",
+        "unclear",
+        "interrupt",
+        "end",
+    }
+    if decision not in valid_decisions:
+        return _degraded_conversation_gate(locale)
+    valid_reason_codes = {
+        "speech_relevant",
+        "non_speech",
+        "low_quality",
+        "not_addressed",
+        "self_echo",
+        "duplicate",
+        "low_confidence",
+        "semantic_interrupt",
+        "conversation_end",
+        "unclear",
+        "invalid_model_output",
+    }
+    reason_code = admission.get("reason_code")
+    normalized_admission = {
+        "decision": decision,
+        "confidence": _bounded_model_score(
+            admission.get("confidence"),
+            fallback=0.5 if decision == "accepted" else 0.0,
+        ),
+        "addressed_to_robot": _bounded_model_score(
+            admission.get("addressed_to_robot"),
+            fallback=0.5 if decision == "accepted" else 0.0,
+        ),
+        "reason_code": (
+            reason_code if reason_code in valid_reason_codes else "invalid_model_output"
+        ),
+    }
     plan = value.get("plan")
-    if isinstance(plan, dict) and normalized_admission is not None:
-        normalized_plan = dict(plan)
-        decision = normalized_admission.get("decision")
-        dialogue_act = normalized.get("dialogue_act")
-        tool_call = normalized_plan.get("tool_call")
-        if "action" not in normalized_plan:
-            if decision == "end" or dialogue_act == "end":
-                normalized_plan["action"] = "end_session"
-            elif decision in {
-                "non_actionable",
-                "not_addressed",
-                "unclear",
-                "interrupt",
-            }:
-                normalized_plan["action"] = "noop"
-            elif isinstance(tool_call, dict):
-                normalized_plan["action"] = "call_tool_then_respond"
-            elif decision == "accepted":
-                normalized_plan["action"] = "respond"
-        action = normalized_plan.get("action")
-        normalized_plan.setdefault("locale", locale)
-        normalized_plan.setdefault("intent", "")
-        normalized_plan.setdefault(
-            "response_required",
-            action
-            not in {
-                "noop",
-                "cancel_pending_tool",
-            },
+    plan = plan if isinstance(plan, dict) else {}
+    valid_dialogue_acts = {
+        "question",
+        "command",
+        "follow_up",
+        "answer",
+        "confirmation",
+        "denial",
+        "correction",
+        "clarification_answer",
+        "social",
+        "interrupt",
+        "end",
+    }
+    dialogue_act = value.get("dialogue_act")
+    if dialogue_act not in valid_dialogue_acts:
+        dialogue_act = (
+            "end" if decision == "end" else "interrupt" if decision == "interrupt" else "answer"
         )
-        normalized_plan.setdefault("response_text", None)
-        normalized_plan.setdefault("tool_call", None)
-        normalized["plan"] = normalized_plan
-
-        if "dialogue_act" not in normalized:
-            normalized["dialogue_act"] = (
-                "end"
-                if decision == "end"
-                else "interrupt"
-                if decision == "interrupt"
-                else "answer"
-            )
+    valid_actions = {
+        "respond",
+        "call_tool_then_respond",
+        "ask_clarification",
+        "execute_pending_tool",
+        "cancel_pending_tool",
+        "end_session",
+        "noop",
+    }
+    action = plan.get("action")
+    tool_call = plan.get("tool_call")
+    if action not in valid_actions:
+        if decision == "end" or dialogue_act == "end":
+            action = "end_session"
+        elif decision in {
+            "non_actionable",
+            "not_addressed",
+            "unclear",
+            "interrupt",
+        }:
+            action = "noop"
+        elif action is None and isinstance(tool_call, dict):
+            action = "call_tool_then_respond"
+        else:
+            action = "respond"
+            tool_call = None
+    if action in {"call_tool_then_respond", "execute_pending_tool"} and not isinstance(
+        tool_call, dict
+    ):
+        action = "respond"
+        tool_call = None
+    if decision not in {"accepted", "end"}:
+        action = "noop"
+        tool_call = None
+    elif decision == "end":
+        action = "end_session"
+        tool_call = None
+        dialogue_act = "end"
+    response_text = plan.get("response_text")
+    if not isinstance(response_text, str) or len(response_text) > 600:
+        response_text = None
+    if stream_response and decision == "accepted" and action in {
+        "respond",
+        "ask_clarification",
+    }:
+        response_text = None
+    response_required = plan.get("response_required")
+    if not isinstance(response_required, bool):
+        response_required = action not in {"noop", "cancel_pending_tool"}
+    if action in {
+        "respond",
+        "call_tool_then_respond",
+        "execute_pending_tool",
+        "ask_clarification",
+    }:
+        response_required = True
+    elif action in {"noop", "cancel_pending_tool"}:
+        response_required = False
+    normalized = {
+        "admission": normalized_admission,
+        "dialogue_act": dialogue_act,
+        "plan": {
+            "action": action,
+            "locale": (
+                plan.get("locale")
+                if isinstance(plan.get("locale"), str) and plan.get("locale")
+                else locale
+            ),
+            "intent": plan.get("intent") if isinstance(plan.get("intent"), str) else "",
+            "response_required": response_required,
+            "response_text": response_text,
+            "tool_call": tool_call if isinstance(tool_call, dict) else None,
+        },
+    }
     validation_error = next(Draft202012Validator(schema).iter_errors(normalized), None)
     if validation_error is None:
         return normalized
@@ -352,24 +438,22 @@ def _validated_planner_output(
         "conversation_gate_schema_rejected",
         validator=validation_error.validator,
         path=".".join(str(part) for part in validation_error.path),
+        fallback="respond_without_tools",
     )
-    return {
-        "admission": {
-            "decision": "unclear",
-            "confidence": 0.0,
-            "addressed_to_robot": 0.0,
-            "reason_code": "invalid_model_output",
-        },
-        "dialogue_act": "clarification_answer",
-        "plan": {
-            "action": "noop",
-            "locale": locale,
-            "intent": "input.invalid_model_output",
-            "response_required": False,
-            "response_text": None,
-            "tool_call": None,
-        },
-    }
+    return _degraded_conversation_gate(locale)
+
+
+def _bounded_model_score(value: object, *, fallback: float) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        return min(max(float(value), 0.0), 1.0)
+    if isinstance(value, str):
+        try:
+            return min(max(float(value), 0.0), 1.0)
+        except ValueError:
+            pass
+    return fallback
 
 
 def _degraded_conversation_gate(locale: str) -> dict[str, Any]:
@@ -450,7 +534,16 @@ async def _complete_conversation_gate_json(
         turn_id=context.turn_id,
         duration_ms=round((monotonic() - started_at) * 1_000, 1),
     )
-    return _validated_planner_output(value, schema, profile.locale)
+    stream_response = bool(
+        profile.llm_chain
+        and profile.llm_chain[0].config.get("streamProseResponse") is True
+    )
+    return _validated_planner_output(
+        value,
+        schema,
+        profile.locale,
+        stream_response=stream_response,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
