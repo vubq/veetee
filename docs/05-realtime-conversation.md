@@ -72,11 +72,11 @@ trắng khi stream dài nhưng thiếu dấu câu. `speech_chunk_target_characte
 `speech_chunk_max_characters` chỉ là pacing/back-pressure bounds; chúng không giới
 hạn độ dài câu người dùng, độ dài câu trả lời, số lượt hay thời lượng phiên.
 
-Provider có thể khai báo capability về chi phí khởi tạo mỗi đoạn văn. Với TTS cloud
-không giữ được một kết nối text incremental (ví dụ Edge TTS), runtime gom các câu
-ngắn đến `minimumChunkCharacters` trước khi mở request tiếp theo để tránh khoảng
-ngắt mạng giữa các câu; audio bên trong từng request vẫn được phát streaming. TTS
-local có thể giữ chunk nhỏ hơn để giảm thời gian tới audio đầu tiên.
+Provider có thể khai báo capability về chi phí khởi tạo mỗi đoạn văn. Với provider
+không giữ được một kết nối text incremental, runtime gom các câu ngắn theo
+capability đã công bố trước khi mở request tiếp theo. TTS local có thể giữ chunk
+nhỏ hơn để giảm thời gian tới audio đầu tiên, nhưng vẫn phải tạo đủ lead-in buffer
+để không phát hụt audio khi inference chậm hơn playback.
 
 Queue có giới hạn để giữ memory và latency ổn định. Nếu TTS lỗi, hết deadline hoặc
 turn bị abort, producer đang chờ queue phải được đánh thức và hủy cùng generation;

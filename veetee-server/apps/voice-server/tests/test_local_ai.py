@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 from time import monotonic
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -10,7 +11,10 @@ import pytest
 
 from veetee_voice_server.conversation.cancellation import CancellationToken, OperationContext
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
-from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
+from veetee_voice_server.providers.local_tts import (
+    VieNeuTtsProvider,
+    _configure_stream_leadin,
+)
 from veetee_voice_server.providers.silero_vad import CHUNK_MS, SileroVadSession
 
 pytestmark = pytest.mark.asyncio
@@ -72,6 +76,17 @@ async def test_vieneu_provider_streams_resampled_pcm() -> None:
     assert chunks[0].sample_rate == 24_000
     assert chunks[0].encoding == "pcm_s16le"
     assert len(b"".join(chunk.data for chunk in chunks)) > 4_000
+
+
+async def test_vieneu_stream_leadin_is_bounded_and_version_checked() -> None:
+    module = SimpleNamespace(_STREAM_LEADIN_FRAMES=4)
+    _configure_stream_leadin(module, 16)
+    assert module._STREAM_LEADIN_FRAMES == 16
+
+    with pytest.raises(RuntimeError, match=r"3\.2\.3"):
+        _configure_stream_leadin(SimpleNamespace(), 16)
+    with pytest.raises(ValueError, match=r"4 to 25"):
+        VieNeuTtsProvider(Path("unused"), voice="Trúc Ly", stream_leadin_frames=3)
 
 
 class ToneTtsEngine:

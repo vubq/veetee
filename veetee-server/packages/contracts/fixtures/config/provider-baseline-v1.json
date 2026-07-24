@@ -51,28 +51,13 @@
   },
   "tts": {
     "provider_id": "vieneu-local",
-    "alternatives": [
-      {
-        "provider_id": "edge-tts",
-        "model_ref": "edge-tts-cloud",
-        "streaming": true,
-        "audio_format": "pcm_s16le",
-        "locale": "vi-VN",
-        "connect_timeout_seconds": 3,
-        "receive_timeout_seconds": 8,
-        "max_attempts": 2,
-        "local_prosody_processing": true,
-        "voice_catalog": [
-          {"id": "vi-VN-HoaiMyNeural", "gender": "female"},
-          {"id": "vi-VN-NamMinhNeural", "gender": "male"}
-        ],
-        "external": true
-      }
-    ],
     "model_ref": "vieneu-tts-v3-turbo",
     "streaming": "probe_then_enable",
     "audio_format": "pcm_s16le",
-    "locale": "vi-VN"
+    "locale": "vi-VN",
+    "runtime": "onnx_int8_cpu",
+    "stream_leadin_frames": 16,
+    "neutral_rate": 1.0
   },
   "privacy": {
     "raw_audio_storage": false,

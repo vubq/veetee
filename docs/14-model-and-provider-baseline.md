@@ -14,19 +14,10 @@ Tài liệu này ghi baseline AI được chọn cho Veetee V1. Nó bổ sung ch
 | LLM | `openai-compatible-9router` | 9router local hoặc endpoint LAN | development/default candidate, có thể thay model/provider bằng Manager |
 | TTS tiếng Việt | VieNeu-TTS v3 Turbo | voice-server local | primary `vi-VN`, sentence/stream chunk tùy khả năng runtime |
 
-Manager cũng có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat
-Completions) và `edge-tts` (Microsoft Edge online TTS). Hai binding này chỉ được
-dùng khi agent chọn primary provider tương ứng; không tự chèn vào fallback chain.
+Manager có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat Completions).
 Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `topP`,
-`reasoningEffort` và `parallelToolCalls`. Edge TTS nhận voice ID, giới tính,
-rate, pitch Hz, volume, sample rate, connect/receive timeout và số lần thử trước
-first audio. Edge có thêm absolute `firstAudioTimeoutSeconds`: metadata/WebSocket
-event không có audio không được reset mốc này; runtime chỉ retry khi chưa nhận byte
-audio để tránh phát trùng. Secret chỉ nằm trong encrypted Manager provider binding; agent
-snapshot chỉ chứa metadata/config đã validate.
-Edge mặc định yêu cầu cloud synthesize ở rate/volume chuẩn rồi áp dụng rate và
-volume bằng ffmpeg streaming local; cách này giữ profile người dùng nhưng tránh
-độ trễ first-audio tăng mạnh khi dịch vụ cloud xử lý rate cao.
+`reasoningEffort` và `parallelToolCalls`. TTS V1 chỉ dùng VieNeu local; secret
+không nằm trong agent snapshot và không có đường gửi transcript ra dịch vụ ngoài.
 Với model mặc định `llama-3.3-70b-versatile`, adapter không gửi
 `reasoning_effort` hoặc metadata tùy biến vì Groq sẽ trả HTTP 400; semantic gate
 dùng JSON Object Mode streaming và vẫn validate lại schema tại voice-server.
@@ -318,14 +309,16 @@ chỉ hỗ trợ batch, sentence chunking vẫn cho UX incremental nhưng latenc
 không giả định “Turbo” tự động có streaming. Adapter phải có `cancel()` và trả
 sample-rate/format rõ ràng.
 
-Giọng production mặc định là Trúc Ly với tempo `1.2`. Voice server dùng WSOLA
-streaming để rút ngắn thời lượng mà giữ nguyên cao độ; không tăng sample rate giả
-vì cách đó làm giọng nữ cao và trẻ con hơn. Tempo là cấu hình server, không thay
-đổi giao thức PCM/Opus 24 kHz với firmware.
+Giọng production mặc định là Trúc Ly với tempo `1.0`. VieNeu engine được cấu hình
+lead-in 16 acoustic frames trước khi phát để giữ đủ audio đệm khi CPU inference
+chậm hơn playback; đây là yếu tố tránh hụt tiếng quan trọng hơn việc rút ngắn
+thời lượng bằng WSOLA. Tempo vẫn là cấu hình server, không thay đổi giao thức
+PCM/Opus 24 kHz với firmware.
 
 Đã benchmark lại trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB)
-bằng năm lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first
-audio median/p95 khoảng 521/596 ms và RTF 1.124/1.202. CUDA 12 với ONNX Runtime
+bằng mười lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first
+audio median/p95 khoảng 1,56/1,72 giây, RTF 1.148/1.205 và không có playback
+starvation trong cả mười lượt. CUDA 12 với ONNX Runtime
 GPU chậm hơn: 696/1,365 ms first audio và RTF 1.303/1.804 do nhiều đoạn graph phải
 sao chép hoặc fallback qua CPU; GPU chỉ được dùng khoảng 4--10%. Zipformer INT8
 decode 1,55 giây audio trong 38/44 ms median/p95 ở 2 threads. Vì vậy V1 giữ
@@ -339,9 +332,7 @@ phát âm tên riêng/số/ngày, chất lượng giọng, output sample rate, l
 hủy giữa chừng. Cache các câu hệ thống ngắn (goodbye, activation code, Wi-Fi lỗi)
 để timeout/error vẫn phản hồi nhanh khi TTS đang bận.
 
-V1 ưu tiên local-only. Cloud TTS có thể được đăng ký là adapter optional nhưng không
-tự động bật và không làm lộ transcript/audio ra ngoài khi privacy profile không cho
-phép.
+V1 chỉ bật local-only. Không có cloud TTS fallback trong runtime baseline.
 
 ## 6. Provider config mẫu
 

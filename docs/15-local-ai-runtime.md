@@ -25,7 +25,7 @@ uses them.
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
 | ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at 1.2x WSOLA tempo | lower thermal load, pitch-preserving speech acceleration, incremental audio and cancellation |
+| TTS default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at neutral 1.0x tempo with 16-frame lead-in | stable pitch, bounded startup buffer, incremental audio and cancellation |
 | TTS benchmark option | VieNeu-TTS.cpp native CPU | llama.cpp native SIMD + ONNX MOSS codec | faster complete synthesis on this host, but the current C ABI is batch-only |
 
 The default TTS remains the ONNX path even though the native benchmark is faster
@@ -53,27 +53,28 @@ resident and do not load ChunkFormer on the normal path.
 ### TTS
 
 The CPU/GPU comparison below uses neutral tempo `1.0` so it measures inference
-placement rather than post-processing. Production uses the same CPU provider
-with Trúc Ly and a streaming WSOLA tempo of `1.2`; WSOLA keeps pitch unchanged
-and adds about 5 ms processing per 320 ms source chunk on this host.
+placement rather than post-processing. Production uses the same CPU provider with
+Trúc Ly and a 16-acoustic-frame stream lead-in. A faster playback tempo shortens
+the audio buffer without making inference faster, so it is not the default.
 
 | Backend | Threads | First audio median / p95 | Complete median / p95 | RTF median / p95 |
 | --- | ---: | ---: | ---: | ---: |
-| VieNeu ONNX INT8 CPU | 2 | 521 / 596 ms | 3.68 / 3.94 s | 1.124 / 1.202 |
+| VieNeu ONNX INT8 CPU, stream lead-in 16 | 2 | 1.56 / 1.72 s | 3.98 / 4.24 s | 1.148 / 1.205 |
 | VieNeu ONNX INT8 CUDA with CPU fallback | 2 | 696 / 1,365 ms | 4.06 / 5.05 s | 1.303 / 1.804 |
 | VieNeu native C++ CPU | 4 | batch-only | 2.22 s historical run | 0.75 historical run |
 
 The CUDA graph produced many CPU/GPU copy boundaries, used only about 4--10% GPU,
 and peaked near 1 GiB VRAM during the sampled run. The current VieNeu INT8 export
-is therefore kept on CPU. Revisit CUDA only with a GPU-oriented FP16/FP32 export
-or a newer engine that keeps the recurrent decode path on the GPU.
+is therefore kept on CPU. The host currently also has an NVIDIA driver/library
+version mismatch, so CUDA cannot be enabled safely without a maintenance reboot.
+Revisit CUDA only with a GPU-oriented FP16/FP32 export or a newer engine that
+keeps the recurrent decode path on the GPU.
 
-A three-run production-speed check measured first audio at 574 ms median, 648 ms
-p95 and shortened the generated sentence to 2.77 seconds. Complete synthesis
-still took 3.72 seconds median because tempo processing changes playback duration,
-not the autoregressive model's generation speed. The paced device transport and
-real hardware jitter buffer therefore remain part of the acceptance test for
-long sentences; the LLM should continue emitting short spoken sentences.
+A post-fix ten-run check measured first audio at 1.56 s median/1.72 s p95,
+complete synthesis at 3.98 s median and zero estimated playback starvation in all
+ten runs. The lead-in trades a few hundred milliseconds of first audio for a
+continuous stream; the old 1.5x profile shortened playback but caused gaps because
+the autoregressive generator remained slower than the speaker clock.
 
 The native run used a 630 MiB model pack and peaked at about 959 MiB RSS. A
 one-shot CLI process took about 5.4 s wall time because model loading dominates;
@@ -83,8 +84,10 @@ user-stop guarantees as the ONNX streaming profile.
 
 ### Thread sweep for local speech
 
-The ASR sweep used 20 warmed runs. The TTS sweep on 2026-07-22 used five warmed,
-fixed-seed runs with the production watermark enabled:
+The ASR sweep used 20 warmed runs. The historical TTS thread sweep on 2026-07-22
+used five warmed, fixed-seed runs with the production watermark enabled and the
+old four-frame lead-in; it remains useful for thread selection, not current
+first-audio expectations:
 
 | Threads | ASR median / p95 | TTS first audio median / p95 | TTS RTF median / p95 |
 | ---: | ---: | ---: | ---: |
@@ -106,7 +109,8 @@ VEETEE_MODELS_ROOT=models
 VEETEE_ASR_THREADS=2
 VEETEE_TTS_THREADS=2
 VEETEE_TTS_VOICE="Trúc Ly"
-VEETEE_TTS_SPEED=1.2
+VEETEE_TTS_SPEED=1.0
+VEETEE_TTS_STREAM_LEADIN_FRAMES=16
 VEETEE_TTS_OUTPUT_SAMPLE_RATE=24000
 VEETEE_TTS_APPLY_WATERMARK=true
 VEETEE_LLM_PREWARM=true
@@ -134,7 +138,8 @@ The benchmark accepts separate controls, for example:
 
 ```bash
 uv run --project apps/voice-server python scripts/benchmark_local_ai.py \
-  --asr-threads 2 --tts-threads 2 --voice "Trúc Ly" --speed 1.2 \
+  --asr-threads 2 --tts-threads 2 --voice "Trúc Ly" --speed 1.0 \
+  --tts-stream-leadin-frames 16 \
   --watermark --runs 5 --seed 20260722
 ```
 

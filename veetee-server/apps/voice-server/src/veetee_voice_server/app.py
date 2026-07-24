@@ -32,7 +32,6 @@ from veetee_voice_server.manager import (
     SessionProfile,
 )
 from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
-from veetee_voice_server.providers.edge_tts import EdgeTtsProvider
 from veetee_voice_server.providers.failover import (
     FailoverLlmProvider,
     LlmProviderCandidate,
@@ -686,19 +685,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         provider = tts_registry.get(key)
         if provider is not None:
             return provider
-        if (
-            endpoint.adapter.lower() in {"edge-tts", "edge_tts"}
-            or "edge" in endpoint.adapter.lower()
+        if endpoint.adapter.lower() == "vieneu-local" and isinstance(
+            default_tts, VieNeuTtsProvider
         ):
-            provider = EdgeTtsProvider(
-                voice=voice.voice_id,
-                rate=voice.rate,
-                pitch_hz=voice.pitch_hz,
-                volume=voice.volume,
-                output_sample_rate=resolved_settings.wire_sample_rate,
-                config=config,
-            )
-        elif isinstance(default_tts, VieNeuTtsProvider):
             provider = default_tts.with_profile(
                 voice=voice.voice_id,
                 speed=voice.rate,
@@ -764,6 +753,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 output_sample_rate=resolved_settings.tts_output_sample_rate,
                 num_threads=resolved_settings.tts_threads,
                 apply_watermark=resolved_settings.tts_apply_watermark,
+                stream_leadin_frames=resolved_settings.tts_stream_leadin_frames,
             )
             default_llm = llm_for_profile(SessionProfile.defaults(resolved_settings))
             runtime.update(asr=asr, vad_model=vad_model, tts=tts)

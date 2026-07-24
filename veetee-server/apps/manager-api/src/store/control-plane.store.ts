@@ -1647,9 +1647,6 @@ export class ControlPlaneStore {
       return { health: ProviderHealth.DEGRADED, errorCode: "disabled" };
     }
     if (!provider.baseUrl) {
-      if (provider.kind === ProviderKind.TTS && provider.adapter.includes("edge")) {
-        return { health: ProviderHealth.UNKNOWN, errorCode: "external_probe_unavailable" };
-      }
       const componentName = providerKindToVoiceComponent.get(provider.kind);
       if (!componentName) {
         return { health: ProviderHealth.UNKNOWN, errorCode: "runtime_probe_unavailable" };

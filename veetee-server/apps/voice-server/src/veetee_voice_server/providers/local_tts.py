@@ -30,6 +30,7 @@ class VieNeuTtsProvider:
         output_sample_rate: int = 24_000,
         num_threads: int = 4,
         apply_watermark: bool = True,
+        stream_leadin_frames: int = 16,
         engine: Any | None = None,
     ) -> None:
         self._model_dir = model_dir
@@ -45,6 +46,9 @@ class VieNeuTtsProvider:
         self._output_sample_rate = output_sample_rate
         self._num_threads = num_threads
         self._apply_watermark = apply_watermark
+        if not 4 <= stream_leadin_frames <= 25:
+            raise ValueError("VieNeu stream lead-in must contain 4 to 25 acoustic frames")
+        self._stream_leadin_frames = stream_leadin_frames
         self._engine = engine
         self._load_lock = threading.Lock()
         self._inference_lock = asyncio.Lock()
@@ -67,6 +71,7 @@ class VieNeuTtsProvider:
             output_sample_rate=self._output_sample_rate,
             num_threads=self._num_threads,
             apply_watermark=self._apply_watermark,
+            stream_leadin_frames=self._stream_leadin_frames,
             engine=self._engine,
         )
 
@@ -156,15 +161,17 @@ class VieNeuTtsProvider:
             # currently does not forward ``codec_dir`` to its ONNX constructor
             # and otherwise performs Hugging Face HEAD requests on startup.
             import vieneu  # type: ignore[import-untyped]
-            from vieneu._v3_turbo_engine.onnx_runtime_lite import (  # type: ignore[import-untyped]
-                OnnxV3LiteEngine,
-            )
+            from vieneu._v3_turbo_engine import onnx_runtime_lite  # type: ignore[import-untyped]
 
             assert vieneu.__file__ is not None
             voices_path = Path(vieneu.__file__).parent / "assets" / "voices_v3_turbo.json"
             voices = json.loads(voices_path.read_text(encoding="utf-8"))
+            _configure_stream_leadin(
+                onnx_runtime_lite,
+                self._stream_leadin_frames,
+            )
             self._engine = _LocalStreamingV3Engine(
-                OnnxV3LiteEngine(
+                onnx_runtime_lite.OnnxV3LiteEngine(
                     checkpoint_path=str(self._model_dir),
                     onnx_dir=str(onnx_dir),
                     codec_dir=str(codec_dir),
@@ -192,6 +199,14 @@ class VieNeuTtsProvider:
             return b""
         clipped = np.clip(samples * self._volume, -1.0, 1.0)
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
+
+
+def _configure_stream_leadin(module: Any, frames: int) -> None:
+    """Tune the pinned VieNeu stream to build enough audio before playback starts."""
+    current = getattr(module, "_STREAM_LEADIN_FRAMES", None)
+    if not isinstance(current, int):
+        raise RuntimeError("VieNeu 3.2.3 streaming lead-in contract is unavailable")
+    module._STREAM_LEADIN_FRAMES = frames
 
 
 class _StreamingTempo:

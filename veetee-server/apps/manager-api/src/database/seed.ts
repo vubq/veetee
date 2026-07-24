@@ -73,7 +73,6 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       "llama-3.3-70b-versatile",
       "https://api.groq.com/openai/v1",
     ],
-    [ProviderKind.TTS, "edge-tts", "edge-tts-cloud", null],
   ] as const;
   for (const [kind, adapter, model, baseUrl] of providers) {
     const defaultConfig = defaultProviderConfig(adapter);
@@ -109,13 +108,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
         )
         .filter((id): id is string => typeof id === "string"),
     );
-    const authoritativeVoices = ["edge-tts", "vieneu-local"].includes(adapter);
-    const upgradeEdgeTransportPolicy =
-      adapter === "edge-tts" &&
-      hasProviderConfigVersionUpgrade(
-        currentConfig.transportPolicyVersion,
-        defaultConfig.transportPolicyVersion,
-      );
+    const authoritativeVoices = adapter === "vieneu-local";
     const hasMissingConfig =
       Object.keys(defaultConfig).some((key) => currentConfig[key] === undefined) ||
       defaultVoices.some(
@@ -137,16 +130,6 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
           config: {
             ...defaultConfig,
             ...currentConfig,
-            ...(upgradeEdgeTransportPolicy
-              ? {
-                  connectTimeoutSeconds: defaultConfig.connectTimeoutSeconds,
-                  receiveTimeoutSeconds: defaultConfig.receiveTimeoutSeconds,
-                  firstAudioTimeoutSeconds: defaultConfig.firstAudioTimeoutSeconds,
-                  maxAttempts: defaultConfig.maxAttempts,
-                  minimumChunkCharacters: defaultConfig.minimumChunkCharacters,
-                  transportPolicyVersion: defaultConfig.transportPolicyVersion,
-                }
-              : {}),
             ...(defaultVoices.length
               ? {
                   voices: authoritativeVoices
@@ -184,7 +167,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
       providerId: ttsProvider.id,
       voiceId: "Trúc Ly",
       gender: "female",
-      rate: 1.2,
+      rate: 1,
       pitchHz: 0,
       volume: 1,
     };
@@ -248,32 +231,10 @@ function defaultProviderConfig(adapter: string): Record<string, unknown> {
       responseFormat: "auto",
     };
   }
-  if (adapter === "edge-tts") {
-    return {
-      voice: "vi-VN-HoaiMyNeural",
-      gender: "female",
-      rate: 1,
-      pitchHz: 0,
-      volume: 1,
-      outputSampleRate: 24_000,
-      connectTimeoutSeconds: 3,
-      receiveTimeoutSeconds: 8,
-      firstAudioTimeoutSeconds: 4,
-      maxAttempts: 2,
-      minimumChunkCharacters: 96,
-      transportPolicyVersion: 4,
-      localProsodyProcessing: true,
-      supportsPitch: true,
-      voices: [
-        { id: "vi-VN-HoaiMyNeural", label: "Hoài My", locale: "vi-VN", gender: "female" },
-        { id: "vi-VN-NamMinhNeural", label: "Nam Minh", locale: "vi-VN", gender: "male" },
-      ],
-    };
-  }
   if (adapter === "vieneu-local") {
     return {
       voice: "Trúc Ly",
-      rate: 1.2,
+      rate: 1,
       volume: 1,
       outputSampleRate: 24_000,
       supportsPitch: false,

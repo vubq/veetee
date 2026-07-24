@@ -34,6 +34,7 @@ async def benchmark(
     speed: float,
     asr_threads: int,
     tts_threads: int,
+    tts_stream_leadin_frames: int,
     apply_watermark: bool,
     runs: int,
     seed: int,
@@ -47,6 +48,7 @@ async def benchmark(
         speed=speed,
         num_threads=tts_threads,
         apply_watermark=apply_watermark,
+        stream_leadin_frames=tts_stream_leadin_frames,
     )
 
     started = perf_counter()
@@ -75,16 +77,26 @@ async def benchmark(
     synthesis_runs_ms: list[float] = []
     audio_seconds_runs: list[float] = []
     rtf_runs: list[float] = []
+    estimated_starvation_runs_ms: list[float] = []
     for index in range(runs):
         np.random.seed(seed + index)
         started = perf_counter()
         first_audio_ms: float | None = None
         output_bytes = 0
+        queued_until_seconds = 0.0
+        estimated_starvation_seconds = 0.0
         async for chunk in tts.synthesize(
             text, "vi-VN", operation_context(f"tts:{index}")
         ):
-            if first_audio_ms is None and chunk.data:
-                first_audio_ms = (perf_counter() - started) * 1000
+            arrival_seconds = perf_counter() - started
+            if chunk.data:
+                if first_audio_ms is None:
+                    first_audio_ms = arrival_seconds * 1000
+                    queued_until_seconds = arrival_seconds
+                if arrival_seconds > queued_until_seconds:
+                    estimated_starvation_seconds += arrival_seconds - queued_until_seconds
+                    queued_until_seconds = arrival_seconds
+                queued_until_seconds += len(chunk.data) / (chunk.sample_rate * 2)
             output_bytes += len(chunk.data)
         synthesis_ms = (perf_counter() - started) * 1000
         audio_seconds = output_bytes / (24_000 * 2)
@@ -93,6 +105,7 @@ async def benchmark(
         audio_seconds_runs.append(audio_seconds)
         if audio_seconds:
             rtf_runs.append((synthesis_ms / 1000) / audio_seconds)
+        estimated_starvation_runs_ms.append(estimated_starvation_seconds * 1000)
     return {
         "asr": {
             "load_ms": round(asr_load_ms, 2),
@@ -116,10 +129,13 @@ async def benchmark(
             "audio_seconds": round(median(audio_seconds_runs), 3),
             "rtf": round(median(rtf_runs), 3) if rtf_runs else None,
             "rtf_p95": round(percentile(rtf_runs, 0.95), 3) if rtf_runs else None,
+            "estimated_starvation_ms": round(median(estimated_starvation_runs_ms), 2),
+            "estimated_starvation_max_ms": round(max(estimated_starvation_runs_ms), 2),
             "device": "cpu",
             "voice": voice,
             "speed": speed,
             "threads": tts_threads,
+            "stream_leadin_frames": tts_stream_leadin_frames,
             "watermark": apply_watermark,
             "runs": runs,
         },
@@ -130,9 +146,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--text", default="Xin chào, tôi là Veetee. Tôi có thể giúp gì cho bạn?")
     parser.add_argument("--voice", default="Trúc Ly")
-    parser.add_argument("--speed", type=float, default=1.2)
+    parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--asr-threads", type=int, default=2, choices=range(1, 9))
     parser.add_argument("--tts-threads", type=int, default=2, choices=range(1, 9))
+    parser.add_argument(
+        "--tts-stream-leadin-frames",
+        type=int,
+        default=16,
+        choices=range(4, 26),
+    )
     parser.add_argument("--watermark", action="store_true")
     parser.add_argument("--runs", type=int, default=1, choices=range(1, 11))
     parser.add_argument("--seed", type=int, default=20_260_722)
@@ -146,6 +168,7 @@ def main() -> None:
                     speed=args.speed,
                     asr_threads=args.asr_threads,
                     tts_threads=args.tts_threads,
+                    tts_stream_leadin_frames=args.tts_stream_leadin_frames,
                     apply_watermark=args.watermark,
                     runs=args.runs,
                     seed=args.seed,

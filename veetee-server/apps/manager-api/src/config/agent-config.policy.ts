@@ -99,13 +99,6 @@ export function validateProviderConfig(
     boundedNumber(normalized, "pitchHz", -100, 100);
     boundedNumber(normalized, "volume", 0, 1.5);
     boundedInteger(normalized, "outputSampleRate", 8_000, 48_000);
-    boundedInteger(normalized, "connectTimeoutSeconds", 1, 10);
-    boundedInteger(normalized, "receiveTimeoutSeconds", 1, 30);
-    boundedInteger(normalized, "firstAudioTimeoutSeconds", 1, 15);
-    boundedInteger(normalized, "maxAttempts", 1, 3);
-    boundedInteger(normalized, "minimumChunkCharacters", 24, 320);
-    boundedInteger(normalized, "transportPolicyVersion", 1, 1_000);
-    boundedBoolean(normalized, "localProsodyProcessing");
     boundedBoolean(normalized, "supportsPitch");
     if (normalized.voice !== undefined) boundedString(normalized, "voice", 1, 160);
     if (normalized.voiceId !== undefined) boundedString(normalized, "voiceId", 1, 160);

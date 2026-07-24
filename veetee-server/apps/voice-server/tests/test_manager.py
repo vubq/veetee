@@ -130,39 +130,47 @@ def test_session_profile_resolves_selected_tts_voice_and_provider_config() -> No
                     "locale": "vi-VN",
                     "providers": [
                         {
-                            "id": "edge-provider",
+                            "id": "vieneu-provider",
                             "kind": "tts",
-                            "adapter": "edge-tts",
-                            "model": "edge-tts-cloud",
-                            "config": {"voice": "vi-VN-HoaiMyNeural"},
+                            "adapter": "vieneu-local",
+                            "model": "vieneu-tts-v3-turbo",
+                            "config": {
+                                "voice": "Trúc Ly",
+                                "supportsPitch": False,
+                                "outputSampleRate": 24000,
+                            },
                         }
                     ],
                 }
             ],
             "voice": {
-                "providerId": "edge-provider",
-                "voiceId": "vi-VN-ThanhHaNeural",
+                "providerId": "vieneu-provider",
+                "voiceId": "Trúc Ly",
                 "gender": "female",
                 "rate": 1.1,
-                "pitchHz": 12,
-                "volume": 0.9,
+                "pitchHz": 0,
+                "volume": 1,
             },
         },
         settings,
         runtime_providers=[
             {
-                "id": "edge-provider",
+                "id": "vieneu-provider",
                 "kind": "tts",
-                "adapter": "edge-tts",
-                "model": "edge-tts-cloud",
-                "config": {"voice": "vi-VN-HoaiMyNeural", "outputSampleRate": 24000},
+                "adapter": "vieneu-local",
+                "model": "vieneu-tts-v3-turbo",
+                "config": {
+                    "voice": "Trúc Ly",
+                    "supportsPitch": False,
+                    "outputSampleRate": 24000,
+                },
             }
         ],
     )
     assert profile.voice is not None
-    assert profile.voice.voice_id == "vi-VN-ThanhHaNeural"
+    assert profile.voice.voice_id == "Trúc Ly"
     assert profile.tts_endpoint is not None
-    assert profile.tts_endpoint.adapter == "edge-tts"
+    assert profile.tts_endpoint.adapter == "vieneu-local"
     assert profile.tts_endpoint.config["outputSampleRate"] == 24000
 
 

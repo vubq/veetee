@@ -119,18 +119,14 @@ describe("provider and voice config", () => {
       validateProviderConfig("llm", "groq-cloud", { apiKey: "must-not-live-here" }),
     ).toThrow(BadRequestException);
     expect(
-      validateProviderConfig("tts", "edge-tts", {
-        connectTimeoutSeconds: 2,
-        receiveTimeoutSeconds: 4,
-        firstAudioTimeoutSeconds: 3,
-        maxAttempts: 2,
-        minimumChunkCharacters: 96,
+      validateProviderConfig("tts", "vieneu-local", {
+        voice: "Trúc Ly",
+        rate: 1,
+        volume: 1,
+        outputSampleRate: 24_000,
+        supportsPitch: false,
       }),
-    ).toMatchObject({
-      firstAudioTimeoutSeconds: 3,
-      maxAttempts: 2,
-      minimumChunkCharacters: 96,
-    });
+    ).toMatchObject({ voice: "Trúc Ly", outputSampleRate: 24_000 });
   });
 
   it("requires the selected voice provider to be part of the TTS chain", () => {
