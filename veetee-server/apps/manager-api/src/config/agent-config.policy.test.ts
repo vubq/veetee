@@ -122,9 +122,10 @@ describe("provider and voice config", () => {
       validateProviderConfig("tts", "edge-tts", {
         connectTimeoutSeconds: 2,
         receiveTimeoutSeconds: 4,
+        firstAudioTimeoutSeconds: 3,
         maxAttempts: 2,
       }),
-    ).toMatchObject({ maxAttempts: 2 });
+    ).toMatchObject({ firstAudioTimeoutSeconds: 3, maxAttempts: 2 });
   });
 
   it("requires the selected voice provider to be part of the TTS chain", () => {

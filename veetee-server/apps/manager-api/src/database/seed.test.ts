@@ -16,9 +16,9 @@ describe("provider seed config", () => {
   });
 
   it("upgrades built-in operational defaults only when the target version advances", () => {
-    expect(hasProviderConfigVersionUpgrade(undefined, 2)).toBe(true);
-    expect(hasProviderConfigVersionUpgrade(1, 2)).toBe(true);
-    expect(hasProviderConfigVersionUpgrade(2, 2)).toBe(false);
-    expect(hasProviderConfigVersionUpgrade(3, 2)).toBe(false);
+    expect(hasProviderConfigVersionUpgrade(undefined, 3)).toBe(true);
+    expect(hasProviderConfigVersionUpgrade(2, 3)).toBe(true);
+    expect(hasProviderConfigVersionUpgrade(3, 3)).toBe(false);
+    expect(hasProviderConfigVersionUpgrade(4, 3)).toBe(false);
   });
 });

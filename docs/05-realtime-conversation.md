@@ -413,7 +413,9 @@ Field nullable hoặc enum mở rộng từ JSON Object Mode được chuẩn h�
 output không thể phục hồi cũng đi qua prose response không tool, không tự biến speech
 hợp lệ thành `unclear`. Provider có `streamProseResponse=true` không dùng
 `plan.response_text` cho lượt trả lời thường: prose token được tách theo câu và đưa vào
-TTS queue trong lúc LLM vẫn tiếp tục sinh phần sau.
+TTS queue trong lúc LLM vẫn tiếp tục sinh phần sau. Prompt của structured gate cũng bắt
+buộc `response_text=null` ở đường này để model chỉ làm admission/planning, không sinh
+một câu trả lời hoàn chỉnh rồi bị runtime bỏ đi trước lần prose stream thứ hai.
 
 Mục tiêu cascade trên Wi-Fi tốt:
 

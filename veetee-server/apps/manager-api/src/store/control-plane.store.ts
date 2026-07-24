@@ -1641,6 +1641,7 @@ export class ControlPlaneStore {
     model: string;
     baseUrl: string | null;
     secretCiphertext: string | null;
+    config: Prisma.JsonValue;
   }): Promise<{ health: ProviderHealth; errorCode: string | null }> {
     if (!provider.enabled) {
       return { health: ProviderHealth.DEGRADED, errorCode: "disabled" };
@@ -1675,15 +1676,7 @@ export class ControlPlaneStore {
           ? await fetch(`${baseUrl}/chat/completions`, {
               method: "POST",
               headers: { ...headers, "content-type": "application/json" },
-              body: JSON.stringify({
-                model: provider.model,
-                stream: false,
-                ...(provider.adapter.includes("groq")
-                  ? { max_completion_tokens: 4 }
-                  : { max_tokens: 4 }),
-                reasoning_effort: "none",
-                messages: [{ role: "user", content: "Reply with OK." }],
-              }),
+              body: JSON.stringify(providerChatProbePayload(provider)),
               signal: AbortSignal.timeout(8_000),
             })
           : await fetch(`${baseUrl}/models`, {
@@ -1762,4 +1755,33 @@ export class ControlPlaneStore {
     }
     return value;
   }
+}
+
+export function providerChatProbePayload(provider: {
+  adapter: string;
+  model: string;
+  config: Prisma.JsonValue;
+}): Record<string, unknown> {
+  const isGroq = provider.adapter.toLowerCase().includes("groq");
+  const config = recordValue(provider.config);
+  const payload: Record<string, unknown> = {
+    model: provider.model,
+    stream: false,
+    ...(isGroq ? { max_completion_tokens: 4 } : { max_tokens: 4 }),
+    messages: [{ role: "user", content: "Reply with OK." }],
+  };
+  if (!isGroq) {
+    payload.reasoning_effort = "none";
+    return payload;
+  }
+  const normalizedModel = provider.model.toLowerCase();
+  const supportsReasoning =
+    normalizedModel.startsWith("qwen/") ||
+    normalizedModel.startsWith("openai/gpt-oss-");
+  if (supportsReasoning) {
+    const effort = config.reasoningEffort;
+    payload.reasoning_effort =
+      typeof effort === "string" && effort.length > 0 ? effort : "none";
+  }
+  return payload;
 }

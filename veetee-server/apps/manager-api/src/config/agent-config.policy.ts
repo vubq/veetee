@@ -101,6 +101,7 @@ export function validateProviderConfig(
     boundedInteger(normalized, "outputSampleRate", 8_000, 48_000);
     boundedInteger(normalized, "connectTimeoutSeconds", 1, 10);
     boundedInteger(normalized, "receiveTimeoutSeconds", 1, 30);
+    boundedInteger(normalized, "firstAudioTimeoutSeconds", 1, 15);
     boundedInteger(normalized, "maxAttempts", 1, 3);
     boundedInteger(normalized, "transportPolicyVersion", 1, 1_000);
     boundedBoolean(normalized, "localProsodyProcessing");

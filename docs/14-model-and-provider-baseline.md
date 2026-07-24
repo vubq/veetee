@@ -20,7 +20,9 @@ dùng khi agent chọn primary provider tương ứng; không tự chèn vào fa
 Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `topP`,
 `reasoningEffort` và `parallelToolCalls`. Edge TTS nhận voice ID, giới tính,
 rate, pitch Hz, volume, sample rate, connect/receive timeout và số lần thử trước
-first audio. Secret chỉ nằm trong encrypted Manager provider binding; agent
+first audio. Edge có thêm absolute `firstAudioTimeoutSeconds`: metadata/WebSocket
+event không có audio không được reset mốc này; runtime chỉ retry khi chưa nhận byte
+audio để tránh phát trùng. Secret chỉ nằm trong encrypted Manager provider binding; agent
 snapshot chỉ chứa metadata/config đã validate.
 Edge mặc định yêu cầu cloud synthesize ở rate/volume chuẩn rồi áp dụng rate và
 volume bằng ffmpeg streaming local; cách này giữ profile người dùng nhưng tránh

@@ -661,6 +661,36 @@ async def test_semantic_schema_repairs_nullable_intent_and_unknown_dialogue_act(
     assert output["plan"]["intent"] == ""
 
 
+async def test_semantic_schema_drops_placeholder_tool_from_regular_response() -> None:
+    schema = _planner_output_schema(SimulatedLabToolBroker())
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": 0.94,
+                "addressed_to_robot": 0.91,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "question",
+            "plan": {
+                "action": "respond",
+                "locale": "vi-VN",
+                "intent": "date.current",
+                "response_required": True,
+                "response_text": None,
+                "tool_call": {},
+            },
+        },
+        schema,
+        "vi-VN",
+    )
+
+    assert output["admission"]["decision"] == "accepted"
+    assert output["admission"]["reason_code"] == "speech_relevant"
+    assert output["plan"]["action"] == "respond"
+    assert output["plan"]["tool_call"] is None
+
+
 async def test_semantic_schema_can_force_regular_response_through_prose_stream() -> None:
     schema = _planner_output_schema(SimulatedLabToolBroker())
     output = _validated_planner_output(

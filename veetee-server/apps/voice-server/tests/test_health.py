@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from time import monotonic
 
 import pytest
@@ -93,6 +94,21 @@ async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     assert "never invent a tool name" in prompt
     assert "ambiguous or missing details, admission must be accepted" in prompt
     assert "not hard-coded phrase rules" in prompt
+
+
+async def test_streaming_planner_does_not_generate_a_response_that_will_be_discarded() -> None:
+    profile = SessionProfile.defaults(Settings(environment="test", require_device_auth=False))
+    endpoint = replace(
+        profile.llm_chain[0],
+        config={"streamProseResponse": True},
+    )
+    profile = replace(profile, llm_chain=(endpoint,))
+
+    prompt = _planner_system_prompt(profile, RegistryToolBroker())
+
+    assert "response_text must be null" in prompt
+    assert "runtime starts a separate prose stream" in prompt
+    assert "For a complete short answer" not in prompt
 
 
 async def test_conversation_gate_forces_the_full_structured_schema() -> None:

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { RedisService } from "../database/redis.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
-import { ControlPlaneStore } from "./control-plane.store.js";
+import {
+  ControlPlaneStore,
+  providerChatProbePayload,
+} from "./control-plane.store.js";
 
 class FakeRedisClient {
   private readonly values = new Map<string, string>();
@@ -68,5 +71,32 @@ describe("PairingService", () => {
       list: [{ password: "hidden", safe: "kept" }],
     });
     expect(details).toEqual({ safe: "kept", nested: { safe: "kept" }, list: [{ safe: "kept" }] });
+  });
+});
+
+describe("provider health probe", () => {
+  it("does not send unsupported reasoning controls to the default Groq Llama model", () => {
+    const payload = providerChatProbePayload({
+      adapter: "groq-cloud",
+      model: "llama-3.3-70b-versatile",
+      config: { reasoningEffort: "none" },
+    });
+
+    expect(payload).toMatchObject({
+      model: "llama-3.3-70b-versatile",
+      max_completion_tokens: 4,
+      stream: false,
+    });
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps Groq reasoning controls for a model family that supports them", () => {
+    const payload = providerChatProbePayload({
+      adapter: "groq-cloud",
+      model: "openai/gpt-oss-20b",
+      config: { reasoningEffort: "medium" },
+    });
+
+    expect(payload.reasoning_effort).toBe("medium");
   });
 });

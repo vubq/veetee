@@ -109,6 +109,21 @@ class ManagerMcpCallRequest(BaseModel):
 def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     tool_catalog = tools.list_tools()
     catalog = json.dumps(tool_catalog, ensure_ascii=False, separators=(",", ":"))
+    streams_prose = bool(
+        profile.llm_chain
+        and profile.llm_chain[0].config.get("streamProseResponse") is True
+    )
+    response_text_instruction = (
+        "For accepted respond or ask_clarification plans, response_text must be null; "
+        "the runtime starts a separate prose stream after admission so it can feed TTS "
+        "incrementally. Tool actions also require response_text null. "
+        if streams_prose
+        else (
+            "For a complete short answer, put directly speakable text in response_text. "
+            "For an answer needing more detail, set response_text null so the runtime can "
+            "stream the full natural response. Tool actions require response_text null. "
+        )
+    )
     prompt_tool_names = [
         {"name": item["name"], "description": ""}
         for item in tool_catalog
@@ -137,9 +152,7 @@ def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
         "not_addressed is clear incidental speech. Named noise/media sources are benchmark "
         "categories, not hard-coded phrase rules. null evidence means unavailable, never zero. "
         "An accepted intentional turn must respond, clarify, use a valid tool or end; do not "
-        "silently noop it. For a complete short answer, put directly speakable text in "
-        "response_text. For an answer needing more detail, set response_text null so the "
-        "runtime can stream the full natural response. Tool actions require response_text null. "
+        f"silently noop it. {response_text_instruction}"
         "Only use an exact tool name from this available tool catalog: "
         f"{catalog}. When the catalog is empty, never invent a tool name."
         f"\n\nPublished agent runtime context (JSON): {agent_context}"
@@ -387,6 +400,30 @@ def _validated_planner_output(
         tool_call, dict
     ):
         action = "respond"
+        tool_call = None
+    if action in {"call_tool_then_respond", "execute_pending_tool"}:
+        root_properties = schema.get("properties")
+        plan_schema = (
+            root_properties.get("plan") if isinstance(root_properties, dict) else None
+        )
+        plan_properties = (
+            plan_schema.get("properties") if isinstance(plan_schema, dict) else None
+        )
+        tool_call_schema = (
+            plan_properties.get("tool_call") if isinstance(plan_properties, dict) else None
+        )
+        tool_call_error = (
+            next(Draft202012Validator(tool_call_schema).iter_errors(tool_call), None)
+            if isinstance(tool_call_schema, dict)
+            else ValueError("missing tool_call schema")
+        )
+        if tool_call_error is not None:
+            action = "respond"
+            tool_call = None
+    else:
+        # JSON Object Mode models sometimes emit an empty placeholder object
+        # even for a regular response. It must not invalidate an otherwise
+        # accepted linguistic turn or leak into the tool policy.
         tool_call = None
     if decision not in {"accepted", "end"}:
         action = "noop"

@@ -233,3 +233,49 @@ async def test_edge_tts_retries_a_transport_without_audio(
     assert FlakyCommunicate.calls == 2
     assert FlakyCommunicate.timeouts == [(2, 7), (2, 7)]
     assert sum(len(chunk.data) for chunk in chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_first_audio_deadline_is_absolute_across_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = await silent_mp3()
+
+    class MetadataStallCommunicate:
+        calls = 0
+
+        def __init__(self, *_: object, **__: object) -> None:
+            self.__class__.calls += 1
+            self.call = self.__class__.calls
+
+        async def stream(self):  # type: ignore[no-untyped-def]
+            if self.call == 1:
+                for _ in range(20):
+                    await asyncio.sleep(0.01)
+                    yield {
+                        "type": "WordBoundary",
+                        "offset": 0,
+                        "duration": 1,
+                        "text": "fixture",
+                    }
+                return
+            yield {"type": "audio", "data": generated}
+
+    monkeypatch.setattr(edge_tts, "Communicate", MetadataStallCommunicate)
+    provider = EdgeTtsProvider(
+        voice="vi-VN-HoaiMyNeural",
+        config={"maxAttempts": 2},
+    )
+    provider._first_audio_timeout = 0.05
+    context = OperationContext(
+        "session-1",
+        "session-1:3",
+        3,
+        CancellationToken(),
+        monotonic() + 5,
+    )
+
+    chunks = [chunk async for chunk in provider.synthesize("Xin chào", "vi-VN", context)]
+
+    assert MetadataStallCommunicate.calls == 2
+    assert sum(len(chunk.data) for chunk in chunks) > 0

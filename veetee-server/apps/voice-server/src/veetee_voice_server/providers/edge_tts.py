@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping
 from contextlib import suppress
+from time import monotonic
 from typing import Any
 
 import structlog
@@ -40,6 +41,9 @@ class EdgeTtsProvider:
         )
         self._receive_timeout = _bounded_int(
             self._config.get("receiveTimeoutSeconds", 8), 1, 30
+        )
+        self._first_audio_timeout = _bounded_int(
+            self._config.get("firstAudioTimeoutSeconds", 4), 1, 15
         )
         self._max_attempts = _bounded_int(self._config.get("maxAttempts", 2), 1, 3)
         self._local_prosody = self._config.get("localProsodyProcessing", True) is not False
@@ -151,17 +155,32 @@ class EdgeTtsProvider:
                     receive_timeout=receive_timeout,
                 )
                 attempt_received_audio = False
+                first_audio_deadline = monotonic() + min(
+                    float(self._first_audio_timeout),
+                    context.remaining_seconds,
+                )
                 stream = communicate.stream()
                 try:
                     while True:
                         context.checkpoint()
+                        if (
+                            not attempt_received_audio
+                            and monotonic() >= first_audio_deadline
+                        ):
+                            raise TimeoutError("Edge TTS first-audio deadline exceeded")
+                        event_timeout = min(
+                            float(receive_timeout),
+                            context.remaining_seconds,
+                        )
+                        if not attempt_received_audio:
+                            event_timeout = min(
+                                event_timeout,
+                                max(0.001, first_audio_deadline - monotonic()),
+                            )
                         try:
                             event = await asyncio.wait_for(
                                 anext(stream),
-                                timeout=min(
-                                    float(receive_timeout),
-                                    context.remaining_seconds,
-                                ),
+                                timeout=event_timeout,
                             )
                         except StopAsyncIteration:
                             break
