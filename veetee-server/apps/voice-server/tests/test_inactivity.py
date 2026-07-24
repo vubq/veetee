@@ -33,6 +33,27 @@ async def test_inactivity_goodbye_closes_gate_after_grace() -> None:
     assert arbiter.snapshot.state is ConversationState.STANDBY
 
 
+async def test_failed_goodbye_callback_cannot_leave_gate_closing() -> None:
+    arbiter = TurnArbiter("session-goodbye-failure")
+
+    async def goodbye(_: str) -> None:
+        raise RuntimeError("fixture goodbye failure")
+
+    controller = InactivityController(
+        arbiter=arbiter,
+        first_input_seconds=0.01,
+        between_turns_seconds=0.01,
+        closing_grace_seconds=0.01,
+        max_session_seconds=1,
+        goodbye=goodbye,
+    )
+    await controller.assistant_opened(WakeSource.BUTTON)
+    await asyncio.sleep(0.04)
+
+    assert arbiter.snapshot.state is ConversationState.STANDBY
+    assert arbiter.snapshot.assistant_gate_open is False
+
+
 async def test_wake_during_closing_cancels_goodbye_close() -> None:
     arbiter = TurnArbiter("session-1")
     goodbye_started = asyncio.Event()

@@ -217,11 +217,12 @@ onBeforeUnmount(stopPolling);
         </article>
         <article class="diagnostics-card">
           <header><div><span class="card-kicker">NETWORK</span><h3>Kết nối hiện tại</h3></div><VtBadge :tone="health.network.connected ? 'success' : 'danger'" dot>{{ health.network.connected ? "Connected" : "Offline" }}</VtBadge></header>
-          <dl><div><dt>IPv4</dt><dd>{{ health.network.ipv4 || "—" }}</dd></div><div><dt>RSSI</dt><dd>{{ health.network.connected ? `${health.network.rssi} dBm` : "—" }}</dd></div><div><dt>Disconnects</dt><dd>{{ health.network.disconnectCount }}</dd></div><div><dt>Reconnect attempts</dt><dd>{{ health.network.reconnectAttemptCount }}</dd></div></dl>
+          <dl><div><dt>IPv4</dt><dd>{{ health.network.ipv4 || "—" }}</dd></div><div><dt>RSSI</dt><dd>{{ health.network.connected ? `${health.network.rssi} dBm` : "—" }}</dd></div><div><dt>Wi-Fi disconnects</dt><dd>{{ health.network.disconnectCount }}</dd></div><div><dt>Wi-Fi reconnects</dt><dd>{{ health.network.reconnectAttemptCount }}</dd></div><div><dt>WS reconnects</dt><dd>{{ health.network.websocketReconnectAttemptCount }}</dd></div><div><dt>WS exhausted</dt><dd>{{ health.network.websocketReconnectExhaustedCount }}</dd></div></dl>
         </article>
         <article class="diagnostics-card diagnostics-card-wide">
           <header><div><span class="card-kicker">AUDIO PIPELINE</span><h3>Capture / playback</h3></div><VtBadge :tone="health.audio.captureTaskRunning && health.audio.playbackTaskRunning ? 'success' : 'danger'" dot>{{ health.audio.captureTaskRunning && health.audio.playbackTaskRunning ? "Tasks alive" : "Task fault" }}</VtBadge></header>
-          <div class="audio-facts"><div><b>{{ formatNumber(health.audio.lifetime.micFrames) }}</b><span>mic frames</span></div><div><b>{{ formatNumber(health.audio.lifetime.detectorFrameDrops) }}</b><span>detector drops</span></div><div><b>{{ formatNumber(health.audio.lifetime.opusEncodeFailures + health.audio.lifetime.opusDecodeFailures) }}</b><span>Opus errors</span></div><div><b>{{ formatNumber(health.audio.lifetime.playbackQueueDrops) }}</b><span>queue drops</span></div></div>
+          <div class="audio-facts"><div><b>{{ formatNumber(health.audio.lifetime.micFrames) }}</b><span>mic frames</span></div><div><b>{{ formatNumber(health.audio.transportUplinkQueueDrops) }}</b><span>WS uplink drops</span></div><div><b>{{ formatNumber(health.audio.lifetime.opusEncodeFailures + health.audio.lifetime.opusDecodeFailures) }}</b><span>Opus errors</span></div><div><b>{{ formatNumber(health.audio.lifetime.playbackQueueDrops) }}</b><span>playback drops</span></div></div>
+          <p class="audio-queue-note">Uplink high-water {{ health.audio.transportUplinkQueueHighWater }} frame. Số này chỉ đo drop cục bộ trong hàng đợi WebSocket V1, không giả lập packet-loss mạng.</p>
         </article>
         <article class="diagnostics-card diagnostics-card-wide task-headroom-card">
           <header>
@@ -301,6 +302,7 @@ onBeforeUnmount(stopPolling);
 .audio-facts div, .audio-results div { display: grid; gap: 4px; border-radius: 11px; padding: 11px; background: #edf1ed; }
 .audio-facts b { font-size: 20px; }
 .audio-facts span, .audio-results span { color: var(--muted); font-size: 8px; }
+.audio-queue-note { border-left: 3px solid var(--navy-2); padding-left: 10px; }
 .task-headroom-card { gap: 12px; }
 .task-headroom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .task-headroom-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 11px; background: #f7f8f4; }

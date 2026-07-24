@@ -445,6 +445,13 @@ class VoiceSession:
             threshold=settings.vad_threshold,
             release_threshold=settings.vad_release_threshold,
             min_silence_ms=settings.vad_min_silence_ms,
+            fast_silence_ms=min(
+                settings.vad_fast_silence_ms, settings.vad_min_silence_ms
+            ),
+            fast_endpoint_min_speech_ms=settings.vad_fast_endpoint_min_speech_ms,
+            quiet_probability=min(
+                settings.vad_quiet_probability, settings.vad_release_threshold
+            ),
             max_speech_seconds=settings.max_utterance_seconds,
         )
         self.mcp = DeviceMcpClient(self.sink.send_mcp, session_id=self.session_id)
@@ -463,6 +470,7 @@ class VoiceSession:
         self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
         self._noise_reference = b""
         self._vad_probabilities: list[float] = []
+        self._vad_processing_ms = 0.0
         self._wake_source: WakeSource | None = None
         self._speech_active = False
         self._asr_task: asyncio.Task[None] | None = None
@@ -611,7 +619,9 @@ class VoiceSession:
             return
         if self._asr_task is not None and not self._asr_task.done():
             return
-        results = self.vad.process(pcm)
+        vad_started_at = monotonic()
+        results = await asyncio.to_thread(self.vad.process, pcm)
+        self._vad_processing_ms += (monotonic() - vad_started_at) * 1_000
         started = any(item.speech_started for item in results)
         ended = any(item.speech_ended for item in results)
 
@@ -657,11 +667,23 @@ class VoiceSession:
                     return
                 self._pre_roll.clear()
         if ended and self._speech_active:
+            endpoint_reason = next(
+                (
+                    item.endpoint_reason
+                    for item in results
+                    if item.speech_ended and item.endpoint_reason is not None
+                ),
+                "silence",
+            )
             self._telemetry.record(
                 self.session_id,
                 "vad.speech_end",
                 generation=self.arbiter.snapshot.generation,
-                payload={"frame_count": len(self._vad_probabilities)},
+                payload={
+                    "frame_count": len(self._vad_probabilities),
+                    "endpoint_reason": endpoint_reason,
+                    "processing_ms": round(self._vad_processing_ms, 3),
+                },
             )
             self._start_asr()
 
@@ -693,6 +715,7 @@ class VoiceSession:
         self._pre_roll.clear()
         self._noise_reference = b""
         self._vad_probabilities.clear()
+        self._vad_processing_ms = 0.0
         self._speech_active = False
         self.vad.reset()
         if not audio:
@@ -716,6 +739,7 @@ class VoiceSession:
             monotonic() + self.settings.asr_seconds,
         )
         self._asr_context = context
+        asr_started_at = monotonic()
         try:
             transcript = await self.asr.transcribe_pcm(
                 pcm,
@@ -739,6 +763,8 @@ class VoiceSession:
                 generation=self.arbiter.snapshot.generation,
                 payload={
                     "audio_bytes": len(pcm),
+                    "duration_ms": round((monotonic() - asr_started_at) * 1_000, 3),
+                    "confidence_available": transcript.confidence is not None,
                     "input_evidence": input_evidence_payload(evidence),
                 },
             )
@@ -788,7 +814,11 @@ class VoiceSession:
                 },
             )
             await self.sink.send_control(
-                {"type": "llm", "emotion": "sad", "text": type(error).__name__}
+                {
+                    "type": "llm",
+                    "emotion": "sad",
+                    "text": "transcription_or_turn_failed",
+                }
             )
             if self.arbiter.snapshot.state is ConversationState.LISTENING:
                 await self.sink.send_listening(generation=self.arbiter.snapshot.generation)
@@ -808,6 +838,7 @@ class VoiceSession:
             monotonic() + self.profile.policy.tts_seconds,
         )
         started = False
+        failure: Exception | None = None
         try:
             async for audio in iterate_operation(
                 self.tts.synthesize(self.profile.goodbye_text, self.profile.locale, context),
@@ -832,6 +863,7 @@ class VoiceSession:
                     )
                 )
         except Exception as error:
+            failure = error
             # A failed goodbye must not leave the assistant gate stuck open. Task
             # cancellation still propagates because asyncio.CancelledError is a BaseException.
             self._telemetry.record(
@@ -858,6 +890,18 @@ class VoiceSession:
                         generation=context.generation,
                     )
                 )
+        if failure is not None:
+            await self.sink.emit(
+                ConversationOutput(
+                    kind=OutputKind.ERROR,
+                    turn_id=None,
+                    generation=context.generation,
+                    payload={
+                        "code": "goodbye_tts_failed",
+                        "stage": "goodbye_tts",
+                    },
+                )
+            )
         await self.sink.send_assistant_sleep(
             reason, generation=self.arbiter.snapshot.generation
         )
@@ -878,5 +922,6 @@ class VoiceSession:
         self._pre_roll.clear()
         self._noise_reference = b""
         self._vad_probabilities.clear()
+        self._vad_processing_ms = 0.0
         self._speech_active = False
         self.vad.reset()

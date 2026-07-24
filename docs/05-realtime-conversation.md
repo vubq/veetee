@@ -210,15 +210,18 @@ không gửi raw PCM hoặc xác suất theo từng frame vào LLM. Object gồm
 - `aec.enabled`, `self_echo_probability` và `target_speaker_probability`, trong đó
   `null` có nghĩa là chưa có bộ đo tương ứng, không phải xác suất bằng 0.
 
-Zipformer hiện trả `stability=1.0` theo adapter và chưa có confidence thực; server giữ
-`confidence=null` thay vì tự bịa điểm số. Admission/planner và prose LLM đều nhận
+Pinned Zipformer offline hiện chưa expose confidence hoặc partial stability đã hiệu
+chuẩn; server giữ cả `confidence=null` và `stability=null` thay vì tự bịa điểm số.
+Admission/planner và prose LLM đều nhận
 object evidence này cùng lịch sử hội thoại. Prose LLM còn nhận rõ ASR confidence/stability,
 admission decision/confidence/addressing/reason, dialogue plan và số lượng context; system
 prompt chứa agent snapshot đã publish (tên, locale, timezone thiết bị, personality,
 policy version và tool catalog). Các trường này chỉ là context hỗ trợ, không phải lệnh
 runtime; VAD chỉ chứng minh audio giống lời nói, không chứng minh người dùng đang nói với
 assistant. Các kích thước prompt, schema, catalog và thời gian structured call được
-log dạng metric đã redact để tối ưu latency.
+log dạng metric đã redact để tối ưu latency. Prompt/schema được cache theo chính
+fingerprint tool catalog của session và tự rebuild sau asynchronous device MCP
+discovery; không freeze catalog rỗng lúc WebSocket vừa mở.
 
 ### 3.2 Utterance gate và semantic planner
 
@@ -378,6 +381,13 @@ không được dùng một timer duy nhất cho cả hai. Provider deadline ch�
 operation bị treo và trả quyền điều khiển cho lượt mới, không đóng session vì người
 dùng nói lâu.
 
+Endpoint V1 dùng base silence `400 ms`. Sau tối thiểu `640 ms` voiced speech, nếu
+Silero đã từng vượt speech threshold và trailing probability giữ dưới `0.15`, một
+quiet endpoint `320 ms` được phép chốt sớm. Câu ngắn/ngập ngừng vẫn dùng base silence;
+policy chỉ dựa signal/duration tổng quát, không so khớp phrase. VAD inference chạy
+ngoài asyncio event loop và telemetry ghi một lần tại speech end với
+`endpoint_reason` cùng tổng processing time, không phát metric theo từng frame.
+
 Chỉ user activity hợp lệ mới reset inactivity timer. Raw energy, VAD false positive, input bị admission reject hoặc self-echo không được giữ session sống mãi. Một clarification hợp lệ được reset timer tối đa theo `maxClarificationAttempts`; sau đó hệ thống quay lại listening hoặc kết thúc lịch sự theo policy.
 
 VAD session giữ pre-roll PCM có giới hạn để không cắt phụ âm đầu khi detector đổi
@@ -419,9 +429,11 @@ JSON Schema ở voice-server trước khi cho phép planner/tool. Adapter giữ 
 (`invalid_sse_json`, `empty_structured_output`, `invalid_structured_json`,
 `structured_output_truncated`, `structured_schema_mismatch`) và không ghi raw output. Các field tương thích bị model bỏ
 sót (ví dụ `plan.action`) được chuẩn hóa an toàn từ chính structured fields trước lần
-validate cuối; không suy diễn từ exact transcript. Nếu gate provider hỏng, input đã qua
-local signal admission được chuyển sang prose response không có tool; nếu cả prose cũng
-hỏng, server phát localized recovery response và giữ assistant gate mở thay vì im lặng.
+validate cuối; không suy diễn từ exact transcript. Nếu structured output sai schema
+nhưng provider vẫn phản hồi, server dùng degraded plan `respond_without_tools` và vẫn
+validate policy. Nếu chính semantic provider không khả dụng, engine không gọi lại cùng
+LLM lần hai cho prose; nó phát recovery đã cấu hình/local signal và giữ session sống.
+Cách này tránh nhân đôi deadline ở đúng thời điểm provider đang lỗi.
 Field nullable hoặc enum mở rộng từ JSON Object Mode được chuẩn hóa theo contract;
 output không thể phục hồi cũng đi qua prose response không tool, không tự biến speech
 hợp lệ thành `unclear`. Provider có `streamProseResponse=true` không dùng
@@ -503,3 +515,7 @@ nằm tại `veetee-server/packages/contracts/fixtures/lab/`.
 12. Provider TTS/MCP timeout -> server hủy task, báo lỗi ngắn và cho phép turn mới.
 13. Text Lab ghi rõ VAD/ASR bypass nhưng vẫn chạy admission/LLM/MCP/TTS thật; Audio
     Replay chạy Silero/Zipformer thật và không tuyên bố đã đo Opus/AEC/loa ESP32.
+14. Voice socket lỗi retryable khi gate mở -> hủy output cũ, tạo session V1 mới trong
+    budget; protocol error/user cancel không reconnect và không kẹt `CONNECTING`.
+15. ASR/TTS/goodbye lỗi trong Device hoặc Lab -> error code/stage bounded, đóng
+    closing grace đúng hạn và cho phép lượt mới; public payload không lộ exception.

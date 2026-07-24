@@ -106,6 +106,51 @@ void TestAdmissionRejectReturnsToListening() {
     Expect(machine, Event::kAdmissionRejected, State::kListening);
 }
 
+void TestTurnFailureReturnsToListeningAndInvalidatesOutput() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    Expect(machine, Event::kVadFinal, State::kEvaluating);
+    Expect(machine, Event::kAdmissionAccepted, State::kThinking);
+    const std::uint32_t generation = machine.cancellation_generation();
+    Expect(machine, Event::kTurnFailed, State::kListening);
+    assert(machine.assistant_gate_open());
+    assert(machine.cancellation_generation() == generation + 1);
+}
+
+void TestReconnectKeepsTheGateOpenAndInvalidatesActiveOutput() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    Expect(machine, Event::kVadFinal, State::kEvaluating);
+    Expect(machine, Event::kAdmissionAccepted, State::kThinking);
+    Expect(machine, Event::kTtsStarted, State::kSpeaking);
+    const std::uint32_t generation = machine.cancellation_generation();
+    Expect(machine, Event::kTransportReconnectScheduled, State::kConnecting);
+    assert(machine.assistant_gate_open());
+    assert(machine.cancellation_generation() == generation + 1);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+}
+
+void TestReconnectIsRejectedAfterClosingStarts() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kTransportConnected, State::kListening);
+    Expect(machine, Event::kInactivityTimeout, State::kClosing);
+    assert(!machine.Handle(Event::kTransportReconnectScheduled).accepted);
+}
+
+void TestButtonCancelsAConnectingSession() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kButtonShortPress, State::kConnecting);
+    Expect(machine, Event::kButtonShortPress, State::kIdle);
+    assert(!machine.assistant_gate_open());
+}
+
 void TestLongPressClosesTheAssistantGate() {
     StateMachine machine;
     ReachIdle(machine);
@@ -155,6 +200,10 @@ int main() {
     TestAbortInvalidatesTheCurrentGeneration();
     TestButtonCanCancelPendingAsrWhileFirmwareStillListens();
     TestAdmissionRejectReturnsToListening();
+    TestTurnFailureReturnsToListeningAndInvalidatesOutput();
+    TestReconnectKeepsTheGateOpenAndInvalidatesActiveOutput();
+    TestReconnectIsRejectedAfterClosingStarts();
+    TestButtonCancelsAConnectingSession();
     TestLongPressClosesTheAssistantGate();
     TestWakeCancelsClosingGrace();
     TestAssistantSleepWaitsForGoodbyePlaybackDrain();

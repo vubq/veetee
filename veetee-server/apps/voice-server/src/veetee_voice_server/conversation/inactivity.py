@@ -4,10 +4,13 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from time import monotonic
 
+import structlog
+
 from veetee_voice_server.conversation.arbiter import ConversationState, TurnArbiter
 from veetee_voice_server.conversation.types import WakeSource
 
 GoodbyeCallback = Callable[[str], Awaitable[None]]
+logger = structlog.get_logger(__name__)
 
 
 class InactivityController:
@@ -141,7 +144,16 @@ class InactivityController:
             if not require_listening:
                 await self._cancel_timer()
             await self._arbiter.begin_closing()
-            await self._goodbye(reason)
+            try:
+                await self._goodbye(reason)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning(
+                    "inactivity_goodbye_failed",
+                    reason=reason,
+                    error=type(error).__name__,
+                )
             await asyncio.sleep(self._closing_grace_seconds)
             if self._arbiter.snapshot.state is ConversationState.CLOSING:
                 await self._arbiter.close_assistant(reason)

@@ -31,6 +31,10 @@ describe("Vue-native Manager Web", () => {
     expect(deviceDiagnosticsPanel).toContain("runSelfTest");
     expect(deviceDiagnosticsPanel).toContain("taskHeadroomRows");
     expect(deviceDiagnosticsPanel).toContain("WebSocket ở đây là task điều phối của Veetee");
+    expect(deviceDiagnosticsPanel).toContain("transportUplinkQueueDrops");
+    expect(deviceDiagnosticsPanel).toContain("không giả lập packet-loss mạng");
+    expect(deviceDiagnosticsPanel).toContain("websocketReconnectAttemptCount");
+    expect(deviceDiagnosticsPanel).toContain("WS exhausted");
   });
 
   it("keeps Mobile as the default UI and exposes all three synchronized styles", () => {
@@ -57,5 +61,7 @@ describe("Vue-native Manager Web", () => {
     expect(agentsPage).toContain("language: form.language");
     expect(agentsPage).toContain("createPersonalityPreset");
     expect(agentsPage).toContain("deletePersonalityPreset");
+    expect(agentsPage).toContain("voiceQualityWarnings");
+    expect(agentsPage).toContain("có nguy cơ clipping");
   });
 });

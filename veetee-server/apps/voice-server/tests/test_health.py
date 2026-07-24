@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from veetee_voice_server.app import (
     _complete_conversation_gate_json,
+    _ConversationGateArtifacts,
     _LlmReadinessProbe,
     _planner_system_prompt,
     _response_system_prompt,
@@ -134,6 +135,43 @@ async def test_response_prompt_omits_tool_input_schemas_from_prose_call() -> Non
     assert "A compact fixture tool." in prompt
     assert "inputSchema" not in prompt
     assert '"properties"' not in prompt
+
+
+async def test_gate_artifact_cache_refreshes_after_device_mcp_discovery() -> None:
+    class MutableToolBroker:
+        def __init__(self) -> None:
+            self.catalog: list[dict[str, object]] = []
+
+        def list_tools(self) -> list[dict[str, object]]:
+            return self.catalog
+
+    profile = SessionProfile.defaults(
+        Settings(environment="test", require_device_auth=False)
+    )
+    broker = MutableToolBroker()
+    artifacts = _ConversationGateArtifacts(profile, broker)  # type: ignore[arg-type]
+
+    empty_schema, empty_prompt, _, empty_count = artifacts.resolve()
+    assert empty_count == 0
+    assert "self.fixture" not in str(empty_schema)
+    assert "self.fixture" not in empty_prompt
+
+    broker.catalog = [
+        {
+            "name": "self.fixture",
+            "description": "Read a fixture value.",
+            "inputSchema": {"type": "object", "additionalProperties": False},
+        }
+    ]
+    tool_schema, tool_prompt, schema_chars, tool_count = artifacts.resolve()
+    cached_schema, cached_prompt, _, _ = artifacts.resolve()
+
+    assert tool_count == 1
+    assert schema_chars > 0
+    assert "self.fixture" in str(tool_schema)
+    assert "self.fixture" in tool_prompt
+    assert cached_schema is tool_schema
+    assert cached_prompt is tool_prompt
 
 
 async def test_conversation_gate_forces_the_full_structured_schema() -> None:

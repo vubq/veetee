@@ -242,6 +242,9 @@ class StructuredConversationGate:
             plan_value = {}
         flattened_plan = {**plan_value, "dialogue_act": value.get("dialogue_act")}
         plan = JsonPlannerProvider._parse(flattened_plan, locale)
+        runtime_error_code = value.get("_runtime_error_code")
+        if runtime_error_code == "semantic_provider_unavailable":
+            plan = replace(plan, runtime_error_code=runtime_error_code)
 
         if (
             disposition is AdmissionDisposition.INTERRUPT

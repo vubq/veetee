@@ -96,6 +96,17 @@ const selectedPersonalityAccent = computed(
 const enabledProviders = (kind: Provider["kind"]) => props.providers.filter((provider) => provider.kind === kind && provider.enabled);
 const ttsProvider = computed(() => props.providers.find((provider) => provider.id === form.tts));
 const ttsSupportsPitch = computed(() => ttsProvider.value?.config?.supportsPitch !== false);
+const voiceQualityWarnings = computed(() => {
+  if (!ttsProvider.value?.adapter.toLowerCase().includes("vieneu")) return [];
+  const warnings: string[] = [];
+  if (Number(form.voiceRate) > 1.2) {
+    warnings.push("Tốc độ trên 1,2× dùng WSOLA sau inference: câu đọc ngắn hơn nhưng model không sinh nhanh hơn, nên có thể thiếu audio đệm.");
+  }
+  if (Number(form.voiceVolume) > 1) {
+    warnings.push("Âm lượng trên 1,0 khuếch đại PCM và có nguy cơ clipping. Ưu tiên chỉnh âm lượng loa trên thiết bị.");
+  }
+  return warnings;
+});
 const voiceOptions = computed(() => {
   const voices = ttsProvider.value?.config?.voices;
   if (!Array.isArray(voices)) return [];
@@ -645,6 +656,10 @@ const promptPreview = computed(() => {
                 <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>
               </div>
               <p v-if="form.tts && !voiceOptions.length" class="agent-runtime-hint">Provider này chưa công bố catalog voice; có thể nhập voice ID ở cấu hình provider trước.</p>
+              <div v-if="voiceQualityWarnings.length" class="tts-quality-warnings" role="status">
+                <VtIcon name="warning" :size="17" />
+                <div><b>Profile có rủi ro chất lượng</b><p v-for="warning in voiceQualityWarnings" :key="warning">{{ warning }}</p></div>
+              </div>
             </section>
             <section class="agent-runtime-card">
               <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Inactivity hội thoại</b><small>Không giới hạn tổng phiên hoặc tổng lượt</small></div></header>
@@ -1158,6 +1173,33 @@ const promptPreview = computed(() => {
   background: #eef2ec;
   font-size: 9px;
   line-height: 1.55;
+}
+
+.tts-quality-warnings {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 9px;
+  border: 1px solid #e5d3ae;
+  border-radius: 12px;
+  padding: 10px 11px;
+  color: var(--warning);
+  background: #fff8e9;
+}
+
+.tts-quality-warnings > div {
+  display: grid;
+  gap: 4px;
+}
+
+.tts-quality-warnings b {
+  font-size: 10px;
+}
+
+.tts-quality-warnings p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
 }
 
 .sticky-publish {

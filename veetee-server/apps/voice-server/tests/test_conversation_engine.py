@@ -87,6 +87,32 @@ class SlowFusedGate:
         return self.plan_value
 
 
+class UnavailableFusedGate:
+    async def evaluate(
+        self, transcript: Transcript, context: OperationContext
+    ) -> AdmissionDecision:
+        del transcript
+        context.checkpoint()
+        return AdmissionDecision(AdmissionDisposition.ACCEPTED, 0.5, "invalid_model_output")
+
+    async def plan(
+        self,
+        transcript: Transcript,
+        admission: AdmissionDecision,
+        context: OperationContext,
+    ) -> ConversationPlan:
+        del transcript, admission
+        context.checkpoint()
+        return ConversationPlan(
+            action=PlanAction.RESPOND,
+            dialogue_act=DialogueAct.ANSWER,
+            locale="vi-VN",
+            intent="",
+            response_required=True,
+            runtime_error_code="semantic_provider_unavailable",
+        )
+
+
 class FakeLlm:
     def __init__(self, deltas: tuple[str, ...] = ("Xin chao. ", "Toi co the giup ban.")) -> None:
         self.deltas = deltas
@@ -449,5 +475,40 @@ async def test_provider_failure_speaks_recovery_and_keeps_session_open() -> None
     await engine.handle_transcript(Transcript("Hôm nay là thứ mấy?", "vi-VN"))
 
     assert tts.calls == ["Bạn nói lại giúp tôi nhé."]
-    assert any(output.kind is OutputKind.ERROR for output in sink.outputs)
+    errors = [output for output in sink.outputs if output.kind is OutputKind.ERROR]
+    assert [output.payload for output in errors] == [
+        {"code": "conversation_failed", "stage": "conversation"}
+    ]
     assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_semantic_provider_failure_does_not_make_second_llm_call() -> None:
+    arbiter = TurnArbiter("session-semantic-unavailable")
+    gate = UnavailableFusedGate()
+    llm = FakeLlm()
+    tts = FakeTts()
+    sink = MemoryConversationSink()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=gate,
+        planner=gate,
+        llm=llm,
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+        error_text="Bạn nói lại giúp tôi nhé.",
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Hôm nay là thứ mấy?", "vi-VN"))
+
+    assert llm.calls == 0
+    assert tts.calls == ["Bạn nói lại giúp tôi nhé."]
+    errors = [output.payload for output in sink.outputs if output.kind is OutputKind.ERROR]
+    assert errors == [
+        {
+            "code": "semantic_provider_unavailable",
+            "stage": "semantic",
+        }
+    ]

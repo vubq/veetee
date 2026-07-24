@@ -51,6 +51,10 @@ class _SpeechLifecycle:
     started: bool = False
 
 
+class _SemanticProviderUnavailableError(RuntimeError):
+    pass
+
+
 class ConversationEngine:
     def __init__(
         self,
@@ -119,6 +123,9 @@ class ConversationEngine:
                         "confidence": decision.confidence,
                         "reason_code": decision.reason_code,
                         "addressed_to_robot": decision.addressed_to_robot,
+                        "duration_ms": round(
+                            (monotonic() - admission_started_at) * 1_000, 1
+                        ),
                     },
                 ),
             )
@@ -154,6 +161,10 @@ class ConversationEngine:
                 has_response_text=bool(plan.response_text),
                 duration_ms=round((monotonic() - planner_started_at) * 1_000, 1),
             )
+            if plan.runtime_error_code == "semantic_provider_unavailable":
+                raise _SemanticProviderUnavailableError(
+                    "semantic provider unavailable"
+                )
             await self._emit(
                 context,
                 ConversationOutput(
@@ -166,6 +177,9 @@ class ConversationEngine:
                         "intent": plan.intent,
                         "locale": plan.locale,
                         "tool_name": plan.tool_call.name if plan.tool_call is not None else None,
+                        "duration_ms": round(
+                            (monotonic() - planner_started_at) * 1_000, 1
+                        ),
                     },
                 ),
             )
@@ -173,7 +187,7 @@ class ConversationEngine:
             return decision.disposition
         except (TurnCancelledError, StaleTurnError):
             return None
-        except OperationDeadlineExceededError as error:
+        except OperationDeadlineExceededError:
             logger.warning(
                 "conversation_provider_deadline",
                 session_id=context.session_id,
@@ -181,7 +195,20 @@ class ConversationEngine:
                 error_code="provider_deadline",
             )
             await self._speak_recovery_if_possible(context, transcript)
-            await self._emit_if_current_error(context, "provider_deadline", str(error))
+            await self._emit_if_current_error(context, "provider_deadline", "provider")
+            return None
+        except _SemanticProviderUnavailableError:
+            logger.warning(
+                "conversation_semantic_provider_unavailable",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+            )
+            await self._speak_recovery_if_possible(context, transcript)
+            await self._emit_if_current_error(
+                context,
+                "semantic_provider_unavailable",
+                "semantic",
+            )
             return None
         except Exception as error:
             logger.warning(
@@ -194,7 +221,7 @@ class ConversationEngine:
                 retryable=getattr(error, "retryable", None),
             )
             await self._speak_recovery_if_possible(context, transcript)
-            await self._emit_if_current_error(context, "conversation_failed", type(error).__name__)
+            await self._emit_if_current_error(context, "conversation_failed", "conversation")
             return None
         finally:
             await self._arbiter.complete_turn(context)
@@ -506,7 +533,7 @@ class ConversationEngine:
         await self._sink.emit(output)
 
     async def _emit_if_current_error(
-        self, context: OperationContext, code: str, detail: str
+        self, context: OperationContext, code: str, stage: str
     ) -> None:
         if not self._arbiter.is_current(context):
             return
@@ -515,7 +542,7 @@ class ConversationEngine:
                 kind=OutputKind.ERROR,
                 turn_id=context.turn_id,
                 generation=context.generation,
-                payload={"code": code, "detail": detail},
+                payload={"code": code, "stage": stage},
             )
         )
 

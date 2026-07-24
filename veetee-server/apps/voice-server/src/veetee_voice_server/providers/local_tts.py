@@ -5,15 +5,19 @@ import json
 import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import numpy as np
 import soxr  # type: ignore[import-untyped]
+import structlog
 from audiotsm import wsola  # type: ignore[import-untyped]
 from audiotsm.io.array import ArrayReader, ArrayWriter  # type: ignore[import-untyped]
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.types import AudioChunk
+
+logger = structlog.get_logger(__name__)
 
 
 class VieNeuTtsProvider:
@@ -32,6 +36,7 @@ class VieNeuTtsProvider:
         apply_watermark: bool = True,
         stream_leadin_frames: int = 16,
         engine: Any | None = None,
+        inference_lock: asyncio.Lock | None = None,
     ) -> None:
         self._model_dir = model_dir
         self._voice = voice
@@ -51,7 +56,26 @@ class VieNeuTtsProvider:
         self._stream_leadin_frames = stream_leadin_frames
         self._engine = engine
         self._load_lock = threading.Lock()
-        self._inference_lock = asyncio.Lock()
+        self._inference_lock = inference_lock or asyncio.Lock()
+        self._conversion_samples = 0
+        self._conversion_clipped_samples = 0
+        for warning in self.quality_warnings:
+            logger.warning(
+                "vieneu_profile_quality_warning",
+                code=warning,
+                voice=self._voice,
+                speed=self._speed,
+                volume=self._volume,
+            )
+
+    @property
+    def quality_warnings(self) -> tuple[str, ...]:
+        warnings: list[str] = []
+        if self._speed > 1.2:
+            warnings.append("postprocess_rate_starvation_risk")
+        if self._volume > 1.0:
+            warnings.append("amplification_clipping_risk")
+        return tuple(warnings)
 
     def with_profile(
         self,
@@ -73,6 +97,7 @@ class VieNeuTtsProvider:
             apply_watermark=self._apply_watermark,
             stream_leadin_frames=self._stream_leadin_frames,
             engine=self._engine,
+            inference_lock=self._inference_lock,
         )
 
     async def prewarm(self) -> None:
@@ -86,6 +111,9 @@ class VieNeuTtsProvider:
             return
         context.checkpoint()
         async with self._inference_lock:
+            started_at = monotonic()
+            self._conversion_samples = 0
+            self._conversion_clipped_samples = 0
             engine = await asyncio.to_thread(self._load_engine)
             stream = await asyncio.to_thread(
                 engine.infer_stream,
@@ -102,29 +130,17 @@ class VieNeuTtsProvider:
             )
             tempo = _StreamingTempo(self._speed) if self._speed != 1.0 else None
             sequence = 0
-            while True:
-                has_chunk, source = await asyncio.to_thread(self._next_chunk, stream)
-                if not has_chunk:
-                    break
-                context.checkpoint()
-                assert source is not None
-                if tempo is not None:
-                    source = tempo.process(source)
-                    if source.size == 0:
-                        continue
-                resampled = resampler.resample_chunk(source, last=False)
-                pcm = self._float_to_pcm(resampled)
-                if pcm:
-                    yield AudioChunk(
-                        sequence=sequence,
-                        sample_rate=self._output_sample_rate,
-                        encoding="pcm_s16le",
-                        data=pcm,
-                    )
-                    sequence += 1
-            if tempo is not None:
-                source = tempo.process(np.empty(0, dtype=np.float32), final=True)
-                if source.size:
+            try:
+                while True:
+                    has_chunk, source = await asyncio.to_thread(self._next_chunk, stream)
+                    if not has_chunk:
+                        break
+                    context.checkpoint()
+                    assert source is not None
+                    if tempo is not None:
+                        source = tempo.process(source)
+                        if source.size == 0:
+                            continue
                     resampled = resampler.resample_chunk(source, last=False)
                     pcm = self._float_to_pcm(resampled)
                     if pcm:
@@ -135,15 +151,46 @@ class VieNeuTtsProvider:
                             data=pcm,
                         )
                         sequence += 1
-            tail = resampler.resample_chunk(np.empty(0, dtype=np.float32), last=True)
-            tail_pcm = self._float_to_pcm(tail)
-            if tail_pcm:
-                yield AudioChunk(
-                    sequence=sequence,
-                    sample_rate=self._output_sample_rate,
-                    encoding="pcm_s16le",
-                    data=tail_pcm,
-                    final=True,
+                if tempo is not None:
+                    source = tempo.process(np.empty(0, dtype=np.float32), final=True)
+                    if source.size:
+                        resampled = resampler.resample_chunk(source, last=False)
+                        pcm = self._float_to_pcm(resampled)
+                        if pcm:
+                            yield AudioChunk(
+                                sequence=sequence,
+                                sample_rate=self._output_sample_rate,
+                                encoding="pcm_s16le",
+                                data=pcm,
+                            )
+                            sequence += 1
+                tail = resampler.resample_chunk(np.empty(0, dtype=np.float32), last=True)
+                tail_pcm = self._float_to_pcm(tail)
+                if tail_pcm:
+                    yield AudioChunk(
+                        sequence=sequence,
+                        sample_rate=self._output_sample_rate,
+                        encoding="pcm_s16le",
+                        data=tail_pcm,
+                        final=True,
+                    )
+            finally:
+                clipping_ratio = (
+                    self._conversion_clipped_samples / self._conversion_samples
+                    if self._conversion_samples
+                    else 0.0
+                )
+                logger.info(
+                    "vieneu_tts_completed",
+                    voice=self._voice,
+                    speed=self._speed,
+                    volume=self._volume,
+                    duration_ms=round((monotonic() - started_at) * 1_000, 1),
+                    audio_ms=round(
+                        self._conversion_samples * 1_000 / self._output_sample_rate,
+                        1,
+                    ),
+                    clipping_ratio=round(clipping_ratio, 6),
                 )
 
     def _load_engine(self) -> Any:
@@ -197,7 +244,10 @@ class VieNeuTtsProvider:
     def _float_to_pcm(self, samples: np.ndarray[Any, Any]) -> bytes:
         if samples.size == 0:
             return b""
-        clipped = np.clip(samples * self._volume, -1.0, 1.0)
+        amplified = samples * self._volume
+        self._conversion_samples += int(amplified.size)
+        self._conversion_clipped_samples += int(np.count_nonzero(np.abs(amplified) > 1.0))
+        clipped = np.clip(amplified, -1.0, 1.0)
         return bytes((clipped * 32767.0).astype("<i2").tobytes())
 
 

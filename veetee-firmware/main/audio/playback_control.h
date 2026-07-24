@@ -10,6 +10,7 @@ enum class PlaybackItemKind : std::uint8_t {
     kEnd,
     kAbort,
     kAbortAndFinish,
+    kRecoverySignal,
 };
 
 constexpr bool ResetsPlaybackDecoder(PlaybackItemKind kind) {

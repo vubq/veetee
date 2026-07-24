@@ -105,8 +105,13 @@ class ManagerMcpCallRequest(BaseModel):
     timeout_seconds: float = Field(default=10.0, ge=0.5, le=30.0)
 
 
-def _planner_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
-    tool_catalog = tools.list_tools()
+def _planner_system_prompt(
+    profile: SessionProfile,
+    tools: ToolBroker,
+    *,
+    tool_catalog: list[dict[str, Any]] | None = None,
+) -> str:
+    tool_catalog = tools.list_tools() if tool_catalog is None else tool_catalog
     catalog = json.dumps(tool_catalog, ensure_ascii=False, separators=(",", ":"))
     streams_prose = bool(
         profile.llm_chain
@@ -200,8 +205,17 @@ def _response_system_prompt(profile: SessionProfile, tools: ToolBroker) -> str:
     ).strip()
 
 
-def _planner_output_schema(tools: ToolBroker) -> dict[str, object]:
-    tool_names = [item["name"] for item in tools.list_tools() if isinstance(item.get("name"), str)]
+def _planner_output_schema(
+    tools: ToolBroker,
+    *,
+    tool_catalog: list[dict[str, Any]] | None = None,
+) -> dict[str, object]:
+    resolved_catalog = tools.list_tools() if tool_catalog is None else tool_catalog
+    tool_names = [
+        item["name"]
+        for item in resolved_catalog
+        if isinstance(item.get("name"), str)
+    ]
     plan_properties: dict[str, object] = {
         "action": {
             "type": "string",
@@ -533,15 +547,75 @@ def _degraded_conversation_gate(locale: str) -> dict[str, Any]:
     }
 
 
+class _ConversationGateArtifacts:
+    """Cache prompt/schema while refreshing after asynchronous MCP discovery."""
+
+    def __init__(self, profile: SessionProfile, tools: ToolBroker) -> None:
+        self._profile = profile
+        self._tools = tools
+        self._fingerprint: str | None = None
+        self._schema: dict[str, object] | None = None
+        self._system_prompt: str | None = None
+        self._schema_chars = 0
+        self._tool_count = 0
+
+    def resolve(self) -> tuple[dict[str, object], str, int, int]:
+        catalog = self._tools.list_tools()
+        fingerprint = json.dumps(
+            catalog,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if fingerprint != self._fingerprint:
+            self._schema = _planner_output_schema(
+                self._tools,
+                tool_catalog=catalog,
+            )
+            self._system_prompt = _planner_system_prompt(
+                self._profile,
+                self._tools,
+                tool_catalog=catalog,
+            )
+            self._schema_chars = len(
+                json.dumps(self._schema, separators=(",", ":"))
+            )
+            self._tool_count = len(catalog)
+            self._fingerprint = fingerprint
+        assert self._schema is not None
+        assert self._system_prompt is not None
+        return (
+            self._schema,
+            self._system_prompt,
+            self._schema_chars,
+            self._tool_count,
+        )
+
+
 async def _complete_conversation_gate_json(
     llm: FailoverLlmProvider,
     profile: SessionProfile,
     tools: ToolBroker,
     payload: dict[str, object],
     context: OperationContext,
+    *,
+    schema: dict[str, object] | None = None,
+    system_prompt: str | None = None,
+    schema_chars: int | None = None,
+    tool_count: int | None = None,
 ) -> dict[str, Any]:
-    schema = _planner_output_schema(tools)
-    system_prompt = _planner_system_prompt(profile, tools)
+    resolved_schema = schema if schema is not None else _planner_output_schema(tools)
+    resolved_system_prompt = (
+        system_prompt
+        if system_prompt is not None
+        else _planner_system_prompt(profile, tools)
+    )
+    resolved_schema_chars = (
+        schema_chars
+        if schema_chars is not None
+        else len(json.dumps(resolved_schema, separators=(",", ":")))
+    )
+    resolved_tool_count = tool_count if tool_count is not None else len(tools.list_tools())
     user_prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     conversation_context = payload.get("conversation_context")
     context_message_count = (
@@ -552,17 +626,17 @@ async def _complete_conversation_gate_json(
         "conversation_gate_request",
         turn_id=context.turn_id,
         context_messages=context_message_count,
-        system_prompt_chars=len(system_prompt),
+        system_prompt_chars=len(resolved_system_prompt),
         user_prompt_chars=len(user_prompt),
-        schema_chars=len(json.dumps(schema, separators=(",", ":"))),
-        tool_count=len(tools.list_tools()),
+        schema_chars=resolved_schema_chars,
+        tool_count=resolved_tool_count,
     )
     try:
         value = await llm.complete_json(
-            system_prompt=system_prompt,
+            system_prompt=resolved_system_prompt,
             user_prompt=user_prompt,
             context=context,
-            schema=schema,
+            schema=resolved_schema,
             schema_name="veetee_conversation_gate",
             schema_transport="json_schema",
             max_output_tokens=512,
@@ -582,7 +656,9 @@ async def _complete_conversation_gate_json(
             schema_path=getattr(error, "schema_path", None),
             fallback="respond_without_tools",
         )
-        return _degraded_conversation_gate(profile.locale)
+        degraded = _degraded_conversation_gate(profile.locale)
+        degraded["_runtime_error_code"] = "semantic_provider_unavailable"
+        return degraded
     logger.info(
         "conversation_gate_response",
         turn_id=context.turn_id,
@@ -594,7 +670,7 @@ async def _complete_conversation_gate_json(
     )
     return _validated_planner_output(
         value,
-        schema,
+        resolved_schema,
         profile.locale,
         stream_response=stream_response,
     )
@@ -708,16 +784,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tools = with_session_context_tools(profile, tool_broker)
         asr_llm = llm_for_profile(profile)
         asr_tts = tts_for_profile(profile)
+        gate_artifacts = _ConversationGateArtifacts(profile, tools)
 
         async def gate_json(
             payload: dict[str, object], context: OperationContext
         ) -> dict[str, Any]:
+            (
+                gate_schema,
+                gate_system_prompt,
+                gate_schema_chars,
+                gate_tool_count,
+            ) = gate_artifacts.resolve()
             return await _complete_conversation_gate_json(
                 asr_llm,
                 profile,
                 tools,
                 payload,
                 context,
+                schema=gate_schema,
+                system_prompt=gate_system_prompt,
+                schema_chars=gate_schema_chars,
+                tool_count=gate_tool_count,
             )
 
         gate = StructuredConversationGate(gate_json, locale=profile.locale)

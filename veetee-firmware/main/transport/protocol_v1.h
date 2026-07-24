@@ -19,6 +19,7 @@ enum class ServerEventKind : std::uint8_t {
     kListenStart,
     kStt,
     kLlm,
+    kTurnError,
     kTtsStart,
     kTtsStop,
     kAssistantSleep,

@@ -264,6 +264,13 @@ exact-string rule):
 - người dùng yêu cầu “nói lại”, “nghe không đúng” hoặc sửa câu trước đó;
 - profile yêu cầu chất lượng cao cho tool/action quan trọng.
 
+Pinned Sherpa offline adapter chưa cung cấp confidence/stability đã hiệu chuẩn nên
+hai field hiện là `null`, không phải `1.0` hay `0`. Preprocess/decode chạy trong
+deadline/cancellation scope; native decode đã timeout vẫn giữ serialization lock
+cho tới khi thread thật sự kết thúc để lượt sau không overlap trên recognizer dùng
+chung. Telemetry tách queue/decode/total latency và ghi
+`confidence_available=false`.
+
 Re-decode phải dùng cùng `turn_id`, deadline và cancellation scope. Nếu ChunkFormer
 không hỗ trợ streaming trên runtime đã chọn, chỉ dùng nó sau VAD final và không
 quảng bá đó là first-response realtime. Khi server chưa đủ CPU/GPU/RAM, có thể bật
@@ -314,6 +321,12 @@ lead-in 16 acoustic frames trước khi phát để giữ đủ audio đệm khi
 chậm hơn playback; đây là yếu tố tránh hụt tiếng quan trọng hơn việc rút ngắn
 thời lượng bằng WSOLA. Tempo vẫn là cấu hình server, không thay đổi giao thức
 PCM/Opus 24 kHz với firmware.
+
+Mọi profile VieNeu dùng chung một inference lock của engine để không chạy đồng thời
+trên model state dùng chung. Runtime cảnh báo `postprocess_rate_starvation_risk` khi
+tempo lớn hơn `1.2` và `amplification_clipping_risk` khi volume lớn hơn `1.0`; Manager
+hiển thị cảnh báo trước khi publish nhưng không tự sửa desired config. Sau mỗi
+synthesis, adapter log số sample/audio duration và clipping ratio thực tế đã redact.
 
 Đã benchmark lại trên host V1 (Intel i5-10300H, 15 GiB RAM, GTX 1650 Ti 4 GiB)
 bằng mười lượt fixed-seed có watermark. VieNeu ONNX INT8 CPU 2 threads đạt first

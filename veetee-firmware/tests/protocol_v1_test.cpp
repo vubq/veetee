@@ -154,6 +154,8 @@ void TestRuntimeEventsAndBinaryAssembly() {
          ServerEventKind::kStt},
         {R"({"session_id":"session-1","type":"llm","emotion":"thinking"})",
          ServerEventKind::kLlm},
+        {R"({"session_id":"session-1","type":"llm","emotion":"sad","text":"conversation_failed"})",
+         ServerEventKind::kTurnError},
         {R"({"session_id":"session-1","type":"llm","emotion":"neutral","text":"xin"})",
          ServerEventKind::kOther},
         {R"({"session_id":"session-1","type":"tts","state":"start"})",

@@ -98,6 +98,10 @@ TransitionResult StateMachine::Handle(Event event) {
                 assistant_gate_open_ = true;
                 state_ = State::kConnecting;
                 accepted = true;
+            } else if (state_ == State::kConnecting) {
+                assistant_gate_open_ = false;
+                state_ = State::kIdle;
+                accepted = true;
             } else if (state_ == State::kListening ||
                        state_ == State::kEvaluating || state_ == State::kThinking ||
                        state_ == State::kSpeaking || state_ == State::kClosing) {
@@ -151,6 +155,21 @@ TransitionResult StateMachine::Handle(Event event) {
             }
             break;
 
+        case Event::kTransportReconnectScheduled:
+            if (assistant_gate_open_ &&
+                (state_ == State::kConnecting || state_ == State::kListening ||
+                 state_ == State::kEvaluating || state_ == State::kThinking ||
+                 state_ == State::kSpeaking)) {
+                if (state_ == State::kEvaluating ||
+                    state_ == State::kThinking ||
+                    state_ == State::kSpeaking) {
+                    ++cancellation_generation_;
+                }
+                state_ = State::kConnecting;
+                accepted = true;
+            }
+            break;
+
         case Event::kTransportLost:
             if (state_ != State::kStarting && state_ != State::kWifiConfiguring &&
                 state_ != State::kActivating && state_ != State::kIdle) {
@@ -182,6 +201,18 @@ TransitionResult StateMachine::Handle(Event event) {
         case Event::kAdmissionRejected:
             if (state_ == State::kEvaluating || state_ == State::kThinking) {
                 state_ = State::kListening;
+                accepted = true;
+            }
+            break;
+
+        case Event::kTurnFailed:
+            if (state_ == State::kListening || state_ == State::kEvaluating ||
+                state_ == State::kThinking || state_ == State::kSpeaking) {
+                if (state_ == State::kEvaluating || state_ == State::kThinking ||
+                    state_ == State::kSpeaking) {
+                    ++cancellation_generation_;
+                }
+                state_ = assistant_gate_open_ ? State::kListening : State::kIdle;
                 accepted = true;
             }
             break;
@@ -303,10 +334,13 @@ const char* ToString(Event event) {
         case Event::kActivationWakeDetected: return "activation_wake_detected";
         case Event::kInterruptDetected: return "interrupt_detected";
         case Event::kTransportConnected: return "transport_connected";
+        case Event::kTransportReconnectScheduled:
+            return "transport_reconnect_scheduled";
         case Event::kTransportLost: return "transport_lost";
         case Event::kVadFinal: return "vad_final";
         case Event::kAdmissionAccepted: return "admission_accepted";
         case Event::kAdmissionRejected: return "admission_rejected";
+        case Event::kTurnFailed: return "turn_failed";
         case Event::kTtsStarted: return "tts_started";
         case Event::kTtsStopped: return "tts_stopped";
         case Event::kAssistantSleepRequested: return "assistant_sleep_requested";

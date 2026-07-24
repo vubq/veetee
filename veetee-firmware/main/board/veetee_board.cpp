@@ -300,6 +300,10 @@ void VeeteeBoard::AbortPlayback() {
     audio_.AbortPlayback();
 }
 
+bool VeeteeBoard::PlayRecoverySignal() {
+    return audio_.PlayRecoverySignal();
+}
+
 bool VeeteeBoard::SetSpeakerVolume(int volume_percent) {
     return audio_.SetVolumePercent(volume_percent);
 }

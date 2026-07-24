@@ -124,6 +124,11 @@ class FakeEngine:
         return
 
 
+class FailingEngine:
+    async def handle_transcript(self, _: Transcript) -> None:
+        raise RuntimeError("private turn fixture detail")
+
+
 def session(websocket: FakeWebSocket, settings: Settings) -> VoiceSession:
     return VoiceSession(
         websocket,  # type: ignore[arg-type]
@@ -419,6 +424,12 @@ async def test_goodbye_always_emits_sleep_when_tts_is_slow_or_fails(tts: object)
         "start",
         "stop",
     }
+    if isinstance(tts, FailingGoodbyeTts):
+        assert llm_payload(
+            voice_session.session_id,
+            "sad",
+            text="goodbye_tts_failed",
+        ) in controls
     await voice_session.close()
 
 
@@ -525,6 +536,32 @@ async def test_provider_failure_rearms_inactivity_after_candidate_started() -> N
         await voice_session._transcribe(b"\0\0" * 320)
 
     candidate_rejected.assert_awaited_once()
+    await voice_session.close()
+
+
+async def test_device_turn_failure_exposes_stable_error_code_only() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    voice_session.asr = TranscriptAsr()  # type: ignore[assignment]
+    voice_session.engine = FailingEngine()  # type: ignore[assignment]
+    await voice_session.inactivity.assistant_opened(WakeSource.BUTTON)
+
+    await voice_session._transcribe(b"\0\0" * 320)
+
+    controls = [json.loads(item) for item in websocket.sent_text]
+    error = next(
+        item
+        for item in controls
+        if item.get("type") == "llm" and item.get("emotion") == "sad"
+    )
+    assert error["text"] == "transcription_or_turn_failed"
+    assert "RuntimeError" not in json.dumps(error)
+    assert controls[-1] == {
+        "session_id": voice_session.session_id,
+        "type": "listen",
+        "state": "start",
+    }
     await voice_session.close()
 
 

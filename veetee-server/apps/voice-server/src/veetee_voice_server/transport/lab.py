@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import soxr  # type: ignore[import-untyped]
+import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 from jsonschema import Draft202012Validator
 
@@ -47,6 +48,8 @@ MAX_LAB_TEXT_CHARACTERS = 4_000
 EngineFactory = Callable[
     [TurnArbiter, "LabConversationSink", SessionProfile, ToolBroker], ConversationEngine
 ]
+
+logger = structlog.get_logger(__name__)
 
 
 class LabConversationSink:
@@ -421,6 +424,13 @@ class LabSession:
             threshold=settings.vad_threshold,
             release_threshold=settings.vad_release_threshold,
             min_silence_ms=settings.vad_min_silence_ms,
+            fast_silence_ms=min(
+                settings.vad_fast_silence_ms, settings.vad_min_silence_ms
+            ),
+            fast_endpoint_min_speech_ms=settings.vad_fast_endpoint_min_speech_ms,
+            quiet_probability=min(
+                settings.vad_quiet_probability, settings.vad_release_threshold
+            ),
             max_speech_seconds=settings.max_utterance_seconds,
         )
         self.inactivity = InactivityController(
@@ -436,6 +446,7 @@ class LabSession:
         self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1_000 * 2
         self._noise_reference = b""
         self._vad_probabilities: list[float] = []
+        self._vad_processing_ms = 0.0
         self._wake_source = WakeSource.BUTTON
         self._speech_active = False
         self._audio_open = False
@@ -567,7 +578,9 @@ class LabSession:
             return
         if self._processing_task is not None and not self._processing_task.done():
             return
-        results = self.vad.process(pcm)
+        vad_started_at = monotonic()
+        results = await asyncio.to_thread(self.vad.process, pcm)
+        self._vad_processing_ms += (monotonic() - vad_started_at) * 1_000
         started = any(item.speech_started for item in results)
         ended = any(item.speech_ended for item in results)
         if self._speech_active:
@@ -607,7 +620,21 @@ class LabSession:
                 self._pre_roll.clear()
                 await self.sink.send_event("vad.speech_start")
         if ended and self._speech_active:
-            await self.sink.send_event("vad.speech_end")
+            endpoint_reason = next(
+                (
+                    item.endpoint_reason
+                    for item in results
+                    if item.speech_ended and item.endpoint_reason is not None
+                ),
+                "silence",
+            )
+            await self.sink.send_event(
+                "vad.speech_end",
+                {
+                    "endpoint_reason": endpoint_reason,
+                    "processing_ms": round(self._vad_processing_ms, 3),
+                },
+            )
             self._start_asr()
 
     async def _finish_audio(self) -> None:
@@ -667,6 +694,7 @@ class LabSession:
         )
         self._asr_context = context
         await self.sink.send_event("asr.start", {"audio_bytes": len(pcm)})
+        asr_started_at = monotonic()
         try:
             transcript = await self.asr.transcribe_pcm(
                 pcm,
@@ -692,11 +720,29 @@ class LabSession:
                     "locale": normalized.locale,
                     "confidence": normalized.confidence,
                     "stability": normalized.stability,
+                    "duration_ms": round(
+                        (monotonic() - asr_started_at) * 1_000, 3
+                    ),
+                    "confidence_available": normalized.confidence is not None,
                     "source": self.context.input_mode,
                     "input_evidence": input_evidence_payload(evidence),
                 },
             )
             await self._run_transcript(normalized)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "lab_asr_failed",
+                session_id=self.session_id,
+                error=type(error).__name__,
+            )
+            await self.inactivity.candidate_rejected()
+            await self.sink.send_event(
+                "turn.error",
+                {"code": "asr_failed", "stage": "asr"},
+                generation=context.generation,
+            )
         finally:
             if self._asr_context is context:
                 self._asr_context = None
@@ -734,10 +780,15 @@ class LabSession:
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            logger.warning(
+                "lab_turn_failed",
+                session_id=self.session_id,
+                error=type(error).__name__,
+            )
             await self.inactivity.candidate_rejected()
             await self.sink.send_event(
                 "turn.error",
-                {"code": "transcription_or_turn_failed", "error_type": type(error).__name__},
+                {"code": "transcription_or_turn_failed", "stage": "turn"},
             )
         finally:
             if self._processing_task is asyncio.current_task():
@@ -776,6 +827,7 @@ class LabSession:
             monotonic() + self.profile.policy.tts_seconds,
         )
         started = False
+        failure: Exception | None = None
         try:
             async for audio in iterate_operation(
                 self.tts.synthesize(self.profile.goodbye_text, self.profile.locale, context),
@@ -795,11 +847,26 @@ class LabSession:
                         audio=audio,
                     )
                 )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            failure = error
+            logger.warning(
+                "lab_goodbye_tts_failed",
+                session_id=self.session_id,
+                error=type(error).__name__,
+            )
         finally:
             if started:
                 await self.sink.emit(
                     ConversationOutput(OutputKind.TTS_STOP, None, context.generation)
                 )
+        if failure is not None:
+            await self.sink.send_event(
+                "turn.error",
+                {"code": "goodbye_tts_failed", "stage": "goodbye_tts"},
+                generation=context.generation,
+            )
         await self.sink.send_event("assistant.sleep", {"reason": reason})
 
     async def _cancel_processing(self, reason: str) -> None:
@@ -818,5 +885,6 @@ class LabSession:
         self._pre_roll.clear()
         self._noise_reference = b""
         self._vad_probabilities.clear()
+        self._vad_processing_ms = 0.0
         self._speech_active = False
         self.vad.reset()

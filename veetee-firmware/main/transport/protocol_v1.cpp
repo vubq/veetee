@@ -273,9 +273,13 @@ bool ParseServerEvent(const char* json, std::size_t length, ServerEvent* event) 
             valid = cJSON_IsString(emotion) && emotion->valuestring != nullptr;
             // Text deltas are high-volume UI metadata; only the thinking edge
             // belongs on the bounded application state queue.
-            parsed.kind = valid && std::strcmp(emotion->valuestring, "thinking") == 0
-                              ? ServerEventKind::kLlm
-                              : ServerEventKind::kOther;
+            if (valid && std::strcmp(emotion->valuestring, "thinking") == 0) {
+                parsed.kind = ServerEventKind::kLlm;
+            } else if (valid && std::strcmp(emotion->valuestring, "sad") == 0) {
+                parsed.kind = ServerEventKind::kTurnError;
+            } else {
+                parsed.kind = ServerEventKind::kOther;
+            }
         } else if (valid && std::strcmp(type->valuestring, "tts") == 0) {
             if (JsonStringEquals(root, "state", "start")) {
                 parsed.kind = ServerEventKind::kTtsStart;

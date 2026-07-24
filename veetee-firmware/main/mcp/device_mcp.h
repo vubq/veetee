@@ -36,8 +36,12 @@ struct DeviceDiagnostics {
     std::array<char, 16> network_ipv4{};
     std::uint64_t network_disconnect_count = 0;
     std::uint64_t network_reconnect_attempt_count = 0;
+    std::uint64_t websocket_reconnect_attempt_count = 0;
+    std::uint64_t websocket_reconnect_exhausted_count = 0;
     std::uint32_t network_last_disconnect_reason = 0;
     audio::AudioRuntimeHealth audio{};
+    std::uint64_t transport_uplink_queue_drops = 0;
+    std::uint32_t transport_uplink_queue_high_water = 0;
     TaskDiagnostics capture_task{};
     TaskDiagnostics playback_task{};
     TaskDiagnostics wake_task{};

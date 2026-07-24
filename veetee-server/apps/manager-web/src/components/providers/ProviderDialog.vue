@@ -38,7 +38,19 @@ const healthLabels: Record<Provider["health"], string> = {
 const dialogTitle = computed(() => props.provider ? `Cấu hình ${props.provider.kind.toUpperCase()}` : "Cấu hình provider");
 const isGroq = computed(() => props.provider?.adapter.toLowerCase().includes("groq") ?? false);
 const isTts = computed(() => props.provider?.kind === "tts");
+const isVieNeu = computed(() => form.adapter.toLowerCase().includes("vieneu"));
 const supportsPitch = computed(() => props.provider?.config?.supportsPitch !== false);
+const ttsQualityWarnings = computed(() => {
+  if (!isTts.value || !isVieNeu.value) return [];
+  const warnings: string[] = [];
+  if (Number(form.rate) > 1.2) {
+    warnings.push("Rate cao chỉ tăng tempo sau inference và có thể làm hàng đợi phát bị đói.");
+  }
+  if (Number(form.volume) > 1) {
+    warnings.push("Volume trên 1,0 có thể clipping; không làm model TTS rõ hơn.");
+  }
+  return warnings;
+});
 
 watch(
   () => [props.open, props.provider] as const,
@@ -158,6 +170,10 @@ async function submit(): Promise<void> {
           <VtField v-if="supportsPitch" label="Cao độ Hz"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
           <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>
           <VtField label="Sample rate" hint="8.000–48.000 Hz"><VtInput v-model="form.outputSampleRate" type="number" min="8000" max="48000" step="1000" /></VtField>
+        </div>
+        <div v-if="ttsQualityWarnings.length" class="provider-tts-quality-warning" role="status">
+          <VtIcon name="warning" :size="17" />
+          <div><b>Cấu hình vẫn được phép lưu, nhưng cần benchmark lại.</b><p v-for="warning in ttsQualityWarnings" :key="warning">{{ warning }}</p></div>
         </div>
       </section>
 

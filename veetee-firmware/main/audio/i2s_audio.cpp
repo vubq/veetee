@@ -236,6 +236,15 @@ void I2sAudio::AbortPlayback() {
     }
 }
 
+bool I2sAudio::PlayRecoverySignal() {
+    playback_accepting_.store(false);
+    const std::uint32_t generation = playback_generation_.fetch_add(1) + 1;
+    if (playback_queue_ == nullptr) return false;
+    xQueueReset(playback_queue_);
+    return QueuePlaybackControl(PlaybackItemKind::kAbort, generation) &&
+           QueuePlaybackControl(PlaybackItemKind::kRecoverySignal, generation);
+}
+
 bool I2sAudio::SetVolumePercent(int volume_percent) {
     if (volume_percent < 0 || volume_percent > 100) return false;
     volume_percent_.store(volume_percent);
@@ -422,6 +431,11 @@ void I2sAudio::RunPlayback() {
             }
             continue;
         }
+        if (item.kind == PlaybackItemKind::kRecoverySignal) {
+            decoder_generation = item.generation;
+            PlayRecoveryChime();
+            continue;
+        }
         if (item.generation != decoder_generation ||
             item.generation != playback_generation_.load()) {
             continue;
@@ -528,6 +542,27 @@ void I2sAudio::PlayBootChime() {
         ESP_LOGI(kTag, "Startup chime complete");
     } else {
         ESP_LOGW(kTag, "Startup chime interrupted by an I2S write error");
+    }
+}
+
+void I2sAudio::PlayRecoveryChime() {
+    constexpr int kNoteFrames = 4;
+    constexpr int kGapFrames = 1;
+    bool complete = WriteChimeNote(523.25, kNoteFrames);
+    if (complete) {
+        tone_dma_buffer_.fill(0);
+        for (int frame = 0; frame < kGapFrames && complete; ++frame) {
+            size_t bytes_written = 0;
+            complete = i2s_channel_write(
+                           tx_handle_, tone_dma_buffer_.data(),
+                           tone_dma_buffer_.size() * sizeof(tone_dma_buffer_[0]),
+                           &bytes_written, pdMS_TO_TICKS(100)) == ESP_OK;
+        }
+    }
+    if (complete) complete = WriteChimeNote(392.00, kNoteFrames);
+    WriteSilence();
+    if (!complete) {
+        ESP_LOGW(kTag, "Recovery signal interrupted by an I2S write error");
     }
 }
 

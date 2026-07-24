@@ -73,6 +73,13 @@ Mọi event trong audio session có `session_id` trừ hello.
 | Server -> device | `alert` | `status`, `message`, `emotion` | thông báo UI/audio |
 | Server -> device | `custom` | `payload` | optional feature flag |
 
+`llm` với `emotion="sad"` là recovery signal tương thích V1 khi voice-server không
+thể hoàn tất turn; `text` chỉ chứa stable bounded error code như
+`conversation_failed` hoặc `transcription_or_turn_failed`, không chứa exception/class.
+Firmware không đọc code đó thành intent hoặc lời thoại: nó hủy output cũ, phát local
+recovery earcon và giữ assistant gate nghe tiếp nếu còn mở. Các emotion khác vẫn là
+UI metadata và không tự tạo nhánh lỗi.
+
 ### Listen modes
 
 - `auto`: mode mặc định của Veetee. Button/wake chỉ mở assistant gate; VAD quyết định hết câu, server tự chạy ASR -> LLM -> TTS và sau `tts.stop` quay lại listening khi gate còn mở.
@@ -98,6 +105,15 @@ Hai nguồn đánh thức phải hội tụ vào cùng flow:
 `reason` là forward-compatible reason code. V1 phải chấp nhận `wake_word_detected` của Xiaozhi và các native code `button_interrupt`, `local_interrupt_detected`, `semantic_interrupt`, `new_turn`, `session_closing_cancelled`. Parser không được reject một abort hợp lệ chỉ vì reason mới chưa biết. Đây là telemetry/policy metadata, không phải exact phrase.
 
 Raw Opus V1 không chứa `turn_id`. Sau local abort, firmware phải ngừng nhận binary TTS, clear decoder/playback queue và chỉ mở lại audio gate sau `tts:start` mới. Server phải generation-check trước từng send; kết quả/frame cũ bị drop dù provider không cancel kịp. WebSocket text/binary ordering trong một connection được coi là protocol invariant.
+
+### Reconnect semantics
+
+Mất voice socket retryable trong khi Wi-Fi còn hoạt động được phép tạo một WebSocket
+V1 mới bằng cùng bootstrap URL/token. Firmware phải chạy lại HTTP upgrade, device
+hello, server hello và nhận `session_id` mới; không resume raw Opus, MCP request,
+`turn_id` hoặc playback generation cũ. Retry là bounded và do application state
+machine cho phép; protocol/config error, explicit close, Wi-Fi loss hoặc user cancel
+không được tự reconnect. Hết budget phát `transport_lost` và về standby sạch.
 
 ### Conversation timeout
 
@@ -156,6 +172,10 @@ Server packetize một TTS stream liên tục: giữ phần PCM dư giữa các 
 chỉ zero-pad frame cuối trước `tts:stop`. Sender được phép gửi một prebuffer nhỏ rồi
 pace theo `frame_duration`; không được burst toàn bộ câu trả lời làm tràn playback
 queue của firmware. Baseline LAN dùng ba frame prebuffer và nhịp 60 ms.
+
+Firmware có thể report số frame mic bị thay thế và high-water của local WebSocket
+uplink queue. Đây là bằng chứng backpressure trong device, không phải packet-loss,
+jitter hoặc reorder của mạng vì raw WebSocket V1 không đo được các chỉ số đó.
 
 Thứ tự response V1 là `stt` -> một hoặc nhiều `llm` metadata -> `tts:start` ->
 binary Opus -> `tts:stop`. `admission`, `plan`, `text_delta` và generation nội bộ
@@ -264,6 +284,8 @@ Mỗi release chạy fixture hai chiều:
 | abort while ASR/LLM/TTS/MCP | yes | yes | no stale result/audio; tool not dispatched or audited as `completed_after_abort` |
 | button wake + wake-word detect | yes | yes | same auto flow, new turn |
 | input admission reject | n/a | yes | no LLM/MCP call, remain listening |
+| retryable socket loss | yes | yes | bounded fresh V1 session; no stale turn/audio |
+| protocol/config socket failure | yes | yes | no retry; close to idle cleanly |
 | inactivity timeout + closing grace | yes | yes | goodbye, sleep or cancel closing |
 | config/resource manifest signature | yes | yes | verify before stage |
 | config_changed invalidation | yes | yes | pull later, no binary over WS |

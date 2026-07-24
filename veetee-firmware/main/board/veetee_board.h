@@ -56,6 +56,7 @@ public:
     bool QueueOpusPlayback(const std::uint8_t* packet, std::size_t length);
     void EndPlayback();
     void AbortPlayback();
+    bool PlayRecoverySignal();
     bool SetSpeakerVolume(int volume_percent);
     [[nodiscard]] int speaker_volume() const;
     bool StartAudioDiagnostic(std::uint32_t duration_seconds,

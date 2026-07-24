@@ -28,6 +28,10 @@ int main() {
            "user abort must not impersonate a normal playback completion");
     Expect(ResetsPlaybackDecoder(PlaybackItemKind::kAbort),
            "user abort must reset the decoder");
+    Expect(!FinishesPlayback(PlaybackItemKind::kRecoverySignal),
+           "local recovery signal must not impersonate server TTS completion");
+    Expect(!ResetsPlaybackDecoder(PlaybackItemKind::kRecoverySignal),
+           "the preceding abort owns recovery decoder reset");
 
     const PlaybackItemKind recovery = PlaybackEndOverflowRecovery();
     Expect(recovery == PlaybackItemKind::kAbortAndFinish,

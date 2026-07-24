@@ -35,6 +35,7 @@ public:
     bool QueueOpusPlayback(const std::uint8_t* packet, std::size_t length);
     void EndPlayback();
     void AbortPlayback();
+    bool PlayRecoverySignal();
     bool SetVolumePercent(int volume_percent);
     [[nodiscard]] int volume_percent() const { return volume_percent_.load(); }
     bool StartDiagnostic(std::uint32_t duration_seconds, std::uint64_t now_ms);
@@ -54,6 +55,7 @@ private:
     void RunCapture();
     void RunPlayback();
     void PlayBootChime();
+    void PlayRecoveryChime();
     bool WriteChimeNote(double frequency_hz, int frame_count);
     void WriteSilence();
     bool QueuePlaybackControl(PlaybackItemKind kind,

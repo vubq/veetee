@@ -114,6 +114,7 @@ class ConversationPlan:
     response_required: bool
     response_text: str | None = None
     tool_call: ToolCall | None = None
+    runtime_error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

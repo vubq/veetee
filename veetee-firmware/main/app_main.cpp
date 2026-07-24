@@ -607,8 +607,10 @@ bool OnTransportEvent(
     switch (notification.event) {
         case veetee::transport::WebSocketTransportEvent::kReady:
             return PostEvent(veetee::app::Event::kTransportConnected);
+        case veetee::transport::WebSocketTransportEvent::kReconnecting:
+            return PostEvent(
+                veetee::app::Event::kTransportReconnectScheduled);
         case veetee::transport::WebSocketTransportEvent::kLost:
-            g_board.AbortPlayback();
             return PostEvent(veetee::app::Event::kTransportLost);
         case veetee::transport::WebSocketTransportEvent::kListenStarted:
             return PostEvent(veetee::app::Event::kAdmissionRejected);
@@ -616,6 +618,8 @@ bool OnTransportEvent(
             return PostEvent(veetee::app::Event::kVadFinal);
         case veetee::transport::WebSocketTransportEvent::kLlmStarted:
             return PostEvent(veetee::app::Event::kAdmissionAccepted);
+        case veetee::transport::WebSocketTransportEvent::kTurnFailed:
+            return PostEvent(veetee::app::Event::kTurnFailed);
         case veetee::transport::WebSocketTransportEvent::kTtsStarted:
             g_board.BeginPlayback();
             return PostEvent(veetee::app::Event::kTtsStarted);
@@ -712,10 +716,18 @@ bool ReadDeviceDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
     diagnostics->network_disconnect_count = network.disconnect_count;
     diagnostics->network_reconnect_attempt_count =
         network.reconnect_attempt_count;
+    diagnostics->websocket_reconnect_attempt_count =
+        g_transport.reconnect_attempt_count();
+    diagnostics->websocket_reconnect_exhausted_count =
+        g_transport.reconnect_exhausted_count();
     diagnostics->network_last_disconnect_reason =
         network.last_disconnect_reason;
 
     diagnostics->audio = g_board.AudioHealth(diagnostics->uptime_ms);
+    diagnostics->transport_uplink_queue_drops =
+        g_transport.outbound_audio_queue_drops();
+    diagnostics->transport_uplink_queue_high_water =
+        g_transport.outbound_audio_queue_high_water();
     diagnostics->capture_task = {
         .expected = true,
         .running = diagnostics->audio.capture_task_running,
@@ -917,6 +929,13 @@ void RunApplication(void*) {
         const veetee::app::Event event = message.event;
         const veetee::app::TransitionResult result = g_state_machine.Handle(event);
         if (!result.accepted) {
+            if (event ==
+                veetee::app::Event::kTransportReconnectScheduled) {
+                g_board.AbortPlayback();
+                g_transport.Close(
+                    veetee::transport::WebSocketCloseMode::kAbortive);
+                PostEvent(veetee::app::Event::kTransportLost);
+            }
             ESP_LOGD(kTag, "Ignored event %s in %s", veetee::app::ToString(event),
                      veetee::app::ToString(result.from));
             continue;
@@ -928,6 +947,16 @@ void RunApplication(void*) {
                  result.assistant_gate_open ? "open" : "closed",
                  result.cancellation_generation);
         g_board.ApplyState(result.to);
+
+        if (event == veetee::app::Event::kTransportReconnectScheduled ||
+            event == veetee::app::Event::kTransportLost) {
+            g_board.AbortPlayback();
+        }
+
+        if (event == veetee::app::Event::kTurnFailed &&
+            !g_board.PlayRecoverySignal()) {
+            ESP_LOGW(kTag, "Unable to queue local recovery signal");
+        }
 
         if (result.to == veetee::app::State::kWifiConfiguring) {
             g_transport.Close();
@@ -993,7 +1022,9 @@ void RunApplication(void*) {
                 veetee::settings::ReportedResourcePhase::kActive,
                 g_ui_resources.Snapshot(), nullptr, nullptr, nullptr,
                 veetee::settings::ReportedArtifactKind::kUiPack);
-        } else if (result.to == veetee::app::State::kConnecting) {
+        } else if (result.to == veetee::app::State::kConnecting &&
+                   event !=
+                       veetee::app::Event::kTransportReconnectScheduled) {
             const veetee::transport::WakeSource source =
                 event == veetee::app::Event::kActivationWakeDetected
                     ? veetee::transport::WakeSource::kWakeWord
@@ -1005,24 +1036,33 @@ void RunApplication(void*) {
             }
         } else if (result.to == veetee::app::State::kAborting) {
             g_board.AbortPlayback();
+            esp_err_t transport_error = ESP_OK;
+            const char* operation = "abort";
             if (!result.assistant_gate_open) {
-                LogTransportError("stop listening",
-                                  g_transport.StopListening("user_disable"));
+                operation = "stop listening";
+                transport_error =
+                    g_transport.StopListening("user_disable");
             } else if (event == veetee::app::Event::kInterruptDetected) {
-                LogTransportError(
-                    "interrupt",
-                    g_transport.Abort("local_interrupt_detected",
-                                      "interrupt_profile"));
+                operation = "interrupt";
+                transport_error = g_transport.Abort(
+                    "local_interrupt_detected", "interrupt_profile");
             } else if (event == veetee::app::Event::kActivationWakeDetected) {
-                LogTransportError(
-                    "closing cancellation",
-                    g_transport.Abort("session_closing_cancelled", "wake_word"));
+                operation = "closing cancellation";
+                transport_error = g_transport.Abort(
+                    "session_closing_cancelled", "wake_word");
             } else {
-                LogTransportError(
-                    "button interrupt",
-                    g_transport.Abort("button_interrupt", "button"));
+                operation = "button interrupt";
+                transport_error =
+                    g_transport.Abort("button_interrupt", "button");
             }
-            PostEvent(veetee::app::Event::kAbortComplete);
+            if (transport_error == ESP_OK) {
+                PostEvent(veetee::app::Event::kAbortComplete);
+            } else {
+                LogTransportError(operation, transport_error);
+                g_transport.Close(
+                    veetee::transport::WebSocketCloseMode::kAbortive);
+                PostEvent(veetee::app::Event::kTransportLost);
+            }
         } else if (result.to == veetee::app::State::kIdle) {
             if (event == veetee::app::Event::kButtonLongPress) {
                 LogTransportError("stop listening",

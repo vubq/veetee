@@ -61,11 +61,15 @@ function health() {
       ipv4: "192.168.1.44",
       disconnect_count: 2,
       reconnect_attempt_count: 3,
+      websocket_reconnect_attempt_count: 4,
+      websocket_reconnect_exhausted_count: 1,
       last_disconnect_reason: 201,
     },
     audio: {
       capture_task_running: true,
       playback_task_running: true,
+      transport_uplink_queue_drops: 2,
+      transport_uplink_queue_high_water: 6,
       lifetime: counters(),
       diagnostic: diagnostic(),
     },
@@ -121,7 +125,11 @@ describe("DeviceDiagnosticsService", () => {
     const result = await service.health("device-1");
     expect(result.schemaVersion).toBe(1);
     expect(result.network.ipv4).toBe("192.168.1.44");
+    expect(result.network.websocketReconnectAttemptCount).toBe(4);
+    expect(result.network.websocketReconnectExhaustedCount).toBe(1);
     expect(result.audio.diagnostic.rawAudioStored).toBe(false);
+    expect(result.audio.transportUplinkQueueDrops).toBe(2);
+    expect(result.audio.transportUplinkQueueHighWater).toBe(6);
     expect(result.tasks).toMatchObject({
       minimumStackFreeBytes: 2_048,
       capture: { running: true, stackFreeBytes: 4_096 },
@@ -179,6 +187,12 @@ describe("DeviceDiagnosticsService", () => {
   it("accepts health from an older schema-v1 device without task metrics", async () => {
     const legacy = health();
     const { tasks: _tasks, ...legacyHealth } = legacy;
+    const legacyAudio = legacyHealth.audio as Record<string, unknown>;
+    const legacyNetwork = legacyHealth.network as Record<string, unknown>;
+    delete legacyAudio.transport_uplink_queue_drops;
+    delete legacyAudio.transport_uplink_queue_high_water;
+    delete legacyNetwork.websocket_reconnect_attempt_count;
+    delete legacyNetwork.websocket_reconnect_exhausted_count;
     const voice = {
       callTool: vi.fn().mockResolvedValue(
         toolPayload("self.diagnostics.get_health", legacyHealth),
@@ -187,6 +201,14 @@ describe("DeviceDiagnosticsService", () => {
     const service = new DeviceDiagnosticsService(voice as never);
     await expect(service.health("device-1")).resolves.toMatchObject({
       schemaVersion: 1,
+      network: {
+        websocketReconnectAttemptCount: 0,
+        websocketReconnectExhaustedCount: 0,
+      },
+      audio: {
+        transportUplinkQueueDrops: 0,
+        transportUplinkQueueHighWater: 0,
+      },
     });
     await expect(service.health("device-1")).resolves.not.toHaveProperty("tasks");
   });

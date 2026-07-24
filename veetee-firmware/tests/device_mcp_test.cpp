@@ -92,6 +92,8 @@ bool ReadDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
                   diagnostics->network_ipv4.size(), "%s", "192.168.1.20");
     diagnostics->network_disconnect_count = 2;
     diagnostics->network_reconnect_attempt_count = 3;
+    diagnostics->websocket_reconnect_attempt_count = 4;
+    diagnostics->websocket_reconnect_exhausted_count = 1;
     diagnostics->network_last_disconnect_reason = 201;
     diagnostics->audio.capture_task_running = true;
     diagnostics->audio.playback_task_running = true;
@@ -101,6 +103,8 @@ bool ReadDiagnostics(veetee::mcp::DeviceDiagnostics* diagnostics,
     diagnostics->audio.playback_stack_free_bytes = 5'120;
     diagnostics->audio.lifetime.mic_frames = 100;
     diagnostics->audio.lifetime.mic_samples = 32'000;
+    diagnostics->transport_uplink_queue_drops = 7;
+    diagnostics->transport_uplink_queue_high_water = 6;
     diagnostics->capture_task = {
         .expected = true,
         .running = true,
@@ -293,6 +297,18 @@ void TestStructuredDiagnosticsAndBounds() {
                    "diagnostic"),
                "raw_audio_stored")),
            "health explicitly reports no raw audio storage");
+    cJSON* audio = cJSON_GetObjectItemCaseSensitive(health, "audio");
+    Expect(cJSON_GetObjectItemCaseSensitive(
+               audio, "transport_uplink_queue_drops")->valuedouble == 7 &&
+               cJSON_GetObjectItemCaseSensitive(
+                   audio, "transport_uplink_queue_high_water")->valueint == 6,
+           "health distinguishes WebSocket queue replacement from capture drops");
+    cJSON* network = cJSON_GetObjectItemCaseSensitive(health, "network");
+    Expect(cJSON_GetObjectItemCaseSensitive(
+               network, "websocket_reconnect_attempt_count")->valuedouble == 4 &&
+               cJSON_GetObjectItemCaseSensitive(
+                   network, "websocket_reconnect_exhausted_count")->valuedouble == 1,
+           "health distinguishes WebSocket reconnects from Wi-Fi reconnects");
     cJSON* tasks = cJSON_GetObjectItemCaseSensitive(health, "tasks");
     Expect(cJSON_GetObjectItemCaseSensitive(
                tasks, "minimum_stack_free_bytes")->valueint == 2'048,

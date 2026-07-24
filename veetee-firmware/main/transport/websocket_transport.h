@@ -18,10 +18,12 @@ namespace veetee::transport {
 
 enum class WebSocketTransportEvent : std::uint8_t {
     kReady,
+    kReconnecting,
     kLost,
     kListenStarted,
     kSttFinal,
     kLlmStarted,
+    kTurnFailed,
     kTtsStarted,
     kTtsStopped,
     kAssistantSleep,
@@ -61,6 +63,18 @@ public:
                    ? 0
                    : static_cast<std::uint32_t>(
                          uxTaskGetStackHighWaterMark(task_));
+    }
+    [[nodiscard]] std::uint64_t outbound_audio_queue_drops() const {
+        return outbound_audio_queue_drops_.load();
+    }
+    [[nodiscard]] std::uint32_t outbound_audio_queue_high_water() const {
+        return outbound_audio_queue_high_water_.load();
+    }
+    [[nodiscard]] std::uint64_t reconnect_attempt_count() const {
+        return reconnect_attempt_count_.load();
+    }
+    [[nodiscard]] std::uint64_t reconnect_exhausted_count() const {
+        return reconnect_exhausted_count_.load();
     }
 
 private:
@@ -104,12 +118,14 @@ private:
 
     void TaskLoop();
     void HandleCommand(const Command& command);
-    void StartClient(std::uint32_t generation, WakeSource source);
+    void StartClient(std::uint32_t generation, WakeSource source,
+                     bool reset_reconnect_policy);
     void HandleSocketConnected(std::uint32_t generation);
     void HandleServerEvent(std::uint32_t generation, const ServerEvent& event);
     void HandleMcpEnvelope(std::uint32_t generation, const ServerEvent& event,
                            const char* envelope, std::size_t length);
-    void HandleLoss(std::uint32_t generation, const char* reason);
+    void HandleLoss(std::uint32_t generation, const char* reason,
+                    bool protocol_failure = false);
     void HandleData(const esp_websocket_event_data_t& data,
                     std::uint32_t generation);
     void Teardown(bool clean, int close_code = 1000, const char* reason = nullptr);
@@ -117,6 +133,8 @@ private:
     bool SendMcpPayloadNow(const char* payload, std::size_t length);
     bool SendBinary(const std::uint8_t* data, std::size_t length);
     bool QueueCommand(const Command& command, TickType_t timeout);
+    bool QueueUrgentCommand(const Command& command, TickType_t timeout);
+    bool QueuePriorityCommand(const Command& command, TickType_t timeout);
     static void ReleaseCommandPayload(const Command& command);
     bool NotifyWithRetry(WebSocketTransportEvent event,
                          std::uint32_t generation) const;
@@ -130,19 +148,30 @@ private:
     McpSink mcp_sink_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t command_queue_ = nullptr;
+    QueueHandle_t urgent_command_queue_ = nullptr;
     QueueHandle_t outbound_audio_queue_ = nullptr;
     TaskHandle_t task_ = nullptr;
     esp_websocket_client_handle_t client_ = nullptr;
+    std::atomic<esp_websocket_client_handle_t> callback_client_{nullptr};
     std::atomic<std::uint32_t> requested_generation_{0};
     std::atomic<std::uint32_t> client_generation_{0};
     std::atomic<bool> ready_for_audio_{false};
     std::atomic<bool> abortive_close_requested_{false};
+    std::atomic<std::uint64_t> outbound_audio_queue_drops_{0};
+    std::atomic<std::uint32_t> outbound_audio_queue_high_water_{0};
+    std::atomic<bool> reconnect_enabled_{false};
+    std::atomic<std::uint64_t> reconnect_attempt_count_{0};
+    std::atomic<std::uint64_t> reconnect_exhausted_count_{0};
     TextFrameAssembler text_assembler_;
     BinaryFrameAssembler binary_assembler_;
     WakeSource wake_source_ = WakeSource::kButton;
     bool awaiting_hello_ = false;
     bool ready_ = false;
     bool playback_open_ = false;
+    bool reconnect_pending_ = false;
+    std::uint8_t reconnect_attempt_ = 0;
+    std::uint32_t reconnect_generation_ = 0;
+    TickType_t reconnect_deadline_ = 0;
     TickType_t hello_deadline_ = 0;
     char hardware_id_[18] = {};
     char session_id_[kMaximumSessionIdBytes + 1] = {};

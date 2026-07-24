@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     vad_release_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     vad_min_silence_ms: int = Field(default=400, ge=80, le=2_000)
+    vad_fast_silence_ms: int = Field(default=320, ge=64, le=1_000)
+    vad_fast_endpoint_min_speech_ms: int = Field(default=640, ge=160, le=4_000)
+    vad_quiet_probability: float = Field(default=0.15, ge=0.0, le=1.0)
     vad_pre_roll_ms: int = Field(default=320, ge=0, le=1_000)
     # Zero leaves utterance boundaries to VAD silence detection.
     max_utterance_seconds: float = Field(default=0.0, ge=0.0, le=60.0)

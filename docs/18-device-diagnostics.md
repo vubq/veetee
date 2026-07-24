@@ -59,8 +59,8 @@ Health response có các nhóm bounded:
 
 - `device`: board, firmware, state, assistant gate, uptime và reset reason;
 - `memory`: free/min internal heap và free/min PSRAM;
-- `network`: connected, RSSI, IPv4, disconnect count, reconnect-attempt count và
-  last disconnect reason;
+- `network`: connected, RSSI, IPv4, Wi-Fi disconnect/reconnect count, last disconnect
+  reason, WebSocket reconnect-attempt count và số lần hết retry budget;
 - `audio`: trạng thái capture/playback task, lifetime error/drop counters,
   playback queue high-water và diagnostic session current/latest;
 - `resources`: wake detector/UI health và wake detector dropped frames.
@@ -84,6 +84,13 @@ gửi trường này và hiển thị trạng thái chưa có telemetry.
 - delta của mic timeout/read error, detector drop, Opus encode/decode error,
   uplink/playback queue drop và speaker write error;
 - `raw_audio_stored=false`.
+
+Health audio còn report lifetime
+`transport_uplink_queue_drops`/`transport_uplink_queue_high_water` cho local V1 queue.
+Network health report riêng `websocket_reconnect_attempt_count` và
+`websocket_reconnect_exhausted_count`; không trộn chúng với Wi-Fi reconnect. Các field
+bổ sung trong schema V1 là optional khi Manager đọc firmware cũ và được normalize về
+`0`. Local queue drop không được trình bày như packet loss mạng.
 
 ## 4. Self-test snapshot
 

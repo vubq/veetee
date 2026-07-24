@@ -300,12 +300,24 @@ cJSON* CreateHealthJson(const DeviceDiagnostics& diagnostics) {
                                 diagnostics.network_disconnect_count) ||
         !cJSON_AddNumberToObject(network, "reconnect_attempt_count",
                                 diagnostics.network_reconnect_attempt_count) ||
+        !cJSON_AddNumberToObject(
+            network, "websocket_reconnect_attempt_count",
+            diagnostics.websocket_reconnect_attempt_count) ||
+        !cJSON_AddNumberToObject(
+            network, "websocket_reconnect_exhausted_count",
+            diagnostics.websocket_reconnect_exhausted_count) ||
         !cJSON_AddNumberToObject(network, "last_disconnect_reason",
                                 diagnostics.network_last_disconnect_reason) ||
         !cJSON_AddBoolToObject(audio, "capture_task_running",
                               diagnostics.audio.capture_task_running) ||
         !cJSON_AddBoolToObject(audio, "playback_task_running",
                               diagnostics.audio.playback_task_running) ||
+        !cJSON_AddNumberToObject(
+            audio, "transport_uplink_queue_drops",
+            diagnostics.transport_uplink_queue_drops) ||
+        !cJSON_AddNumberToObject(
+            audio, "transport_uplink_queue_high_water",
+            diagnostics.transport_uplink_queue_high_water) ||
         !AddCounterFields(lifetime, diagnostics.audio.lifetime) ||
         !cJSON_AddBoolToObject(resources, "wake_resource_healthy",
                               diagnostics.wake_resource_healthy) ||

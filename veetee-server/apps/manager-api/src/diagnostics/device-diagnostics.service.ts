@@ -71,11 +71,15 @@ export interface DeviceHealth {
     ipv4: string;
     disconnectCount: number;
     reconnectAttemptCount: number;
+    websocketReconnectAttemptCount: number;
+    websocketReconnectExhaustedCount: number;
     lastDisconnectReason: number;
   };
   audio: {
     captureTaskRunning: boolean;
     playbackTaskRunning: boolean;
+    transportUplinkQueueDrops: number;
+    transportUplinkQueueHighWater: number;
     lifetime: AudioCounters;
     diagnostic: AudioDiagnosticSession;
   };
@@ -243,6 +247,18 @@ export class DeviceDiagnosticsService {
           maxCounter,
           "network.reconnect_attempt_count",
         ),
+        websocketReconnectAttemptCount: this.integer(
+          network.websocket_reconnect_attempt_count ?? 0,
+          0,
+          maxCounter,
+          "network.websocket_reconnect_attempt_count",
+        ),
+        websocketReconnectExhaustedCount: this.integer(
+          network.websocket_reconnect_exhausted_count ?? 0,
+          0,
+          maxCounter,
+          "network.websocket_reconnect_exhausted_count",
+        ),
         lastDisconnectReason: this.integer(
           network.last_disconnect_reason,
           0,
@@ -258,6 +274,18 @@ export class DeviceDiagnosticsService {
         playbackTaskRunning: this.boolean(
           audio.playback_task_running,
           "audio.playback_task_running",
+        ),
+        transportUplinkQueueDrops: this.integer(
+          audio.transport_uplink_queue_drops ?? 0,
+          0,
+          maxCounter,
+          "audio.transport_uplink_queue_drops",
+        ),
+        transportUplinkQueueHighWater: this.integer(
+          audio.transport_uplink_queue_high_water ?? 0,
+          0,
+          1_024,
+          "audio.transport_uplink_queue_high_water",
         ),
         lifetime: this.parseCounters(audio.lifetime, "audio.lifetime"),
         diagnostic: this.parseAudioDiagnostic(audio.diagnostic),

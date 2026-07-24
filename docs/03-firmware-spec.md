@@ -90,6 +90,7 @@ RECONCILING
 LISTENING
   ├─ VAD final ─────────────> EVALUATING (input admission + semantic gate)
   ├─ input rejected ────────> LISTENING (không gọi LLM/MCP)
+  ├─ transport retry ───────> CONNECTING (giữ gate, session V1 mới)
   ├─ button off ────────────> IDLE/STANDBY, không tạo AI turn
   └─ inactivity timeout ────> CLOSING
 
@@ -107,6 +108,7 @@ THINKING
 SPEAKING
   ├─ button/interrupt word ─> ABORTING -> LISTENING
   ├─ semantic/AEC barge-in ─> ABORTING -> LISTENING
+  ├─ transport retry ───────> CONNECTING (hủy playback/output cũ)
   ├─ tts stop auto mode ────> LISTENING (assistant gate còn mở)
   └─ tts stop manual mode ──> IDLE
 
@@ -446,6 +448,10 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
 - Uplink queue bounded và ưu tiên control: khi đầy, drop frame mic cũ nhất để giữ
   realtime. Downlink queue overflow làm session fail rõ ràng thay vì phát stream đã
   mất packet.
+- Abort, stop và close đi qua một urgent control queue riêng, được kiểm tra trước
+  audio/control thường. Nếu cả urgent lẫn normal queue không nhận lệnh, firmware
+  invalidate generation, đóng socket abortive và đi qua `transport_lost`; không phát
+  `abort_complete` giả trên session cũ.
 - Task điều phối WebSocket của Veetee dùng stack PSRAM riêng, nhưng task I/O của
   `esp_websocket_client` phải giữ stack trong RAM nội vì gọi Wi-Fi/TLS. Budget task
   I/O là 10 KiB: trace board ngày 2026-07-23 sau 12 lượt hội thoại còn tối thiểu
@@ -456,6 +462,11 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
   lịch sự trên socket chết vì API component có đường chờ không giới hạn. Sau station
   reconnect, lần mở assistant tiếp theo phải tạo session/task mới thay vì kẹt
   `connecting`.
+- Khi Wi-Fi vẫn còn nhưng voice socket lỗi transport retryable, firmware tự thử tối
+  đa 3 lần với exponential backoff `250/500/1000 ms`, jitter tối đa `125 ms` và hard
+  cap `2000 ms`. Mỗi lần retry tạo WebSocket/hello/session V1 mới, không resume raw
+  Opus hoặc turn cũ. Protocol/config failure, explicit close, Wi-Fi loss, button
+  cancel và long press không retry; hết budget thì đóng gate và về `idle`.
 - `tts:start`, binary Opus và `tts:stop` phải được xử lý theo đúng thứ tự. Firmware
   chỉ báo `tts stopped` cho state machine sau khi playback queue drain, không phải
   ngay khi nhận JSON `tts:stop`. Nếu queue đã đầy đến mức không thể xếp marker kết
@@ -463,6 +474,9 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
   chính audio task; không được để state kẹt vĩnh viễn ở `SPEAKING`.
 - `abort` phải idempotent và hoàn tất trong mục tiêu <100 ms ở local device.
 - Khi local abort, firmware đặt `accept_tts_audio=false`, clear decoder/playback queue và chỉ nhận binary TTS lại sau `tts:start` của generation mới. Raw Opus V1 không mang `turn_id`, nên quy tắc này là bắt buộc để frame cũ đang nằm trong socket không phát lại.
+- Lỗi ASR/semantic/LLM/TTS được server map vào recovery signal V1 bounded. Firmware
+  hủy output cũ, quay lại `LISTENING` nếu gate còn mở và phát một earcon local ngắn;
+  recovery không phụ thuộc TTS provider và không chứa câu semantic hard-code.
 
 ## 10. Definition of Done firmware V1
 

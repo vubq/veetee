@@ -64,9 +64,20 @@ class FakeAsr:
         return Transcript("xin chào", "vi-VN", 0.9, 1.0)
 
 
+class FailingAsr:
+    async def transcribe_pcm(self, *_: object, **__: object) -> Transcript:
+        raise RuntimeError("private ASR fixture detail")
+
+
 class FakeTts:
     async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
         yield AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 240, final=True)
+
+
+class FailingGoodbyeTts:
+    async def synthesize(self, *_: object, **__: object) -> AsyncIterator[AudioChunk]:
+        yield AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 240)
+        raise RuntimeError("private TTS fixture detail")
 
 
 class EchoEngine:
@@ -242,4 +253,55 @@ async def test_provider_failure_rearms_lab_inactivity_timeout() -> None:
         await session._run_transcript(Transcript("xin chào", "vi-VN", 0.99, 1.0))
 
     candidate_rejected.assert_awaited_once()
+    await session.inactivity.close()
+
+
+async def test_audio_lab_asr_failure_emits_stable_error_and_rearms_timeout() -> None:
+    websocket = FakeWebSocket()
+    session = make_session(websocket)
+    session.asr = FailingAsr()  # type: ignore[assignment]
+    candidate_rejected = AsyncMock()
+
+    with patch.object(session.inactivity, "candidate_rejected", candidate_rejected):
+        await session._transcribe(b"\0\0" * 320, None)
+
+    candidate_rejected.assert_awaited_once()
+    events: list[dict[str, Any]] = []
+    while not websocket.outgoing.empty():
+        item = websocket.outgoing.get_nowait()
+        if isinstance(item, dict):
+            events.append(item)
+    error = next(item for item in events if item.get("event") == "turn.error")
+    assert error["payload"] == {"code": "asr_failed", "stage": "asr"}
+    assert "RuntimeError" not in json.dumps(error)
+    assert session._asr_context is None
+    assert session._processing_task is None
+    await session.inactivity.close()
+
+
+async def test_lab_goodbye_failure_stops_tts_and_emits_sleep() -> None:
+    websocket = FakeWebSocket()
+    session = make_session(websocket)
+    session.tts = FailingGoodbyeTts()  # type: ignore[assignment]
+
+    await session._goodbye("between_turns_timeout")
+
+    events: list[dict[str, Any]] = []
+    while not websocket.outgoing.empty():
+        item = websocket.outgoing.get_nowait()
+        if isinstance(item, dict):
+            events.append(item)
+    assert [item["event"] for item in events] == [
+        "tts.start",
+        "tts.first_audio",
+        "tts.stop",
+        "turn.error",
+        "assistant.sleep",
+    ]
+    error = next(item for item in events if item["event"] == "turn.error")
+    assert error["payload"] == {
+        "code": "goodbye_tts_failed",
+        "stage": "goodbye_tts",
+    }
+    assert events[-1]["payload"] == {"reason": "between_turns_timeout"}
     await session.inactivity.close()

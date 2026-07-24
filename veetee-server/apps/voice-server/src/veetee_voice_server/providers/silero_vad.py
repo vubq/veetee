@@ -20,6 +20,7 @@ class VadFrameResult:
     speech_started: bool
     speech_ended: bool
     is_speech: bool
+    endpoint_reason: str | None = None
 
 
 class VadModel(Protocol):
@@ -71,12 +72,24 @@ class SileroVadSession:
         threshold: float = 0.5,
         release_threshold: float = 0.35,
         min_silence_ms: int = 400,
+        fast_silence_ms: int = 320,
+        fast_endpoint_min_speech_ms: int = 640,
+        quiet_probability: float = 0.15,
         max_speech_seconds: float = 20.0,
     ) -> None:
+        if fast_silence_ms <= 0 or fast_silence_ms > min_silence_ms:
+            raise ValueError("VAD fast silence must be positive and no longer than base silence")
+        if fast_endpoint_min_speech_ms <= 0:
+            raise ValueError("VAD fast endpoint requires positive voiced speech")
+        if not 0 <= quiet_probability <= release_threshold:
+            raise ValueError("VAD quiet probability must not exceed release threshold")
         self._model = model
         self._threshold = threshold
         self._release_threshold = release_threshold
         self._min_silence_ms = min_silence_ms
+        self._fast_silence_ms = fast_silence_ms
+        self._fast_endpoint_min_speech_ms = fast_endpoint_min_speech_ms
+        self._quiet_probability = quiet_probability
         self._max_speech_ms = (
             int(max_speech_seconds * 1000) if max_speech_seconds > 0 else None
         )
@@ -86,7 +99,10 @@ class SileroVadSession:
         self._speech_active = False
         self._last_speech = False
         self._silence_ms = 0
+        self._quiet_silence_ms = 0
         self._speech_ms = 0
+        self._voiced_ms = 0
+        self._speech_peak_probability = 0.0
 
     def process(self, pcm_s16le: bytes) -> list[VadFrameResult]:
         if len(pcm_s16le) % 2:
@@ -107,27 +123,60 @@ class SileroVadSession:
             self._last_speech = is_speech
             started = False
             ended = False
+            endpoint_reason: str | None = None
             if is_speech:
                 self._silence_ms = 0
+                self._quiet_silence_ms = 0
+                self._voiced_ms += CHUNK_MS
+                self._speech_peak_probability = max(
+                    self._speech_peak_probability, probability
+                )
                 if not self._speech_active:
                     self._speech_active = True
                     started = True
             elif self._speech_active:
                 self._silence_ms += CHUNK_MS
-                ended = self._silence_ms >= self._min_silence_ms
+                if probability <= self._quiet_probability:
+                    self._quiet_silence_ms += CHUNK_MS
+                else:
+                    self._quiet_silence_ms = 0
+                fast_endpoint = (
+                    self._voiced_ms >= self._fast_endpoint_min_speech_ms
+                    and self._speech_peak_probability >= self._threshold
+                    and self._quiet_silence_ms >= self._fast_silence_ms
+                )
+                ended = fast_endpoint or self._silence_ms >= self._min_silence_ms
+                if ended:
+                    endpoint_reason = (
+                        "confident_quiet" if fast_endpoint else "silence"
+                    )
 
             if self._speech_active:
                 self._speech_ms += CHUNK_MS
-                ended = ended or (
+                duration_limit = (
                     self._max_speech_ms is not None
                     and self._speech_ms >= self._max_speech_ms
                 )
+                if duration_limit:
+                    ended = True
+                    endpoint_reason = "duration_limit"
             if ended:
                 self._speech_active = False
                 self._speech_ms = 0
                 self._silence_ms = 0
+                self._quiet_silence_ms = 0
+                self._voiced_ms = 0
+                self._speech_peak_probability = 0.0
 
-            results.append(VadFrameResult(probability, started, ended, is_speech))
+            results.append(
+                VadFrameResult(
+                    probability,
+                    started,
+                    ended,
+                    is_speech,
+                    endpoint_reason,
+                )
+            )
         return results
 
     def reset(self) -> None:
@@ -137,4 +186,7 @@ class SileroVadSession:
         self._speech_active = False
         self._last_speech = False
         self._silence_ms = 0
+        self._quiet_silence_ms = 0
         self._speech_ms = 0
+        self._voiced_ms = 0
+        self._speech_peak_probability = 0.0
