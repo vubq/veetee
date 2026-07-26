@@ -294,19 +294,15 @@ class SessionProfile:
                     30.0,
                 ),
                 llm_stream_idle_seconds=_bounded_float(
-                    conversation.get("llmStreamIdleSeconds"),
+                    conversation.get(
+                        "llmStreamIdleSeconds",
+                        conversation.get("llmSeconds"),
+                    ),
                     defaults.policy.llm_stream_idle_seconds,
                     1.0,
                     45.0,
                 ),
-                llm_total_seconds=_bounded_float(
-                    conversation.get("llmSeconds")
-                    if "llmStreamIdleSeconds" not in conversation
-                    else 0.0,
-                    defaults.policy.llm_total_seconds,
-                    0.0,
-                    45.0,
-                ),
+                llm_total_seconds=0.0,
                 tts_first_audio_seconds=_bounded_float(
                     conversation.get("ttsFirstAudioSeconds"),
                     defaults.policy.tts_first_audio_seconds,
@@ -314,19 +310,15 @@ class SessionProfile:
                     30.0,
                 ),
                 tts_stream_idle_seconds=_bounded_float(
-                    conversation.get("ttsStreamIdleSeconds"),
+                    conversation.get(
+                        "ttsStreamIdleSeconds",
+                        conversation.get("ttsSeconds"),
+                    ),
                     defaults.policy.tts_stream_idle_seconds,
                     1.0,
                     30.0,
                 ),
-                tts_total_seconds=_bounded_float(
-                    conversation.get("ttsSeconds")
-                    if "ttsStreamIdleSeconds" not in conversation
-                    else 0.0,
-                    defaults.policy.tts_total_seconds,
-                    0.0,
-                    30.0,
-                ),
+                tts_total_seconds=0.0,
                 mcp_seconds=_bounded_float(conversation.get("mcpSeconds"), 10.0, 0.5, 30.0),
                 context_message_limit=_bounded_int(
                     conversation.get("contextMessageLimit"),

@@ -114,7 +114,7 @@ def test_session_profile_uses_configurable_local_persona_fallback() -> None:
     assert profile.persona == "Configured local persona"
     assert profile.policy.max_session_seconds == 720
 
-def test_legacy_v1_stream_seconds_remain_absolute_provider_ceilings() -> None:
+def test_legacy_v1_stream_seconds_map_to_renewable_idle_watchdogs() -> None:
     settings = Settings(environment="test", require_device_auth=False)
 
     profile = SessionProfile.from_payload(
@@ -122,10 +122,31 @@ def test_legacy_v1_stream_seconds_remain_absolute_provider_ceilings() -> None:
         settings,
     )
 
-    assert profile.policy.llm_total_seconds == 12.0
-    assert profile.policy.tts_total_seconds == 7.0
-    assert profile.policy.llm_stream_idle_seconds == 20.0
-    assert profile.policy.tts_stream_idle_seconds == 10.0
+    assert profile.policy.llm_stream_idle_seconds == 12.0
+    assert profile.policy.tts_stream_idle_seconds == 7.0
+    assert profile.policy.llm_total_seconds == 0.0
+    assert profile.policy.tts_total_seconds == 0.0
+
+
+def test_explicit_stream_idle_fields_override_legacy_aliases() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+
+    profile = SessionProfile.from_payload(
+        {
+            "conversation": {
+                "llmSeconds": 12,
+                "llmStreamIdleSeconds": 8,
+                "ttsSeconds": 7,
+                "ttsStreamIdleSeconds": 6,
+            }
+        },
+        settings,
+    )
+
+    assert profile.policy.llm_stream_idle_seconds == 8.0
+    assert profile.policy.tts_stream_idle_seconds == 6.0
+    assert profile.policy.llm_total_seconds == 0.0
+    assert profile.policy.tts_total_seconds == 0.0
 
 
 def test_session_profile_treats_zero_parent_turn_ceiling_as_unlimited() -> None:
