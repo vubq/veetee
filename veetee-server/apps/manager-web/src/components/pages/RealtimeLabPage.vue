@@ -74,6 +74,11 @@ function chooseAudio(event: Event): void {
           </div>
         </div>
         <div class="lab-input-zone">
+          <div v-if="lab.connected.value && (!lab.audioReady.value || lab.audioError.value)" class="lab-audio-gate" role="alert">
+            <VtIcon name="warning" :size="18" />
+            <span><b>Điện thoại chưa cho phép phát âm thanh</b><small>{{ lab.audioError.value || "Chạm nút để bật loa cho Realtime Lab." }}</small></span>
+            <VtButton size="sm" variant="secondary" @click="lab.enableAudio">Bật âm thanh</VtButton>
+          </div>
           <form v-if="lab.inputMode.value === 'text'" id="labTextForm" class="lab-text-form" @submit.prevent="submit"><input id="labTextInput" v-model="text" :disabled="!lab.canSubmit.value" placeholder="Nhập nội dung tương đương một lượt nói…" /><VtButton type="submit" size="sm" :disabled="!lab.canSubmit.value || !text.trim()">Gửi lượt nói <VtIcon name="arrow" :size="15" /></VtButton></form>
           <div v-else-if="lab.inputMode.value === 'audio_replay'" id="labAudioReplay" class="lab-file-form"><label><input type="file" accept="audio/*" @change="chooseAudio" /><span><VtIcon name="upload" :size="18" /> {{ lab.replayFile.value?.name ?? "Chọn audio tối đa 20 giây" }}</span></label><VtButton size="sm" :busy="lab.replayBusy.value" :disabled="!lab.canSubmit.value || !lab.replayFile.value" @click="lab.replayAudio">Replay realtime</VtButton><small>{{ lab.replayMeta.value }}</small></div>
           <div v-else id="labLiveMic" class="lab-mic-form"><VtButton :variant="lab.micActive.value ? 'danger' : 'secondary'" :disabled="!lab.connected.value" @click="lab.toggleMicrophone"><VtIcon :name="lab.micActive.value ? 'stop' : 'mic'" :size="17" /> {{ lab.micActive.value ? "Tắt microphone" : "Bật microphone" }}</VtButton><p>{{ lab.micActive.value ? "Mic đang mở · browser AEC/NS bật." : "Live Mic cần HTTPS hoặc localhost." }}</p></div>

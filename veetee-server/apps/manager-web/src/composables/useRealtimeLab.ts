@@ -46,6 +46,22 @@ interface LabCallbacks {
   toast(message: string, tone?: "success" | "danger" | "info"): void;
 }
 
+type MobileAudioContextState = AudioContextState | "interrupted";
+type AudioContextWindow = Window & { webkitAudioContext?: typeof AudioContext };
+
+export async function unlockAudioContext(context: AudioContext): Promise<void> {
+  if (context.state === "closed") throw new Error("AudioContext đã đóng.");
+  const source = context.createBufferSource();
+  source.buffer = context.createBuffer(1, 1, context.sampleRate);
+  source.connect(context.destination);
+  source.onended = () => source.disconnect();
+  source.start(0);
+  if ((context.state as MobileAudioContextState) !== "running") await context.resume();
+  if ((context.state as MobileAudioContextState) !== "running") {
+    throw new Error("Trình duyệt chưa cho phép phát âm thanh. Hãy chạm Bật âm thanh rồi thử lại.");
+  }
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -120,6 +136,8 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
   const replayFile = ref<File>();
   const replayBusy = ref(false);
   const micActive = ref(false);
+  const audioReady = ref(false);
+  const audioError = ref("");
   const showRaw = ref(false);
   let nextMessageId = 2;
   let currentAssistantId: number | undefined;
@@ -199,9 +217,44 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     nextPlaybackAt = audioContext?.currentTime ?? 0;
   }
 
+  function createAudioContext(): AudioContext {
+    const Context = window.AudioContext ?? (window as AudioContextWindow).webkitAudioContext;
+    if (!Context) throw new Error("Trình duyệt không hỗ trợ Web Audio.");
+    const context = new Context({ latencyHint: "interactive" });
+    context.addEventListener("statechange", () => {
+      const running = (context.state as MobileAudioContextState) === "running";
+      audioReady.value = running;
+      if (!running && connected.value) {
+        audioError.value = "Âm thanh đang bị trình duyệt tạm dừng. Hãy chạm Bật âm thanh.";
+      }
+    });
+    return context;
+  }
+
+  async function enableAudio(): Promise<boolean> {
+    try {
+      audioContext ??= createAudioContext();
+      await unlockAudioContext(audioContext);
+      audioReady.value = true;
+      audioError.value = "";
+      return true;
+    } catch (exception) {
+      audioReady.value = false;
+      audioError.value = exception instanceof Error
+        ? exception.message
+        : "Không thể bật âm thanh trên trình duyệt này.";
+      callbacks.toast(audioError.value, "danger");
+      return false;
+    }
+  }
+
   async function ensureAudioContext(): Promise<AudioContext> {
-    audioContext ??= new AudioContext({ latencyHint: "interactive" });
-    if (audioContext.state === "suspended") await audioContext.resume();
+    audioContext ??= createAudioContext();
+    if ((audioContext.state as MobileAudioContextState) !== "running") {
+      await unlockAudioContext(audioContext);
+    }
+    audioReady.value = true;
+    audioError.value = "";
     return audioContext;
   }
 
@@ -222,6 +275,18 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     playbackSources.add(source);
     source.onended = () => playbackSources.delete(source);
     source.start(startAt);
+  }
+
+  function reportPlaybackFailure(exception: unknown): void {
+    const message = exception instanceof Error
+      ? exception.message
+      : "Không thể phát âm thanh từ Realtime Lab.";
+    const changed = audioError.value !== message;
+    audioReady.value = false;
+    audioError.value = message;
+    stopPlayback();
+    setState("Âm thanh bị chặn", "error", "Chạm Bật âm thanh để cho phép loa trên điện thoại.");
+    if (changed) callbacks.toast(message, "danger");
   }
 
   async function stopMicrophone(notifyServer: boolean): Promise<void> {
@@ -245,6 +310,7 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     messages.value = [{ id: nextMessageId++, kind: "system", text: "Phiên Lab không lưu transcript hoặc audio vào Manager." }];
     currentAssistantId = undefined;
     replayFile.value = undefined;
+    audioError.value = "";
     showRaw.value = false;
     setState("Sẵn sàng", "idle", "Chọn trợ lý và đầu vào, sau đó bắt đầu phiên.");
   }
@@ -320,7 +386,10 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
     starting.value = true;
     setState("Đang mở phiên", "running", "Manager đang cấp token WebSocket dùng một lần.");
     try {
-      await ensureAudioContext();
+      if (!await enableAudio()) {
+        starting.value = false;
+        return;
+      }
       issued.value = await callbacks.createSession({
         agentId: agentId.value, inputMode: inputMode.value, mcpMode: mcpMode.value,
         ...(mcpMode.value === "selected_device" ? { deviceId: deviceId.value } : {}),
@@ -331,7 +400,10 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
       current.binaryType = "arraybuffer";
       current.addEventListener("open", () => { current.send(JSON.stringify({ type: "lab.auth", token })); token = ""; });
       current.addEventListener("message", (message) => {
-        if (message.data instanceof ArrayBuffer) { void playPcm(message.data); return; }
+        if (message.data instanceof ArrayBuffer) {
+          void playPcm(message.data).catch(reportPlaybackFailure);
+          return;
+        }
         if (typeof message.data !== "string") return;
         const payload = JSON.parse(message.data) as LabHello | LabEvent;
         if (payload.type === "lab.hello") handleHello(payload); else if (payload.type === "lab.event") handleEvent(payload);
@@ -453,7 +525,8 @@ export function useRealtimeLab(callbacks: LabCallbacks) {
   return {
     agentId, inputMode, mcpMode, deviceId, connected, listening, starting, locked, canSubmit,
     state, stateTone, prompt, activePrompt, sessionId, issued, events, messages, metrics, rawEvents, showRaw,
-    replayFile, replayMeta, replayBusy, micActive,
+    replayFile, replayMeta, replayBusy, micActive, audioReady, audioError,
     startSession, closeSession, submitText, interrupt, wake, replayAudio, toggleMicrophone,
+    enableAudio,
   };
 }
