@@ -497,6 +497,48 @@ async def test_websocket_sink_buffers_a_native_sentence_while_next_batch_synthes
         sink.close()
 
 
+async def test_cancelled_enqueue_cleans_up_queue_and_wait_tasks() -> None:
+    websocket = FakeWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-queue-cancel",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+        playback_queue_seconds=0.18,
+    )
+    try:
+        await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+        stream = sink._audio_stream
+        assert stream is not None and stream.task is not None
+        stream.task.cancel()
+        await asyncio.gather(stream.task, return_exceptions=True)
+        while not stream.queue.full():
+            stream.queue.put_nowait(b"queued")
+        baseline_tasks = asyncio.all_tasks()
+        enqueue_task = asyncio.create_task(sink._enqueue_audio(stream, b"blocked"))
+        await asyncio.sleep(0)
+        assert not enqueue_task.done()
+
+        enqueue_task.cancel()
+        await asyncio.gather(enqueue_task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert not [
+            task
+            for task in asyncio.all_tasks()
+            if task not in baseline_tasks and not task.done()
+        ]
+    finally:
+        if sink._audio_stream is not None:
+            sink._audio_stream.cancelled.set()
+            if sink._audio_stream.task is not None:
+                sink._audio_stream.task.cancel()
+                await asyncio.gather(
+                    sink._audio_stream.task, return_exceptions=True
+                )
+        sink.close()
+
+
 async def test_cancelled_generation_stops_paced_audio_before_late_frames() -> None:
     websocket = FakeWebSocket()
     sink = WebSocketConversationSink(

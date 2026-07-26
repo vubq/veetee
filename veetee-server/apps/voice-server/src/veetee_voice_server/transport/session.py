@@ -305,14 +305,19 @@ class WebSocketConversationSink:
             return False
         put_task = asyncio.create_task(stream.queue.put(packet))
         cancelled = asyncio.create_task(stream.cancelled.wait())
-        done, _ = await asyncio.wait({put_task, cancelled}, return_when=asyncio.FIRST_COMPLETED)
-        if cancelled in done:
-            put_task.cancel()
-            await asyncio.gather(put_task, return_exceptions=True)
-            return False
-        cancelled.cancel()
-        await asyncio.gather(cancelled, return_exceptions=True)
-        return True
+        try:
+            done, _ = await asyncio.wait(
+                {put_task, cancelled}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancelled in done:
+                return False
+            await put_task
+            return True
+        finally:
+            for task in (put_task, cancelled):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(put_task, cancelled, return_exceptions=True)
 
     async def _run_paced_audio(self, stream: _PacedAudioStream) -> None:
         loop = asyncio.get_running_loop()

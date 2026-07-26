@@ -44,6 +44,8 @@ from veetee_voice_server.transport.session_registry import DeviceSessionRegistry
 
 MAX_LAB_PCM_FRAME_BYTES = 128 * 1024
 MAX_LAB_TEXT_CHARACTERS = 4_000
+# Match manager-web's playbackLeadSeconds so tts.stop follows scheduled browser audio.
+LAB_PLAYBACK_LEAD_SECONDS = 0.2
 
 EngineFactory = Callable[
     [TurnArbiter, "LabConversationSink", SessionProfile, ToolBroker], ConversationEngine
@@ -216,7 +218,7 @@ class LabConversationSink:
         if (
             audio is None
             or audio.encoding != "pcm_s16le"
-            or self._tts_generation != output.generation
+            or not self._is_current_tts_generation(output.generation)
         ):
             return
         pcm = audio.data
@@ -227,19 +229,35 @@ class LabConversationSink:
                 audio.sample_rate,
                 self._output_sample_rate,
             )
-        if self._first_audio_generation != output.generation:
-            self._first_audio_generation = output.generation
+            if not self._is_current_tts_generation(output.generation):
+                return
+        first_audio = self._first_audio_generation != output.generation
+        if first_audio:
             await self.send_event(
                 "tts.first_audio",
                 {"sample_rate": self._output_sample_rate},
                 turn_id=output.turn_id,
                 generation=output.generation,
             )
+            if not self._is_current_tts_generation(output.generation):
+                return
         async with self._wire_lock:
+            if not self._is_current_tts_generation(output.generation):
+                return
             await self._websocket.send_bytes(pcm)
+        if not self._is_current_tts_generation(output.generation):
+            return
+        self._first_audio_generation = output.generation
         duration_seconds = len(pcm) / (self._output_sample_rate * 2)
-        self._playback_until = (
-            max(self._playback_until, monotonic()) + duration_seconds
+        playback_base = monotonic()
+        if first_audio:
+            playback_base += LAB_PLAYBACK_LEAD_SECONDS
+        self._playback_until = max(self._playback_until, playback_base) + duration_seconds
+
+    def _is_current_tts_generation(self, generation: int) -> bool:
+        return (
+            generation >= self._cancel_generation
+            and self._tts_generation == generation
         )
 
     async def _wait_for_browser_playback(self) -> None:
