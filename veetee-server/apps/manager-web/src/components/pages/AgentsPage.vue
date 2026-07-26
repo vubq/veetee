@@ -3,6 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 
 import type { Agent, AgentPromptCatalog, PersonalityPreset, Provider } from "../../api/schemas";
 import type { AgentDraftInput } from "../../types/manager";
+import { voiceQualityWarnings as collectVoiceQualityWarnings } from "../../utils/voice-quality";
 import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect, VtTextarea } from "../ui";
 
 const props = defineProps<{
@@ -97,17 +98,6 @@ const selectedPersonalityAccent = computed(
 const enabledProviders = (kind: Provider["kind"]) => props.providers.filter((provider) => provider.kind === kind && provider.enabled);
 const ttsProvider = computed(() => props.providers.find((provider) => provider.id === form.tts));
 const ttsSupportsPitch = computed(() => ttsProvider.value?.config?.supportsPitch !== false);
-const voiceQualityWarnings = computed(() => {
-  if (!ttsProvider.value?.adapter.toLowerCase().includes("vieneu")) return [];
-  const warnings: string[] = [];
-  if (Number(form.voiceRate) > 1.2) {
-    warnings.push("Tốc độ được áp dụng đúng bằng WSOLA, nhưng trên 1,2× có thể phát nhanh hơn khả năng sinh của CPU và tạo khoảng nghỉ ở câu trả lời rất dài.");
-  }
-  if (Number(form.voiceVolume) > 1) {
-    warnings.push("Âm lượng trên 1,0 khuếch đại PCM và có nguy cơ clipping. Ưu tiên chỉnh âm lượng loa trên thiết bị.");
-  }
-  return warnings;
-});
 const voiceOptions = computed(() => {
   const voices = ttsProvider.value?.config?.voices;
   if (!Array.isArray(voices)) return [];
@@ -121,6 +111,17 @@ const voiceStyleOptions = computed(() => {
       Boolean(style) && typeof style === "object" && !Array.isArray(style),
   );
 });
+const selectedVoiceSourceStyle = computed(() => {
+  const voice = voiceOptions.value.find((candidate) => String(candidate.id) === form.voiceId);
+  return stringValue(voice?.style);
+});
+const voiceQualityWarnings = computed(() => collectVoiceQualityWarnings({
+  adapter: ttsProvider.value?.adapter ?? "",
+  rate: Number(form.voiceRate),
+  volume: Number(form.voiceVolume),
+  sourceStyle: selectedVoiceSourceStyle.value,
+  selectedStyle: form.voiceStyle,
+}));
 
 watch(
   () => form.tts,

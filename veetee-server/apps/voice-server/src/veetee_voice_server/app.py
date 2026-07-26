@@ -838,6 +838,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 native_model_dir=resolved_settings.tts_native_model_dir,
                 native_library_path=resolved_settings.tts_native_library_path,
                 native_realtime_headroom=resolved_settings.tts_native_realtime_headroom,
+                native_use_ref_codes=resolved_settings.tts_native_use_ref_codes,
             )
             default_llm = llm_for_profile(SessionProfile.defaults(resolved_settings))
             runtime.update(asr=asr, vad_model=vad_model, tts=tts)

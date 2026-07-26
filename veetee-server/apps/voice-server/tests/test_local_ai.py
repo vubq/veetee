@@ -15,6 +15,7 @@ from veetee_voice_server.conversation.cancellation import (
     OperationContext,
     OperationDeadlineExceededError,
 )
+from veetee_voice_server.conversation.sentence_chunker import TtsTextChunkingPolicy
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import (
     VieNeuTtsProvider,
@@ -180,17 +181,35 @@ async def test_vieneu_profile_views_share_inference_lock_and_report_risky_postpr
     )
 
 
-async def test_vieneu_native_profile_uses_shorter_batch_chunks() -> None:
+async def test_vieneu_native_profile_keeps_natural_clause_conditioning() -> None:
+    class NativeProfileEngine:
+        def __init__(self) -> None:
+            self.use_ref_codes: bool | None = None
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text
+            self.use_ref_codes = kwargs["use_ref_codes"]
+            yield np.zeros(4_800, dtype=np.float32)
+
+    engine = NativeProfileEngine()
     base = VieNeuTtsProvider(
         Path("unused"),
         voice="Trúc Ly",
         backend="native",
         native_model_dir=Path("native-model"),
         native_library_path=Path("libvieneu-tts.so"),
-        engine=ToneTtsEngine(),
+        engine=engine,
     )
     profile = base.with_profile(voice="Trúc Ly", speed=1.0)
+    chunks = [
+        chunk
+        async for chunk in profile.synthesize("Xin chào", "vi-VN", context())
+    ]
 
+    assert chunks
+    assert engine.use_ref_codes is True
     assert base.preferred_text_chunk_characters == 48
     assert profile.preferred_text_chunk_characters == 48
     assert base.maximum_text_chunk_characters == 72
@@ -198,8 +217,46 @@ async def test_vieneu_native_profile_uses_shorter_batch_chunks() -> None:
     assert base.initial_text_chunk_characters == 24
     assert profile.initial_maximum_text_chunk_characters == 40
     assert profile._backend == "native"
+    assert profile.text_chunking_policy == TtsTextChunkingPolicy(
+        mode="sentence_bounded",
+        emergency_max_characters=72,
+        sentence_batch_max_characters=72,
+    )
     assert profile._native_model_dir == Path("native-model")
     assert profile._native_library_path == Path("libvieneu-tts.so")
+    assert profile._native_use_ref_codes is True
+
+
+async def test_vieneu_native_can_disable_reference_codes_for_quality_comparison() -> None:
+    class NativeProfileEngine:
+        def __init__(self) -> None:
+            self.use_ref_codes: bool | None = None
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text
+            self.use_ref_codes = kwargs["use_ref_codes"]
+            yield np.zeros(4_800, dtype=np.float32)
+
+    engine = NativeProfileEngine()
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        backend="native",
+        native_model_dir=Path("native-model"),
+        native_library_path=Path("libvieneu-tts.so"),
+        native_use_ref_codes=False,
+        engine=engine,
+    )
+
+    chunks = [
+        chunk
+        async for chunk in provider.synthesize("Xin chào", "vi-VN", context())
+    ]
+
+    assert chunks
+    assert engine.use_ref_codes is False
 
 
 async def test_vieneu_native_honors_requested_speed_without_feedback_slowdown() -> None:

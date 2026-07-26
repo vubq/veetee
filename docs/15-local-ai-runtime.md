@@ -25,14 +25,18 @@ uses them.
 | VAD/endpoint | Silero VAD ONNX | CPU, one recurrent state per session | small, deterministic endpoint signal; not semantic admission |
 | ASR primary | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | CPU, 2 threads | very low RTF and suitable for final/streaming decode |
 | ASR quality fallback | ChunkFormer-CTC-Large-Vie | not installed by default | 614 MiB-class checkpoint, heavy dependencies and CC BY-NC restriction; enable only after quality benchmark |
-| TTS active host | VieNeu-TTS.cpp native CPU | 4 threads, llama.cpp SIMD + ONNX MOSS codec, 24/40 lead and 48/72 steady batch bounds | Small lead chunk lowers first audio; exact configured tempo, measured headroom and bounded playback queue |
-| TTS compatibility default | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at neutral 1.0x tempo with 16-frame lead-in | clone-safe default when native library/model pack is absent |
+| TTS active host | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly at neutral 1.0x tempo with 16-frame lead-in | Best measured Vietnamese intelligibility on the current host |
+| TTS optional native | VieNeu-TTS.cpp native CPU | llama.cpp SIMD + ONNX MOSS codec, batch-only | Faster batch inference but requires a better native Vietnamese G2P build before re-selection |
 
-Repository examples retain ONNX as the portable default, while this development
-host selects `VEETEE_TTS_BACKEND=native`. The native C ABI is batch-only, so the
-adapter releases a 24/40-character lead chunk and bounds steady batches at 48/72
-characters, buffers five seconds of paced device audio, schedules browser PCM
-ahead, and serializes the native worker. Abort clears
+Repository examples and this development host currently use ONNX. For both VieNeu
+backends, the application groups complete short sentences into natural TTS batches
+(ONNX 160, native 72 characters), while every normal boundary remains a confirmed
+sentence terminator. The final unpunctuated remainder joins the pending batch when
+it fits. Punctuation-free pathological output uses a provider-safe emergency limit
+(ONNX 256, native 72 characters) and prefers a whitespace boundary. This prevents a
+phrase such as `khó khăn` from being split solely because it crossed a character
+pacing threshold. The native C ABI remains batch-only and serializes its worker.
+Abort clears
 speaker/browser audio and rejects the generation immediately; an in-flight C call
 may finish silently under its worker lock because native code cannot be force-killed.
 
@@ -127,6 +131,7 @@ VEETEE_TTS_APPLY_WATERMARK=true
 VEETEE_TTS_NATIVE_MODEL_DIR=models/vieneu-v3-turbo-native
 VEETEE_TTS_NATIVE_LIBRARY_PATH=.cache/local-ai/VieNeu-TTS.cpp/build-cpu/libvieneu-tts.so
 VEETEE_TTS_NATIVE_REALTIME_HEADROOM=1.15
+VEETEE_TTS_NATIVE_USE_REF_CODES=true
 VEETEE_TTS_PLAYBACK_QUEUE_SECONDS=5
 VEETEE_LLM_PREWARM=true
 VEETEE_LLM_PREWARM_SECONDS=12

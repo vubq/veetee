@@ -22,7 +22,10 @@ from veetee_voice_server.conversation.cancellation import (
     await_operation,
     iterate_operation,
 )
-from veetee_voice_server.conversation.sentence_chunker import SentenceChunker
+from veetee_voice_server.conversation.sentence_chunker import (
+    SentenceChunker,
+    TtsTextChunkingPolicy,
+)
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
@@ -344,9 +347,16 @@ class ConversationEngine:
                         payload={"text": event.text},
                     ),
                 )
-                for sentence in chunker.push(event.text):
+                for sentence in chunker.push_chunks(event.text):
+                    logger.info(
+                        "conversation_tts_text_chunk_ready",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        reason=sentence.reason,
+                        text_characters=len(sentence.text),
+                    )
                     await self._enqueue_speech(
-                        speech_queue, sentence, speech_task, context
+                        speech_queue, sentence.text, speech_task, context
                     )
 
             logger.info(
@@ -356,9 +366,17 @@ class ConversationEngine:
                 duration_ms=round((monotonic() - stream_started_at) * 1_000, 1),
                 response_characters=response_characters,
             )
-            remainder = chunker.flush()
-            if remainder:
-                await self._enqueue_speech(speech_queue, remainder, speech_task, context)
+            for remainder in chunker.flush_chunks():
+                logger.info(
+                    "conversation_tts_text_chunk_ready",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    reason=remainder.reason,
+                    text_characters=len(remainder.text),
+                )
+                await self._enqueue_speech(
+                    speech_queue, remainder.text, speech_task, context
+                )
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
             completed = True
@@ -441,9 +459,17 @@ class ConversationEngine:
         try:
             for sentence in chunker.push(text):
                 await self._enqueue_speech(speech_queue, sentence, speech_task, context)
-            remainder = chunker.flush()
-            if remainder:
-                await self._enqueue_speech(speech_queue, remainder, speech_task, context)
+            for remainder in chunker.flush_chunks():
+                logger.info(
+                    "conversation_tts_text_chunk_ready",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    reason=remainder.reason,
+                    text_characters=len(remainder.text),
+                )
+                await self._enqueue_speech(
+                    speech_queue, remainder.text, speech_task, context
+                )
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
             completed = True
@@ -547,6 +573,13 @@ class ConversationEngine:
         return isinstance(event, LlmTextDelta) and bool(event.text)
 
     def _new_sentence_chunker(self) -> SentenceChunker:
+        chunking_policy = getattr(
+            self._tts,
+            "text_chunking_policy",
+            TtsTextChunkingPolicy(
+                emergency_max_characters=self._policy.speech_chunk_max_characters
+            ),
+        )
         provider_target = getattr(
             self._tts,
             "preferred_text_chunk_characters",
@@ -606,6 +639,11 @@ class ConversationEngine:
                     if hasattr(self._tts, "preferred_text_chunk_characters")
                     else self._policy.sentence_min_characters
                 )
+            ),
+            mode=chunking_policy.mode,
+            emergency_max_characters=chunking_policy.emergency_max_characters,
+            sentence_batch_max_characters=(
+                chunking_policy.sentence_batch_max_characters
             ),
         )
 

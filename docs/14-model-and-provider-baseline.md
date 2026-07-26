@@ -372,11 +372,14 @@ không giả định “Turbo” tự động có streaming. Adapter phải có 
 sample-rate/format rõ ràng.
 
 Giọng production mặc định là Trúc Ly với tempo `1.0`. ONNX compatibility backend
-dùng lead-in 16 acoustic frames; host hiện tại chọn native C++ CPU batch 4 threads
-vì RTF đoạn ngắn thấp hơn 1. Native adapter dùng lead chunk 24/40 ký tự
-target/maximum rồi batch duy trì 48/72 ký tự, prewarm context một lần và đẩy PCM
-vào browser/device playback queue trong lúc synthesize batch kế tiếp. Tempo được
-áp dụng đúng theo agent config bằng WSOLA giữ cao độ; runtime đo
+dùng lead-in 16 acoustic frames; native C++ CPU vẫn là batch-only. VieNeu chỉ tạo
+TTS request theo dấu kết câu để không tách một cụm như `khó khăn` thành hai
+utterance. Nhiều câu ngắn được gom thành một natural batch tối đa 160 ký tự trên
+ONNX hoặc 72 ký tự trên native, giảm phần im lặng và acoustic restart giữa các
+request. Câu cuối không dấu được nhập vào batch khi còn vừa; output bệnh lý không
+có dấu câu dùng emergency bound theo backend (ONNX 256, native 72 ký tự) và chỉ cắt
+ở whitespace khi có thể. Tempo được áp dụng đúng theo agent config bằng WSOLA giữ cao
+độ; runtime đo
 `realtime_speed_ceiling` với headroom `1.15` và cảnh báo starvation thay vì tự đổi
 tốc độ đã publish. Giao thức PCM/Opus 24 kHz với firmware không đổi.
 
@@ -385,9 +388,10 @@ Voice và style là hai tham số độc lập. Style mặc định `tu_nhien` d
 gốc kiểu đọc truyện như Ngọc Linh không tự ép mọi hội thoại sang nhịp đọc truyện.
 
 Mọi profile VieNeu dùng chung một inference lock của engine để không chạy đồng thời
-trên model state dùng chung. Runtime cảnh báo `postprocess_rate_starvation_risk` khi
-tempo lớn hơn `1.2` và `amplification_clipping_risk` khi volume lớn hơn `1.0`; Manager
-hiển thị cảnh báo trước khi publish nhưng không tự sửa desired config. Sau mỗi
+trên model state dùng chung. Runtime cảnh báo `postprocess_rate_starvation_risk` từ
+tempo `1.2` vì WSOLA có thể làm phụ âm và dấu tiếng Việt kém rõ, đồng thời giảm
+playback headroom; `amplification_clipping_risk` áp dụng khi volume lớn hơn `1.0`.
+Manager hiển thị cảnh báo trước khi publish nhưng không tự sửa desired config. Sau mỗi
 synthesis, adapter log số sample/audio duration và clipping ratio thực tế đã redact.
 Runtime giữ thêm turn-level reservation từ speech chunk đầu tới hết lượt. Cách này
 tránh hai session thay nhau chiếm model sau từng câu; session đang chờ reservation

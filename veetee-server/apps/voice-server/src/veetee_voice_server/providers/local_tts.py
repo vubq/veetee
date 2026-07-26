@@ -21,6 +21,7 @@ from veetee_voice_server.conversation.cancellation import (
     OperationContext,
     await_operation,
 )
+from veetee_voice_server.conversation.sentence_chunker import TtsTextChunkingPolicy
 from veetee_voice_server.conversation.types import AudioChunk
 
 logger = structlog.get_logger(__name__)
@@ -51,6 +52,7 @@ class VieNeuTtsProvider:
         native_model_dir: Path | None = None,
         native_library_path: Path | None = None,
         native_realtime_headroom: float = 1.15,
+        native_use_ref_codes: bool = True,
     ) -> None:
         self._model_dir = model_dir
         self._voice = voice
@@ -75,6 +77,7 @@ class VieNeuTtsProvider:
         if native_realtime_headroom < 1.0:
             raise ValueError("VieNeu native realtime headroom must be at least 1.0")
         self._native_realtime_headroom = native_realtime_headroom
+        self._native_use_ref_codes = native_use_ref_codes
         self._engine = engine
         self._load_lock = threading.Lock()
         self._inference_lock = inference_lock or asyncio.Lock()
@@ -94,6 +97,17 @@ class VieNeuTtsProvider:
                 speed=self._speed,
                 volume=self._volume,
             )
+
+    @property
+    def text_chunking_policy(self) -> TtsTextChunkingPolicy:
+        # ONNX starts returning audio before inference completes, so it can safely
+        # accept a longer emergency request than the batch-only native backend.
+        sentence_batch_max = 160 if self._backend == "onnx" else 72
+        return TtsTextChunkingPolicy(
+            mode="sentence_bounded",
+            emergency_max_characters=256 if self._backend == "onnx" else 72,
+            sentence_batch_max_characters=sentence_batch_max,
+        )
 
     @property
     def preferred_text_chunk_characters(self) -> int:
@@ -116,7 +130,7 @@ class VieNeuTtsProvider:
     @property
     def quality_warnings(self) -> tuple[str, ...]:
         warnings: list[str] = []
-        if self._speed > 1.2:
+        if self._speed >= 1.2:
             warnings.append("postprocess_rate_starvation_risk")
         if self._volume > 1.0:
             warnings.append("amplification_clipping_risk")
@@ -152,6 +166,7 @@ class VieNeuTtsProvider:
             native_model_dir=self._native_model_dir,
             native_library_path=self._native_library_path,
             native_realtime_headroom=self._native_realtime_headroom,
+            native_use_ref_codes=self._native_use_ref_codes,
         )
 
     async def prewarm(self) -> None:
@@ -188,12 +203,17 @@ class VieNeuTtsProvider:
             self._conversion_samples = 0
             self._conversion_clipped_samples = 0
             engine = await asyncio.to_thread(self._load_engine)
+            inference_options = {
+                "voice": self._voice,
+                "style": self._style,
+                "apply_watermark": self._apply_watermark,
+            }
+            if self._backend == "native":
+                inference_options["use_ref_codes"] = self._native_use_ref_codes
             stream = await asyncio.to_thread(
                 engine.infer_stream,
                 text,
-                voice=self._voice,
-                style=self._style,
-                apply_watermark=self._apply_watermark,
+                **inference_options,
             )
             resampler = soxr.ResampleStream(
                 self.source_sample_rate,
@@ -579,6 +599,7 @@ class _NativeVieNeuEngine:
         voice: str,
         style: str,
         apply_watermark: bool,
+        use_ref_codes: bool,
     ) -> Iterator[np.ndarray[Any, Any]]:
         if self._closed:
             raise RuntimeError("VieNeu native engine is closed")
@@ -593,6 +614,7 @@ class _NativeVieNeuEngine:
         params.text = encoded_text
         params.voice_id = encoded_voice
         params.style = encoded_style
+        params.use_ref_codes = use_ref_codes
         params.apply_watermark = apply_watermark
         audio = _NativeAudio()
         status = self._library.vieneu_synthesize_v3(

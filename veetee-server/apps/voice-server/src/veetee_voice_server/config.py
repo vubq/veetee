@@ -85,6 +85,7 @@ class Settings(BaseSettings):
         ".cache/local-ai/VieNeu-TTS.cpp/build-cpu/libvieneu-tts.so"
     )
     tts_native_realtime_headroom: float = Field(default=1.15, ge=1.0, le=2.0)
+    tts_native_use_ref_codes: bool = True
     tts_playback_queue_seconds: float = Field(default=5.0, ge=1.0, le=15.0)
     default_locale: str = "vi-VN"
     default_persona: str = ""

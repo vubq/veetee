@@ -63,7 +63,7 @@ describe("Vue-native Manager Web", () => {
     expect(agentsPage).toContain("createPersonalityPreset");
     expect(agentsPage).toContain("deletePersonalityPreset");
     expect(agentsPage).toContain("voiceQualityWarnings");
-    expect(agentsPage).toContain("có nguy cơ clipping");
+    expect(agentsPage).toContain("collectVoiceQualityWarnings");
   });
 
   it("configures every LLM binding without coupling parameters to one vendor", () => {

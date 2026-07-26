@@ -10,6 +10,7 @@ import pytest
 from veetee_voice_server.conversation.arbiter import ConversationState, TurnArbiter
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.engine import ConversationEngine
+from veetee_voice_server.conversation.sentence_chunker import TtsTextChunkingPolicy
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
@@ -396,6 +397,39 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
         output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP} for output in sink.outputs
     )
     assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
+async def test_sentence_bounded_tts_keeps_phrase_in_one_request() -> None:
+    class SentenceBoundedTts(FakeTts):
+        text_chunking_policy = TtsTextChunkingPolicy(
+            mode="sentence_bounded",
+            emergency_max_characters=112,
+        )
+
+    arbiter = TurnArbiter("session-sentence-boundary")
+    tts = SentenceBoundedTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=FakeLlm(
+            (
+                "Đây là một tình huống có nhiều điều khó",
+                " khăn nhưng vẫn xử lý được.",
+            )
+        ),
+        tts=tts,
+        tools=FakeTools(),
+        sink=MemoryConversationSink(),
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("fixture", "vi-VN"))
+
+    assert tts.calls == [
+        "Đây là một tình huống có nhiều điều khó khăn nhưng vẫn xử lý được."
+    ]
 
 
 async def test_llm_stream_continues_while_tts_speaks_previous_chunk() -> None:

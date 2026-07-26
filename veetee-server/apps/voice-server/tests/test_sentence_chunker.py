@@ -88,6 +88,122 @@ def test_sentence_chunker_rejects_invalid_bounds(
         )
 
 
+def test_sentence_bounded_chunker_keeps_kho_khan_in_one_request() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=112,
+    )
+
+    assert chunker.push("Đây là một tình huống có nhiều điều khó") == []
+    assert chunker.push(" khăn nhưng vẫn xử lý được.") == []
+    assert chunker.push(" Câu sau") == []
+    assert chunker.flush() == (
+        "Đây là một tình huống có nhiều điều khó khăn nhưng vẫn xử lý được. Câu sau"
+    )
+
+
+def test_sentence_bounded_chunker_ignores_clause_punctuation() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=20,
+        max_characters=32,
+        mode="sentence_bounded",
+        emergency_max_characters=96,
+    )
+
+    assert chunker.push("Đầu tiên, tôi kiểm tra: dữ liệu; rồi tiếp tục") == []
+    assert chunker.push(".") == []
+    assert chunker.push(" Câu mới") == []
+    assert chunker.flush() == "Đầu tiên, tôi kiểm tra: dữ liệu; rồi tiếp tục. Câu mới"
+
+
+def test_sentence_bounded_chunker_handles_decimal_abbreviation_and_closer() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=112,
+    )
+
+    assert chunker.push("PGS. An dùng phiên bản 3.") == []
+    assert chunker.push("14 và nói: \"Ổn rồi!") == []
+    assert chunker.push("\" Câu sau") == []
+    assert chunker.flush() == 'PGS. An dùng phiên bản 3.14 và nói: "Ổn rồi!" Câu sau'
+
+
+def test_sentence_bounded_chunker_groups_short_complete_sentences() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=160,
+        sentence_batch_max_characters=72,
+    )
+
+    assert chunker.push("Câu đầu ngắn. Câu sau") == []
+    assert chunker.push(" cũng ngắn. Câu thứ ba dài hơn một chút") == []
+    assert chunker.push(" để làm tràn batch. Câu tiếp") == [
+        "Câu đầu ngắn. Câu sau cũng ngắn."
+    ]
+    assert chunker.flush() == "Câu thứ ba dài hơn một chút để làm tràn batch. Câu tiếp"
+
+
+def test_sentence_bounded_chunker_splits_final_tail_over_batch_limit() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=160,
+        sentence_batch_max_characters=40,
+    )
+
+    assert chunker.push("Đây là một câu hoàn chỉnh. Câu cuối còn dài") == []
+    assert [(chunk.text, chunk.reason) for chunk in chunker.flush_chunks()] == [
+        ("Đây là một câu hoàn chỉnh.", "sentence"),
+        ("Câu cuối còn dài", "final"),
+    ]
+
+
+def test_sentence_bounded_chunker_absorbs_punctuation_only_tail() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=160,
+        sentence_batch_max_characters=72,
+    )
+
+    assert chunker.push("Câu hoàn chỉnh. Tiếp") == []
+    assert chunker.push("?!") == []
+    assert chunker.flush() == "Câu hoàn chỉnh. Tiếp?!"
+
+
+def test_sentence_bounded_chunker_uses_emergency_whitespace_boundary() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=20,
+        max_characters=32,
+        mode="sentence_bounded",
+        emergency_max_characters=40,
+    )
+
+    chunks = chunker.push_chunks(
+        "Đây là một dòng không có dấu câu và tiếp tục vượt giới hạn an toàn"
+    )
+
+    assert [(chunk.text, chunk.reason) for chunk in chunks] == [
+        ("Đây là một dòng không có dấu câu và", "emergency")
+    ]
+    assert chunker.flush() == "tiếp tục vượt giới hạn an toàn"
+
+
 def test_sentence_chunker_can_coalesce_short_sentences_for_cloud_tts() -> None:
     chunker = SentenceChunker(
         min_characters=8,
