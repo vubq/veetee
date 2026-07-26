@@ -54,6 +54,9 @@ flash_args
 # Local tooling and temporary agent state
 .codex/
 .cache/
+/.claude/settings.local.json
+/.claude/worktrees/
+/.playwright-mcp/
 *.swp
 *~
 
