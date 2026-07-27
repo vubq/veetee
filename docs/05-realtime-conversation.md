@@ -94,21 +94,33 @@ Nếu turn dừng bất thường sau khi audio đã bắt đầu, `tts.stop` ph
 cancelled cho Lab và server phải bỏ paced-audio queue của device để audio cũ không
 chạy đè lên câu trả lời của lượt mới.
 
+`ttsFirstAudioSeconds` chỉ áp dụng tới PCM không rỗng đầu tiên của toàn speech turn.
+Các batch VieNeu tiếp theo không được reset budget first-audio; chúng dùng
+`ttsStreamIdleSeconds`/`ttsSeconds` để bắt khoảng im lặng giữa hai audio event. Log
+`conversation_tts_first_audio` vì vậy chỉ xuất hiện một lần mỗi turn, còn
+`conversation_tts_batch_first_audio` đo từng request với batch number, reason và số
+ký tự. Client vẫn chỉ thấy một lifecycle `tts.start`/audio/`tts.stop` liên tục.
+
 `ttsSeconds` cũng là deadline không hoạt động, được làm mới trước khi chờ mỗi audio
 chunk. Với VieNeu local dùng một inference worker, thời gian một lượt phải chờ lượt
 đang nói trước đó không tiêu thụ deadline này. Khi bắt đầu phát, lượt giữ worker cho
 tới hết speech queue để các phiên đồng thời không giành model sau từng câu và tạo
-khoảng lặng dài. Backend native nhả chunk mở đầu ở mục tiêu/tối đa 24/40 ký tự,
-sau đó dùng batch duy trì 48/72 ký tự; vì vậy LLM vừa sinh đủ một cụm nói tự nhiên
-thì TTS bắt đầu, không chờ toàn bộ câu trả lời hoặc một câu văn quá dài. Tốc độ
+khoảng lặng dài. Baseline ONNX gom các câu ngắn hoàn chỉnh tới natural cap 160 ký tự; native batch-only
+giữ cap 72. Cả hai phát ở sentence boundary và chỉ emergency-split stream thiếu dấu câu
+ở bound ONNX 256/native 72; vì vậy không tách cụm từ tại mốc pacing và không chờ toàn bộ
+câu trả lời. Tốc độ
 voice config được áp dụng đúng bằng post-processing giữ cao độ, không tự giảm trong
 lượt. Adapter đo và log tốc độ realtime tối đa theo RTF/headroom; Manager cảnh báo
 khi cấu hình trên 1,2x có thể phát nhanh hơn throughput CPU, nhưng không âm thầm
 đổi giá trị người dùng đã publish.
 
 Lab gửi PCM sớm để browser lập lịch liền mạch nhưng chỉ phát `tts.stop` và
-`listen.start` sau thời lượng PCM đã lên lịch. Device sink tương tự giữ Opus queue
-5 giây có giới hạn rồi đợi paced sender drain; abort/cancel đánh thức cả hai ngay,
+`listen.start` sau thời lượng PCM đã lên lịch. Nếu timeline đã cạn trước PCM kế tiếp,
+Lab cộng lại restart cushion 200 ms giống browser và ghi schedule-gap estimate; đó
+không phải playback ACK hoặc measured speaker underrun. Device sink tương tự giữ Opus
+queue 5 giây có giới hạn rồi đợi paced sender drain. Paced sender tách provider
+queue-starvation khỏi event-loop/WebSocket scheduler lateness với tolerance bounded;
+hai metric vẫn không chứng minh loa đã underrun. Abort/cancel đánh thức cả hai ngay,
 xóa audio cũ và không phải chờ playback bình thường.
 
 Voice-server ghi hai mốc metric đã redact cho từng turn:
@@ -510,7 +522,9 @@ voice session hoạt động.
 Độ trung thực phải được công bố rõ trong UI và `lab.hello`:
 
 - Browser nhận PCM TTS để phát trực tiếp; Lab không đo packetization/pacing Opus V1,
-  Wi-Fi ESP32, decoder queue, amplifier hoặc loa vật lý.
+  Wi-Fi ESP32, decoder queue, amplifier hoặc loa vật lý. Mobile browser cần một user
+  gesture để tạo/resume `AudioContext`; nút bắt đầu phiên thử tự unlock bằng silent
+  buffer và UI giữ nút `Bật âm thanh` nếu context vẫn suspended hoặc playback lỗi.
 - Browser AEC/noise suppression/AGC của Live Mic không phải AEC của INMP441/
   MAX98357A. `getUserMedia` trên LAN HTTP thường bị chặn; dùng HTTPS/localhost hoặc
   Audio Replay.

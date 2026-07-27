@@ -31,7 +31,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Privacy | Raw audio không lưu mặc định; transcript/voiceprint có retention/consent riêng. |
 | Speech AI placement | ASR, Silero VAD và VieNeu-TTS chạy local trên voice-server; ESP32 chỉ capture/playback/Opus/wake/interrupt. |
 | ASR baseline | Sherpa-ONNX Zipformer Vietnamese 30M INT8 là primary; ChunkFormer-CTC-Large-Vie chỉ re-decode khi confidence/ổn định thấp hoặc policy yêu cầu chất lượng cao. Không chạy cả hai trên mọi utterance. |
-| TTS baseline | VieNeu-TTS v3 Turbo là primary `vi-VN`; clone mới dùng ONNX compatibility, host dùng native CPU với lead chunk 24/40, batch duy trì 48/72, tempo chính xác theo agent config, style đọc độc lập, playback buffer và generation cancellation. Cloud TTS không tự bật trong privacy profile local-only. |
+| TTS baseline | VieNeu-TTS v3 Turbo ONNX INT8 CPU 2 threads là primary `vi-VN` portable và trên host hiện tại; natural sentence cap 160, emergency punctuation-free 256, Trúc Ly/`tu_nhien`/1.0x/lead-in 16. Native CPU là profile batch-only tùy chọn 72/72 sau benchmark, không tự fallback. Tempo chính xác theo agent config, playback bounded và generation cancellation. Cloud TTS không tự bật trong privacy profile local-only. |
 | VAD baseline | Silero VAD (`silero-local`) chạy server để speech/endpoint; không coi VAD là noise classifier hay semantic admission. |
 | LLM baseline | 9Router `v0.5.40` local, endpoint `/v1`, model dev/LAN `cx/gpt-5.6-terra` sau benchmark trên host; production vẫn phải giữ adapter thay thế (official API/self-hosted). ChatGPT Plus/Codex OAuth không được coi là OpenAI Platform API key. |
 
@@ -49,7 +49,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
 | ASR | Zipformer Vietnamese 30M INT8 primary; ChunkFormer-CTC-Large-Vie fallback có điều kiện. | Có thể tạm Zipformer-only trong bring-up nếu server chưa đủ tài nguyên. |
 | LLM | `openai-compatible-9router` cho dev/LAN; adapter giữ tương thích Chat Completions/Responses, SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu 9router không đạt contract hoặc không phù hợp quyền sử dụng. |
-| TTS | VieNeu-TTS v3 Turbo local primary `vi-VN`; native CPU trên host hiện tại, ONNX compatibility khi thiếu native artifact. | Thêm local/cloud fallback chỉ sau license, privacy và latency benchmark. |
+| TTS | VieNeu-TTS v3 Turbo ONNX INT8 CPU 2 threads local primary `vi-VN`; native CPU chỉ là profile benchmark tùy chọn và fail readiness nếu artifact thiếu. | Đổi backend hoặc thêm local/cloud fallback chỉ sau license, privacy, latency, cancellation và live quality benchmark. |
 | Tenant | Schema tenant-aware, UI V1 một workspace/owner. | Mở full tenant/RBAC sau khi voice loop ổn định. |
 | LAN security | HTTP/WS chỉ cho dev LAN; release LAN dùng HTTPS/WSS với local CA/SPKI pinning. | Public cần tunnel/domain/TLS. |
 | Config apply | Sensitivity/cooldown ở standby; model pack stage inactive slot và restart subsystem; firmware/apply ở safe boundary. | Chỉ hot reload nếu capability/health test chứng minh an toàn. |

@@ -153,6 +153,36 @@ def test_sentence_bounded_chunker_groups_short_complete_sentences() -> None:
     assert chunker.flush() == "Câu thứ ba dài hơn một chút để làm tràn batch. Câu tiếp"
 
 
+def test_sentence_bounded_chunker_keeps_a_161_to_256_character_sentence_intact() -> None:
+    sentence = "Một " + ("ý " * 94) + "xong."
+    assert 161 <= len(sentence) <= 256
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=256,
+        sentence_batch_max_characters=256,
+    )
+
+    assert chunker.push(f"{sentence} Câu sau") == []
+    assert chunker.flush() == f"{sentence} Câu sau"
+
+
+def test_sentence_bounded_chunker_drops_entirely_punctuation_only_stream() -> None:
+    chunker = SentenceChunker(
+        min_characters=8,
+        target_characters=24,
+        max_characters=40,
+        mode="sentence_bounded",
+        emergency_max_characters=256,
+        sentence_batch_max_characters=256,
+    )
+
+    assert chunker.push("…?!") == []
+    assert chunker.flush_chunks() == []
+
+
 def test_sentence_bounded_chunker_splits_final_tail_over_batch_limit() -> None:
     chunker = SentenceChunker(
         min_characters=8,

@@ -725,6 +725,72 @@ async def test_tts_first_audio_deadline_precedes_stream_idle_watchdog() -> None:
     assert not any(output.kind is OutputKind.TTS_START for output in sink.outputs)
 
 
+async def test_tts_batch_first_audio_logs_the_chunk_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        "veetee_voice_server.conversation.engine.logger.info",
+        lambda event, **fields: records.append((event, fields)),
+    )
+    engine, arbiter, _, _, _, _, _ = create_engine(
+        plan=response_plan("Câu đầu tiên. Câu thứ hai.")
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("fixture", "vi-VN"))
+
+    first_audio_records = [
+        fields
+        for event, fields in records
+        if event == "conversation_tts_batch_first_audio"
+    ]
+    assert [record["reason"] for record in first_audio_records] == [
+        "sentence",
+        "sentence",
+    ]
+
+
+async def test_later_tts_batch_uses_stream_idle_for_first_audio() -> None:
+    arbiter = TurnArbiter("session-later-batch-idle")
+    sink = MemoryConversationSink()
+
+    class LaterBatchTts(FakeTts):
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del locale, context
+            self.calls.append(text)
+            if len(self.calls) == 2:
+                await asyncio.sleep(0.04)
+            yield AudioChunk(0, 24_000, "pcm_s16le", b"audio", final=True)
+
+    tts = LaterBatchTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Câu đầu tiên. Câu thứ hai.")),
+        llm=FakeLlm(),
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            tts_first_audio_seconds=0.02,
+            tts_stream_idle_seconds=0.08,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    assert tts.calls == ["Câu đầu tiên.", "Câu thứ hai."]
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
 async def test_tts_idle_deadline_refreshes_while_audio_keeps_progressing() -> None:
     arbiter = TurnArbiter("session-progressive-tts")
     sink = MemoryConversationSink()

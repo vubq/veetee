@@ -13,6 +13,10 @@ Veetee has two owning source trees:
 
 Both directories under `references/` are read-only comparison sources. Never edit them.
 
+For reboot recovery, full-stack startup and AI handoff, use `docs/21-local-development-runbook.md`.
+The documented known-good VieNeu baseline is commit `e1618d7`; always verify the active
+branch/commit before starting a runtime process.
+
 ## Architecture
 
 Audio travels directly between the ESP32 and `apps/voice-server` over the versioned WebSocket/Opus contract. `apps/manager-api` manages tenants, devices, agents, providers, credentials, artifacts, OTA and desired/reported state; it must not enter the frame-by-frame audio path. `apps/manager-web` is the operator console and calls Manager API, except Realtime Lab, which uses a separately authorized WebSocket to the voice server.

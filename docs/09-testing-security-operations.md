@@ -173,6 +173,14 @@ Admission test corpus phải đa dạng về môi trường, speaker, media play
 - `artifact_rollback_total{reason}`.
 - `wake_model_false_accept_rate` và `wake_model_false_reject_rate`.
 - `provider_request_duration_ms{kind,adapter,result}`.
+- VieNeu per-request `request_wall_rtf`, generated audio duration, normalized chunk
+  count, actual internal inference-start count và clipping ratio. `request_wall_rtf`
+  là wall time ở provider boundary và có thể bao gồm sink backpressure; không gọi nó
+  là pure inference RTF.
+- Lab generation summary: estimated schedule-gap count/total/max và low-water.
+- Device paced-sender generation summary: queue-starvation count/total/max,
+  scheduler-lateness count/total/max và queue low-water frames. Hai summary là
+  scheduling diagnostics, không phải measured browser/device speaker underrun.
 - `audio_frames_dropped_total{direction,reason}`.
 - `mcp_calls_total{tool,result,actor}`.
 - `activation_attempts_total{result}`.
@@ -195,7 +203,9 @@ Không dùng transcript làm span name/label vì cardinality và privacy.
 
 Conversation timeline vận hành mặc định chỉ lưu metadata đã redact; event UUID
 idempotent, retention 7 ngày (configurable 1-30), payload được bound ở producer và
-không tạo event theo từng audio frame/token delta.
+không tạo event theo từng audio frame/token delta. Schedule summary phát tối đa một
+lần mỗi TTS generation (kể cả abort), không chứa text, PCM/Opus, credential hoặc
+Authorization header.
 
 ## 5. LAN deployment không domain
 

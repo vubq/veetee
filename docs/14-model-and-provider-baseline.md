@@ -407,10 +407,10 @@ starvation trong cả mười lượt. CUDA 12 với ONNX Runtime
 GPU chậm hơn: 696/1,365 ms first audio và RTF 1.303/1.804 do nhiều đoạn graph phải
 sao chép hoặc fallback qua CPU; GPU chỉ được dùng khoảng 4--10%. Zipformer INT8
 decode 1,55 giây audio trong 38/44 ms median/p95 ở 2 threads. Vì vậy Zipformer giữ
-ONNX INT8 CPU 2 threads; VieNeu ONNX vẫn là compatibility default cho clone mới,
-còn deployment host này bật native C++ CPU 4 threads sau khi có adapter batch,
-playback buffer, generation cancellation và serialized worker. Chi tiết và lệnh
-tái lập nằm ở `docs/15-local-ai-runtime.md`.
+ONNX INT8 CPU 2 threads và VieNeu ONNX là baseline portable lẫn profile hiện hành
+trên host này. Native C++ CPU 4 threads chỉ là profile batch tùy chọn sau benchmark;
+nó không tự fallback hoặc thay ONNX. Chi tiết, A/B batching bị rollback và live Lab
+evidence nằm ở `docs/15-local-ai-runtime.md`.
 
 Model TTS phải được benchmark về first-audio, real-time factor, CPU/RAM/VRAM,
 phát âm tên riêng/số/ngày, chất lượng giọng, output sample rate, license và khả năng

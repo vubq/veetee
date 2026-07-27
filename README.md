@@ -39,6 +39,7 @@ veetee/
 14. `docs/14-model-and-provider-baseline.md` - baseline local ASR/VAD/TTS, 9router LLM, fallback và benchmark gate.
 15. `docs/15-local-ai-runtime.md` - runtime local đã chọn, readiness, model worker và validation.
 16. `docs/16-device-ui-and-ui-packs.md` - contract và hướng triển khai UI Pack data-only.
+17. `docs/21-local-development-runbook.md` - cold-start sau reboot, chạy đủ server stack, health check và prompt cho AI.
 
 ## Tài liệu tham khảo bổ sung
 

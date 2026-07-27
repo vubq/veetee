@@ -32,8 +32,10 @@ Clone mới dùng `VEETEE_TTS_BACKEND=onnx`. Host đã benchmark có thể chạ
 library không đủ thay vì âm thầm đổi backend.
 
 VieNeu gom các câu ngắn hoàn chỉnh thành natural batch để không tách cụm từ hoặc
-restart TTS quá thường xuyên. Câu cuối không dấu vẫn được đọc khi LLM hoàn tất;
-output bất thường không có dấu câu dùng emergency bound theo backend.
+restart TTS quá thường xuyên. Baseline ONNX giữ natural cap 160 ký tự và chỉ dùng
+emergency bound 256 cho output bất thường không có dấu câu; native giữ 72/72. A/B
+first-160/steady-256 giảm inference starts nhưng làm aggregate RTF xấu hơn nên không
+được rollout. Câu cuối không dấu vẫn được đọc khi LLM hoàn tất.
 `VEETEE_TTS_STYLE=tu_nhien` là style hội thoại mặc
 định; agent có thể chọn riêng `doc_truyen` hoặc `tin_tuc`. Tempo từ agent được áp
 dụng đúng, còn runtime log headroom và cảnh báo quality khi profile quá nhanh.
@@ -51,12 +53,17 @@ Các biến cấu hình chính:
 
 ```dotenv
 VEETEE_LAB_WEBSOCKET_PATH=/veetee/lab/v1/
-VEETEE_LAB_ALLOWED_ORIGINS=http://127.0.0.1:8081,http://192.168.110.115:8081
+VEETEE_LAB_ALLOWED_ORIGINS=http://127.0.0.1:8081,https://veetee-dev.example.ts.net
 VEETEE_LAB_MAX_SESSIONS=4
 ```
 
 - Text bypass VAD/ASR có event công khai; admission/LLM/MCP/VieNeu vẫn là thật.
 - Audio Replay/Live Mic gửi PCM16 mono 16 kHz qua Silero và Zipformer thật.
 - PCM downlink chỉ phục vụ browser playback; không đo Opus, AEC hay speaker ESP32.
+- Mobile browser phải unlock/resume `AudioContext` bằng user gesture trước PCM đầu;
+  banner/nút `Bật âm thanh` là recovery path, không phải trạng thái thành công.
 - Live Mic trên LAN HTTP thường không có `getUserMedia`; dùng HTTPS/localhost hoặc
   Audio Replay.
+- `lab_playback_schedule_summary` là timeline estimate. Device
+  `tts.paced_sender_summary` tách queue starvation và scheduler lateness; cả hai đều
+  không phải measured speaker underrun.

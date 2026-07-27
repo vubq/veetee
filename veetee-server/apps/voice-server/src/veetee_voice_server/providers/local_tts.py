@@ -89,6 +89,10 @@ class VieNeuTtsProvider:
         self._worker_lock = worker_lock or threading.Lock()
         self._conversion_samples = 0
         self._conversion_clipped_samples = 0
+        self._normalized_chunk_count = 0
+        self._normalized_chunk_characters = 0
+        self._normalized_chunk_max_characters = 0
+        self._internal_inference_start_count = 0
         for warning in self.quality_warnings:
             logger.warning(
                 "vieneu_profile_quality_warning",
@@ -202,7 +206,16 @@ class VieNeuTtsProvider:
             started_at = monotonic()
             self._conversion_samples = 0
             self._conversion_clipped_samples = 0
+            self._normalized_chunk_count = 0
+            self._normalized_chunk_characters = 0
+            self._normalized_chunk_max_characters = 0
+            self._internal_inference_start_count = 0
             engine = await asyncio.to_thread(self._load_engine)
+            if self._backend == "onnx":
+                engine.normalized_chunk_count = 0
+                engine.normalized_chunk_characters = 0
+                engine.normalized_chunk_max_characters = 0
+                engine.internal_inference_start_count = 0
             inference_options = {
                 "voice": self._voice,
                 "style": self._style,
@@ -284,10 +297,32 @@ class VieNeuTtsProvider:
                         final=True,
                     )
             finally:
+                if self._backend == "onnx":
+                    self._normalized_chunk_count = int(
+                        getattr(engine, "normalized_chunk_count", 0)
+                    )
+                    self._normalized_chunk_characters = int(
+                        getattr(engine, "normalized_chunk_characters", 0)
+                    )
+                    self._normalized_chunk_max_characters = int(
+                        getattr(engine, "normalized_chunk_max_characters", 0)
+                    )
+                    self._internal_inference_start_count = int(
+                        getattr(engine, "internal_inference_start_count", 0)
+                    )
+                elif self._conversion_samples:
+                    self._normalized_chunk_count = 1
+                    self._normalized_chunk_characters = len(text)
+                    self._normalized_chunk_max_characters = len(text)
+                    self._internal_inference_start_count = 1
                 clipping_ratio = (
                     self._conversion_clipped_samples / self._conversion_samples
                     if self._conversion_samples
                     else 0.0
+                )
+                duration_seconds = max(monotonic() - started_at, 0.0)
+                audio_seconds = (
+                    self._conversion_samples / self._output_sample_rate
                 )
                 logger.info(
                     "vieneu_tts_completed",
@@ -307,10 +342,22 @@ class VieNeuTtsProvider:
                     ),
                     backend=self._backend,
                     volume=self._volume,
-                    duration_ms=round((monotonic() - started_at) * 1_000, 1),
-                    audio_ms=round(
-                        self._conversion_samples * 1_000 / self._output_sample_rate,
-                        1,
+                    duration_ms=round(duration_seconds * 1_000, 1),
+                    audio_ms=round(audio_seconds * 1_000, 1),
+                    request_wall_rtf=(
+                        round(duration_seconds / audio_seconds, 3)
+                        if audio_seconds > 0
+                        else None
+                    ),
+                    normalized_chunk_count=self._normalized_chunk_count,
+                    internal_inference_start_count=(
+                        self._internal_inference_start_count
+                    ),
+                    normalized_chunk_characters=self._normalized_chunk_characters,
+                    normalized_chunk_max_characters=(
+                        self._normalized_chunk_max_characters
+                        if self._normalized_chunk_count
+                        else None
                     ),
                     clipping_ratio=round(clipping_ratio, 6),
                 )
@@ -668,6 +715,10 @@ class _LocalStreamingV3Engine:
     def __init__(self, engine: Any, voices: dict[str, Any]) -> None:
         self._engine = engine
         self._voices = voices.get("presets", {})
+        self.normalized_chunk_count = 0
+        self.normalized_chunk_characters = 0
+        self.normalized_chunk_max_characters = 0
+        self.internal_inference_start_count = 0
         self._watermarker: Any | None = None
         try:
             import perth  # type: ignore[import-untyped]
@@ -691,8 +742,16 @@ class _LocalStreamingV3Engine:
         speaker_emb = np.asarray(preset["speaker_emb"], dtype=np.float32)
         ref_codes = np.asarray(preset["codes"], dtype=np.int64)
         resolved_style = style or str(preset.get("style", "tu_nhien"))
-        for chunk in normalize_to_chunks_v3(text, max_chars=256):
+        chunks = normalize_to_chunks_v3(text, max_chars=256)
+        self.normalized_chunk_count = len(chunks)
+        self.normalized_chunk_characters = sum(len(chunk) for chunk in chunks)
+        self.normalized_chunk_max_characters = max(
+            (len(chunk) for chunk in chunks),
+            default=0,
+        )
+        for chunk in chunks:
             phonemes = phonemize_text_with_emotions(chunk)
+            self.internal_inference_start_count += 1
             for audio in self._engine.infer_stream(
                 phonemes=phonemes,
                 speaker_emb=speaker_emb,

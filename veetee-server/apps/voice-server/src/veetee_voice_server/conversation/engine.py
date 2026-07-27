@@ -24,6 +24,7 @@ from veetee_voice_server.conversation.cancellation import (
 )
 from veetee_voice_server.conversation.sentence_chunker import (
     SentenceChunker,
+    TextChunk,
     TtsTextChunkingPolicy,
 )
 from veetee_voice_server.conversation.types import (
@@ -55,6 +56,7 @@ logger = structlog.get_logger(__name__)
 @dataclass(slots=True)
 class _SpeechLifecycle:
     started: bool = False
+    batch_count: int = 0
 
 
 class _SemanticProviderUnavailableError(RuntimeError):
@@ -295,7 +297,7 @@ class ConversationEngine:
 
     async def _stream_response(self, request: LlmRequest, context: OperationContext) -> str:
         speech = _SpeechLifecycle()
-        speech_queue: asyncio.Queue[str | None] = asyncio.Queue(
+        speech_queue: asyncio.Queue[TextChunk | None] = asyncio.Queue(
             maxsize=self._policy.speech_queue_capacity
         )
         speech_task = asyncio.create_task(
@@ -356,7 +358,7 @@ class ConversationEngine:
                         text_characters=len(sentence.text),
                     )
                     await self._enqueue_speech(
-                        speech_queue, sentence.text, speech_task, context
+                        speech_queue, sentence, speech_task, context
                     )
 
             logger.info(
@@ -375,7 +377,7 @@ class ConversationEngine:
                     text_characters=len(remainder.text),
                 )
                 await self._enqueue_speech(
-                    speech_queue, remainder.text, speech_task, context
+                    speech_queue, remainder, speech_task, context
                 )
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
@@ -389,19 +391,25 @@ class ConversationEngine:
 
     async def _drain_speech_queue(
         self,
-        queue: asyncio.Queue[str | None],
+        queue: asyncio.Queue[TextChunk | None],
         locale: str,
         context: OperationContext,
         speech: _SpeechLifecycle,
     ) -> None:
-        text = await await_operation(queue.get(), context)
-        if text is None:
+        chunk = await await_operation(queue.get(), context)
+        if chunk is None:
             return
         async with self._speech_turn_scope(context):
             while True:
-                await self._speak_text(text, locale, context, speech)
-                text = await await_operation(queue.get(), context)
-                if text is None:
+                await self._speak_text(
+                    chunk.text,
+                    locale,
+                    context,
+                    speech,
+                    reason=chunk.reason,
+                )
+                chunk = await await_operation(queue.get(), context)
+                if chunk is None:
                     return
 
     @asynccontextmanager
@@ -417,15 +425,15 @@ class ConversationEngine:
 
     async def _enqueue_speech(
         self,
-        queue: asyncio.Queue[str | None],
-        text: str | None,
+        queue: asyncio.Queue[TextChunk | None],
+        chunk: TextChunk | None,
         speech_task: asyncio.Task[None],
         context: OperationContext,
     ) -> None:
         context.checkpoint()
         if speech_task.done():
             await speech_task
-        put_task = asyncio.create_task(queue.put(text))
+        put_task = asyncio.create_task(queue.put(chunk))
         try:
             # A failed TTS consumer must wake a producer that is blocked on a
             # full queue instead of waiting for the turn deadline forever.
@@ -447,7 +455,7 @@ class ConversationEngine:
 
     async def _speak_once(self, text: str, locale: str, context: OperationContext) -> None:
         speech = _SpeechLifecycle()
-        speech_queue: asyncio.Queue[str | None] = asyncio.Queue(
+        speech_queue: asyncio.Queue[TextChunk | None] = asyncio.Queue(
             maxsize=self._policy.speech_queue_capacity
         )
         speech_task = asyncio.create_task(
@@ -457,7 +465,7 @@ class ConversationEngine:
         chunker = self._new_sentence_chunker()
         completed = False
         try:
-            for sentence in chunker.push(text):
+            for sentence in chunker.push_chunks(text):
                 await self._enqueue_speech(speech_queue, sentence, speech_task, context)
             for remainder in chunker.flush_chunks():
                 logger.info(
@@ -468,7 +476,7 @@ class ConversationEngine:
                     text_characters=len(remainder.text),
                 )
                 await self._enqueue_speech(
-                    speech_queue, remainder.text, speech_task, context
+                    speech_queue, remainder, speech_task, context
                 )
             await self._enqueue_speech(speech_queue, None, speech_task, context)
             await await_operation(speech_task, context)
@@ -497,6 +505,8 @@ class ConversationEngine:
         locale: str,
         context: OperationContext,
         speech: _SpeechLifecycle,
+        *,
+        reason: str,
     ) -> None:
         started_at = monotonic()
         first_audio_logged = False
@@ -507,6 +517,7 @@ class ConversationEngine:
             turn_id=context.turn_id,
             provider=provider,
             text_characters=len(text),
+            reason=reason,
         )
         try:
             tts_context = (
@@ -514,10 +525,16 @@ class ConversationEngine:
                 if self._policy.tts_total_seconds > 0
                 else context
             )
+            first_progress_seconds = (
+                self._policy.tts_first_audio_seconds
+                if not speech.started
+                else self._policy.tts_stream_idle_seconds
+            )
+            speech.batch_count += 1
             async for audio in iterate_operation(
                 self._tts.synthesize(text, locale, tts_context),
                 tts_context,
-                first_item_timeout_seconds=self._policy.tts_first_audio_seconds,
+                first_item_timeout_seconds=first_progress_seconds,
                 idle_timeout_seconds=self._policy.tts_stream_idle_seconds,
                 is_progress=lambda chunk: bool(chunk.data),
             ):
@@ -525,14 +542,26 @@ class ConversationEngine:
                     continue
                 if not first_audio_logged:
                     first_audio_logged = True
+                    duration_ms = round((monotonic() - started_at) * 1_000, 1)
                     logger.info(
-                        "conversation_tts_first_audio",
+                        "conversation_tts_batch_first_audio",
                         session_id=context.session_id,
                         turn_id=context.turn_id,
                         provider=provider,
+                        batch_number=speech.batch_count,
                         text_characters=len(text),
-                        duration_ms=round((monotonic() - started_at) * 1_000, 1),
+                        reason=reason,
+                        duration_ms=duration_ms,
                     )
+                    if not speech.started:
+                        logger.info(
+                            "conversation_tts_first_audio",
+                            session_id=context.session_id,
+                            turn_id=context.turn_id,
+                            provider=provider,
+                            text_characters=len(text),
+                            duration_ms=duration_ms,
+                        )
                 if not speech.started:
                     await self._arbiter.mark_speaking(context)
                     await self._emit(

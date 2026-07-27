@@ -72,6 +72,11 @@ class LabConversationSink:
         self._first_audio_generation: int | None = None
         self._playback_until = 0.0
         self._playback_cancelled = asyncio.Event()
+        self._playback_gap_count = 0
+        self._playback_gap_seconds = 0.0
+        self._playback_gap_max_seconds = 0.0
+        self._playback_low_water_seconds: float | None = None
+        self._playback_summary_logged = False
 
     async def emit(self, output: ConversationOutput) -> None:
         if output.generation < self._cancel_generation:
@@ -105,6 +110,11 @@ class LabConversationSink:
             self._first_audio_generation = None
             self._playback_until = monotonic()
             self._playback_cancelled = asyncio.Event()
+            self._playback_gap_count = 0
+            self._playback_gap_seconds = 0.0
+            self._playback_gap_max_seconds = 0.0
+            self._playback_low_water_seconds = None
+            self._playback_summary_logged = False
             await self.send_event(
                 "tts.start", {}, turn_id=output.turn_id, generation=output.generation
             )
@@ -121,6 +131,7 @@ class LabConversationSink:
                 await self._wait_for_browser_playback()
             if self._tts_generation != output.generation:
                 return
+            self._log_playback_summary(output.generation, output.turn_id)
             await self.send_event(
                 "tts.stop",
                 output.payload,
@@ -199,7 +210,9 @@ class LabConversationSink:
     async def cancel_tts(self, generation: int) -> None:
         self._cancel_generation = max(self._cancel_generation, generation)
         self._playback_cancelled.set()
-        if self._tts_generation is not None:
+        active_generation = self._tts_generation
+        if active_generation is not None:
+            self._log_playback_summary(active_generation, None)
             await self.send_event(
                 "tts.stop",
                 {"cancelled": True},
@@ -249,10 +262,29 @@ class LabConversationSink:
             return
         self._first_audio_generation = output.generation
         duration_seconds = len(pcm) / (self._output_sample_rate * 2)
-        playback_base = monotonic()
-        if first_audio:
-            playback_base += LAB_PLAYBACK_LEAD_SECONDS
-        self._playback_until = max(self._playback_until, playback_base) + duration_seconds
+        now = monotonic()
+        buffered_seconds = max(0.0, self._playback_until - now)
+        if not first_audio:
+            if self._playback_low_water_seconds is None:
+                self._playback_low_water_seconds = buffered_seconds
+            else:
+                self._playback_low_water_seconds = min(
+                    self._playback_low_water_seconds,
+                    buffered_seconds,
+                )
+        playback_base = max(self._playback_until, now)
+        if first_audio or self._playback_until <= now:
+            if not first_audio and self._playback_until > 0:
+                gap_seconds = now - self._playback_until
+                if gap_seconds > 0:
+                    self._playback_gap_count += 1
+                    self._playback_gap_seconds += gap_seconds
+                    self._playback_gap_max_seconds = max(
+                        self._playback_gap_max_seconds,
+                        gap_seconds,
+                    )
+            playback_base = now + LAB_PLAYBACK_LEAD_SECONDS
+        self._playback_until = playback_base + duration_seconds
 
     def _is_current_tts_generation(self, generation: int) -> bool:
         return (
@@ -268,6 +300,32 @@ class LabConversationSink:
             await asyncio.wait_for(self._playback_cancelled.wait(), timeout=remaining)
         except TimeoutError:
             pass
+
+    def _log_playback_summary(
+        self,
+        generation: int,
+        turn_id: str | None,
+    ) -> None:
+        if self._playback_summary_logged:
+            return
+        self._playback_summary_logged = True
+        logger.info(
+            "lab_playback_schedule_summary",
+            session_id=self._session_id,
+            turn_id=turn_id,
+            generation=generation,
+            schedule_gap_count=self._playback_gap_count,
+            schedule_gap_ms=round(self._playback_gap_seconds * 1_000, 1),
+            schedule_gap_max_ms=round(
+                self._playback_gap_max_seconds * 1_000,
+                1,
+            ),
+            schedule_low_water_ms=(
+                round(self._playback_low_water_seconds * 1_000, 1)
+                if self._playback_low_water_seconds is not None
+                else None
+            ),
+        )
 
     async def _send_json(self, payload: dict[str, Any]) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

@@ -119,6 +119,73 @@ async def test_vieneu_provider_streams_resampled_pcm() -> None:
     assert len(b"".join(chunk.data for chunk in chunks)) > 4_000
 
 
+async def test_vieneu_resets_normalized_metrics_before_a_new_request() -> None:
+    class FailingNormalizedEngine:
+        normalized_chunk_count = 3
+        normalized_chunk_characters = 240
+        normalized_chunk_max_characters = 96
+        internal_inference_start_count = 3
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text, kwargs
+            raise RuntimeError("normalization failed")
+
+    engine = FailingNormalizedEngine()
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        engine=engine,
+    )
+
+    with pytest.raises(RuntimeError, match="normalization failed"):
+        async for _ in provider.synthesize("Lượt mới", "vi-VN", context()):
+            pass
+
+    assert engine.normalized_chunk_count == 0
+    assert engine.normalized_chunk_characters == 0
+    assert engine.normalized_chunk_max_characters == 0
+    assert engine.internal_inference_start_count == 0
+    assert provider._normalized_chunk_count == 0
+    assert provider._normalized_chunk_characters == 0
+    assert provider._normalized_chunk_max_characters == 0
+    assert provider._internal_inference_start_count == 0
+
+
+async def test_vieneu_distinguishes_normalized_chunks_from_inference_starts() -> None:
+    class SplitMetricEngine:
+        normalized_chunk_count = 0
+        normalized_chunk_characters = 0
+        normalized_chunk_max_characters = 0
+        internal_inference_start_count = 0
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text, kwargs
+            self.normalized_chunk_count = 3
+            self.normalized_chunk_characters = 240
+            self.normalized_chunk_max_characters = 96
+            self.internal_inference_start_count = 1
+            yield np.zeros(4_800, dtype=np.float32)
+
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        engine=SplitMetricEngine(),
+    )
+
+    chunks = [
+        chunk
+        async for chunk in provider.synthesize("Lượt mới", "vi-VN", context())
+    ]
+
+    assert chunks
+    assert provider._normalized_chunk_count == 3
+    assert provider._internal_inference_start_count == 1
+
+
 async def test_vieneu_stream_leadin_is_bounded_and_version_checked() -> None:
     module = SimpleNamespace(_STREAM_LEADIN_FRAMES=4)
     _configure_stream_leadin(module, 16)

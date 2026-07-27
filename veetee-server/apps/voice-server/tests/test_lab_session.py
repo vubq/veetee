@@ -248,6 +248,39 @@ async def test_normal_tts_stop_waits_for_browser_lead_and_audio_duration() -> No
     assert events == ["tts.start", "tts.first_audio", "tts.stop"]
 
 
+async def test_normal_tts_stop_waits_for_restart_lead_after_schedule_gap() -> None:
+    websocket = FakeWebSocket()
+    sink = LabConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="lab-session",
+        output_sample_rate=1_000,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(0, 1_000, "pcm_s16le", b"\0\0" * 10),
+        )
+    )
+    await asyncio.sleep(0.22)
+    restarted_at = asyncio.get_running_loop().time()
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(1, 1_000, "pcm_s16le", b"\0\0" * 20, final=True),
+        )
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+
+    assert asyncio.get_running_loop().time() - restarted_at >= 0.21
+    assert sink._playback_gap_count == 1
+    assert sink._playback_gap_seconds > 0
+
+
 async def test_abort_while_first_audio_event_is_blocked_drops_stale_pcm() -> None:
     websocket = BlockingFirstAudioWebSocket()
     sink = LabConversationSink(
@@ -283,6 +316,53 @@ async def test_abort_while_first_audio_event_is_blocked_drops_stale_pcm() -> Non
     controls = [item for item in remaining if isinstance(item, dict)]
     assert [item["event"] for item in controls] == ["tts.stop"]
     assert controls[0]["payload"] == {"cancelled": True}
+
+
+async def test_abort_logs_one_playback_summary_and_resets_next_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summaries: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "veetee_voice_server.transport.lab.logger.info",
+        lambda event, **fields: summaries.append({"event": event, **fields}),
+    )
+    websocket = FakeWebSocket()
+    sink = LabConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="lab-session",
+        output_sample_rate=1_000,
+    )
+
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(0, 1_000, "pcm_s16le", b"\0\0" * 10),
+        )
+    )
+    sink.mark_cancelled(3)
+    await sink.cancel_tts(3)
+    await sink.cancel_tts(3)
+
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-2", 4))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-2",
+            4,
+            audio=AudioChunk(0, 1_000, "pcm_s16le", b"\0\0" * 10),
+        )
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-2", 4))
+
+    playback_summaries = [
+        item for item in summaries if item["event"] == "lab_playback_schedule_summary"
+    ]
+    assert [item["generation"] for item in playback_summaries] == [2, 4]
+    assert playback_summaries[0]["turn_id"] is None
+    assert playback_summaries[1]["turn_id"] == "turn-2"
 
 
 async def test_text_lab_marks_vad_asr_bypassed_and_streams_real_tts_pcm() -> None:

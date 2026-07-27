@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
+from time import sleep
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -79,6 +80,26 @@ class FakeWebSocket:
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         self.closed.append((code, reason))
+
+
+class FakeTelemetry:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record(
+        self,
+        session_id: str,
+        event_type: str,
+        *,
+        generation: int,
+        turn_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        del session_id, generation, turn_id
+        self.events.append((event_type, payload or {}))
+
+    async def close(self) -> None:
+        return
 
 
 class FakeVadModel:
@@ -497,6 +518,107 @@ async def test_websocket_sink_buffers_a_native_sentence_while_next_batch_synthes
         sink.close()
 
 
+async def test_websocket_sink_records_paced_sender_summary() -> None:
+    websocket = FakeWebSocket()
+    telemetry = FakeTelemetry()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-summary",
+        telemetry=telemetry,
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+    )
+    try:
+        await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+        await sink.emit(
+            ConversationOutput(
+                OutputKind.AUDIO,
+                "turn-1",
+                2,
+                audio=AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 5_760),
+            )
+        )
+        await sink.emit(ConversationOutput(OutputKind.TTS_STOP, "turn-1", 2))
+    finally:
+        sink.close()
+
+    summaries = [
+        payload
+        for event_type, payload in telemetry.events
+        if event_type == "tts.paced_sender_summary"
+    ]
+    assert len(summaries) == 1
+    assert summaries[0]["queue_starvation_count"] == 0
+    assert summaries[0]["scheduler_lateness_count"] == 0
+    assert summaries[0]["frame_duration_ms"] == 60
+    assert isinstance(summaries[0]["queue_low_water_frames"], int)
+
+
+async def test_paced_sender_separates_queue_starvation_from_scheduler_lateness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websocket = FakeWebSocket()
+    telemetry = FakeTelemetry()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-delays",
+        telemetry=telemetry,
+        output_sample_rate=24_000,
+        frame_duration_ms=20,
+    )
+    monkeypatch.setattr(sink, "_prebuffer_frames", 1)
+
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    stream = sink._audio_stream
+    assert stream is not None
+    await sink._enqueue_audio(stream, b"first")
+    await asyncio.sleep(0.05)
+    await sink._enqueue_audio(stream, b"starved")
+    await asyncio.sleep(0.01)
+    await sink._enqueue_audio(stream, None)
+    assert stream.task is not None
+    await stream.task
+
+    assert stream.starvation_count == 1
+    assert stream.starvation_seconds > 0
+    assert stream.scheduler_lateness_count == 0
+
+
+async def test_paced_sender_records_scheduler_lateness_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websocket = FakeWebSocket()
+    telemetry = FakeTelemetry()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-late-scheduler",
+        telemetry=telemetry,
+        output_sample_rate=24_000,
+        frame_duration_ms=20,
+    )
+    monkeypatch.setattr(sink, "_prebuffer_frames", 1)
+
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    stream = sink._audio_stream
+    assert stream is not None
+    await sink._enqueue_audio(stream, b"first")
+    await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    stream.queue.put_nowait((b"ready", loop.time()))
+
+    def delay_event_loop() -> None:
+        sleep(0.04)
+
+    loop.call_later(0.005, delay_event_loop)
+    stream.queue.put_nowait((None, loop.time()))
+    assert stream.task is not None
+    await stream.task
+
+    assert stream.starvation_count == 0
+    assert stream.scheduler_lateness_count == 1
+    assert stream.scheduler_lateness_seconds > 0
+
+
 async def test_cancelled_enqueue_cleans_up_queue_and_wait_tasks() -> None:
     websocket = FakeWebSocket()
     sink = WebSocketConversationSink(
@@ -513,7 +635,9 @@ async def test_cancelled_enqueue_cleans_up_queue_and_wait_tasks() -> None:
         stream.task.cancel()
         await asyncio.gather(stream.task, return_exceptions=True)
         while not stream.queue.full():
-            stream.queue.put_nowait(b"queued")
+            stream.queue.put_nowait(
+            (b"queued", asyncio.get_running_loop().time())
+        )
         baseline_tasks = asyncio.all_tasks()
         enqueue_task = asyncio.create_task(sink._enqueue_audio(stream, b"blocked"))
         await asyncio.sleep(0)

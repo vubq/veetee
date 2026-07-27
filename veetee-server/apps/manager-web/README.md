@@ -72,13 +72,18 @@ LAN-first profile.
 
 When the Vite development server is placed behind a trusted HTTPS tunnel, add its
 exact public hostname with `VEETEE_WEB_ALLOWED_HOSTS`. Multiple hosts are
-comma-separated; do not disable host checking globally. Example:
+comma-separated; do not disable host checking globally. If the HTTPS listener proxies
+Manager Web and leaves `/api` plus `/health` on the same origin, omit
+`VITE_MANAGER_API_URL`; the browser then uses Vite's loopback proxy and avoids mixed
+content/CORS. Example:
 
 ```bash
-VITE_MANAGER_API_URL=https://veetee-dev.example.ts.net:8443 \
 VEETEE_WEB_ALLOWED_HOSTS=veetee-dev.example.ts.net \
-npm run dev --workspace @veetee/manager-web
+  npm run dev --workspace @veetee/manager-web
 ```
+
+Set `VITE_MANAGER_API_URL=https://veetee-dev.example.ts.net:8443` only for an
+intentional split-origin deployment, and add the exact Web origin to Manager CORS.
 
 The production bundle self-hosts the Vietnamese, Latin Extended and Latin
 subsets of Be Vietnam Pro at weights 400–700 for both body and display copy.
@@ -100,6 +105,15 @@ Trang Realtime Lab có ba input:
 Phiên bắt đầu bằng `POST /api/v1/lab/sessions`, sau đó token dùng một lần được gửi
 trong WebSocket auth frame, không nằm trong URL. UI không lưu transcript/audio và
 không tuyên bố PCM/browser AEC đã kiểm thử Opus, AEC hoặc loa vật lý của ESP32.
+
+Mobile Safari/Chromium có thể tạo `AudioContext` ở trạng thái `suspended` vì autoplay
+policy. `Bắt đầu phiên thử` chạy trong user gesture, resume context và phát một silent
+buffer để unlock output trước khi xin token Lab. Nếu context vẫn chưa chạy hoặc một
+PCM buffer không schedule được, UI giữ banner `Điện thoại chưa cho phép phát âm thanh`
+và nút `Bật âm thanh`; không che lỗi bằng cách tiếp tục phiên không tiếng. Khi test qua
+HTTPS tunnel, xác nhận banner biến mất sau gesture và console không có playback error.
+HTTP LAN chỉ phù hợp Text/Audio Replay khi browser cho phép; Live Mic cần HTTPS hoặc
+localhost.
 
 Để E2E không vô tình dùng Manager runtime thật đang ở port 8081, chọn port riêng:
 

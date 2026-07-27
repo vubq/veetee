@@ -155,13 +155,15 @@ Conversation timeout và provider deadline là config độc lập. Registry kha
 tối đa cho admission, ASR, planner, TTS và MCP. `llmSeconds` riêng của prose stream là
 idle deadline cho first token/khoảng cách giữa hai event và được làm mới khi stream có
 tiến triển; nó không phải giới hạn tổng độ dài hoặc thời lượng câu trả lời.
-`ttsSeconds` tương tự là synthesis idle deadline giữa các audio chunk sau khi đã
-nhận local worker; thời gian chờ hàng đợi và tổng thời lượng câu trả lời không bị
-tính vào deadline này. VieNeu giữ tuần tự trọn một speech turn thay vì xen kẽ các
-sentence request của nhiều phiên. Native batch dùng lead chunk mục tiêu/tối đa
-24/40 ký tự rồi batch duy trì 48/72 ký tự. Playback rate dùng đúng agent config;
-adapter chỉ đo realtime speed ceiling và cảnh báo starvation thay vì tự hạ tốc độ,
-vì config đã publish phải phản ánh đúng điều người dùng nghe.
+`ttsFirstAudioSeconds` chỉ áp trước PCM đầu tiên của toàn speech turn;
+`ttsSeconds`/`ttsStreamIdleSeconds` là synthesis idle deadline giữa các audio chunk
+và cho first audio của những batch sau. Thời gian chờ hàng đợi và tổng thời lượng câu
+trả lời không bị tính vào deadline này. VieNeu giữ tuần tự trọn một speech turn thay
+vì xen kẽ sentence request của nhiều phiên. Request được tạo ở sentence boundary:
+ONNX gom các câu ngắn tới natural cap 160 ký tự và chỉ emergency-split output thiếu
+dấu câu ở 256; native giữ 72/72 vì vẫn batch-only. Playback rate dùng đúng agent
+config; adapter chỉ đo realtime speed ceiling và cảnh báo starvation thay vì tự hạ
+tốc độ, vì config đã publish phải phản ánh đúng điều người dùng nghe.
 `TurnArbiter` vẫn hủy cả chain khi button/interrupt profile phát abort.
 
 Source hiện publish `providerChains` tường minh theo `kind + locale`; mỗi chain chứa

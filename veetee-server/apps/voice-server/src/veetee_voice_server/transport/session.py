@@ -68,9 +68,17 @@ logger = structlog.get_logger(__name__)
 class _PacedAudioStream:
     generation: int
     turn_id: str | None
-    queue: asyncio.Queue[bytes | None]
+    queue: asyncio.Queue[tuple[bytes | None, float]]
     cancelled: asyncio.Event
     task: asyncio.Task[None] | None = None
+    starvation_count: int = 0
+    starvation_seconds: float = 0.0
+    starvation_max_seconds: float = 0.0
+    scheduler_lateness_count: int = 0
+    scheduler_lateness_seconds: float = 0.0
+    scheduler_lateness_max_seconds: float = 0.0
+    low_water_frames: int | None = None
+    summary_recorded: bool = False
 
 
 class WebSocketConversationSink:
@@ -270,6 +278,7 @@ class WebSocketConversationSink:
             return
         if stream.task is not None:
             await asyncio.gather(stream.task, return_exceptions=True)
+        self._record_paced_stream_summary(stream)
         async with self._lock:
             if (
                 self._audio_stream is not stream
@@ -303,7 +312,9 @@ class WebSocketConversationSink:
     async def _enqueue_audio(self, stream: _PacedAudioStream, packet: bytes | None) -> bool:
         if stream.cancelled.is_set():
             return False
-        put_task = asyncio.create_task(stream.queue.put(packet))
+        put_task = asyncio.create_task(
+            stream.queue.put((packet, asyncio.get_running_loop().time()))
+        )
         cancelled = asyncio.create_task(stream.cancelled.wait())
         try:
             done, _ = await asyncio.wait(
@@ -323,17 +334,50 @@ class WebSocketConversationSink:
         loop = asyncio.get_running_loop()
         sequence = 0
         next_packet_at = 0.0
+        frame_seconds = self._frame_duration_ms / 1_000
+        scheduler_tolerance_seconds = min(0.01, frame_seconds / 4)
         while not stream.cancelled.is_set():
-            packet = await stream.queue.get()
+            packet, enqueued_at = await stream.queue.get()
+            dequeued_at = loop.time()
             if packet is None:
                 return
+            queued_frames = stream.queue.qsize()
+            if stream.low_water_frames is None:
+                stream.low_water_frames = queued_frames
+            else:
+                stream.low_water_frames = min(
+                    stream.low_water_frames,
+                    queued_frames,
+                )
             if sequence >= self._prebuffer_frames:
-                delay = next_packet_at - loop.time()
+                expected_packet_at = next_packet_at
+                starvation_seconds = max(0.0, enqueued_at - expected_packet_at)
+                if starvation_seconds > scheduler_tolerance_seconds:
+                    stream.starvation_count += 1
+                    stream.starvation_seconds += starvation_seconds
+                    stream.starvation_max_seconds = max(
+                        stream.starvation_max_seconds,
+                        starvation_seconds,
+                    )
+                target_send_at = max(expected_packet_at, enqueued_at)
+                delay = target_send_at - dequeued_at
                 if delay > 0:
                     await asyncio.sleep(delay)
-                next_packet_at = max(next_packet_at, loop.time()) + (self._frame_duration_ms / 1000)
+                send_ready_at = loop.time()
+                scheduler_lateness_seconds = max(
+                    0.0,
+                    send_ready_at - target_send_at,
+                )
+                if scheduler_lateness_seconds > scheduler_tolerance_seconds:
+                    stream.scheduler_lateness_count += 1
+                    stream.scheduler_lateness_seconds += scheduler_lateness_seconds
+                    stream.scheduler_lateness_max_seconds = max(
+                        stream.scheduler_lateness_max_seconds,
+                        scheduler_lateness_seconds,
+                    )
+                next_packet_at = max(expected_packet_at, send_ready_at) + frame_seconds
             elif sequence == self._prebuffer_frames - 1:
-                next_packet_at = loop.time() + self._frame_duration_ms / 1000
+                next_packet_at = loop.time() + frame_seconds
             if (
                 stream.cancelled.is_set()
                 or stream.generation < self._cancel_generation
@@ -361,6 +405,40 @@ class WebSocketConversationSink:
         if stream.task is not None and not stream.task.done():
             stream.task.cancel()
             await asyncio.gather(stream.task, return_exceptions=True)
+        self._record_paced_stream_summary(stream)
+
+    def _record_paced_stream_summary(self, stream: _PacedAudioStream) -> None:
+        if stream.summary_recorded:
+            return
+        stream.summary_recorded = True
+        self._telemetry.record(
+            self._session_id,
+            "tts.paced_sender_summary",
+            generation=stream.generation,
+            turn_id=stream.turn_id,
+            payload={
+                "queue_starvation_count": stream.starvation_count,
+                "queue_starvation_ms": round(
+                    stream.starvation_seconds * 1_000,
+                    1,
+                ),
+                "queue_starvation_max_ms": round(
+                    stream.starvation_max_seconds * 1_000,
+                    1,
+                ),
+                "scheduler_lateness_count": stream.scheduler_lateness_count,
+                "scheduler_lateness_ms": round(
+                    stream.scheduler_lateness_seconds * 1_000,
+                    1,
+                ),
+                "scheduler_lateness_max_ms": round(
+                    stream.scheduler_lateness_max_seconds * 1_000,
+                    1,
+                ),
+                "queue_low_water_frames": stream.low_water_frames,
+                "frame_duration_ms": self._frame_duration_ms,
+            },
+        )
 
     def _detach_tts(self) -> _PacedAudioStream | None:
         stream = self._audio_stream
