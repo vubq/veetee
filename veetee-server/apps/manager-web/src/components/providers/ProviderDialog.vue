@@ -5,6 +5,11 @@ import { useI18n } from "vue-i18n";
 import type { Provider } from "../../api/schemas";
 import type { ProviderUpdateInput } from "../../types/manager";
 import { statusTone } from "../../utils/format";
+import {
+  formatVoiceOptionLabel,
+  resolveVoiceMetadata,
+  type VoiceCatalogEntry,
+} from "../../utils/voice-catalog";
 import { VtBadge, VtButton, VtDialog, VtField, VtIcon, VtInput, VtSelect, VtSwitch } from "../ui";
 
 const props = defineProps<{
@@ -21,7 +26,11 @@ const form = reactive({
   temperature: 0.2, topP: 0.95, maxCompletionTokens: 1024,
   serviceTier: "on_demand", reasoningEffort: "none", streamProseResponse: true,
   parallelToolCalls: true, responseFormat: "auto", completionTokenParameter: "max_tokens",
-  voice: "", style: "tu_nhien", rate: 1, pitchHz: 0, volume: 1, outputSampleRate: 24000,
+  voice: "", style: "",
+  rate: "" as number | string,
+  pitchHz: "" as number | string,
+  volume: "" as number | string,
+  outputSampleRate: "" as number | string,
 });
 const busy = ref(false);
 const error = ref("");
@@ -44,10 +53,54 @@ const isGroq = computed(() => form.adapter.toLowerCase().includes("groq"));
 const isTts = computed(() => props.provider?.kind === "tts");
 const isVieNeu = computed(() => form.adapter.toLowerCase().includes("vieneu"));
 const supportsPitch = computed(() => props.provider?.config?.supportsPitch !== false);
+const ttsVoiceOptions = computed(() => {
+  const voices = props.provider?.config?.voices;
+  if (!Array.isArray(voices)) return [];
+  return voices.filter(
+    (voice): voice is VoiceCatalogEntry =>
+      Boolean(voice)
+      && typeof voice === "object"
+      && !Array.isArray(voice)
+      && typeof voice.id === "string"
+      && voice.id.length > 0,
+  );
+});
+const selectedTtsVoiceMetadata = computed(() => resolveVoiceMetadata(
+  ttsVoiceOptions.value,
+  form.voice,
+  {
+    gender: typeof props.provider?.config?.gender === "string"
+      ? props.provider.config.gender
+      : "",
+    style: form.style,
+  },
+));
+
+function ttsVoiceOptionLabel(voice: VoiceCatalogEntry): string {
+  return formatVoiceOptionLabel(voice, {
+    genders: {
+      female: t("agents.runtime.female"),
+      male: t("agents.runtime.male"),
+      neutral: t("agents.runtime.neutral"),
+    },
+    styles: {
+      tu_nhien: t("agents.runtime.voiceStyleNatural"),
+      doc_truyen: t("agents.runtime.voiceStyleStorytelling"),
+      tin_tuc: t("agents.runtime.voiceStyleNews"),
+    },
+  });
+}
+
+const legacyTtsVoiceOptionLabel = computed(() => ttsVoiceOptionLabel({
+  id: form.voice,
+  label: form.voice,
+  gender: selectedTtsVoiceMetadata.value.gender,
+  style: selectedTtsVoiceMetadata.value.style,
+}));
 const ttsQualityWarnings = computed(() => {
   if (!isTts.value || !isVieNeu.value) return [];
   const warnings: string[] = [];
-  if (Number(form.rate) > 1.2) {
+  if (Number(form.rate) >= 1.2) {
     warnings.push(t("providerDialog.warnings.rate"));
   }
   if (Number(form.volume) > 1) {
@@ -55,6 +108,20 @@ const ttsQualityWarnings = computed(() => {
   }
   return warnings;
 });
+
+function setOptionalNumber(
+  config: Record<string, unknown>,
+  key: "rate" | "pitchHz" | "volume" | "outputSampleRate",
+  value: number | string,
+): void {
+  if (value === "") {
+    delete config[key];
+    return;
+  }
+  const number = Number(value);
+  if (Number.isFinite(number)) config[key] = number;
+  else delete config[key];
+}
 
 watch(
   () => [props.open, props.provider] as const,
@@ -79,11 +146,13 @@ watch(
     form.responseFormat = String(config.responseFormat ?? "auto");
     form.completionTokenParameter = String(config.completionTokenParameter ?? "max_tokens");
     form.voice = String(config.voice ?? config.voiceId ?? "");
-    form.style = String(config.style ?? (isVieNeu.value ? "tu_nhien" : ""));
-    form.rate = Number(config.rate ?? 1);
-    form.pitchHz = Number(config.pitchHz ?? 0);
-    form.volume = Number(config.volume ?? 1);
-    form.outputSampleRate = Number(config.outputSampleRate ?? 24000);
+    form.style = typeof config.style === "string" ? config.style : "";
+    form.rate = typeof config.rate === "number" ? config.rate : "";
+    form.pitchHz = typeof config.pitchHz === "number" ? config.pitchHz : "";
+    form.volume = typeof config.volume === "number" ? config.volume : "";
+    form.outputSampleRate = typeof config.outputSampleRate === "number"
+      ? config.outputSampleRate
+      : "";
     error.value = "";
   },
   { immediate: true },
@@ -114,14 +183,27 @@ async function submit(): Promise<void> {
       if (!isGroq.value) delete config.serviceTier;
     }
     if (isTts.value) {
-      Object.assign(config, {
-        voice: form.voice.trim() || undefined,
-        ...(isVieNeu.value ? { style: form.style } : {}),
-        rate: Number(form.rate),
-        pitchHz: Number(form.pitchHz),
-        volume: Number(form.volume),
-        outputSampleRate: Number(form.outputSampleRate),
-      });
+      const voice = form.voice.trim();
+      setOptionalNumber(config, "rate", form.rate);
+      setOptionalNumber(config, "pitchHz", form.pitchHz);
+      setOptionalNumber(config, "volume", form.volume);
+      setOptionalNumber(config, "outputSampleRate", form.outputSampleRate);
+      if (voice) config.voice = voice;
+      else delete config.voice;
+      if (Object.prototype.hasOwnProperty.call(config, "voiceId")) {
+        if (voice) config.voiceId = voice;
+        else delete config.voiceId;
+      }
+      if (selectedTtsVoiceMetadata.value.catalogVoice) {
+        const style = selectedTtsVoiceMetadata.value.catalogVoice.style;
+        if (typeof style === "string" && style) config.style = style;
+        else delete config.style;
+        const gender = selectedTtsVoiceMetadata.value.catalogVoice.gender;
+        if (typeof gender === "string" && gender) config.gender = gender;
+        else delete config.gender;
+      } else if (isVieNeu.value && selectedTtsVoiceMetadata.value.style) {
+        config.style = selectedTtsVoiceMetadata.value.style;
+      }
     }
     await props.save(props.provider.id, {
       adapter: form.adapter.trim(), model: form.model.trim(), baseUrl: form.baseUrl.trim() || null,
@@ -181,8 +263,7 @@ async function submit(): Promise<void> {
           <div class="provider-switch span-two"><VtSwitch v-model="form.streamProseResponse" :label="t('providerDialog.parameters.streamToTts')" :description="t('providerDialog.parameters.streamToTtsDescription')" /></div>
         </div>
         <div v-else class="form-grid two">
-          <VtField :label="t('providerDialog.tts.defaultVoice')" :hint="t('providerDialog.tts.defaultVoiceHint')"><VtInput v-model="form.voice" placeholder="Trúc Ly" /></VtField>
-          <VtField v-if="isVieNeu" :label="t('providerDialog.tts.defaultStyle')"><VtSelect v-model="form.style"><option value="tu_nhien">{{ t("providerDialog.tts.natural") }}</option><option value="doc_truyen">{{ t("providerDialog.tts.story") }}</option><option value="tin_tuc">{{ t("providerDialog.tts.news") }}</option></VtSelect></VtField>
+          <VtField :label="t('providerDialog.tts.defaultVoice')" :hint="t(ttsVoiceOptions.length ? 'providerDialog.tts.defaultVoiceHint' : 'providerDialog.tts.customVoiceHint')"><VtSelect v-if="ttsVoiceOptions.length" v-model="form.voice"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-if="form.voice && !selectedTtsVoiceMetadata.catalogVoice" :value="form.voice">{{ legacyTtsVoiceOptionLabel }}</option><option v-for="voice in ttsVoiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ ttsVoiceOptionLabel(voice) }}</option></VtSelect><VtInput v-else v-model="form.voice" placeholder="Trúc Ly" /></VtField>
           <VtField :label="t('providerDialog.tts.rate')" :hint="t('providerDialog.tts.rateHint')"><VtInput v-model="form.rate" type="number" min="0.5" max="2" step="0.05" /></VtField>
           <VtField v-if="supportsPitch" :label="t('providerDialog.tts.pitch')"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
           <VtField :label="t('providerDialog.tts.volume')" :hint="t('providerDialog.tts.volumeRange')"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>

@@ -33,6 +33,8 @@ async function mockManagerApi(
     personalityDeletes?: string[];
     withFirmware?: boolean;
     withSecondAgent?: boolean;
+    withTtsCatalog?: boolean;
+    withTtsWithoutCatalog?: boolean;
     primaryAgentPublishedVersion?: number;
     deviceAgentConfigVersion?: number;
     pairingResponses?: Array<"success" | "expired" | "conflict">;
@@ -607,7 +609,23 @@ async function mockManagerApi(
             futureExtension: { enabled: true },
             providerChains: [
               { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
+              ...(options.withTtsCatalog
+                ? [{ kind: "tts", locale: "vi-VN", providerIds: ["tts-1"] }]
+                : []),
             ],
+            ...(options.withTtsCatalog
+              ? {
+                  voice: {
+                    providerId: "tts-1",
+                    voiceId: "Trúc Ly",
+                    gender: "male",
+                    style: "tin_tuc",
+                    rate: 1,
+                    pitchHz: 0,
+                    volume: 1,
+                  },
+                }
+              : {}),
           },
           version: options.primaryAgentPublishedVersion ?? 1,
           publishedVersion: options.primaryAgentPublishedVersion ?? 1,
@@ -709,8 +727,27 @@ async function mockManagerApi(
         failureCount: 0,
       });
     }
+    if (url.pathname === "/api/v1/providers/tts-1" && request.method() === "PATCH") {
+      const patch = request.postDataJSON();
+      options.providerPatches?.push(patch);
+      return json({
+        id: "tts-1",
+        kind: "tts",
+        adapter: patch.adapter,
+        model: patch.model,
+        ...(patch.baseUrl ? { baseUrl: patch.baseUrl } : {}),
+        config: patch.config ?? {},
+        secretConfigured: false,
+        enabled: patch.enabled,
+        priority: patch.priority,
+        locales: patch.locales,
+        health: "unknown",
+        circuitState: "closed",
+        failureCount: 0,
+      });
+    }
     if (url.pathname === "/api/v1/providers") {
-      return json([
+      const providers: Record<string, unknown>[] = [
         {
           id: "llm-1",
           kind: "llm",
@@ -725,7 +762,48 @@ async function mockManagerApi(
           circuitState: "closed",
           failureCount: 0,
         },
-      ]);
+      ];
+      if (options.withTtsCatalog || options.withTtsWithoutCatalog) {
+        providers.push({
+          id: "tts-1",
+          kind: "tts",
+          adapter: "vieneu-local",
+          model: "VieNeu-TTS",
+          secretConfigured: false,
+          enabled: true,
+          priority: 10,
+          locales: ["vi-VN"],
+          health: "healthy",
+          circuitState: "closed",
+          failureCount: 0,
+          config: options.withTtsCatalog
+            ? {
+                voice: "Trúc Ly",
+                voiceId: "Trúc Ly",
+                gender: "male",
+                style: "tu_nhien",
+                rate: 1,
+                volume: 1,
+                outputSampleRate: 24000,
+                supportsPitch: false,
+                styles: [
+                  { id: "tu_nhien", label: "Tự nhiên / hội thoại" },
+                  { id: "doc_truyen", label: "Đọc truyện" },
+                ],
+                voices: [
+                  { id: "Trúc Ly", label: "Trúc Ly", locale: "vi-VN", gender: "female", style: "tu_nhien" },
+                  { id: "Ngọc Linh", label: "Ngọc Linh", locale: "vi-VN", gender: "female", style: "doc_truyen" },
+                ],
+                futureExtension: { enabled: true },
+              }
+            : {
+                voiceId: "Legacy Voice",
+                supportsPitch: false,
+                futureExtension: { enabled: true },
+              },
+        });
+      }
+      return json(providers);
     }
     if (url.pathname === "/api/v1/mcp/tools") {
       return json([
@@ -1288,6 +1366,82 @@ test("edits provider routing and rotates secrets without reading the old secret"
   ]);
 });
 
+test("derives the VieNeu provider default style from its catalog voice", async ({ page }) => {
+  const providerPatches: unknown[] = [];
+  await mockManagerApi(page, { providerPatches, withTtsCatalog: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="providers"]').first().click();
+  await page.locator('[data-provider-kind="tts"]').getByRole("button", { name: "Cấu hình" }).click();
+  const dialog = page.getByRole("dialog", { name: /Cấu hình Tổng hợp giọng nói/ });
+  const voice = dialog.getByRole("combobox", { name: /Voice mặc định/ });
+  await expect(voice.locator("option")).toHaveText([
+    "Chưa chọn",
+    "Trúc Ly · Nữ · Tự nhiên / hội thoại",
+    "Ngọc Linh · Nữ · Đọc truyện",
+  ]);
+  await expect(dialog.getByRole("combobox", { name: "Phong cách mặc định", exact: true })).toHaveCount(0);
+
+  const rate = dialog.getByRole("spinbutton", { name: /Tốc độ/ });
+  const [voiceBox, rateBox] = await Promise.all([voice.boundingBox(), rate.boundingBox()]);
+  expect(Math.abs((voiceBox?.y ?? 0) - (rateBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((voiceBox?.height ?? 0) - (rateBox?.height ?? 0))).toBeLessThanOrEqual(1);
+
+  await voice.selectOption("Ngọc Linh");
+  await dialog.getByRole("button", { name: "Lưu provider" }).click();
+  await expect.poll(() => providerPatches).toHaveLength(1);
+  const config = (providerPatches[0] as { config: Record<string, unknown> }).config;
+  expect(config).toEqual({
+    voice: "Ngọc Linh",
+    voiceId: "Ngọc Linh",
+    gender: "female",
+    style: "doc_truyen",
+    rate: 1,
+    volume: 1,
+    outputSampleRate: 24000,
+    supportsPitch: false,
+    styles: [
+      { id: "tu_nhien", label: "Tự nhiên / hội thoại" },
+      { id: "doc_truyen", label: "Đọc truyện" },
+    ],
+    voices: [
+      { id: "Trúc Ly", label: "Trúc Ly", locale: "vi-VN", gender: "female", style: "tu_nhien" },
+      { id: "Ngọc Linh", label: "Ngọc Linh", locale: "vi-VN", gender: "female", style: "doc_truyen" },
+    ],
+    futureExtension: { enabled: true },
+  });
+});
+
+test("preserves legacy VieNeu metadata when no voice catalog is available", async ({ page }) => {
+  const providerPatches: unknown[] = [];
+  await mockManagerApi(page, { providerPatches, withTtsWithoutCatalog: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="providers"]').first().click();
+  await page.locator('[data-provider-kind="tts"]').getByRole("button", { name: "Cấu hình" }).click();
+  const dialog = page.getByRole("dialog", { name: /Cấu hình Tổng hợp giọng nói/ });
+  const voice = dialog.getByRole("textbox", { name: /Voice mặc định/ });
+  await expect(voice).toHaveValue("Legacy Voice");
+  await expect(dialog.getByRole("combobox", { name: "Phong cách mặc định", exact: true })).toHaveCount(0);
+
+  await voice.fill("Custom Voice");
+  await dialog.getByRole("button", { name: "Lưu provider" }).click();
+  await expect.poll(() => providerPatches).toHaveLength(1);
+  const config = (providerPatches[0] as { config: Record<string, unknown> }).config;
+  expect(config).toEqual({
+    voice: "Custom Voice",
+    voiceId: "Custom Voice",
+    supportsPitch: false,
+    futureExtension: { enabled: true },
+  });
+});
+
 test("builds a live MCP form from the device JSON Schema", async ({ page }) => {
   const toolCalls: unknown[] = [];
   await mockManagerApi(page, { withDevice: true, toolCalls });
@@ -1342,6 +1496,76 @@ test("publishes bounded conversation changes without dropping extension fields",
       { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
     ]),
   );
+});
+
+test("derives gender and source style from the selected catalog voice", async ({ page }) => {
+  const agentPatches: unknown[] = [];
+  await mockManagerApi(page, { agentPatches, withTtsCatalog: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  const voiceCard = page.locator(".agent-voice-card");
+  const voice = voiceCard.getByRole("combobox", { name: "Voice", exact: true });
+  await expect(voice.locator("option")).toHaveText([
+    "Chưa chọn",
+    "Trúc Ly · Nữ · Tự nhiên / hội thoại",
+    "Ngọc Linh · Nữ · Đọc truyện",
+  ]);
+  await expect(voiceCard.getByRole("combobox", { name: "Giới tính", exact: true })).toHaveCount(0);
+  await expect(voiceCard.getByRole("combobox", { name: "Phong cách đọc", exact: true })).toHaveCount(0);
+
+  const rate = voiceCard.getByRole("spinbutton", { name: /Tốc độ/ });
+  const [voiceBox, rateBox] = await Promise.all([voice.boundingBox(), rate.boundingBox()]);
+  expect(Math.abs((voiceBox?.y ?? 0) - (rateBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((voiceBox?.height ?? 0) - (rateBox?.height ?? 0))).toBeLessThanOrEqual(1);
+
+  await voice.selectOption("Ngọc Linh");
+  await page.getByRole("button", { name: /Publish version/ }).click();
+
+  await expect.poll(() => agentPatches).toHaveLength(1);
+  expect(agentPatches[0]).toMatchObject({
+    draftConfig: {
+      voice: {
+        providerId: "tts-1",
+        voiceId: "Ngọc Linh",
+        gender: "female",
+        style: "doc_truyen",
+      },
+    },
+  });
+});
+
+test("clears the persisted agent voice when the operator selects not selected", async ({ page }) => {
+  const agentPatches: unknown[] = [];
+  await mockManagerApi(page, { agentPatches, withTtsCatalog: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  await page.locator(".agent-voice-card").getByRole("combobox", { name: "Voice", exact: true }).selectOption("");
+  await page.getByRole("button", { name: /Publish version/ }).click();
+
+  await expect.poll(() => agentPatches).toHaveLength(1);
+  const draftConfig = (agentPatches[0] as { draftConfig: Record<string, unknown> }).draftConfig;
+  expect(draftConfig).not.toHaveProperty("voice");
+});
+
+test("loads a legacy provider voiceId as the agent default", async ({ page }) => {
+  await mockManagerApi(page, { withTtsWithoutCatalog: true });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  await expect(
+    page.locator(".agent-voice-card").getByRole("combobox", { name: "Voice", exact: true }),
+  ).toHaveValue("Legacy Voice");
 });
 
 test("creates an independent assistant draft from the manager UI", async ({ page }) => {
@@ -1495,6 +1719,31 @@ test("creates and removes a custom personality without exposing built-in delete 
   await dialog.getByRole("radio", { name: "Biển" }).click();
   await expect(dialog.getByRole("radio", { name: "Biển" })).toHaveAttribute("aria-checked", "true");
   await dialog.getByLabel("Hướng dẫn cho AI").fill("Trêu nhẹ theo ngữ cảnh, phản biện lập luận.");
+  const personalityPreview = dialog.locator(".personality-create-preview");
+  await expect(personalityPreview).toContainText("Cà khịa vui");
+  await expect(personalityPreview).toContainText("Trêu nhẹ, sắc nhưng biết dừng.");
+  await expect(personalityPreview.locator(".personality-selected")).toBeVisible();
+  const [previewSurface, activeCardSurface] = await Promise.all([
+    personalityPreview.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderColor: style.borderColor,
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+      };
+    }),
+    page.locator(".personality-card.active").evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderColor: style.borderColor,
+        borderRadius: style.borderRadius,
+        boxShadow: style.boxShadow,
+      };
+    }),
+  ]);
+  expect(previewSurface).toEqual(activeCardSurface);
   await dialog.getByRole("button", { name: "Lưu tính cách" }).click();
   await expect.poll(() => personalityCreates).toEqual([
     {

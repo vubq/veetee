@@ -4,6 +4,12 @@ import { useI18n } from "vue-i18n";
 
 import type { Agent, AgentPromptCatalog, PersonalityPreset, Provider } from "../../api/schemas";
 import type { AgentDraftInput } from "../../types/manager";
+import {
+  findCatalogVoice,
+  formatVoiceOptionLabel,
+  resolveVoiceMetadata,
+  type VoiceCatalogEntry,
+} from "../../utils/voice-catalog";
 import { voiceQualityWarnings as collectVoiceQualityWarnings } from "../../utils/voice-quality";
 import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtMetricStrip, VtOperationsHero, VtPageHeader, VtSelect, VtTextarea } from "../ui";
 
@@ -129,26 +135,43 @@ const ttsSupportsPitch = computed(() => ttsProvider.value?.config?.supportsPitch
 const voiceOptions = computed(() => {
   const voices = ttsProvider.value?.config?.voices;
   if (!Array.isArray(voices)) return [];
-  return voices.filter((voice): voice is Record<string, unknown> => Boolean(voice) && typeof voice === "object" && !Array.isArray(voice));
-});
-const voiceStyleOptions = computed(() => {
-  const styles = ttsProvider.value?.config?.styles;
-  if (!Array.isArray(styles)) return [];
-  return styles.filter(
-    (style): style is Record<string, unknown> =>
-      Boolean(style) && typeof style === "object" && !Array.isArray(style),
+  return voices.filter(
+    (voice): voice is VoiceCatalogEntry =>
+      Boolean(voice) && typeof voice === "object" && !Array.isArray(voice),
   );
 });
-const selectedVoiceSourceStyle = computed(() => {
-  const voice = voiceOptions.value.find((candidate) => String(candidate.id) === form.voiceId);
-  return stringValue(voice?.style);
+const selectedVoiceMetadata = computed(() => {
+  return resolveVoiceMetadata(voiceOptions.value, form.voiceId, {
+    gender: form.voiceGender || stringValue(ttsProvider.value?.config?.gender, "female"),
+    style: form.voiceStyle || stringValue(ttsProvider.value?.config?.style, "tu_nhien"),
+  });
 });
 const voiceQualityWarnings = computed(() => collectVoiceQualityWarnings({
   adapter: ttsProvider.value?.adapter ?? "",
   rate: Number(form.voiceRate),
   volume: Number(form.voiceVolume),
-  sourceStyle: selectedVoiceSourceStyle.value,
-  selectedStyle: form.voiceStyle,
+}));
+
+function voiceOptionLabel(voice: VoiceCatalogEntry): string {
+  return formatVoiceOptionLabel(voice, {
+    genders: {
+      female: t("agents.runtime.female"),
+      male: t("agents.runtime.male"),
+      neutral: t("agents.runtime.neutral"),
+    },
+    styles: {
+      tu_nhien: t("agents.runtime.voiceStyleNatural"),
+      doc_truyen: t("agents.runtime.voiceStyleStorytelling"),
+      tin_tuc: t("agents.runtime.voiceStyleNews"),
+    },
+  });
+}
+
+const legacyVoiceOptionLabel = computed(() => voiceOptionLabel({
+  id: form.voiceId,
+  label: form.voiceId,
+  gender: form.voiceGender,
+  style: form.voiceStyle,
 }));
 
 watch(
@@ -161,9 +184,12 @@ watch(
             Boolean(voice) && typeof voice === "object" && !Array.isArray(voice),
         )
       : [];
-    form.voiceId = stringValue(provider?.config?.voice) || stringValue(voices[0]?.id);
-    form.voiceGender = stringValue(provider?.config?.gender, stringValue(voices[0]?.gender, "female"));
-    form.voiceStyle = stringValue(provider?.config?.style, "tu_nhien");
+    form.voiceId = stringValue(provider?.config?.voice)
+      || stringValue(provider?.config?.voiceId)
+      || stringValue(voices[0]?.id);
+    const defaultVoice = findCatalogVoice(voices, form.voiceId);
+    form.voiceGender = stringValue(defaultVoice?.gender, stringValue(provider?.config?.gender, "female"));
+    form.voiceStyle = stringValue(defaultVoice?.style, stringValue(provider?.config?.style, "tu_nhien"));
     form.voiceRate = Number(provider?.config?.rate ?? 1);
     form.voicePitch = provider?.config?.supportsPitch === false
       ? 0
@@ -256,10 +282,19 @@ watch(
     const voice = objectValue(agent.draftConfig.voice);
     const selectedTts = props.providers.find((provider) => provider.id === form.tts);
     const configuredVoice = stringValue(voice.voiceId);
-    const fallbackVoice = stringValue(selectedTts?.config?.voice) || stringValue(voiceOptions.value[0]?.id);
+    const fallbackVoice = stringValue(selectedTts?.config?.voice)
+      || stringValue(selectedTts?.config?.voiceId)
+      || stringValue(voiceOptions.value[0]?.id);
     form.voiceId = configuredVoice || fallbackVoice;
-    form.voiceGender = stringValue(voice.gender, stringValue(voiceOptions.value[0]?.gender, "female"));
-    form.voiceStyle = stringValue(voice.style, stringValue(selectedTts?.config?.style, "tu_nhien"));
+    const catalogVoice = findCatalogVoice(voiceOptions.value, form.voiceId);
+    form.voiceGender = stringValue(
+      voice.gender,
+      stringValue(catalogVoice?.gender, stringValue(selectedTts?.config?.gender, "female")),
+    );
+    form.voiceStyle = stringValue(
+      voice.style,
+      stringValue(catalogVoice?.style, stringValue(selectedTts?.config?.style, "tu_nhien")),
+    );
     form.voiceRate = Number(voice.rate ?? selectedTts?.config?.rate ?? 1);
     form.voicePitch = Number(voice.pitchHz ?? selectedTts?.config?.pitchHz ?? 0);
     form.voiceVolume = Number(voice.volume ?? selectedTts?.config?.volume ?? 1);
@@ -305,19 +340,17 @@ async function publish(): Promise<void> {
           // Product conversation has no parent turn ceiling; provider deadlines stay internal.
           totalTurnSeconds: 0,
         },
-        ...(form.tts && form.voiceId
+        voice: form.tts && form.voiceId
           ? {
-              voice: {
-                providerId: form.tts,
-                voiceId: form.voiceId,
-                gender: form.voiceGender || undefined,
-                style: form.voiceStyle,
-                rate: Number(form.voiceRate),
-                pitchHz: Number(form.voicePitch),
-                volume: Number(form.voiceVolume),
-              },
+              providerId: form.tts,
+              voiceId: form.voiceId,
+              gender: selectedVoiceMetadata.value.gender || undefined,
+              style: selectedVoiceMetadata.value.style,
+              rate: Number(form.voiceRate),
+              pitchHz: Number(form.voicePitch),
+              volume: Number(form.voiceVolume),
             }
-          : {}),
+          : undefined,
       },
     });
   } catch (exception) {
@@ -737,9 +770,7 @@ const promptPreview = computed(() => {
             <section class="agent-runtime-card agent-voice-card">
               <header><span class="agent-runtime-icon"><VtIcon name="mic" :size="17" /></span><div><b>{{ t("agents.runtime.voiceTitle") }}</b><small>{{ t("agents.runtime.voiceDescription") }}</small></div></header>
               <div class="form-grid two">
-                <VtField :label="t('agents.runtime.voice')"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-if="form.voiceId && !voiceOptions.some((voice) => String(voice.id) === form.voiceId)" :value="form.voiceId">{{ form.voiceId }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ String(voice.label ?? voice.id) }} · {{ String(voice.gender ?? "neutral") }}</option></VtSelect></VtField>
-                <VtField :label="t('agents.runtime.gender')"><VtSelect v-model="form.voiceGender"><option value="female">{{ t("agents.runtime.female") }}</option><option value="male">{{ t("agents.runtime.male") }}</option><option value="neutral">{{ t("agents.runtime.neutral") }}</option></VtSelect></VtField>
-                <VtField :label="t('agents.runtime.voiceStyle')" :hint="t('agents.runtime.voiceStyleHint')"><VtSelect v-model="form.voiceStyle" :disabled="!voiceStyleOptions.length"><option v-if="!voiceStyleOptions.length" value="tu_nhien">{{ t("agents.runtime.natural") }}</option><option v-for="style in voiceStyleOptions" :key="String(style.id)" :value="String(style.id)">{{ String(style.label ?? style.id) }}</option></VtSelect></VtField>
+                <VtField :label="t('agents.runtime.voice')"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-if="form.voiceId && !selectedVoiceMetadata.catalogVoice" :value="form.voiceId">{{ legacyVoiceOptionLabel }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ voiceOptionLabel(voice) }}</option></VtSelect></VtField>
                 <VtField :label="t('agents.runtime.rate')" :hint="t('agents.runtime.rateRange')"><VtInput v-model="form.voiceRate" type="number" min="0.5" max="2" step="0.05" /></VtField>
                 <VtField :label="t('agents.runtime.pitch')" :hint="t(ttsSupportsPitch ? 'agents.runtime.pitchHint' : 'agents.runtime.pitchUnsupported')"><VtInput v-model="form.voicePitch" type="number" min="-100" max="100" step="1" :disabled="!ttsSupportsPitch" /></VtField>
                 <VtField :label="t('agents.runtime.volume')" :hint="t('agents.runtime.volumeRange')"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>
@@ -822,6 +853,7 @@ const promptPreview = computed(() => {
             <b>{{ personalityForm.label.trim() || t("agents.personalityDialog.previewName") }}</b>
             <p>{{ personalityForm.summary.trim() || t("agents.personalityDialog.previewSummary") }}</p>
           </div>
+          <i class="personality-selected" aria-hidden="true"><VtIcon name="check" :size="13" /></i>
         </section>
         <p v-if="personalityError" class="inline-error" role="alert">{{ personalityError }}</p>
       </form>
@@ -1722,33 +1754,26 @@ const promptPreview = computed(() => {
   --preview-accent: #e06b51;
   position: relative;
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  align-items: center;
-  gap: 11px;
+  grid-template-columns: 32px minmax(0, 1fr) 18px;
+  align-items: start;
+  gap: 10px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--preview-accent) 45%, var(--line));
-  border-radius: 14px;
-  padding: 12px 14px 12px 17px;
-  background: color-mix(in srgb, var(--preview-accent) 6%, var(--paper-strong));
-}
-
-.personality-create-preview::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: var(--preview-accent);
-  content: "";
+  border: 1px solid var(--orange);
+  border-radius: 15px;
+  padding: 13px 14px;
+  background: color-mix(in srgb, var(--orange) 7%, var(--paper));
+  box-shadow: 0 0 0 3px rgba(242, 100, 60, .1);
 }
 
 .personality-create-preview-mark {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 10px;
   color: color-mix(in srgb, var(--preview-accent) 76%, var(--navy));
-  background: color-mix(in srgb, var(--preview-accent) 15%, var(--paper-strong));
-  font-size: 13px;
+  background: color-mix(in srgb, var(--preview-accent) 14%, var(--paper-strong));
+  font-size: 11px;
   font-weight: 800;
 }
 
@@ -1762,20 +1787,20 @@ const promptPreview = computed(() => {
   color: var(--preview-accent);
   font-size: 7px;
   font-weight: 800;
-  letter-spacing: .11em;
+  letter-spacing: .12em;
 }
 
 .personality-create-preview b {
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .personality-create-preview p {
-  overflow: hidden;
   margin: 0;
   color: var(--muted);
   font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  white-space: normal;
 }
 
 @media (max-width: 960px) {

@@ -402,9 +402,17 @@ OpenBLAS, NumPy có thể mở thêm worker, làm CPU/nhiệt tăng và TTS ch�
 ONNX vẫn ghi hai threads. Giá trị checked-in, A/B dài và cách xác minh nằm trong
 `docs/15-local-ai-runtime.md` và `docs/21-local-development-runbook.md`.
 
-Voice và style là hai tham số độc lập. Style mặc định `tu_nhien` dành cho hội thoại;
-`doc_truyen` và `tin_tuc` chỉ dùng khi agent chọn rõ. Vì vậy một voice có reference
-gốc kiểu đọc truyện như Ngọc Linh không tự ép mọi hội thoại sang nhịp đọc truyện.
+V1 không coi voice và style là hai tham số có thể ghép độc lập trong Manager. Mỗi entry
+trong voice catalog quyết định đồng thời voice ID, `gender` và `style` nguồn đã được
+benchmark từ reference/model pack; chọn voice đồng nghĩa Manager publish đúng metadata
+của entry đó ở cả Agent và default của Provider. Các field riêng vẫn còn trong agent
+và provider schema để đọc snapshot cũ. Với một voice legacy/custom không còn trong
+catalog hiện tại, Manager giữ metadata đã lưu thay vì tự đoán hoặc âm thầm đổi cấu hình.
+
+V1 chưa triển khai voice đa phong cách. Nếu một voice trong tương lai thực sự hỗ trợ
+nhiều phong cách, provider capability, Manager UI và runtime phải cùng bổ sung contract
+allowlist như `allowedStyles` và benchmark từng giá trị trước khi mở selector. Trong V1,
+`style` nguồn từ voice catalog là giá trị duy nhất mà Manager cho publish với voice đó.
 
 Mọi profile VieNeu dùng chung một inference lock của engine để không chạy đồng thời
 trên model state dùng chung. Runtime cảnh báo `postprocess_rate_starvation_risk` từ

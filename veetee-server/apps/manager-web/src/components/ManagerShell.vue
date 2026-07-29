@@ -136,7 +136,11 @@ async function publishAgent(input: AgentDraftInput): Promise<void> {
     const value = chain as Record<string, unknown>;
     return !replacedKeys.has(`${String(value.kind)}:${String(value.locale)}`);
   }), ...nextChains];
-  await managerApi.updateAgent(input.id, { name: input.name, defaultLocale: input.defaultLocale, interactionMode: input.interactionMode, persona: input.persona, draftConfig: { ...(current?.draftConfig ?? {}), ...input.draftConfig, providerChains, conversation: { ...(currentConversation && typeof currentConversation === "object" ? currentConversation : {}), ...(nextConversation && typeof nextConversation === "object" ? nextConversation : {}) } } });
+  const draftConfig: Record<string, unknown> = { ...(current?.draftConfig ?? {}), ...input.draftConfig, providerChains, conversation: { ...(currentConversation && typeof currentConversation === "object" ? currentConversation : {}), ...(nextConversation && typeof nextConversation === "object" ? nextConversation : {}) } };
+  if (Object.prototype.hasOwnProperty.call(input.draftConfig, "voice") && input.draftConfig.voice === undefined) {
+    delete draftConfig.voice;
+  }
+  await managerApi.updateAgent(input.id, { name: input.name, defaultLocale: input.defaultLocale, interactionMode: input.interactionMode, persona: input.persona, draftConfig });
   await managerApi.publishAgent(input.id); await refresh("agents"); toast(t("toasts.agentPublished"));
 }
 async function createAgent(input: { name: string; defaultLocale: string; interactionMode: "auto" | "manual" | "realtime"; persona: string; draftConfig?: Record<string, unknown> }) { const agent = await managerApi.createAgent(input); await refresh("agents"); toast(t("toasts.agentCreated")); return agent; }

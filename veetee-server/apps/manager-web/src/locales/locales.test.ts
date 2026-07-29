@@ -16,4 +16,9 @@ describe("manager locale catalogs", () => {
   it("keeps vi-VN and en-US keys in parity", () => {
     expect(keys(viVN).sort()).toEqual(keys(enUS).sort());
   });
+
+  it("localizes the TTS voice-catalog guidance in English", () => {
+    expect(enUS.providerDialog.tts.defaultVoiceHint).toContain("source reading style");
+    expect(enUS.providerDialog.tts.customVoiceHint).toContain("no catalog");
+  });
 });

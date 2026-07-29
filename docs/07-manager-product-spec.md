@@ -201,6 +201,12 @@ Hiển thị health của voice-server, provider, Redis/Postgres, số thiết b
 - Personality preset dạng dữ liệu (bao gồm chính kiến/tranh luận) + custom override;
   preset không tạo nhánh semantic trong runtime.
 - Locale + wake/exit profile.
+- Voice được chọn từ catalog; Manager tự suy ra `gender` và `style` nguồn từ entry đã
+  chọn, không cho chỉnh chúng thành các tham số ghép tự do. Các field vẫn tồn tại trong
+  schema để đọc cấu hình cũ; voice legacy/custom không có trong catalog hiện tại giữ
+  nguyên metadata đã lưu. V1 chưa hỗ trợ voice đa phong cách; một version tương lai chỉ
+  được mở selector style sau khi capability và UI cùng hỗ trợ allowlist `allowedStyles`
+  của chính voice đó.
 - Activation wake profile và interrupt profile tách riêng, version theo locale/model.
 - Conversation mode: cascade/realtime.
 - Interaction mode: `auto` mặc định; manual/PTT chỉ là compatibility/accessibility option.
@@ -233,7 +239,10 @@ rộng ngoài ý muốn.
 - Catalog theo ASR/VAD/LLM/TTS/realtime/memory.
 - Credential reference, không hiển thị secret sau khi lưu.
 - Health/test request, latency và quota.
-- Model/voice capability theo locale.
+- Model/voice capability theo locale; mỗi voice công bố `gender`, `style` nguồn và
+  có thể công bố `allowedStyles` trong contract đa phong cách tương lai. Voice mặc định
+  của Provider Hub cũng được chọn từ catalog và tự ghi `gender`/`style` tương ứng, không
+  có dropdown style độc lập; provider legacy chưa có catalog giữ nguyên metadata đã lưu.
 - Hiển thị baseline local: Silero VAD, Zipformer primary, ChunkFormer conditional
   fallback, VieNeu-TTS và CLIProxyAPI/OpenAI-compatible LLM binding.
 - Hiển thị `local/external`, streaming/batch, CPU/GPU worker, model/version/license,

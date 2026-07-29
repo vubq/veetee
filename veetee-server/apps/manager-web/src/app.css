@@ -90,7 +90,7 @@ pre, code { font-family: "SFMono-Regular", Consolas, monospace; }
 .vt-spinner { width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.vt-field { display: grid; min-width: 0; gap: 8px; color: var(--ink-2); font-size: 12px; font-weight: 700; }
+.vt-field { display: grid; min-width: 0; align-content: start; gap: 8px; color: var(--ink-2); font-size: 12px; font-weight: 700; }
 .vt-field-label { display: flex; gap: 4px; align-items: baseline; }
 .vt-field-label i { color: var(--orange); font-style: normal; }
 .vt-field-hint, .vt-field-error { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
