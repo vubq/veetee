@@ -27,6 +27,10 @@ void TestInterruptRequiresItsOwnValidatedProfile() {
            DetectorRole::kInterrupt);
     assert(DetectorRoleForState(State::kSpeaking, true, true) ==
            DetectorRole::kInterrupt);
+    assert(DetectorRoleForState(State::kSpeaking, true, true, false) ==
+           DetectorRole::kDisabled);
+    assert(DetectorRoleForState(State::kThinking, true, true, false) ==
+           DetectorRole::kInterrupt);
     assert(DetectorRoleForState(State::kSpeaking, true, false) ==
            DetectorRole::kDisabled);
 }
@@ -39,6 +43,8 @@ void TestProvisioningAndCancellationNeverRunTheDetector() {
     assert(DetectorRoleForState(State::kConnecting, true, true) ==
            DetectorRole::kDisabled);
     assert(DetectorRoleForState(State::kAborting, true, true) ==
+           DetectorRole::kDisabled);
+    assert(DetectorRoleForState(State::kUpgrading, true, true) ==
            DetectorRole::kDisabled);
 }
 

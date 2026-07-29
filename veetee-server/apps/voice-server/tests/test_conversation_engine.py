@@ -25,6 +25,7 @@ from veetee_voice_server.conversation.types import (
     DialogueAct,
     OutputKind,
     PlanAction,
+    ToolCall,
     Transcript,
     WakeSource,
 )
@@ -478,6 +479,85 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     )
     assert arbiter.snapshot.state is ConversationState.LISTENING
     assert recorded == []
+
+
+async def test_button_abort_cancels_mcp_and_drops_result_from_cancel_ignoring_adapter() -> None:
+    class CancellationIgnoringTools:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.finished = asyncio.Event()
+
+        def list_tools(self) -> list[dict[str, Any]]:
+            return []
+
+        async def call(
+            self,
+            name: str,
+            arguments: dict[str, Any],
+            context: OperationContext,
+        ) -> Any:
+            del name, arguments, context
+            self.started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                # Model a vendor SDK that observes cancellation but still returns
+                # a late result after its underlying request completes.
+                self.cancelled.set()
+                await self.release.wait()
+            self.finished.set()
+            return {"late": True}
+
+    arbiter = TurnArbiter("session-stale-mcp")
+    tools = CancellationIgnoringTools()
+    llm = FakeLlm()
+    tts = FakeTts()
+    sink = MemoryConversationSink()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(
+            ConversationPlan(
+                action=PlanAction.CALL_TOOL_THEN_RESPOND,
+                dialogue_act=DialogueAct.COMMAND,
+                locale="vi-VN",
+                intent="fixture.tool",
+                response_required=True,
+                tool_call=ToolCall("fixture.slow", {}),
+            )
+        ),
+        llm=llm,
+        tts=tts,
+        tools=tools,
+        sink=sink,
+        policy=ConversationPolicy(mcp_seconds=1.0, sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    turn = asyncio.create_task(
+        engine.handle_transcript(Transcript("Thực hiện giúp tôi", "vi-VN"))
+    )
+    await tools.started.wait()
+
+    receipt = await arbiter.abort("button_interrupt")
+    await arbiter.finish_cancellation(receipt)
+    await asyncio.wait_for(turn, timeout=0.2)
+    await asyncio.wait_for(tools.cancelled.wait(), timeout=0.2)
+
+    assert llm.calls == 0
+    assert tts.calls == []
+    assert not any(
+        output.kind
+        in {OutputKind.TEXT_DELTA, OutputKind.TTS_START, OutputKind.AUDIO, OutputKind.TTS_STOP}
+        for output in sink.outputs
+    )
+
+    tools.release.set()
+    await asyncio.wait_for(tools.finished.wait(), timeout=0.2)
+    await asyncio.sleep(0)
+    assert llm.calls == 0
+    assert tts.calls == []
 
 
 async def test_abort_after_partial_tts_output_does_not_commit_memory() -> None:

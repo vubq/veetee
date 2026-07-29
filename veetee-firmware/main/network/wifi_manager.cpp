@@ -88,7 +88,10 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
 }
 
 esp_err_t WifiManager::StartStation() {
-    if (settings_ == nullptr || store_ == nullptr || !settings_->HasProvisioning()) {
+    const settings::DeviceSettings settings_snapshot =
+        store_ == nullptr ? settings::DeviceSettings{} : store_->Snapshot();
+    if (settings_ == nullptr || store_ == nullptr ||
+        !settings_snapshot.HasProvisioning()) {
         return ESP_ERR_INVALID_STATE;
     }
     const bool keep_portal = provisioning_active_ && portal_.IsRunning() &&
@@ -263,7 +266,9 @@ esp_err_t WifiManager::StartProvisioning() {
         }
     }
     if (error == ESP_OK) {
-        error = portal_.Start(kApAddress, *settings_, store_->WifiProfiles(),
+        const settings::DeviceSettings settings_snapshot = store_->Snapshot();
+        error = portal_.Start(kApAddress, settings_snapshot,
+                              store_->WifiProfiles(),
                               &WifiManager::SaveProvisioning,
                               &WifiManager::ReadProvisioningStatus,
                               &WifiManager::ObserveProvisioningSuccess,
@@ -568,7 +573,6 @@ esp_err_t WifiManager::SaveProvisioning(settings::DeviceSettings* settings,
     if (settings == nullptr) return ESP_ERR_INVALID_ARG;
     const esp_err_t error = manager->store_->SaveProvisioning(settings);
     if (error == ESP_OK) {
-        *manager->settings_ = *settings;
         const std::uint32_t attempt_id =
             manager->provisioning_status_.BeginAttempt();
         manager->provisioning_status_.MarkSaved(attempt_id);
@@ -743,10 +747,6 @@ void WifiManager::ConnectNextCandidate() {
 
         std::snprintf(connecting_ssid_, sizeof(connecting_ssid_), "%s",
                       profile.ssid);
-        std::snprintf(settings_->ssid, sizeof(settings_->ssid), "%s",
-                      profile.ssid);
-        std::snprintf(settings_->password, sizeof(settings_->password), "%s",
-                      profile.password);
         esp_err_t error = esp_wifi_set_config(WIFI_IF_STA, &config);
         if (error == ESP_OK) error = esp_wifi_connect();
         if (error == ESP_OK || error == ESP_ERR_WIFI_CONN) {

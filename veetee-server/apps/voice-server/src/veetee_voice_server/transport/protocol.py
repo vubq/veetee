@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 MAX_CONTROL_FRAME_BYTES = 8192
 MAX_OPUS_PACKET_BYTES = 1500
@@ -52,6 +59,12 @@ class ListenEvent(StrictModel):
     source: Literal["button", "wake_word"] | None = None
     text: str | None = None
     reason: Reason | None = None
+
+    @model_validator(mode="after")
+    def validate_detect_source(self) -> ListenEvent:
+        if self.state == "detect" and self.source != "wake_word":
+            raise ValueError("listen detect requires wake_word source")
+        return self
 
 
 class AbortEvent(StrictModel):

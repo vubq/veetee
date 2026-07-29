@@ -4,6 +4,8 @@
 #include <cstdint>
 
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "nvs.h"
 #include "settings/wifi_profile_record.h"
 
@@ -34,6 +36,7 @@ public:
     ~SettingsStore();
 
     esp_err_t Initialize(DeviceSettings* settings);
+    [[nodiscard]] DeviceSettings Snapshot() const;
     esp_err_t SaveProvisioning(DeviceSettings* settings);
     esp_err_t ClearWifiCredentials(DeviceSettings* settings);
     [[nodiscard]] WifiProfileRecord WifiProfiles() const;
@@ -61,6 +64,8 @@ private:
 
     nvs_handle_t handle_ = 0;
     WifiProfileRecord wifi_profiles_{};
+    DeviceSettings* live_settings_ = nullptr;
+    mutable SemaphoreHandle_t mutex_ = nullptr;
 };
 
 }  // namespace veetee::settings

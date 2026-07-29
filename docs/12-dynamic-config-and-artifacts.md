@@ -38,20 +38,28 @@ Manager API không mutate trực tiếp thiết bị. JSON dưới đây là man
 {
   "deviceId": "AA:BB:CC:DD:EE:FF",
   "desired": {
-    "agentConfigVersion": 13,
-    "resourceBundleVersion": "1.4.0",
-    "firmwareVersion": "0.2.0"
+    "version": 8,
+    "state": {
+      "agentConfigVersion": 13,
+      "resourceBundleVersion": "1.4.0",
+      "firmwareVersion": "0.2.0"
+    }
   },
   "reported": {
-    "agentConfigVersion": 12,
+    "config": {"desiredVersion": 8, "appliedVersion": 7, "phase": "applying"},
     "resourceBundleVersion": "1.3.2",
-    "firmwareVersion": "0.1.5",
-    "status": "downloading_resources"
+    "firmwareVersion": "0.1.5"
   }
 }
 ```
 
 UI phải hiển thị drift thay vì giả định publish là đã áp dụng. Rollback chỉ đổi desired pointer sang version cũ đã ký; không chỉnh sửa object đã publish.
+
+`DeviceDesiredState.version` là revision của toàn bộ desired state và là version của
+signed device-config snapshot. Nó không phải `agentConfigVersion`: agent version vẫn
+dành cho immutable Voice snapshot, memory và MCP. Hai counter phải được hiển thị và
+reconcile độc lập để publish agent config không vô tình làm firmware chấp nhận một
+snapshot chưa ký hoặc ngược lại.
 
 ## 4. Wake profile cấu hình từ Web/API
 
@@ -220,8 +228,8 @@ Manifest là nguồn chuẩn cho compatibility và integrity:
       "format_version": 1,
       "sample_rate": 16000,
       "detectors": [
-        {"id": "wakenet:veetee_vi", "role": "activation"},
-        {"id": "multinet:interrupt_stop", "role": "interrupt"}
+        {"id": "wn9s_veetee_vi", "role": "activation"},
+        {"id": "wn9s_interrupt_stop", "role": "interrupt"}
       ],
       "sha256": "<64 hex chars>",
       "bytes": 125943
@@ -270,7 +278,7 @@ OTA/bootstrap response giữ field Xiaozhi cũ và thêm optional Veetee fields:
 {
   "config": {
     "version": 13,
-    "etag": "agent-config-13",
+    "etag": "cfg1-<43-char-sha256-base64url>",
     "url": "http://192.168.1.20:8001/veetee/config/v1/devices/AA-BB"
   },
   "resources": {
@@ -285,6 +293,54 @@ OTA/bootstrap response giữ field Xiaozhi cũ và thêm optional Veetee fields:
 ```
 
 Xiaozhi-compatible firmware bỏ qua unknown field. Veetee firmware dùng `If-None-Match`/ETag để tránh tải lại config.
+
+Config endpoint không trả raw `desired.state`. Manager tạo firmware projection tối
+đa 8 KiB, exact-property/integer-only theo restricted JCS và ký detached Ed25519:
+
+```json
+{
+  "schema_version": 1,
+  "device_id": "d74f1594-765c-4bd5-b07b-6443273777ed",
+  "version": 8,
+  "wake_profile": {
+    "id": "b80f676e-2fd2-47f9-8160-e68cf7e3a260",
+    "version": 4,
+    "required_resource_version": "1.2.0",
+    "activation": {
+      "model_id": "wn9s_hiesp",
+      "threshold_ppm": 640000,
+      "cooldown_ms": 1200
+    },
+    "interrupt": null,
+    "send_wake_audio": false
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "veetee-dev-release-2026-01",
+    "security_epoch": 1,
+    "value": "<base64>"
+  }
+}
+```
+
+ETag canonical là `cfg1-<43-char-sha256-base64url>`. Matching
+`If-None-Match` trả `304`; firmware chỉ gửi ETag đã apply và chỉ dùng `304` khi
+desired version cũng khớp. URL config phải cùng bootstrap origin; redirect,
+compressed response, logical detector alias và activation/interrupt dùng cùng exact
+WakeNet model đều bị từ chối. `interrupt` được phép `null`. `send_wake_audio` mặc
+định `false`. Manager chỉ chiếu giá trị `true` từ một wake-profile version đã publish
+với opt-in rõ; giá trị nằm trong chữ ký/ETag. Firmware khi đó cấp ring PSRAM 32 Opus
+frame (1,92 giây) chỉ ở activation boundary, gửi
+`listen:detect -> binary -> listen:start`, rồi xóa. Button/abort/close/generation
+mismatch không tái sử dụng cache; Voice giữ pending tối đa 2 giây và không persist raw
+audio.
+
+Khi nâng từ desired-state prototype từng lưu logical alias như `wakenet:...` hoặc
+`multinet:...`, migration không tự đoán alias đó tương ứng model nhị phân nào. Nó bỏ
+riêng `wakeProfile` không tương thích khỏi projection firmware, tăng desired version và
+giữ nguyên agent/resource cùng identity thiết bị. Device nhận snapshot ký hợp lệ với
+`wake_profile=null` và tiếp tục button-only; operator phải publish lại một profile đã
+đối chiếu detector inventory của exact artifact trước khi bật wake runtime động.
 
 ### Invalidation
 
@@ -301,6 +357,8 @@ Khi device đang online, voice server gửi event nhỏ:
 ```
 
 Device không áp dụng payload từ event. Nó chỉ schedule reconcile qua HTTP(S) khi standby hoặc theo policy.
+Firmware cũng chạy authenticated bootstrap poll mỗi 60 giây khi idle để tự chữa khi
+WebSocket invalidation bị mất hoặc chưa từng được phát.
 
 ### Report
 
@@ -329,28 +387,45 @@ Content-Type: application/json
     "locale": "vi-VN",
     "timeZone": "Asia/Bangkok",
     "firmware": {"version": "0.2.0"},
-    "resource": {
-      "phase": "downloading",
-      "currentVersion": "factory-bringup",
-      "desiredVersion": "1.0.0",
-      "activeSlot": 0,
-      "targetSlot": 1,
-      "expectedBytes": 125943,
-      "downloadedBytes": 65536,
-      "securityEpoch": 1
+    "config": {
+      "desiredVersion": 8,
+      "appliedVersion": 7,
+      "phase": "applying"
     }
   }
 }
 ```
 
+Resource/UI/firmware OTA dùng report riêng ở sequence kế tiếp với đúng object
+`state.resource`, `state.ui` hoặc `state.firmware_ota` đã định nghĩa trong contract;
+không ghép hai subsystem vào cùng request.
+
 `errorCode` chỉ xuất hiện ở `failed/rolled_back`. Version lớn hơn atomically thay
 state; cùng version là retry idempotent và không mutate; version thấp hơn trả `409`.
-Sequence được firmware persist trước khi gửi. Terminal state đang chờ được persist
-để retry qua reboot; intermediate state latest-wins để không làm nghẽn main/audio.
+Sequence được firmware persist trước khi gửi. `rebooting`, `pending_health` và các
+terminal result được giữ trong record CRC để replay đúng thứ tự qua reboot; OTA không
+supersede phase trước khi reporter drain. Khi durable terminal đang pending, reporter
+không cấp sequence mới cho intermediate đã coalesce và ưu tiên replay terminal; vì vậy
+`staged` executable có thể chỉ tồn tại trong journal local trước external `rebooting`.
+Terminal OTA recovery còn đối chiếu running slot/version và report failed-safe
+`terminal_runtime_mismatch` thay vì ACK `active` sai image. Intermediate
+state latest-wins để không làm nghẽn main/audio.
 Endpoint lấy từ bootstrap origin nên đổi IP/tunnel/domain không cần rebuild firmware.
 V1 chưa đưa duration/trace vào snapshot; hai field này sẽ thuộc apply-event timeline
 khi Manager có rollout/event model riêng. Không gửi secret, transcript hoặc signed
 URL đầy đủ vào body/log.
+
+Mỗi report chỉ cần mang subsystem đang reconcile. Manager row-lock reported state và
+shallow-merge `config`, `resource`, `ui`, `firmware` để config-only report không xóa
+artifact/UI state và artifact report sau đó không xóa config state.
+
+Mọi writer desired state (agent assignment, manual desired update, resource/UI và
+firmware rollout/rollback) khóa parent `Device` row trước khi đọc/merge. Parent luôn
+tồn tại dù row desired one-to-one chưa có; multi-device mutation khóa theo thứ tự ID.
+Vì vậy hai rollout đồng thời nhận version đơn điệu khác nhau và không thể tạo hai
+body/ETag khác nhau dưới cùng version hoặc làm mất field của nhau. Historical wake
+rollout luôn dùng artifact relation của exact `WakeProfileVersion`, không ghép snapshot
+cũ với model pack hiện tại của profile.
 
 ## 9. Firmware storage cho ESP32-S3 N16R8
 
@@ -379,20 +454,35 @@ ui_1                             0x200000 (2 MiB)
 coredump                         0x040000 (256 KiB)
 ```
 
-Firmware `0.3.0` hiện khoảng `0x170370` byte, còn khoảng 60% trong OTA slot nhỏ
-nhất. Nếu wake resource hoặc UI Pack vượt 2 MiB sau khi chốt scope, phải mở ADR đổi
-layout/store; không tự overwrite active slot. Manager phải từ chối bundle vượt
-capability của đúng artifact class.
+Default build AEC-off của firmware `0.3.1` sau config-store, privacy latch và exact
+detector-inventory hardening là `0x18e260` byte (1.630.816 byte), còn 2.170.272 byte,
+tương đương khoảng 57% trong OTA slot nhỏ nhất. Build experimental AEC-on từ đúng cùng
+source revision là `0x1996a0` byte (1.676.960 byte), còn 2.124.128 byte, khoảng 56%; cả
+hai build vẫn quảng bá `features.aec=false` cho tới khi board benchmark đạt gate. Nếu wake
+resource hoặc UI Pack vượt 2 MiB sau khi chốt scope, phải mở ADR đổi layout/store;
+không tự overwrite active slot. Manager phải từ chối bundle vượt capability của đúng
+artifact class.
 
 ## 10. Apply transaction và rollback
 
 Source hiện đã triển khai các bước 1-10 cho single-member ESP-SR V1 và UI Pack V1.
 Executable firmware có transaction riêng: detached Ed25519 manifest, streaming
 SHA-256 vào inactive `ota_*`, `esp_ota_end`, boot partition pending-verify, health
-window rồi mark-valid hoặc bootloader rollback. Firmware security epoch được giữ
+window 30 giây tính từ `GOT_IP`, kèm overall bound từ boot bằng Wi-Fi timeout 60 giây
+và bootstrap grace 30 giây, rồi mark-valid hoặc bootloader rollback. Bootstrap target
+firmware
+khác running version chiếm toàn bộ activation boundary; config/resource/UI không apply
+trong lượt đó. Application task vào `upgrading`, đóng voice/abort playback, cancel
+reconciler/timer rồi mới schedule updater. Worker chỉ stage image; application task
+persist `rebooting`, commit boot partition và sở hữu reboot. Manifest và content phải
+là canonical Manager routes cùng bootstrap origin, không redirect/compression. Image mới chỉ được
+confirm khi identity hợp lệ, authenticated bootstrap hoàn tất, state `idle`, capture
+và playback task chạy, wake resource/UI healthy và wake task chạy nếu profile yêu cầu.
+Firmware security epoch được giữ
 monotonic trong namespace NVS riêng và không sửa Wi-Fi/activation NVS:
-device-authenticated manifest/content pull, strict verify, Range/resume, streaming
-hash/write, CRC journal, safe-boundary reload, pending-health và rollback. Manager
+device-authenticated manifest/content pull, strict verify, streaming hash/write,
+attempt journal versioned + CRC, pending-health và rollback. Executable OTA V1 tải
+lại từ byte 0 khi retry; chưa có HTTP Range/resume hay download-offset journal. Manager
 API stream file immutable trực tiếp, trả `206`/`Content-Range`, không buffer artifact
 trong process. UI Pack upload dùng bounded streaming quarantine và atomic immutable
 publish. Chưa được coi production-ready cho tới khi power-loss/corruption/rollback
@@ -412,10 +502,31 @@ Device áp dụng config/resource theo transaction:
 9. Start health window và report.
 10. Rollback nếu crash, watchdog, load failure hoặc detector health fail.
 
-Release local dùng `npm run resources:release -- ...`; private Ed25519 key nằm trong
-đường dẫn ignored ngoài source. Output immutable mặc định ở `data/artifacts/:id/`
-với `manifest.json`, `content.bin` và marker hoàn tất. Bootstrap có thể dùng LAN IP;
-không cần domain.
+Nếu config mới yêu cầu resource mới, firmware ghép hai thay đổi vào cùng health
+transaction trong RAM; snapshot đang health-check không bị target mới overwrite.
+Config-only cũng dùng health window 5 giây, chỉ confirm ở idle/gate đóng; target bị
+supersede, persist/load/task health lỗi đều restore previous resource cùng
+last-known-good config.
+Physical pairing recovery cancel toàn bộ reconciler và reset persisted device config;
+remote response không tự xóa identity/Wi-Fi/config.
+
+Release local dùng `npm run resources:release -- ...`; lệnh bắt buộc khai báo exact
+WakeNet ID bằng `--activation-model` và optional `--interrupt-model`. Hai descriptor
+(`id`, `role`) nằm trong member model-pack đã ký; Manager chỉ cho profile tham chiếu
+đúng detector/role mà artifact khai báo, nên một chuỗi hợp lệ như `wn_fake` không thể
+được publish rồi mới fail trên firmware. Private Ed25519 key nằm trong đường dẫn ignored
+ngoài source. Output immutable mặc định ở `data/artifacts/:id/` với `manifest.json`,
+`content.bin` và marker hoàn tất. Bootstrap có thể dùng LAN IP; không cần domain.
+
+Resource journal firmware V2 có layout NVS 656 byte và giữ riêng inventory detector
+đã ký cho `active`, `previous` và `desired`. Mọi boot/direct apply/staged apply/health/
+rollback phải khớp đồng thời resource version, activation WakeNet ID và optional
+interrupt ID theo đúng role; chỉ khớp version là chưa đủ. Record V1 268 byte được
+migrate mà không đổi slot/version/epoch/progress, nhưng inventory không chứng minh được
+giữ `unknown` và runtime fail-closed về button-only. Authenticated reconcile có thể
+hydrate inventory của exact active/staged version từ manifest đã verify mà không tải
+lại payload; inventory đã biết nhưng khác bị từ chối. Trước khi inactive slot bị ghi
+đè, inventory `previous` của slot đó bị vô hiệu để không trở thành fallback giả.
 
 Không overwrite active slot trước khi verify xong. Mất điện ở mọi bước phải khởi động lại được từ apply journal.
 
@@ -482,6 +593,10 @@ Upload đi thẳng vào private MinIO/local object store bằng short-lived sign
 - SHA-256 cho payload integrity; manifest V1 dùng restricted JCS + detached
   Ed25519, verify bằng Monocypher 4.0.3 đã vendored và giữ nguyên license/provenance.
 - Public verification key/rotation metadata nằm trong firmware trust store; private signing key nằm ngoài database, ưu tiên HSM/Vault/offline signer.
+- Device-config version/ETag là immutable pair. Mỗi lần rotate config signer
+  (`key_id`, key hoặc `security_epoch`) phải atomically tăng
+  `DeviceDesiredState.version` cho toàn bộ device bị ảnh hưởng trước khi phục vụ
+  snapshot mới; firmware cố ý từ chối ETag khác ở cùng version.
 - Device token scoped theo device và chỉ đọc artifact được rollout cho chính nó.
 - Artifact URL có TTL; URL scheme/host phải qua allowlist/bootstrap trust.
 - Chống downgrade bằng minimum accepted version/security epoch; rollback chỉ tới version đã ký và còn policy cho phép.

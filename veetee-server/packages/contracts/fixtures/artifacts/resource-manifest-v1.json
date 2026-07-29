@@ -33,6 +33,13 @@
       "runtime": "esp-sr",
       "runtime_abi": 1,
       "format_version": 1,
+      "sample_rate": 16000,
+      "detectors": [
+        {
+          "id": "wn9s_hiesp",
+          "role": "activation"
+        }
+      ],
       "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
       "bytes": 1024
     }
@@ -42,6 +49,6 @@
     "algorithm": "ed25519",
     "key_id": "veetee-dev-release-2026-01",
     "security_epoch": 1,
-    "value": "6NDi3PMUTs22WDhvp8yE9zdUq9lkClbjYE4F34Pap2KhP7QUjAxQXfL+2aDHwmDwPg1Ntg3EMSLPbp6evGaZDg=="
+    "value": "kBlzM5+k7rOxHDMjDeO4/inN/pa7f0CCJW9rbaATuGbsIW82bYTtpqkguHp3byDshO6pFwCXUflRF+VUDGBYAA=="
   }
 }

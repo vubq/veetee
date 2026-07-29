@@ -7,7 +7,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from veetee_voice_server.conversation.cancellation import OperationContext
+from veetee_voice_server.conversation.cancellation import OperationContext, await_operation
 from veetee_voice_server.providers.contracts import ToolBroker
 
 ToolHandler = Callable[[dict[str, Any], OperationContext], Awaitable[Any]]
@@ -64,7 +64,7 @@ class RegistryToolBroker:
                 f"Invalid server MCP arguments for {name}: "
                 f"{validation_error.message[:256]}"
             )
-        result = await tool.handler(arguments, context)
+        result = await await_operation(tool.handler(arguments, context), context)
         context.checkpoint()
         return {
             "tool": name,

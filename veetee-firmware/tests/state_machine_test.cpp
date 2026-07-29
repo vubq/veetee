@@ -50,6 +50,28 @@ void TestWifiLossMarksTransportForAbortiveClose() {
     assert(result.network_lost);
 }
 
+void TestSessionLossInvalidatesQueuedSessionWork() {
+    StateMachine connecting;
+    ReachIdle(connecting);
+    Expect(connecting, Event::kButtonShortPress, State::kConnecting);
+    const std::uint32_t connecting_generation =
+        connecting.cancellation_generation();
+    Expect(connecting, Event::kTransportLost, State::kIdle);
+    assert(connecting.cancellation_generation() ==
+           connecting_generation + 1);
+
+    StateMachine listening;
+    ReachIdle(listening);
+    Expect(listening, Event::kButtonShortPress, State::kConnecting);
+    Expect(listening, Event::kTransportConnected, State::kListening);
+    const std::uint32_t listening_generation =
+        listening.cancellation_generation();
+    Expect(listening, Event::kWifiDisconnected,
+           State::kNetworkConnecting);
+    assert(listening.cancellation_generation() ==
+           listening_generation + 1);
+}
+
 void TestAutoConversationDoesNotNeedSecondButtonPress() {
     StateMachine machine;
     ReachIdle(machine);
@@ -190,11 +212,56 @@ void TestRejectedIdentityRequiresPhysicalRecovery() {
     Expect(machine, Event::kEnterWifiConfig, State::kWifiConfiguring);
 }
 
+void TestFirmwareUpdateOwnsTheActivationBoundary() {
+    StateMachine machine;
+    Expect(machine, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(machine, Event::kWifiConnected, State::kActivating);
+    Expect(machine, Event::kFirmwareUpdateRequested, State::kUpgrading);
+    assert(!machine.assistant_gate_open());
+    assert(!machine.Handle(Event::kActivationComplete).accepted);
+    assert(!machine.Handle(Event::kButtonShortPress).accepted);
+    assert(!machine.Handle(Event::kButtonLongPress).accepted);
+    assert(!machine.Handle(Event::kActivationWakeDetected).accepted);
+    assert(!machine.Handle(Event::kTransportLost).accepted);
+    assert(machine.state() == State::kUpgrading);
+}
+
+void TestFirmwareUpdateRecoveryTransitions() {
+    StateMachine already_current;
+    Expect(already_current, Event::kBootWithCredentials,
+           State::kNetworkConnecting);
+    Expect(already_current, Event::kWifiConnected, State::kActivating);
+    Expect(already_current, Event::kFirmwareUpdateRequested, State::kUpgrading);
+    Expect(already_current, Event::kFirmwareAlreadyCurrent, State::kIdle);
+
+    StateMachine failed;
+    Expect(failed, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(failed, Event::kWifiConnected, State::kActivating);
+    Expect(failed, Event::kFirmwareUpdateRequested, State::kUpgrading);
+    Expect(failed, Event::kFirmwareUpdateFailed, State::kActivating);
+
+    StateMachine wifi_lost;
+    Expect(wifi_lost, Event::kBootWithCredentials, State::kNetworkConnecting);
+    Expect(wifi_lost, Event::kWifiConnected, State::kActivating);
+    Expect(wifi_lost, Event::kFirmwareUpdateRequested, State::kUpgrading);
+    const auto result = wifi_lost.Handle(Event::kWifiDisconnected);
+    assert(result.accepted);
+    assert(result.to == State::kNetworkConnecting);
+    assert(result.network_lost);
+}
+
+void TestIdleCanEnterFirmwareUpdateAtSafeBoundary() {
+    StateMachine machine;
+    ReachIdle(machine);
+    Expect(machine, Event::kFirmwareUpdateRequested, State::kUpgrading);
+}
+
 }  // namespace
 
 int main() {
     TestBootAndProvisioningFlow();
     TestWifiLossMarksTransportForAbortiveClose();
+    TestSessionLossInvalidatesQueuedSessionWork();
     TestAutoConversationDoesNotNeedSecondButtonPress();
     TestWakeAndButtonShareTheSamePath();
     TestAbortInvalidatesTheCurrentGeneration();
@@ -208,6 +275,9 @@ int main() {
     TestWakeCancelsClosingGrace();
     TestAssistantSleepWaitsForGoodbyePlaybackDrain();
     TestRejectedIdentityRequiresPhysicalRecovery();
+    TestFirmwareUpdateOwnsTheActivationBoundary();
+    TestFirmwareUpdateRecoveryTransitions();
+    TestIdleCanEnterFirmwareUpdateAtSafeBoundary();
     std::cout << "state_machine_test: passed\n";
     return 0;
 }

@@ -72,6 +72,20 @@ bool IsSha256(const char* value) {
     });
 }
 
+bool IsWakeNetModelId(const char* value) {
+    if (value == nullptr) return false;
+    const std::size_t length = std::strlen(value);
+    if (length < 3 || length > 64 || value[0] != 'w' || value[1] != 'n') {
+        return false;
+    }
+    return std::all_of(value + 2, value + length, [](char character) {
+        return (character >= 'a' && character <= 'z') ||
+               (character >= 'A' && character <= 'Z') ||
+               (character >= '0' && character <= '9') ||
+               character == '.' || character == '_' || character == '-';
+    });
+}
+
 bool ParseSemver(const char* value, std::uint32_t parts[3]) {
     if (value == nullptr) return false;
     const char* cursor = value;
@@ -164,8 +178,10 @@ bool IsSupportedRuntime(const DeviceResourceCapability& capability,
 
 ResourceManifestError ValidateMembers(
     const cJSON* members, std::uint64_t payload_bytes,
-    const DeviceResourceCapability& capability) {
-    if (!cJSON_IsArray(members) || cJSON_GetArraySize(members) <= 0) {
+    const DeviceResourceCapability& capability,
+    VerifiedResourceManifest* manifest) {
+    if (!cJSON_IsArray(members) || cJSON_GetArraySize(members) != 1 ||
+        manifest == nullptr) {
         return ResourceManifestError::kInvalidSchema;
     }
     std::vector<std::string> names;
@@ -179,6 +195,7 @@ ResourceManifestError ValidateMembers(
         char hash[65] = {};
         std::uint32_t runtime_abi = 0;
         std::uint32_t format_version = 0;
+        std::uint32_t sample_rate = 0;
         std::uint64_t bytes = 0;
         if (!CopyString(member, "name", name, sizeof(name)) ||
             !IsSafeMemberName(name) ||
@@ -192,6 +209,69 @@ ResourceManifestError ValidateMembers(
             !IsSha256(hash) || !ReadU64(member, "bytes", &bytes) || bytes == 0 ||
             bytes > payload_bytes || member_bytes > payload_bytes - bytes) {
             return ResourceManifestError::kInvalidSchema;
+        }
+        const bool model_pack = std::strcmp(kind, "model_pack") == 0;
+        if (!HasOnlyProperties(
+                member,
+                model_pack
+                    ? std::initializer_list<const char*>{
+                          "name", "kind", "runtime", "runtime_abi",
+                          "format_version", "sample_rate", "detectors",
+                          "sha256", "bytes"}
+                    : std::initializer_list<const char*>{
+                          "name", "kind", "runtime", "runtime_abi",
+                          "format_version", "sha256", "bytes"})) {
+            return ResourceManifestError::kInvalidSchema;
+        }
+        if (model_pack) {
+            if (!ReadU32(member, "sample_rate", &sample_rate) ||
+                sample_rate != 16000) {
+                return ResourceManifestError::kInvalidSchema;
+            }
+            const cJSON* detectors =
+                cJSON_GetObjectItemCaseSensitive(member, "detectors");
+            const int detector_count = cJSON_IsArray(detectors)
+                                           ? cJSON_GetArraySize(detectors)
+                                           : 0;
+            if (detector_count < 1 || detector_count > 2) {
+                return ResourceManifestError::kInvalidSchema;
+            }
+            bool activation_seen = false;
+            bool interrupt_seen = false;
+            for (const cJSON* detector = detectors->child; detector != nullptr;
+                 detector = detector->next) {
+                char model_id[65] = {};
+                char role[17] = {};
+                if (!HasOnlyProperties(detector, {"id", "role"}) ||
+                    !CopyString(detector, "id", model_id, sizeof(model_id)) ||
+                    !IsWakeNetModelId(model_id) ||
+                    !CopyString(detector, "role", role, sizeof(role))) {
+                    return ResourceManifestError::kInvalidSchema;
+                }
+                if (std::strcmp(role, "activation") == 0) {
+                    if (activation_seen) {
+                        return ResourceManifestError::kInvalidSchema;
+                    }
+                    activation_seen = true;
+                    std::memcpy(manifest->activation_model_id, model_id,
+                                std::strlen(model_id) + 1);
+                } else if (std::strcmp(role, "interrupt") == 0) {
+                    if (interrupt_seen) {
+                        return ResourceManifestError::kInvalidSchema;
+                    }
+                    interrupt_seen = true;
+                    std::memcpy(manifest->interrupt_model_id, model_id,
+                                std::strlen(model_id) + 1);
+                } else {
+                    return ResourceManifestError::kInvalidSchema;
+                }
+            }
+            if (!activation_seen ||
+                (interrupt_seen &&
+                 std::strcmp(manifest->activation_model_id,
+                             manifest->interrupt_model_id) == 0)) {
+                return ResourceManifestError::kInvalidSchema;
+            }
         }
         if (!IsSupportedRuntime(capability, kind, runtime, runtime_abi)) {
             return ResourceManifestError::kUnsupportedRuntime;
@@ -324,7 +404,7 @@ ResourceManifestError VerifyResourceManifest(
         return ResourceManifestError::kResourceAbiMismatch;
     }
     const ResourceManifestError member_error =
-        ValidateMembers(members, candidate.payload_bytes, capability);
+        ValidateMembers(members, candidate.payload_bytes, capability, &candidate);
     if (member_error != ResourceManifestError::kOk) {
         cJSON_Delete(root);
         return member_error;

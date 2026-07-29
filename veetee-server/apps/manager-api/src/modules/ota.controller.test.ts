@@ -3,6 +3,7 @@ import { PATH_METADATA } from "@nestjs/common/constants";
 import type { FastifyReply } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DeviceConfigService } from "../config/device-config.service.js";
 import type { ControlPlaneStore } from "../store/control-plane.store.js";
 import { OtaController } from "./ota.controller.js";
 
@@ -13,6 +14,16 @@ const headers = {
   "firmware-version": "0.1.0",
   "accept-language": "vi-VN",
 };
+
+function configService(version = 3, etag = "cfg1-signed-config"): DeviceConfigService {
+  return {
+    snapshot: vi.fn().mockResolvedValue({
+      body: { version },
+      etag,
+      canonicalBody: "{}",
+    }),
+  } as unknown as DeviceConfigService;
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -32,7 +43,7 @@ describe("OtaController", () => {
     } as unknown as ControlPlaneStore;
     vi.stubEnv("VEETEE_VOICE_WS_URL", "ws://192.168.1.20:8000/veetee/v1/");
 
-    const response = await new OtaController(store).bootstrap(headers, {});
+    const response = await new OtaController(store, configService()).bootstrap(headers, {});
 
     expect(response.activation).toMatchObject({ code: "482913", message: "482913" });
     expect(response.websocket).toEqual({
@@ -76,7 +87,8 @@ describe("OtaController", () => {
     );
     const token = "a".repeat(43);
 
-    const response = await new OtaController(store).bootstrap(
+    const deviceConfig = configService(8, "cfg1-signed-eight");
+    const response = await new OtaController(store, deviceConfig).bootstrap(
       { ...headers, authorization: `Bearer ${token}` },
       {},
     );
@@ -84,10 +96,11 @@ describe("OtaController", () => {
     expect(response.activation).toBeUndefined();
     expect(response.websocket.token).toBe(token);
     expect(response.config).toEqual({
-      version: 3,
-      etag: "agent-config-3",
+      version: 8,
+      etag: "cfg1-signed-eight",
       url: "http://192.168.1.20:8001/veetee/config/v1/devices/01JDEVICE",
     });
+    expect(deviceConfig.snapshot).toHaveBeenCalledWith("01JDEVICE");
     expect(response.resources?.version).toBe("1.2.0");
     expect(response.resources?.manifest_url).toBe(
       "http://192.168.1.20:8001/veetee/artifacts/manifests/canary-vi-v2",
@@ -110,7 +123,7 @@ describe("OtaController", () => {
       }),
     } as unknown as ControlPlaneStore;
     vi.stubEnv("VEETEE_MANAGER_PUBLIC_URL", "http://192.168.1.20:8001");
-    const response = await new OtaController(store).bootstrap(
+    const response = await new OtaController(store, configService()).bootstrap(
       { ...headers, "firmware-version": "0.4.0" },
       {},
     );
@@ -132,7 +145,7 @@ describe("OtaController", () => {
       }),
     } as unknown as FastifyReply;
 
-    const response = await new OtaController(store).activate(
+    const response = await new OtaController(store, configService()).activate(
       headers,
       { challenge: "challenge-with-enough-entropy" },
       reply,
@@ -146,7 +159,7 @@ describe("OtaController", () => {
     const store = {} as ControlPlaneStore;
     const reply = {} as FastifyReply;
     await expect(
-      new OtaController(store).activate(
+      new OtaController(store, configService()).activate(
         headers,
         { hardwareId: "different-device", challenge: "challenge-with-enough-entropy" },
         reply,

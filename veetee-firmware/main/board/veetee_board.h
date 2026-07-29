@@ -6,6 +6,7 @@
 #include "app/state_machine.h"
 #include "audio/i2s_audio.h"
 #include "audio/wake_detector.h"
+#include "config/device_config.h"
 #include "display/st7789_display.h"
 #include "esp_err.h"
 #include "input/button.h"
@@ -15,7 +16,7 @@
 
 namespace veetee::board {
 
-class VeeteeBoard {
+class VeeteeBoard : public audio::WakeAudioSource {
 public:
     using ButtonSink = input::Button::EventSink;
     using EncodedAudioSink = audio::I2sAudio::EncodedAudioSink;
@@ -32,9 +33,22 @@ public:
                          const char* fallback_resource_partition,
                          const char* active_ui_partition,
                          const char* fallback_ui_partition,
+                         const config::DeviceConfig* applied_config,
                          void* context);
     esp_err_t StartAudio(bool play_boot_chime);
     esp_err_t ReloadWakeResource(const char* partition_label);
+    esp_err_t ReloadWakeRuntime(const char* partition_label,
+                                const config::DeviceConfig& config);
+    bool RevokeWakeAudioConsent();
+    bool EnableWakeAudioConsentAfterCommit(
+        std::uint32_t expected_config_version);
+    [[nodiscard]] bool WakeAudioConsentMatches(
+        std::uint32_t expected_config_version,
+        bool expected_send_wake_audio) const;
+    [[nodiscard]] bool WakeRuntimeConfigVersionMatches(
+        std::uint32_t expected_config_version) const;
+    esp_err_t ApplyDeviceConfig(const config::DeviceConfig& config,
+                                const char* active_resource_partition);
     [[nodiscard]] bool WakeResourceHealthy() const;
     [[nodiscard]] const char* loaded_wake_partition() const {
         return loaded_wake_partition_[0] == '\0'
@@ -74,6 +88,13 @@ public:
     [[nodiscard]] std::uint32_t wake_dropped_frames() const {
         return wake_detector_.dropped_frames();
     }
+    [[nodiscard]] bool wake_profile_expected() const {
+        return device_config_.version == 0 ||
+               device_config_.has_wake_profile;
+    }
+    bool PopWakeAudioPacket(std::uint8_t* destination, std::size_t capacity,
+                            std::size_t* length) override;
+    void DiscardWakeAudio() override;
 
 private:
     enum class DisplayCommandKind : std::uint8_t {
@@ -90,10 +111,18 @@ private:
     static void DisplayTaskEntry(void* context);
     void RunDisplay();
     esp_err_t QueueDisplay(const DisplayCommand& command);
+    std::size_t BuildDetectorProfiles(
+        const config::DeviceConfig& config,
+        std::array<audio::DetectorProfile, 2>* profiles) const;
+    esp_err_t InitializeWakeDetector(
+        const char* partition_label,
+        const config::DeviceConfig& config,
+        DetectorEventSink detector_event_sink, void* context);
 
     display::St7789Display display_;
     audio::I2sAudio audio_;
     audio::WakeDetector wake_detector_;
+    config::DeviceConfig device_config_{};
     input::Button button_;
     app::State state_ = app::State::kStarting;
     std::array<char, 17> loaded_wake_partition_{};

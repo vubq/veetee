@@ -41,7 +41,6 @@ Silero VAD (server local)
   -> Sherpa-ONNX Zipformer Vietnamese 30M INT8 (primary)
   -> ChunkFormer-CTC-Large-Vie (re-decode khi low confidence/unstable)
   -> openai-compatible-cliproxyapi (streaming LLM local primary)
-     -> groq-cloud (published retryable fallback before visible output)
   -> VieNeu-TTS v3 Turbo (local `vi-VN`)
 ```
 
@@ -54,7 +53,9 @@ không được tính như true streaming.
 
 CLIProxyAPI là adapter OpenAI-compatible local/dev hiện hành, không phải ràng buộc
 conversation core. Nó phải pass structured output, tool calling, SSE và cancellation;
-9Router vẫn là adapter tùy chọn nhưng đang tạm dừng. Mọi gateway phải pass conformance;
+chain mặc định hiện chỉ có CLIProxyAPI. Groq vẫn là binding có thể chọn hoặc thêm làm
+fallback bằng một publish tường minh trong task sau, không được seed tự động. 9Router
+vẫn là adapter tùy chọn nhưng đang tạm dừng. Mọi gateway phải pass conformance;
 ChatGPT Plus/Codex login/token không được đưa trực tiếp vào firmware hay provider
 secret. Xem `docs/14-model-and-provider-baseline.md` để biết điều kiện freeze.
 
@@ -399,10 +400,15 @@ Chế độ manual vẫn giữ để tương thích Xiaozhi và hỗ trợ ngư�
 Wake detector chạy local trong `standby/sleep` và có thể giữ một interrupt detector nhẹ khi `thinking/speaking`:
 
 1. buffer optional wake audio theo feature flag;
-2. gửi `listen:detect` nếu server cần biết phrase;
-3. mở assistant gate nếu đang standby;
-4. gửi `listen:start(mode=auto)`;
+2. gửi `listen:detect(source=wake_word)` không cần hard-code phrase;
+3. nếu signed `send_wake_audio=true`, gửi ring Opus PSRAM bounded 1,92 giây;
+4. mở assistant gate bằng `listen:start(mode=auto,source=wake_word)`;
 5. bật VAD sau 300-500 ms để không bắt phần đuôi wake phrase.
+
+Voice nhận sequence `detect -> binary -> start` bằng pending buffer tối đa 2 giây gắn
+với session generation. `start` khớp phải đưa PCM đó vào VAD theo frame thay vì gọi
+reset làm mất cache. Abort/stop/socket close, source hoặc generation không khớp đều xóa
+pending data; raw audio không được persist hay đưa vào telemetry.
 
 Khi đang `thinking/speaking`, `interrupt_profile` phải gọi abort trước; clear playback queue, hủy provider/MCP tasks rồi chuyển sang listening. Không biến câu “dừng lại” thành một câu hỏi mới.
 
@@ -460,7 +466,8 @@ audio boundary policy có safe range, không phải rule semantic theo tiếng �
 Khi finalize utterance, VAD buffer được reset trước lượt tiếp theo để audio cũ không
 rò sang ASR request mới.
 
-Trong V1 chưa AEC, firmware ngừng uplink capture khi đã chuyển khỏi `LISTENING`.
+Trong V1 chưa có AEC đã qua production gate, firmware ngừng uplink capture khi đã
+chuyển khỏi `LISTENING`.
 Button vẫn có thể abort ngay cả lúc server đang chạy ASR nhưng firmware chưa nhận
 transcript: click ở `LISTENING` được hiểu là cancel pending turn rồi quay lại nghe,
 không đóng assistant gate. Long press mới là thao tác tắt gate.
@@ -476,12 +483,23 @@ không đóng assistant gate. Long press mới là thao tác tắt gate.
 | L2 | Server AEC timestamp protocol v2 | thử nghiệm, phụ thuộc latency/jitter |
 | L3 | Hardware/ESP AFE AEC với far-end reference | mục tiêu full-duplex production |
 
+Lát firmware hiện có `CONFIG_VEETEE_EXPERIMENTAL_AEC=n` để tạo evidence cho L1/L3
+mà không nâng capability sớm. Khi opt-in build bật, direct ESP-SR 2.4.7 AEC nhận mic
+16 kHz và far-end từ đúng PCM speaker 24 kHz sau volume, downsample 3:2 qua buffer
+bị chặn kích thước. Output chỉ đi tới local interrupt detector trong thời gian loa
+phát. `features.aec`, conversation capture khi `SPEAKING` và `listen.mode=realtime`
+vẫn giữ false/off; chúng không phụ thuộc đơn thuần vào compile flag.
+
 INMP441 + MAX98357A tách RX/TX nhưng không tự loại echo. Vì vậy `realtime` mode chỉ được bật khi:
 
 - có reference playback được feed vào AEC;
 - đo ERLE/false VAD trên board thật;
 - có test với tiếng Việt, nhạc nền và khoảng cách loa-mic;
 - abort voice <250 ms trong p95.
+
+Evidence board phải ghi thêm ERLE, near-end attenuation, false activation/interrupt,
+reference underflow/drop và heap/task-stack. Host resampler test hoặc firmware build
+pass không thay thế phép đo mic/loa thật.
 
 Nếu chưa đạt, UI phải hiển thị “Bấm nút để ngắt” chứ không hứa “nói chen ngang luôn được”.
 

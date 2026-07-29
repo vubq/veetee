@@ -328,6 +328,9 @@ class ConversationEngine:
                 ),
                 tool_context,
             )
+            # The adapter may swallow task cancellation. Re-check the arbiter
+            # generation at the broker boundary before a result can reach LLM/TTS.
+            self._arbiter.require_current(context)
 
         if plan.response_required:
             return await self._stream_response(

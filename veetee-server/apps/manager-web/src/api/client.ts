@@ -478,6 +478,7 @@ export const managerApi = {
     locale: string;
     channel: string;
     activationPhrase: string;
+    sendWakeAudio?: boolean;
     activation: {
       detectorId: string;
       sensitivity: number;
@@ -489,7 +490,7 @@ export const managerApi = {
       sensitivity: number;
       cooldownMs: number;
       allowedStates: string[];
-    };
+    } | null;
   }) {
     return request("/api/v1/wake-profiles", wakeProfileSchema, {
       method: "POST",

@@ -23,6 +23,7 @@ enum class ServerEventKind : std::uint8_t {
     kTtsStart,
     kTtsStop,
     kAssistantSleep,
+    kConfigChanged,
     kMcp,
     kOther,
 };
@@ -30,6 +31,7 @@ enum class ServerEventKind : std::uint8_t {
 struct ServerEvent {
     ServerEventKind kind = ServerEventKind::kOther;
     char session_id[kMaximumSessionIdBytes + 1] = {};
+    std::uint32_t config_version = 0;
 };
 
 enum class AssembleResult : std::uint8_t {
@@ -79,6 +81,8 @@ const char* DeviceHelloJson();
 bool ParseServerEvent(const char* json, std::size_t length, ServerEvent* event);
 bool BuildListenStart(const char* session_id, WakeSource source, char* destination,
                       std::size_t capacity, std::size_t* length);
+bool BuildListenDetect(const char* session_id, char* destination,
+                       std::size_t capacity, std::size_t* length);
 bool BuildAbort(const char* session_id, const char* reason, const char* source,
                 char* destination, std::size_t capacity, std::size_t* length);
 bool BuildListenStop(const char* session_id, const char* reason, char* destination,

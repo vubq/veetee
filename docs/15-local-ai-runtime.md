@@ -162,8 +162,9 @@ The sync reads the CLIProxyAPI client key from the existing trusted local config
 only `VEETEE_CLIPROXY_*` gateway settings and does not read or require a 9Router store.
 
 The active local profile selected on 2026-07-29 keeps 9Router paused and publishes the
-agent LLM chain as `openai-compatible-cliproxyapi` on `http://127.0.0.1:8317/v1`, then
-`groq-cloud` as fallback. After sync, start Voice directly from `veetee-server`:
+agent LLM chain with only `openai-compatible-cliproxyapi` on
+`http://127.0.0.1:8317/v1`. Groq remains an available binding but is not seeded or
+published as fallback. After sync, start Voice directly from `veetee-server`:
 
 ```bash
 npm run dev:voice
@@ -315,6 +316,22 @@ stopped and no Groq fallback was used. Voice CPU average/p95/peak was
 first attempt had a prose `provider_deadline` at 4.999 s and is recorded as a failed
 cycle; one controlled retry passed. Never hide a retry or average a failed provider
 cycle into the passing soak.
+
+The final merged-tree recheck on 2026-07-29 kept the same process-wide
+`OPENBLAS_NUM_THREADS=1`, ONNX two-thread profile and local CLIProxyAPI route. The first
+release cycle failed when the long-story prose request produced no first token inside
+the five-second idle budget; the HTTP response itself was `200`, no fallback ran and
+the cycle remained failed. One labelled controlled retry then completed two warmups, a
+single 8,086-character LLM stream, 416 PCM frames / 464.56 seconds of audio and three
+normal follow-up turns. Every turn reached `tts.stop -> listen.start`, all scheduler gap
+counts were zero, all twelve planner/prose POSTs used CLIProxyAPI with HTTP `200`, Groq
+was not used and port `20128` remained unowned. During the long generation window Voice
+CPU average/p95/peak was 151.184/169/178%; across the whole retry it was
+82.064/165/178%. The sample immediately after final synthesis used 32% CPU and the next
+one was 0%, while the 202.512-second final-PCM-to-`tts.stop` interval averaged 0.274%
+CPU (p95 1%), proving playback drain rather than continued inference. Sampler RSS began
+at 834.29 MiB, peaked at 1,044.54 MiB and ended at a flat 1,020.93 MiB; the final 61
+samples had zero KiB range and the process held 27 threads throughout.
 
 The 2026-07-28 accepted live HTTPS Realtime Lab session used the current ONNX/2-thread,
 Trúc Ly, `tu_nhien`, 1.0x profile. Two natural user turns completed with one

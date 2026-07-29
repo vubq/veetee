@@ -5,7 +5,7 @@ export const viVN = {
   brand: { operations: "vận hành robot" },
   common: {
     cancel: "Hủy", close: "Đóng", publish: "Publish", on: "Bật", off: "Tắt",
-    statusSummary: "Tóm tắt trạng thái", dismissToast: "Đóng thông báo",
+    statusSummary: "Tóm tắt trạng thái", dismissToast: "Đóng thông báo", notConfigured: "Chưa cấu hình",
   },
   access: { memoryRequiresOperator: "Bộ nhớ hội thoại yêu cầu vai trò Operator trở lên." },
   theme: {
@@ -158,7 +158,7 @@ export const viVN = {
     tabs: { artifacts: "Artifacts", wakeProfiles: "Wake profiles", rollouts: "Rollouts", firmware: "Firmware OTA" },
     artifacts: { eyebrow: "ARTIFACT CATALOG", title: "Gói tài nguyên", emptyTitle: "Chưa có artifact", emptyBody: "Đăng ký artifact đã được release pipeline tạo và ký." },
     register: { eyebrow: "REGISTER RELEASE", title: "Đăng ký artifact", description: "Manager không tạo binary; chỉ nhận artifact ID đã có trong storage cùng metadata release.", action: "Đăng ký" },
-    wake: { eyebrow: "WAKE CATALOG", title: "Wake profile", productReady: "Product-ready", notBenchmarked: "Chưa benchmark", emptyTitle: "Chưa có wake profile", emptyBody: "Tạo profile từ model pack đã ký; phrase text không tự sinh ra wake model." },
+    wake: { eyebrow: "WAKE CATALOG", title: "Wake profile", productReady: "Product-ready", notBenchmarked: "Chưa benchmark", emptyTitle: "Chưa có wake profile", emptyBody: "Tạo profile từ model pack đã ký; phrase text không tự sinh ra wake model.", audioOptIn: "Gửi âm thanh trước wake word", audioOptInDescription: "Mặc định tắt. Khi bật, snapshot đã ký cho phép thiết bị gửi tối đa 1,92 giây âm thanh quanh lần kích hoạt; không bật ghi âm nền và server không lưu raw audio.", audioEnabled: "Wake audio: Bật", audioDisabled: "Wake audio: Tắt" },
   },
   operations: {
     api: { ready: "Manager API sẵn sàng", interrupted: "Manager API gián đoạn", attention: "Manager API cần kiểm tra" },

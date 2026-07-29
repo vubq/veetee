@@ -42,6 +42,8 @@ struct ResourceProfile {
     const char* partition_prefix;
     const char* nvs_namespace;
     const char* default_version;
+    const char* default_activation_model_id;
+    const char* default_interrupt_model_id;
     const char* task_name;
     std::uint8_t partition_subtype_base;
     std::uint32_t resource_abi;
@@ -57,6 +59,8 @@ const ResourceProfile& Profile(ResourceClass resource_class) {
         .partition_prefix = "resource_",
         .nvs_namespace = "veetee_resource",
         .default_version = "factory-bringup",
+        .default_activation_model_id = "wn9s_hiesp",
+        .default_interrupt_model_id = nullptr,
         .task_name = "veetee_resources",
         .partition_subtype_base = 0x40,
         .resource_abi = 1,
@@ -70,6 +74,8 @@ const ResourceProfile& Profile(ResourceClass resource_class) {
         .partition_prefix = "ui_",
         .nvs_namespace = "veetee_ui",
         .default_version = "factory-signal",
+        .default_activation_model_id = nullptr,
+        .default_interrupt_model_id = nullptr,
         .task_name = "veetee_ui_pack",
         .partition_subtype_base = 0x42,
         .resource_abi = 2,
@@ -132,17 +138,17 @@ bool ParseContentRange(const char* value, std::uint64_t* first,
 
 }  // namespace
 
-esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
+esp_err_t ResourceReconciler::Initialize(settings::SettingsStore* settings_store,
                                          EventSink sink, void* context,
                                          ResourceClass resource_class) {
-    if (settings == nullptr || sink == nullptr ||
+    if (settings_store == nullptr || sink == nullptr ||
         CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID[0] == '\0' ||
         !DecodePublicKey(CONFIG_VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX,
                          &trusted_key_.public_key)) {
         return ESP_ERR_INVALID_ARG;
     }
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
-    settings_ = settings;
+    settings_store_ = settings_store;
     resource_class_ = resource_class;
     sink_ = sink;
     sink_context_ = context;
@@ -173,7 +179,8 @@ esp_err_t ResourceReconciler::Initialize(settings::DeviceSettings* settings,
     if (state_mutex_ == nullptr) return ESP_ERR_NO_MEM;
     esp_err_t error = resource_state_.Initialize(
         CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH, profile.nvs_namespace,
-        profile.default_version);
+        profile.default_version, profile.default_activation_model_id,
+        profile.default_interrupt_model_id);
     if (error != ESP_OK) {
         vSemaphoreDelete(state_mutex_);
         state_mutex_ = nullptr;
@@ -362,6 +369,22 @@ void ResourceReconciler::Reconcile(const Target& target) {
                       manifest.version, "desired_version_mismatch");
         return;
     }
+    const settings::ResourceRecord current = RecordSnapshot();
+    const settings::ResourceDetectorInventory* persisted_inventory = nullptr;
+    if (std::strcmp(current.active_version, manifest.version) == 0) {
+        persisted_inventory = &current.active_detectors;
+    } else if (std::strcmp(current.desired_version, manifest.version) == 0) {
+        persisted_inventory = &current.desired_detectors;
+    }
+    if (persisted_inventory != nullptr &&
+        settings::HasResourceDetectorInventory(*persisted_inventory) &&
+        !settings::ResourceDetectorInventoryMatches(
+            *persisted_inventory, manifest.activation_model_id,
+            manifest.interrupt_model_id)) {
+        EmitWithRetry(ResourceReconcileEvent::kManifestRejected, target,
+                      manifest.version, "detector_inventory_mismatch");
+        return;
+    }
     std::uint8_t target_slot = 0;
     std::uint32_t resume_bytes = 0;
     bool already_staged = false;
@@ -431,17 +454,37 @@ esp_err_t ResourceReconciler::PrepareDownload(
         error = ESP_ERR_INVALID_STATE;
     } else if (record.phase == settings::ResourceRecordPhase::kStable &&
                std::strcmp(record.active_version, manifest.version) == 0) {
-        *already_active = true;
-        *target_slot = record.active_slot;
+        bool inventory_changed = false;
+        if (!settings::BindActiveResourceDetectorInventory(
+                &record, manifest.activation_model_id,
+                manifest.interrupt_model_id, &inventory_changed)) {
+            error = ESP_ERR_INVALID_STATE;
+        } else if (inventory_changed &&
+                   resource_state_.Save(record) != ESP_OK) {
+            error = ESP_FAIL;
+        } else {
+            *already_active = true;
+            *target_slot = record.active_slot;
+        }
     } else if (record.phase == settings::ResourceRecordPhase::kStaged &&
                std::strcmp(record.desired_version, manifest.version) == 0 &&
                std::strcmp(record.bundle_id, manifest.bundle_id) == 0 &&
                std::strcmp(record.payload_sha256, manifest.payload_sha256) == 0 &&
                record.expected_bytes == manifest.payload_bytes &&
                record.desired_security_epoch == manifest.security_epoch) {
-        *already_staged = true;
-        *target_slot = record.target_slot;
-        *resume_bytes = record.downloaded_bytes;
+        bool inventory_changed = false;
+        if (!settings::BindDesiredResourceDetectorInventory(
+                &record, manifest.activation_model_id,
+                manifest.interrupt_model_id, &inventory_changed)) {
+            error = ESP_ERR_INVALID_STATE;
+        } else if (inventory_changed &&
+                   resource_state_.Save(record) != ESP_OK) {
+            error = ESP_FAIL;
+        } else {
+            *already_staged = true;
+            *target_slot = record.target_slot;
+            *resume_bytes = record.downloaded_bytes;
+        }
     } else {
         if (record.phase != settings::ResourceRecordPhase::kStable &&
             record.phase != settings::ResourceRecordPhase::kDownloading &&
@@ -449,12 +492,26 @@ esp_err_t ResourceReconciler::PrepareDownload(
             error = ESP_ERR_INVALID_STATE;
         }
         const settings::ResourceRecord previous = record;
+        const bool same_download =
+            record.phase == settings::ResourceRecordPhase::kDownloading &&
+            std::strcmp(record.desired_version, manifest.version) == 0 &&
+            std::strcmp(record.bundle_id, manifest.bundle_id) == 0 &&
+            std::strcmp(record.payload_sha256, manifest.payload_sha256) == 0 &&
+            record.expected_bytes == manifest.payload_bytes &&
+            record.desired_security_epoch == manifest.security_epoch;
+        if (error == ESP_OK && same_download &&
+            !settings::BindDesiredResourceDetectorInventory(
+                &record, manifest.activation_model_id,
+                manifest.interrupt_model_id)) {
+            error = ESP_ERR_INVALID_STATE;
+        }
         if (error == ESP_OK &&
             !settings::BeginResourceDownload(
                 &record, manifest.version, manifest.bundle_id,
                 manifest.payload_sha256,
                 static_cast<std::uint32_t>(manifest.payload_bytes),
-                manifest.security_epoch)) {
+                manifest.security_epoch, manifest.activation_model_id,
+                manifest.interrupt_model_id)) {
             error = ESP_ERR_INVALID_ARG;
         }
         if (error == ESP_OK &&
@@ -495,7 +552,8 @@ esp_err_t ResourceReconciler::DownloadPayload(
     const Target& target, const VerifiedResourceManifest& manifest,
     std::uint8_t target_slot, std::uint32_t resume_bytes) {
     if (!IsCurrent(target.generation) || target_slot > 1 ||
-        resource_partitions_[target_slot] == nullptr || settings_ == nullptr ||
+        resource_partitions_[target_slot] == nullptr ||
+        settings_store_ == nullptr ||
         manifest.payload_bytes == 0 || manifest.payload_bytes > UINT32_MAX ||
         manifest.payload_bytes > resource_partitions_[target_slot]->size ||
         resume_bytes > manifest.payload_bytes) {
@@ -543,6 +601,12 @@ esp_err_t ResourceReconciler::DownloadPayload(
 
     for (int attempt = 0; error == ESP_OK && resume_bytes < expected_bytes;
          ++attempt) {
+        const settings::DeviceSettings settings_snapshot =
+            settings_store_->Snapshot();
+        if (!settings_snapshot.HasDeviceIdentity()) {
+            error = ESP_ERR_INVALID_STATE;
+            break;
+        }
         esp_http_client_config_t config = {};
         config.url = manifest.payload_url;
         config.event_handler = &ResourceReconciler::PayloadHttpEventHandler;
@@ -566,8 +630,9 @@ esp_err_t ResourceReconciler::DownloadPayload(
         request_generation_.store(target.generation);
         error = esp_http_client_set_method(client, HTTP_METHOD_GET);
         if (error == ESP_OK) {
-            const int length = std::snprintf(authorization, sizeof(authorization),
-                                             "Bearer %s", settings_->device_token);
+            const int length = std::snprintf(
+                authorization, sizeof(authorization), "Bearer %s",
+                settings_snapshot.device_token);
             if (length <= 7 || length >= static_cast<int>(sizeof(authorization))) {
                 error = ESP_ERR_INVALID_SIZE;
             }
@@ -782,7 +847,8 @@ settings::ResourceRecord ResourceReconciler::RecordSnapshot() const {
 
 esp_err_t ResourceReconciler::FetchManifest(const Target& target, char** document,
                                             std::size_t* document_size) {
-    if (document == nullptr || document_size == nullptr || settings_ == nullptr ||
+    if (document == nullptr || document_size == nullptr ||
+        settings_store_ == nullptr ||
         !IsCurrent(target.generation)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -813,12 +879,23 @@ esp_err_t ResourceReconciler::FetchManifest(const Target& target, char** documen
         return ESP_ERR_NO_MEM;
     }
     request_generation_.store(target.generation);
+    const settings::DeviceSettings settings_snapshot =
+        settings_store_->Snapshot();
+    if (!settings_snapshot.HasDeviceIdentity()) {
+        esp_http_client_cleanup(client);
+        heap_caps_free(response_);
+        response_ = nullptr;
+        response_size_ = 0;
+        request_generation_.store(0);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     char authorization[160] = {};
     esp_err_t error = esp_http_client_set_method(client, HTTP_METHOD_GET);
     if (error == ESP_OK) {
-        const int length = std::snprintf(authorization, sizeof(authorization),
-                                         "Bearer %s", settings_->device_token);
+        const int length = std::snprintf(
+            authorization, sizeof(authorization), "Bearer %s",
+            settings_snapshot.device_token);
         if (length <= 7 || length >= static_cast<int>(sizeof(authorization))) {
             error = ESP_ERR_INVALID_SIZE;
         }

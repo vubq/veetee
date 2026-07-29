@@ -1,6 +1,9 @@
 import { Algorithm, hash } from "@node-rs/argon2";
 import {
+  ArtifactKind,
+  ArtifactStatus,
   MemoryMessageRole,
+  Prisma,
   RemoteMcpCallActor,
   RemoteMcpCallStatus,
   TenantRole,
@@ -8,7 +11,6 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AuditService } from "../audit/audit.service.js";
-import { ArtifactFilesService } from "../artifacts/artifact-files.service.js";
 import { ResourceCatalogService } from "../artifacts/resource-catalog.service.js";
 import { ResourceManifestService } from "../artifacts/resource-manifest.service.js";
 import { AuthService } from "../auth/auth.service.js";
@@ -18,9 +20,11 @@ import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
 import { RemoteMcpService } from "../mcp/remote-mcp.service.js";
 import { MemoryService } from "../memory/memory.service.js";
+import { FirmwareRolloutService } from "../ota/firmware-rollout.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./control-plane.store.js";
+import { mergeDeviceDesiredState } from "./device-desired-state.js";
 
 if (process.env.VEETEE_INTEGRATION === "1") {
   const databaseUrl = process.env.DATABASE_URL;
@@ -52,6 +56,48 @@ const reportedCapabilities = {
   },
 };
 
+const integrationResourceManifest = {
+  manifest_version: 1,
+  bundle_id: "integration-resource",
+  kind: "resource_bundle",
+  version: "1.0.0",
+  channel: "development",
+  members: [{
+    name: "speech/esp-sr-models",
+    kind: "model_pack",
+    runtime: "esp-sr",
+    runtime_abi: 1,
+    format_version: 1,
+    sample_rate: 16_000,
+    detectors: [{ id: "wn9s_hiesp", role: "activation" }],
+    sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+    bytes: 125_943,
+  }],
+};
+
+const integrationManifestService = {
+  async validate(artifactId: string) {
+    return {
+      artifactId,
+      kind: "resource_bundle" as const,
+      version: "1.0.0",
+      channel: "development",
+      sizeBytes: 125_943,
+      sha256: "56fc71dda4bf4ebe6ed87359e3bda7eebef38dc0b8b01ce1203d2cd1dc212562",
+      contentType: "application/vnd.veetee.esp-sr-model-pack",
+      runtime: "esp-sr",
+      runtimeAbi: 1,
+      board: "veetee-s3-n16r8",
+      minFirmware: "0.2.0",
+      maxFirmware: "0.3.0",
+      signatureKeyId: "integration-release-key",
+      securityEpoch: 1,
+      detectors: [{ id: "wn9s_hiesp", role: "activation" as const }],
+      manifest: structuredClone(integrationResourceManifest),
+    };
+  },
+} as unknown as ResourceManifestService;
+
 describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneStore", () => {
   const prisma = new PrismaService();
   const redis = new RedisService();
@@ -67,8 +113,9 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
   const resourceCatalog = new ResourceCatalogService(
     prisma,
     audit,
-    new ResourceManifestService(new ArtifactFilesService()),
+    integrationManifestService,
   );
+  const firmwareRollouts = new FirmwareRolloutService(prisma, audit);
   const memory = new MemoryService(prisma, audit);
   const remoteMcp = new RemoteMcpService(prisma, audit, new SecretCryptoService());
   let principal: Principal;
@@ -87,6 +134,8 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await prisma.conversationMemoryMessage.deleteMany();
     await prisma.memoryWriteReceipt.deleteMany();
     await prisma.conversationEvent.deleteMany();
+    await prisma.firmwareRollout.deleteMany();
+    await prisma.uiPackRollout.deleteMany();
     await prisma.resourceRollout.deleteMany();
     await prisma.wakeProfileVersion.deleteMany();
     await prisma.wakeProfile.deleteMany();
@@ -239,6 +288,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     ).rejects.toThrow();
     const activation = await store.activateDevice("esp32-integration", ticket.challenge);
     expect(typeof activation?.token).toBe("string");
+    expect(activation?.configVersion).toBe(3);
     await expect(store.activateDevice("esp32-integration", ticket.challenge)).resolves.toEqual(
       activation,
     );
@@ -277,13 +327,37 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     expect(reported.reportedState.state).not.toEqual(reported.desiredState.state);
     const idempotent = await store.updateReportedState(device.id, 2, { unexpected: true });
     expect(idempotent.reportedState.state).toEqual(reported.reportedState.state);
+    const configMerged = await store.updateReportedState(device.id, 3, {
+      schemaVersion: 1,
+      firmware: { version: "0.2.0" },
+      config: { desiredVersion: 5, appliedVersion: 4, phase: "applying" },
+    });
+    expect(configMerged.reportedState.state).toMatchObject({
+      resourceBundleVersion: "0.9.0",
+      config: { desiredVersion: 5, appliedVersion: 4, phase: "applying" },
+    });
+    const artifactMerged = await store.updateReportedState(device.id, 4, {
+      schemaVersion: 1,
+      firmware: { version: "0.2.0" },
+      resource: { phase: "checking" },
+      // class-transformer DTO instances define absent optional fields as
+      // own properties with undefined values. They must not erase a
+      // previously reported subsystem during the shallow merge.
+      config: undefined,
+    });
+    expect(artifactMerged.reportedState.state).toMatchObject({
+      config: { desiredVersion: 5, appliedVersion: 4, phase: "applying" },
+      resource: { phase: "checking" },
+    });
+    const equalMerged = await store.updateReportedState(device.id, 4, { unexpected: true });
+    expect(equalMerged.reportedState.state).toEqual(artifactMerged.reportedState.state);
     await Promise.allSettled([
-      store.updateReportedState(device.id, 4, { marker: "newest", ...reportedCapabilities }),
-      store.updateReportedState(device.id, 3, { marker: "older" }),
+      store.updateReportedState(device.id, 6, { marker: "newest", ...reportedCapabilities }),
+      store.updateReportedState(device.id, 5, { marker: "older" }),
     ]);
-    const concurrent = await store.updateReportedState(device.id, 4, { unexpected: true });
+    const concurrent = await store.updateReportedState(device.id, 6, { unexpected: true });
     expect(concurrent.reportedState).toMatchObject({
-      version: 4,
+      version: 6,
       state: { marker: "newest", ...reportedCapabilities },
     });
     await expect(store.updateReportedState(device.id, 1, {})).rejects.toThrow(/stale/i);
@@ -341,7 +415,9 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     ]);
     await expect(prisma.conversationEvent.findUnique({ where: { id: eventId } })).resolves.toBeNull();
 
-    await store.bootstrapDevice("esp32-integration", activation?.token, "0.2.0");
+    await expect(
+      store.bootstrapDevice("esp32-integration", activation?.token, "0.2.0"),
+    ).resolves.toMatchObject({ configVersion: 5 });
     const artifact = await resourceCatalog.registerArtifact(
       "stable",
       "ESP-SR model pack bring-up; benchmark not yet a Hey VeeTee product pass",
@@ -357,6 +433,48 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       principal,
       requestId: "integration-artifact-publish",
     });
+    await expect(resourceCatalog.createWakeProfile(
+      {
+        artifactId: artifact.id,
+        name: "Undeclared detector",
+        locale: "vi-VN",
+        channel: "development",
+        activationPhrase: "Not in the model pack",
+        activation: {
+          detectorId: "wn_fake",
+          sensitivity: 0.5,
+          cooldownMs: 1_500,
+          allowedStates: ["standby"],
+        },
+        interrupt: null,
+      },
+      { principal, requestId: "integration-wake-undeclared" },
+    )).rejects.toThrow(/not declared by the selected signed model pack/);
+    await expect(resourceCatalog.createWakeProfile(
+      {
+        artifactId: artifact.id,
+        name: "Invalid shared model",
+        locale: "vi-VN",
+        channel: "development",
+        activationPhrase: "Hi ESP",
+        activation: {
+          detectorId: "wn9s_hiesp",
+          sensitivity: 0.5,
+          cooldownMs: 1_500,
+          allowedStates: ["standby"],
+        },
+        interrupt: {
+          detectorId: "wn9s_hiesp",
+          sensitivity: 0.7,
+          cooldownMs: 750,
+          allowedStates: ["thinking", "speaking"],
+        },
+      },
+      { principal, requestId: "integration-wake-conflict" },
+    )).rejects.toThrow(/different WakeNet models/);
+    await expect(prisma.wakeProfile.count({
+      where: { tenantId: principal.tenantId, name: "Invalid shared model" },
+    })).resolves.toBe(0);
     const wakeProfile = await resourceCatalog.createWakeProfile(
       {
         artifactId: artifact.id,
@@ -364,18 +482,14 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
         locale: "vi-VN",
         channel: "development",
         activationPhrase: "Hi ESP",
+        sendWakeAudio: true,
         activation: {
-          detectorId: "wakenet:hi_esp",
+          detectorId: "wn9s_hiesp",
           sensitivity: 0.5,
           cooldownMs: 1_500,
           allowedStates: ["standby"],
         },
-        interrupt: {
-          detectorId: "multinet:stop",
-          sensitivity: 0.6,
-          cooldownMs: 800,
-          allowedStates: ["thinking", "speaking"],
-        },
+        interrupt: null,
       },
       { principal, requestId: "integration-wake-create" },
     );
@@ -384,6 +498,83 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       principal,
       requestId: "integration-wake-publish",
     });
+    const publishedVersion = await prisma.wakeProfileVersion.findUniqueOrThrow({
+      where: {
+        wakeProfileId_version: {
+          wakeProfileId: wakeProfile.id,
+          version: publishedWake.publishedVersion,
+        },
+      },
+    });
+    const validSnapshot = publishedVersion.snapshot as Prisma.JsonObject;
+    await prisma.wakeProfileVersion.update({
+      where: { id: publishedVersion.id },
+      data: {
+        snapshot: {
+          ...validSnapshot,
+          interrupt: {
+            ...(validSnapshot.activation as Prisma.JsonObject),
+            allowedStates: ["thinking", "speaking"],
+          },
+        },
+      },
+    });
+    await expect(resourceCatalog.rollout(
+      wakeProfile.id,
+      publishedWake.publishedVersion,
+      [device.id],
+      { principal, requestId: "integration-invalid-history-rollout" },
+    )).rejects.toThrow(/different WakeNet models/);
+    await prisma.wakeProfileVersion.update({
+      where: { id: publishedVersion.id },
+      data: { snapshot: validSnapshot },
+    });
+    const originalArtifact = await prisma.artifact.findUniqueOrThrow({
+      where: { id: artifact.id },
+    });
+    const nextArtifactId = "stable-next";
+    await prisma.artifact.create({
+      data: {
+        id: nextArtifactId,
+        tenantId: principal.tenantId,
+        kind: originalArtifact.kind,
+        version: "2.0.0",
+        channel: originalArtifact.channel,
+        sizeBytes: originalArtifact.sizeBytes,
+        sha256: originalArtifact.sha256,
+        contentType: originalArtifact.contentType,
+        runtime: originalArtifact.runtime,
+        runtimeAbi: originalArtifact.runtimeAbi,
+        license: originalArtifact.license,
+        board: originalArtifact.board,
+        minFirmware: originalArtifact.minFirmware,
+        maxFirmware: originalArtifact.maxFirmware,
+        signatureKeyId: originalArtifact.signatureKeyId,
+        securityEpoch: originalArtifact.securityEpoch,
+        benchmarkStatus: originalArtifact.benchmarkStatus,
+        status: originalArtifact.status,
+        manifest: originalArtifact.manifest as Prisma.InputJsonValue,
+        publishedAt: new Date(),
+      },
+    });
+    await resourceCatalog.updateWakeProfile(
+      wakeProfile.id,
+      {
+        artifactId: nextArtifactId,
+        name: "ESP-SR bring-up",
+        locale: "vi-VN",
+        channel: "development",
+        activationPhrase: "Hi ESP",
+        activation: {
+          detectorId: "wn9s_hiesp",
+          sensitivity: 0.5,
+          cooldownMs: 1_500,
+          allowedStates: ["standby"],
+        },
+        interrupt: null,
+      },
+      { principal, requestId: "integration-wake-next-artifact" },
+    );
     const rollouts = await resourceCatalog.rollout(
       wakeProfile.id,
       publishedWake.publishedVersion,
@@ -391,13 +582,16 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
       { principal, requestId: "integration-resource-rollout" },
     );
     expect(rollouts).toHaveLength(1);
+    expect(rollouts[0]).toMatchObject({ artifactId: artifact.id });
     await expect(store.device(principal.tenantId, device.id)).resolves.toMatchObject({
       desiredState: {
         state: {
           resourceBundleVersion: "1.0.0",
           resourceManifestId: "stable",
           wakeProfile: {
+            artifactId: "stable",
             activationPhrase: "Hi ESP",
+            sendWakeAudio: true,
             productReady: false,
           },
         },
@@ -405,7 +599,7 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     });
     await store.updateReportedState(
       device.id,
-      5,
+      7,
       {
         schemaVersion: 1,
         firmware: { version: "0.2.0" },
@@ -425,6 +619,156 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await expect(resourceCatalog.listRollouts(principal.tenantId)).resolves.toEqual([
       expect.objectContaining({ id: rollouts[0]?.id, status: "complete" }),
     ]);
+  });
+
+  it("serializes concurrent resource, UI and firmware desired-state merges", async () => {
+    const device = await prisma.device.findUniqueOrThrow({
+      where: { hardwareId: "esp32-integration" },
+      include: { desiredState: true },
+    });
+    const baselineVersion = device.desiredState?.version ?? 0;
+    const patches = [
+      {
+        resourceBundleVersion: "race-resource",
+        resourceManifestId: "race-resource-manifest",
+      },
+      {
+        uiPackVersion: "race-ui",
+        uiManifestId: "race-ui-manifest",
+      },
+      {
+        firmwareVersion: "race-firmware",
+        firmwareManifestId: "race-firmware-manifest",
+      },
+    ];
+
+    const mutations = await Promise.all(patches.map((patch) =>
+      prisma.$transaction((transaction) =>
+        mergeDeviceDesiredState(
+          transaction,
+          device.id,
+          principal.tenantId,
+          patch,
+        ))));
+
+    expect(mutations.every((mutation) => mutation !== null)).toBe(true);
+    expect(mutations
+      .map((mutation) => mutation?.version)
+      .sort((left, right) => Number(left) - Number(right))).toEqual([
+      baselineVersion + 1,
+      baselineVersion + 2,
+      baselineVersion + 3,
+    ]);
+    const desired = await prisma.deviceDesiredState.findUniqueOrThrow({
+      where: { deviceId: device.id },
+    });
+    expect(desired.version).toBe(baselineVersion + 3);
+    expect(desired.state).toMatchObject({
+      ...(device.desiredState?.state as Prisma.JsonObject),
+      ...patches[0],
+      ...patches[1],
+      ...patches[2],
+    });
+  });
+
+  it("keeps resource, UI and firmware service mutations under the shared device lock", async () => {
+    const device = await prisma.device.findUniqueOrThrow({
+      where: { hardwareId: "esp32-integration" },
+      include: { desiredState: true },
+    });
+    const profile = await prisma.wakeProfile.findFirstOrThrow({
+      where: { tenantId: principal.tenantId, name: "ESP-SR bring-up" },
+    });
+    const uiArtifact = await prisma.artifact.create({
+      data: {
+        id: "race-ui-artifact",
+        tenantId: principal.tenantId,
+        kind: ArtifactKind.DISPLAY_ASSETS,
+        version: "1.1.0",
+        channel: "development",
+        sizeBytes: 1_024,
+        sha256: "a".repeat(64),
+        contentType: "application/vnd.veetee.ui-pack",
+        runtime: "veetee-ui",
+        runtimeAbi: 1,
+        license: "integration-only",
+        board: "veetee-s3-n16r8",
+        minFirmware: "0.2.0",
+        maxFirmware: "0.4.0",
+        signatureKeyId: "integration-release",
+        securityEpoch: 1,
+        status: ArtifactStatus.PUBLISHED,
+        manifest: { schema_version: 1 },
+        publishedAt: new Date(),
+      },
+    });
+    const firmwareArtifact = await prisma.artifact.create({
+      data: {
+        id: "race-firmware-artifact",
+        tenantId: principal.tenantId,
+        kind: ArtifactKind.FIRMWARE,
+        version: "0.4.0",
+        channel: "development",
+        sizeBytes: 1_048_576,
+        sha256: "b".repeat(64),
+        contentType: "application/vnd.veetee.esp32s3-firmware",
+        runtime: "esp-idf-image",
+        runtimeAbi: 1,
+        license: "integration-only",
+        board: "veetee-s3-n16r8",
+        minFirmware: "0.2.0",
+        maxFirmware: "0.5.0",
+        signatureKeyId: "integration-release",
+        securityEpoch: 1,
+        status: ArtifactStatus.PUBLISHED,
+        manifest: { schema_version: 1 },
+        publishedAt: new Date(),
+      },
+    });
+    const baselineVersion = device.desiredState?.version ?? 0;
+    const baselineState = device.desiredState?.state as Prisma.JsonObject;
+
+    const [resource, ui, firmware] = await Promise.all([
+      resourceCatalog.rollout(
+        profile.id,
+        profile.publishedVersion,
+        [device.id],
+        { principal, requestId: "integration-race-resource" },
+      ),
+      resourceCatalog.rolloutUiPack(
+        uiArtifact.id,
+        [device.id],
+        { principal, requestId: "integration-race-ui" },
+      ),
+      firmwareRollouts.createRollout(
+        {
+          artifactId: firmwareArtifact.id,
+          percentage: 0,
+          canaryDeviceIds: [device.id],
+        },
+        { principal, requestId: "integration-race-firmware" },
+      ),
+    ]);
+
+    expect(resource).toHaveLength(1);
+    expect(ui).toHaveLength(1);
+    expect(resource[0]?.desiredStateVersion).not.toBe(ui[0]?.desiredStateVersion);
+    expect(firmware.selectedDeviceIds).toContain(device.id);
+    const desired = await prisma.deviceDesiredState.findUniqueOrThrow({
+      where: { deviceId: device.id },
+    });
+    expect(desired.version).toBe(baselineVersion + 3);
+    expect(desired.state).toMatchObject({
+      ...baselineState,
+      resourceBundleVersion: "1.0.0",
+      resourceManifestId: "stable",
+      wakeProfile: expect.any(Object),
+      uiPackVersion: uiArtifact.version,
+      uiManifestId: uiArtifact.id,
+      firmwareVersion: firmwareArtifact.version,
+      firmwareManifestId: firmwareArtifact.id,
+      firmwareChannel: firmwareArtifact.channel,
+    });
   });
 
   it("persists bounded cross-session memory and immutable Remote MCP assignments", async () => {

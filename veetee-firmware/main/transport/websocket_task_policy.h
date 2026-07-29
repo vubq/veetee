@@ -3,7 +3,24 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "transport/protocol_v1.h"
+
 namespace veetee::transport {
+
+enum class WebSocketCommandPriority : std::uint8_t {
+    kRegular,
+    kUrgent,
+    kCriticalControl,
+};
+
+constexpr bool CanFallbackToRegularQueue(WebSocketCommandPriority priority) {
+    return priority == WebSocketCommandPriority::kUrgent;
+}
+
+constexpr bool ShouldReplaceOldestUrgentCommand(
+    WebSocketCommandPriority priority) {
+    return priority == WebSocketCommandPriority::kCriticalControl;
+}
 
 // This task calls Wi-Fi/TLS code, so its stack stays in internal RAM.
 inline constexpr std::size_t kWebSocketIoTaskStackBytes = 10 * 1024;
@@ -22,6 +39,59 @@ constexpr bool CanRetryWebSocket(bool session_open, bool protocol_failure,
     return session_open && !protocol_failure &&
            completed_attempts < kWebSocketReconnectAttempts;
 }
+
+enum class WakeOpeningPhase : std::uint8_t {
+    kIdle,
+    kPending,
+    kStarted,
+};
+
+// Owned by the WebSocket control task. Binding source and progress to the
+// transport generation prevents an init/start retry from inheriting stale
+// wake metadata or replaying a partially consumed pre-roll ring.
+class WakeOpeningSnapshot {
+public:
+    constexpr void Begin(std::uint32_t generation, WakeSource source) {
+        generation_ = generation;
+        source_ = source;
+        phase_ = WakeOpeningPhase::kPending;
+    }
+
+    [[nodiscard]] constexpr bool Matches(std::uint32_t generation,
+                                         WakeSource source) const {
+        return phase_ != WakeOpeningPhase::kIdle &&
+               generation_ == generation && source_ == source;
+    }
+
+    [[nodiscard]] constexpr bool Matches(std::uint32_t generation) const {
+        return phase_ != WakeOpeningPhase::kIdle &&
+               generation_ == generation;
+    }
+
+    constexpr bool MarkStarted(std::uint32_t generation) {
+        if (!Matches(generation)) return false;
+        phase_ = WakeOpeningPhase::kStarted;
+        return true;
+    }
+
+    [[nodiscard]] constexpr bool PreserveAudioForRetry(
+        bool retryable, std::uint32_t generation) const {
+        return retryable && Matches(generation) &&
+               source_ == WakeSource::kWakeWord &&
+               phase_ == WakeOpeningPhase::kPending;
+    }
+
+    [[nodiscard]] constexpr WakeSource source() const { return source_; }
+    [[nodiscard]] constexpr std::uint32_t generation() const {
+        return generation_;
+    }
+    [[nodiscard]] constexpr WakeOpeningPhase phase() const { return phase_; }
+
+private:
+    std::uint32_t generation_ = 0;
+    WakeSource source_ = WakeSource::kButton;
+    WakeOpeningPhase phase_ = WakeOpeningPhase::kIdle;
+};
 
 constexpr std::uint32_t WebSocketReconnectDelayMs(std::uint8_t attempt,
                                                   std::uint32_t entropy) {

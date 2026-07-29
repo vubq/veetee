@@ -572,6 +572,7 @@ model WakeProfile {
   locale           String
   channel          String
   activationPhrase String
+  sendWakeAudio     Boolean  @default(false)
   activation       Json
   interrupt        Json
   version          Int      @default(1)

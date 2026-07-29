@@ -1,0 +1,2 @@
+ALTER TABLE "WakeProfile"
+ADD COLUMN "sendWakeAudio" BOOLEAN NOT NULL DEFAULT false;

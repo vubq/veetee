@@ -23,6 +23,22 @@ constexpr char kWifiProfileRecordKey[] = "wifi_profiles";
 constexpr char kLegacyWifiSsidKey[] = "wifi_ssid";
 constexpr char kLegacyWifiPasswordKey[] = "wifi_pass";
 
+class SemaphoreGuard {
+public:
+    explicit SemaphoreGuard(SemaphoreHandle_t mutex) : mutex_(mutex) {
+        if (mutex_ != nullptr) xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    ~SemaphoreGuard() {
+        if (mutex_ != nullptr) xSemaphoreGive(mutex_);
+    }
+
+    SemaphoreGuard(const SemaphoreGuard&) = delete;
+    SemaphoreGuard& operator=(const SemaphoreGuard&) = delete;
+
+private:
+    SemaphoreHandle_t mutex_;
+};
+
 void CopyString(char* destination, std::size_t capacity, const char* source) {
     if (capacity == 0) {
         return;
@@ -78,12 +94,20 @@ SettingsStore::~SettingsStore() {
     if (handle_ != 0) {
         nvs_close(handle_);
     }
+    if (mutex_ != nullptr) {
+        vSemaphoreDelete(mutex_);
+        mutex_ = nullptr;
+    }
 }
 
 esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
-    if (settings == nullptr) {
+    if (settings == nullptr || mutex_ != nullptr || live_settings_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
+    mutex_ = xSemaphoreCreateMutex();
+    if (mutex_ == nullptr) return ESP_ERR_NO_MEM;
+    SemaphoreGuard guard(mutex_);
+    live_settings_ = settings;
 
     esp_err_t error = nvs_flash_init();
     if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -148,7 +172,13 @@ esp_err_t SettingsStore::Initialize(DeviceSettings* settings) {
     return error;
 }
 
+DeviceSettings SettingsStore::Snapshot() const {
+    SemaphoreGuard guard(mutex_);
+    return live_settings_ == nullptr ? DeviceSettings{} : *live_settings_;
+}
+
 esp_err_t SettingsStore::SaveProvisioning(DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr || settings->ssid[0] == '\0' ||
         settings->bootstrap_url[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -179,6 +209,22 @@ esp_err_t SettingsStore::SaveProvisioning(DeviceSettings* settings) {
         wifi_profiles_ = updated;
         CopyString(settings->password, sizeof(settings->password),
                    selected->password);
+        if (live_settings_ != nullptr && live_settings_ != settings) {
+            CopyString(live_settings_->ssid, sizeof(live_settings_->ssid),
+                       settings->ssid);
+            CopyString(live_settings_->password,
+                       sizeof(live_settings_->password), settings->password);
+            CopyString(live_settings_->bootstrap_url,
+                       sizeof(live_settings_->bootstrap_url),
+                       settings->bootstrap_url);
+            CopyString(live_settings_->locale, sizeof(live_settings_->locale),
+                       settings->locale);
+            CopyString(live_settings_->time_zone,
+                       sizeof(live_settings_->time_zone), settings->time_zone);
+            CopyString(live_settings_->wake_profile,
+                       sizeof(live_settings_->wake_profile),
+                       settings->wake_profile);
+        }
         ESP_LOGI(kTag, "Provisioning saved for SSID '%s' and bootstrap host (password redacted)",
                  settings->ssid);
     }
@@ -186,6 +232,7 @@ esp_err_t SettingsStore::SaveProvisioning(DeviceSettings* settings) {
 }
 
 esp_err_t SettingsStore::ClearWifiCredentials(DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -209,11 +256,13 @@ esp_err_t SettingsStore::ClearWifiCredentials(DeviceSettings* settings) {
 }
 
 WifiProfileRecord SettingsStore::WifiProfiles() const {
+    SemaphoreGuard guard(mutex_);
     return wifi_profiles_;
 }
 
 esp_err_t SettingsStore::MarkWifiProfileSuccessful(const char* ssid,
                                                    DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || ssid == nullptr || settings == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -234,6 +283,7 @@ esp_err_t SettingsStore::MarkWifiProfileSuccessful(const char* ssid,
 
 esp_err_t SettingsStore::SavePendingActivation(const char* code, const char* challenge,
                                                DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr || settings->HasDeviceIdentity() ||
         code == nullptr || challenge == nullptr ||
         std::strlen(code) != 6 || std::strlen(challenge) < 16 ||
@@ -265,6 +315,7 @@ esp_err_t SettingsStore::SaveDeviceActivation(const char* device_id, const char*
                                               const char* websocket_url,
                                               std::uint32_t config_version,
                                               DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr || device_id == nullptr || token == nullptr ||
         websocket_url == nullptr || device_id[0] == '\0' || token[0] == '\0' ||
         websocket_url[0] == '\0' ||
@@ -295,6 +346,7 @@ esp_err_t SettingsStore::SaveDeviceActivation(const char* device_id, const char*
 esp_err_t SettingsStore::SaveBoundBootstrap(const char* websocket_url,
                                             std::uint32_t config_version,
                                             DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr || !settings->HasDeviceIdentity() ||
         websocket_url == nullptr || websocket_url[0] == '\0' ||
         std::strlen(websocket_url) >= sizeof(settings->websocket_url)) {
@@ -319,6 +371,7 @@ esp_err_t SettingsStore::SaveBoundBootstrap(const char* websocket_url,
 }
 
 esp_err_t SettingsStore::ClearPendingActivation(DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr) return ESP_ERR_INVALID_ARG;
     if (settings->HasDeviceIdentity()) return ESP_OK;
     esp_err_t error = nvs_erase_key(handle_, kActivationRecordKey);
@@ -331,6 +384,7 @@ esp_err_t SettingsStore::ClearPendingActivation(DeviceSettings* settings) {
 }
 
 esp_err_t SettingsStore::ClearDeviceIdentity(DeviceSettings* settings) {
+    SemaphoreGuard guard(mutex_);
     if (handle_ == 0 || settings == nullptr) return ESP_ERR_INVALID_ARG;
     esp_err_t error = nvs_erase_key(handle_, kActivationRecordKey);
     if (error == ESP_ERR_NVS_NOT_FOUND) error = ESP_OK;

@@ -16,6 +16,7 @@ import {
 import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
 import { PrismaService } from "../database/prisma.service.js";
+import { mergeDeviceDesiredState } from "../store/device-desired-state.js";
 import { ResourceManifestService } from "./resource-manifest.service.js";
 
 interface MutationContext {
@@ -59,8 +60,9 @@ export interface WakeProfileRecord {
   locale: string;
   channel: string;
   activationPhrase: string;
+  sendWakeAudio: boolean;
   activation: DetectorProfileInput;
-  interrupt: DetectorProfileInput;
+  interrupt: DetectorProfileInput | null;
   version: number;
   publishedVersion: number;
   productReady: boolean;
@@ -91,8 +93,9 @@ export interface WakeProfileInput {
   locale: string;
   channel: string;
   activationPhrase: string;
+  sendWakeAudio?: boolean;
   activation: DetectorProfileInput;
-  interrupt: DetectorProfileInput;
+  interrupt?: DetectorProfileInput | null;
 }
 
 const artifactKindToDatabase = {
@@ -103,6 +106,106 @@ const artifactKindToDatabase = {
   audio_assets: ArtifactKind.AUDIO_ASSETS,
   admission_model: ArtifactKind.ADMISSION_MODEL,
 } as const;
+
+const wakeNetModelId = /^wn[A-Za-z0-9._-]{1,62}$/;
+const wakeRuntimeStates = new Set([
+  "standby",
+  "listening",
+  "thinking",
+  "speaking",
+  "closing",
+]);
+
+function assertRunnableWakeProfile(input: unknown): asserts input is WakeProfileInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BadRequestException(
+      "Wake profile is outside the ESP-SR V1 runtime bounds",
+    );
+  }
+  const candidate = input as Record<string, unknown>;
+  const activation = candidate.activation;
+  const interrupt = candidate.interrupt;
+  if (candidate.sendWakeAudio !== undefined &&
+      typeof candidate.sendWakeAudio !== "boolean") {
+    throw new BadRequestException(
+      "Wake audio privacy opt-in must be boolean",
+    );
+  }
+  if (!activation || typeof activation !== "object" || Array.isArray(activation) ||
+      (interrupt !== undefined && interrupt !== null &&
+       (typeof interrupt !== "object" || Array.isArray(interrupt)))) {
+    throw new BadRequestException(
+      "Wake profile is outside the ESP-SR V1 runtime bounds",
+    );
+  }
+  const detectors = [activation, interrupt].filter(
+    (detector): detector is DetectorProfileInput => detector != null,
+  );
+  for (const detector of detectors) {
+    if (
+      !wakeNetModelId.test(detector.detectorId) ||
+      !Number.isFinite(detector.sensitivity) ||
+      (detector.sensitivity !== 0 &&
+        (detector.sensitivity < 0.4 || detector.sensitivity > 0.9999)) ||
+      !Number.isInteger(detector.cooldownMs) ||
+      detector.cooldownMs < 250 ||
+      detector.cooldownMs > 10_000 ||
+      !Array.isArray(detector.allowedStates) ||
+      detector.allowedStates.length < 1 ||
+      detector.allowedStates.length > 5 ||
+      new Set(detector.allowedStates).size !== detector.allowedStates.length ||
+      detector.allowedStates.some(
+        (state) => typeof state !== "string" || !wakeRuntimeStates.has(state),
+      )
+    ) {
+      throw new BadRequestException(
+        "Wake profile is outside the ESP-SR V1 runtime bounds",
+      );
+    }
+  }
+  if ((interrupt as DetectorProfileInput | null | undefined)?.detectorId ===
+      (activation as DetectorProfileInput).detectorId) {
+    throw new BadRequestException(
+      "Activation and interrupt require different WakeNet models",
+    );
+  }
+}
+
+function assertWakeProfileMatchesSignedArtifact(
+  input: WakeProfileInput,
+  manifestValue: Prisma.JsonValue,
+): void {
+  const manifest = manifestValue as Prisma.JsonObject;
+  const members = Array.isArray(manifest.members) ? manifest.members : [];
+  const member = members.length === 1 && members[0] &&
+      typeof members[0] === "object" && !Array.isArray(members[0])
+    ? members[0] as Prisma.JsonObject
+    : null;
+  const rawDetectors = member && Array.isArray(member.detectors)
+    ? member.detectors
+    : [];
+  const detectors = rawDetectors.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const descriptor = value as Prisma.JsonObject;
+    return typeof descriptor.id === "string" &&
+        (descriptor.role === "activation" || descriptor.role === "interrupt")
+      ? [{ id: descriptor.id, role: descriptor.role }]
+      : [];
+  });
+  const activationMatches = detectors.some(
+    (detector) => detector.role === "activation" &&
+      detector.id === input.activation.detectorId,
+  );
+  const interruptMatches = input.interrupt == null || detectors.some(
+    (detector) => detector.role === "interrupt" &&
+      detector.id === input.interrupt?.detectorId,
+  );
+  if (!activationMatches || !interruptMatches) {
+    throw new ConflictException(
+      "Wake profile detector is not declared by the selected signed model pack",
+    );
+  }
+}
 
 @Injectable()
 export class ResourceCatalogService {
@@ -250,7 +353,9 @@ export class ResourceCatalogService {
     input: WakeProfileInput,
     context: MutationContext,
   ): Promise<WakeProfileRecord> {
+    assertRunnableWakeProfile(input);
     const artifact = await this.requireArtifact(input.artifactId, context.principal.tenantId);
+    assertWakeProfileMatchesSignedArtifact(input, artifact.manifest);
     return this.prisma.$transaction(async (transaction) => {
       const profile = await transaction.wakeProfile.create({
         data: {
@@ -260,8 +365,11 @@ export class ResourceCatalogService {
           locale: input.locale,
           channel: input.channel,
           activationPhrase: input.activationPhrase,
+          sendWakeAudio: input.sendWakeAudio ?? false,
           activation: input.activation as unknown as Prisma.InputJsonValue,
-          interrupt: input.interrupt as unknown as Prisma.InputJsonValue,
+          interrupt: input.interrupt == null
+            ? Prisma.JsonNull
+            : input.interrupt as unknown as Prisma.InputJsonValue,
         },
       });
       await this.audit.record(
@@ -285,7 +393,9 @@ export class ResourceCatalogService {
     input: WakeProfileInput,
     context: MutationContext,
   ): Promise<WakeProfileRecord> {
+    assertRunnableWakeProfile(input);
     const artifact = await this.requireArtifact(input.artifactId, context.principal.tenantId);
+    assertWakeProfileMatchesSignedArtifact(input, artifact.manifest);
     return this.prisma.$transaction(async (transaction) => {
       const profile = await transaction.wakeProfile.findFirst({
         where: { id, tenantId: context.principal.tenantId },
@@ -299,8 +409,11 @@ export class ResourceCatalogService {
           locale: input.locale,
           channel: input.channel,
           activationPhrase: input.activationPhrase,
+          sendWakeAudio: input.sendWakeAudio ?? false,
           activation: input.activation as unknown as Prisma.InputJsonValue,
-          interrupt: input.interrupt as unknown as Prisma.InputJsonValue,
+          interrupt: input.interrupt == null
+            ? Prisma.JsonNull
+            : input.interrupt as unknown as Prisma.InputJsonValue,
           version: { increment: 1 },
         },
       });
@@ -328,6 +441,26 @@ export class ResourceCatalogService {
         include: { artifact: true },
       });
       if (!profile) throw new NotFoundException("Wake profile not found");
+      assertRunnableWakeProfile({
+        sendWakeAudio: profile.sendWakeAudio,
+        activation: profile.activation,
+        interrupt: profile.interrupt,
+      });
+      assertWakeProfileMatchesSignedArtifact(
+        {
+          artifactId: profile.artifactId,
+          name: profile.name,
+          locale: profile.locale,
+          channel: profile.channel,
+          activationPhrase: profile.activationPhrase,
+          sendWakeAudio: profile.sendWakeAudio,
+          activation: profile.activation as unknown as DetectorProfileInput,
+          interrupt: profile.interrupt === null
+            ? null
+            : profile.interrupt as unknown as DetectorProfileInput,
+        },
+        profile.artifact.manifest,
+      );
       if (profile.artifact.status !== ArtifactStatus.PUBLISHED) {
         throw new ConflictException("Wake profile requires a published signed artifact");
       }
@@ -406,7 +539,7 @@ export class ResourceCatalogService {
     }
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, tenantId: context.principal.tenantId },
-      include: { desiredState: true, reportedState: true },
+      include: { reportedState: true },
     });
     if (devices.length !== new Set(deviceIds).size) {
       throw new NotFoundException("One or more rollout devices were not found");
@@ -415,29 +548,25 @@ export class ResourceCatalogService {
 
     return this.prisma.$transaction(async (transaction) => {
       const output: UiPackRolloutRecord[] = [];
-      for (const device of devices) {
-        const desiredStateVersion = (device.desiredState?.version ?? 0) + 1;
-        const current = (device.desiredState?.state ?? {}) as Record<string, unknown>;
-        const next = {
-          ...current,
-          uiPackVersion: artifact.version,
-          uiManifestId: artifact.id,
-        };
-        await transaction.deviceDesiredState.upsert({
-          where: { deviceId: device.id },
-          create: {
-            deviceId: device.id,
-            version: desiredStateVersion,
-            state: next as Prisma.InputJsonValue,
+      for (const device of [...devices].sort((left, right) =>
+        left.id.localeCompare(right.id)
+      )) {
+        const desired = await mergeDeviceDesiredState(
+          transaction,
+          device.id,
+          context.principal.tenantId,
+          {
+            uiPackVersion: artifact.version,
+            uiManifestId: artifact.id,
           },
-          update: { version: desiredStateVersion, state: next as Prisma.InputJsonValue },
-        });
+        );
+        if (!desired) throw new NotFoundException("Rollout device not found");
         const rollout = await transaction.uiPackRollout.create({
           data: {
             tenantId: context.principal.tenantId,
             deviceId: device.id,
             artifactId: artifact.id,
-            desiredStateVersion,
+            desiredStateVersion: desired.version,
           },
         });
         await this.audit.record(
@@ -448,8 +577,8 @@ export class ResourceCatalogService {
             targetType: "device",
             targetId: device.id,
             requestId: context.requestId,
-            before: current,
-            after: next,
+            before: desired.previousState,
+            after: desired.state,
             details: { rolloutId: rollout.id, artifactId: artifact.id },
           },
           transaction,
@@ -468,54 +597,57 @@ export class ResourceCatalogService {
   ): Promise<ResourceRolloutRecord[]> {
     const profile = await this.prisma.wakeProfile.findFirst({
       where: { id: wakeProfileId, tenantId: context.principal.tenantId },
-      include: { artifact: true },
     });
     if (!profile) throw new NotFoundException("Wake profile not found");
     const selectedVersion = version ?? profile.publishedVersion;
     if (selectedVersion <= 0) throw new ConflictException("Wake profile is not published");
     const published = await this.prisma.wakeProfileVersion.findUnique({
       where: { wakeProfileId_version: { wakeProfileId, version: selectedVersion } },
+      include: { artifact: true },
     });
     if (!published) throw new NotFoundException("Wake profile version not found");
-    if (profile.artifact.status !== ArtifactStatus.PUBLISHED) {
+    assertRunnableWakeProfile(published.snapshot);
+    assertWakeProfileMatchesSignedArtifact(
+      published.snapshot as unknown as WakeProfileInput,
+      published.artifact.manifest,
+    );
+    if (published.artifact.status !== ArtifactStatus.PUBLISHED) {
       throw new ConflictException("Artifact is not published");
     }
     const devices = await this.prisma.device.findMany({
       where: { id: { in: deviceIds }, tenantId: context.principal.tenantId },
-      include: { desiredState: true, reportedState: true },
+      include: { reportedState: true },
     });
     if (devices.length !== new Set(deviceIds).size) {
       throw new NotFoundException("One or more rollout devices were not found");
     }
-    for (const device of devices) this.assertDeviceCompatibility(device, profile.artifact);
+    for (const device of devices) {
+      this.assertDeviceCompatibility(device, published.artifact);
+    }
 
     return this.prisma.$transaction(async (transaction) => {
       const results: ResourceRolloutRecord[] = [];
-      for (const device of devices) {
-        const desiredStateVersion = (device.desiredState?.version ?? 0) + 1;
-        const current = (device.desiredState?.state ?? {}) as Record<string, unknown>;
-        const next = {
-          ...current,
-          resourceBundleVersion: profile.artifact.version,
-          resourceManifestId: profile.artifact.id,
-          wakeProfile: published.snapshot,
-        };
-        await transaction.deviceDesiredState.upsert({
-          where: { deviceId: device.id },
-          create: {
-            deviceId: device.id,
-            version: desiredStateVersion,
-            state: next as Prisma.InputJsonValue,
+      for (const device of [...devices].sort((left, right) =>
+        left.id.localeCompare(right.id)
+      )) {
+        const desired = await mergeDeviceDesiredState(
+          transaction,
+          device.id,
+          context.principal.tenantId,
+          {
+            resourceBundleVersion: published.artifact.version,
+            resourceManifestId: published.artifact.id,
+            wakeProfile: published.snapshot,
           },
-          update: { version: desiredStateVersion, state: next as Prisma.InputJsonValue },
-        });
+        );
+        if (!desired) throw new NotFoundException("Rollout device not found");
         const rollout = await transaction.resourceRollout.create({
           data: {
             tenantId: context.principal.tenantId,
             deviceId: device.id,
-            artifactId: profile.artifact.id,
+            artifactId: published.artifact.id,
             wakeProfileVersionId: published.id,
-            desiredStateVersion,
+            desiredStateVersion: desired.version,
           },
           include: { wakeProfileVersion: true },
         });
@@ -527,8 +659,8 @@ export class ResourceCatalogService {
             targetType: "device",
             targetId: device.id,
             requestId: context.requestId,
-            before: current,
-            after: next,
+            before: desired.previousState,
+            after: desired.state,
             details: { rolloutId: rollout.id },
           },
           transaction,
@@ -643,6 +775,7 @@ export class ResourceCatalogService {
       locale: string;
       channel: string;
       activationPhrase: string;
+      sendWakeAudio: boolean;
       activation: Prisma.JsonValue;
       interrupt: Prisma.JsonValue;
     },
@@ -657,8 +790,11 @@ export class ResourceCatalogService {
       locale: profile.locale,
       channel: profile.channel,
       activationPhrase: profile.activationPhrase,
+      sendWakeAudio: profile.sendWakeAudio,
       activation: profile.activation as unknown as DetectorProfileInput,
-      interrupt: profile.interrupt as unknown as DetectorProfileInput,
+      interrupt: profile.interrupt === null
+        ? null
+        : profile.interrupt as unknown as DetectorProfileInput,
       version,
       publishedVersion: version,
       productReady,
@@ -716,6 +852,7 @@ export class ResourceCatalogService {
     locale: string;
     channel: string;
     activationPhrase: string;
+    sendWakeAudio: boolean;
     activation: Prisma.JsonValue;
     interrupt: Prisma.JsonValue;
     version: number;
@@ -729,8 +866,11 @@ export class ResourceCatalogService {
       locale: profile.locale,
       channel: profile.channel,
       activationPhrase: profile.activationPhrase,
+      sendWakeAudio: profile.sendWakeAudio,
       activation: profile.activation as unknown as DetectorProfileInput,
-      interrupt: profile.interrupt as unknown as DetectorProfileInput,
+      interrupt: profile.interrupt === null
+        ? null
+        : profile.interrupt as unknown as DetectorProfileInput,
       version: profile.version,
       publishedVersion: profile.publishedVersion,
       productReady:

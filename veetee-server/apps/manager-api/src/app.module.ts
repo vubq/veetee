@@ -51,6 +51,7 @@ import { RemoteMcpService } from "./mcp/remote-mcp.service.js";
 import { SecretCryptoService } from "./security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./store/control-plane.store.js";
 import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
+import { DeviceConfigService } from "./config/device-config.service.js";
 
 @Module({
   controllers: [
@@ -96,6 +97,7 @@ import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
     MemoryService,
     DeviceDiagnosticsService,
     SecretCryptoService,
+    DeviceConfigService,
     LabSessionService,
     ControlPlaneStore,
     FirmwareRolloutService,

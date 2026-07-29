@@ -18,14 +18,14 @@ void Expect(bool condition, const char* message) {
 
 int main() {
     using veetee::app::State;
-    constexpr std::array<State, 13> states = {
+    constexpr std::array<State, 14> states = {
         State::kStarting,        State::kWifiConfiguring,
         State::kNetworkConnecting, State::kActivating,
         State::kPairingRecovery, State::kIdle,
         State::kConnecting,      State::kListening,
         State::kEvaluating,      State::kThinking,
         State::kSpeaking,        State::kAborting,
-        State::kClosing,
+        State::kClosing,           State::kUpgrading,
     };
     for (const State state : states) {
         const auto& visual = veetee::display::VisualForState(state);
@@ -40,6 +40,10 @@ int main() {
         veetee::display::VisualForState(State::kPairingRecovery);
     Expect(std::strstr(recovery.detail, "5S") != nullptr,
            "pairing recovery must advertise the physical reset hold");
+    const auto& upgrading =
+        veetee::display::VisualForState(State::kUpgrading);
+    Expect(std::strstr(upgrading.detail, "POWER") != nullptr,
+           "upgrading must warn against power loss");
     std::cout << "state visual tests passed\n";
     return 0;
 }

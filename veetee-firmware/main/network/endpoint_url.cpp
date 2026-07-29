@@ -102,6 +102,56 @@ bool IsValidEndpointUrl(const char* value, const char* first_scheme,
     return true;
 }
 
+const char* PathBegin(const char* value) {
+    const char* scheme = value == nullptr ? nullptr : std::strstr(value, "://");
+    return scheme == nullptr ? nullptr : std::strchr(scheme + 3, '/');
+}
+
+bool SameHttpOrigin(const char* left, const char* right) {
+    if (!IsHttpEndpointUrl(left) || !IsHttpEndpointUrl(right)) return false;
+    const char* left_path = PathBegin(left);
+    const char* right_path = PathBegin(right);
+    const std::size_t left_length =
+        left_path == nullptr ? std::strlen(left)
+                             : static_cast<std::size_t>(left_path - left);
+    const std::size_t right_length =
+        right_path == nullptr ? std::strlen(right)
+                              : static_cast<std::size_t>(right_path - right);
+    return left_length == right_length &&
+           std::memcmp(left, right, left_length) == 0;
+}
+
+bool IsSafeArtifactId(const char* begin, const char* end) {
+    if (begin == nullptr || end == nullptr || begin == end) return false;
+    for (const char* cursor = begin; cursor != end; ++cursor) {
+        const unsigned char character = static_cast<unsigned char>(*cursor);
+        if (std::isalnum(character) == 0 && *cursor != '-' && *cursor != '_' &&
+            *cursor != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsCanonicalArtifactUrl(const char* bootstrap_url,
+                            const char* candidate_url, bool manifest) {
+    if (!SameHttpOrigin(bootstrap_url, candidate_url)) return false;
+    const char* path = PathBegin(candidate_url);
+    if (path == nullptr) return false;
+    constexpr char kManifestPrefix[] = "/veetee/artifacts/manifests/";
+    constexpr char kContentPrefix[] = "/veetee/artifacts/";
+    if (manifest) {
+        if (!HasPrefix(path, kManifestPrefix)) return false;
+        const char* id = path + std::strlen(kManifestPrefix);
+        return IsSafeArtifactId(id, id + std::strlen(id));
+    }
+    if (!HasPrefix(path, kContentPrefix)) return false;
+    const char* id = path + std::strlen(kContentPrefix);
+    const char* suffix = std::strchr(id, '/');
+    return suffix != nullptr && std::strcmp(suffix, "/content") == 0 &&
+           IsSafeArtifactId(id, suffix);
+}
+
 }  // namespace
 
 bool IsHttpEndpointUrl(const char* value) {
@@ -137,6 +187,16 @@ bool BuildHttpOriginEndpoint(const char* source_url, const char* endpoint_path,
                                       endpoint_path);
     return written > 0 && static_cast<std::size_t>(written) < output_size &&
            IsHttpEndpointUrl(output);
+}
+
+bool IsCanonicalArtifactManifestUrl(const char* bootstrap_url,
+                                    const char* candidate_url) {
+    return IsCanonicalArtifactUrl(bootstrap_url, candidate_url, true);
+}
+
+bool IsCanonicalArtifactContentUrl(const char* bootstrap_url,
+                                   const char* candidate_url) {
+    return IsCanonicalArtifactUrl(bootstrap_url, candidate_url, false);
 }
 
 }  // namespace veetee::network

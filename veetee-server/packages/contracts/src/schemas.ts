@@ -5,6 +5,119 @@ const nonNegativeInteger = { type: "integer", minimum: 0 } as const;
 const positiveNumber = { type: "number", exclusiveMinimum: 0 } as const;
 const nonNegativeNumber = { type: "number", minimum: 0 } as const;
 const sha256 = { type: "string", pattern: "^[a-f0-9]{64}$" } as const;
+const safeOpaqueId = {
+  type: "string",
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+} as const;
+const safeResourceVersion = {
+  type: "string",
+  minLength: 1,
+  maxLength: 32,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+} as const;
+const wakeNetModelId = {
+  type: "string",
+  minLength: 3,
+  maxLength: 64,
+  pattern: "^wn[A-Za-z0-9._-]{1,62}$",
+} as const;
+
+const deviceConfigDetectorSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["model_id", "threshold_ppm", "cooldown_ms"],
+  properties: {
+    model_id: wakeNetModelId,
+    threshold_ppm: {
+      anyOf: [
+        { const: 0 },
+        { type: "integer", minimum: 400_000, maximum: 999_900 },
+      ],
+    },
+    cooldown_ms: { type: "integer", minimum: 250, maximum: 10_000 },
+  },
+} as const;
+
+export const deviceConfigSchema = {
+  $id: "https://schemas.veetee.local/config/device-config-v1.json",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "device_id",
+    "version",
+    "wake_profile",
+    "signature",
+  ],
+  properties: {
+    schema_version: { const: 1 },
+    device_id: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    },
+    version: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+    wake_profile: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "version",
+            "required_resource_version",
+            "activation",
+            "interrupt",
+            "send_wake_audio",
+          ],
+          properties: {
+            id: safeOpaqueId,
+            version: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+            required_resource_version: safeResourceVersion,
+            activation: deviceConfigDetectorSchema,
+            interrupt: {
+              anyOf: [
+                { type: "null" },
+                {
+                  ...deviceConfigDetectorSchema,
+                  required: [
+                    ...deviceConfigDetectorSchema.required,
+                    "enabled_while_speaking",
+                  ],
+                  properties: {
+                    ...deviceConfigDetectorSchema.properties,
+                    enabled_while_speaking: { type: "boolean" },
+                  },
+                },
+              ],
+            },
+            send_wake_audio: { type: "boolean" },
+          },
+        },
+      ],
+    },
+    signature: {
+      type: "object",
+      additionalProperties: false,
+      required: ["algorithm", "key_id", "security_epoch", "value"],
+      properties: {
+        algorithm: { const: "ed25519" },
+        key_id: safeOpaqueId,
+        security_epoch: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+        value: {
+          type: "string",
+          minLength: 88,
+          maxLength: 88,
+          pattern: "^[A-Za-z0-9+/]{86}==$",
+        },
+      },
+    },
+  },
+} as const;
 
 export const deviceCapabilitySchema = {
   $id: "https://schemas.veetee.local/artifacts/device-capability-v1.json",
@@ -112,16 +225,50 @@ export const resourceManifestSchema = {
     members: {
       type: "array",
       minItems: 1,
+      maxItems: 1,
       items: {
         type: "object",
-        additionalProperties: true,
-        required: ["name", "kind", "runtime", "runtime_abi", "format_version", "sha256", "bytes"],
+        additionalProperties: false,
+        required: [
+          "name",
+          "kind",
+          "runtime",
+          "runtime_abi",
+          "format_version",
+          "sample_rate",
+          "detectors",
+          "sha256",
+          "bytes",
+        ],
         properties: {
           name: id,
-          kind: { enum: ["model_pack", "display_assets", "audio_assets"] },
-          runtime: id,
-          runtime_abi: nonNegativeInteger,
-          format_version: nonNegativeInteger,
+          kind: { const: "model_pack" },
+          runtime: { const: "esp-sr" },
+          runtime_abi: { const: 1 },
+          format_version: { const: 1 },
+          sample_rate: { const: 16_000 },
+          detectors: {
+            type: "array",
+            minItems: 1,
+            maxItems: 2,
+            uniqueItems: true,
+            contains: {
+              type: "object",
+              required: ["role"],
+              properties: { role: { const: "activation" } },
+            },
+            minContains: 1,
+            maxContains: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["id", "role"],
+              properties: {
+                id: wakeNetModelId,
+                role: { enum: ["activation", "interrupt"] },
+              },
+            },
+          },
           sha256,
           bytes: nonNegativeInteger,
         },
@@ -580,13 +727,154 @@ export const otaBootstrapSchema = {
       type: "object",
       additionalProperties: false,
       required: ["version", "etag", "url"],
-      properties: { version: nonNegativeInteger, etag: id, url: { type: "string", format: "uri" } },
+      properties: {
+        version: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+        etag: { type: "string", pattern: "^cfg1-[A-Za-z0-9_-]{43}$" },
+        url: { type: "string", format: "uri" },
+      },
     },
     resources: {
       type: "object",
       additionalProperties: false,
       required: ["version", "manifest_url"],
       properties: { version: id, manifest_url: { type: "string", format: "uri" } },
+    },
+  },
+} as const;
+
+const reportedResourceStateSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "phase",
+    "currentVersion",
+    "desiredVersion",
+    "activeSlot",
+    "targetSlot",
+    "expectedBytes",
+    "downloadedBytes",
+    "securityEpoch",
+  ],
+  properties: {
+    phase: {
+      enum: [
+        "checking",
+        "downloading",
+        "verifying",
+        "staged",
+        "applying",
+        "active",
+        "failed",
+        "rolled_back",
+        "rebooting",
+        "pending_health",
+      ],
+    },
+    currentVersion: {
+      type: "string",
+      minLength: 1,
+      maxLength: 32,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+    },
+    desiredVersion: {
+      type: "string",
+      minLength: 1,
+      maxLength: 32,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+    },
+    activeSlot: { type: "integer", minimum: 0, maximum: 1 },
+    targetSlot: { type: "integer", minimum: 0, maximum: 1 },
+    expectedBytes: { type: "integer", minimum: 0, maximum: 16_777_216 },
+    downloadedBytes: { type: "integer", minimum: 0, maximum: 16_777_216 },
+    securityEpoch: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
+    errorCode: {
+      type: "string",
+      minLength: 1,
+      maxLength: 32,
+      pattern: "^[a-z0-9][a-z0-9._-]*$",
+    },
+  },
+  allOf: [
+    {
+      if: { properties: { phase: { enum: ["failed", "rolled_back"] } } },
+      then: { properties: { errorCode: true }, required: ["errorCode"] },
+      else: {
+        properties: { errorCode: true },
+        not: { required: ["errorCode"] },
+      },
+    },
+  ],
+} as const;
+
+const reportedCapabilitiesSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["board", "display", "wake"],
+  properties: {
+    board: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^[a-z0-9][a-z0-9._-]*$",
+    },
+    display: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "target",
+        "controller",
+        "width",
+        "height",
+        "colorFormat",
+        "resourceAbi",
+        "uiAbi",
+        "slotBytes",
+        "hotReload",
+        "compositions",
+      ],
+      properties: {
+        target: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          pattern: "^[a-z0-9][a-z0-9._-]*$",
+        },
+        controller: { const: "st7789" },
+        width: { type: "integer", minimum: 80, maximum: 320 },
+        height: { type: "integer", minimum: 80, maximum: 320 },
+        colorFormat: { const: "rgb565" },
+        resourceAbi: { type: "integer", minimum: 1, maximum: 64 },
+        uiAbi: { type: "integer", minimum: 1, maximum: 64 },
+        slotBytes: { type: "integer", minimum: 1, maximum: 16_777_216 },
+        hotReload: { type: "boolean" },
+        compositions: {
+          type: "array",
+          uniqueItems: true,
+          items: { enum: ["signal", "monolith", "quiet"] },
+        },
+      },
+    },
+    wake: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "runtime",
+        "runtimeAbi",
+        "resourceAbi",
+        "slotBytes",
+        "sampleRateHz",
+        "channels",
+        "hotReload",
+      ],
+      properties: {
+        runtime: { const: "esp-sr" },
+        runtimeAbi: { type: "integer", minimum: 1, maximum: 64 },
+        resourceAbi: { type: "integer", minimum: 1, maximum: 64 },
+        slotBytes: { type: "integer", minimum: 1, maximum: 16_777_216 },
+        sampleRateHz: { type: "integer", minimum: 8_000, maximum: 48_000 },
+        channels: { type: "integer", minimum: 1, maximum: 2 },
+        hotReload: { type: "boolean" },
+      },
     },
   },
 } as const;
@@ -602,9 +890,21 @@ export const deviceReportedStateSchema = {
     state: {
       type: "object",
       additionalProperties: false,
-      required: ["schemaVersion", "firmware", "resource"],
+      required: ["schemaVersion", "firmware"],
       properties: {
         schemaVersion: { const: 1 },
+        locale: {
+          type: "string",
+          minLength: 1,
+          maxLength: 35,
+          pattern: "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
+        },
+        timeZone: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          pattern: "^[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*$",
+        },
         firmware: {
           type: "object",
           additionalProperties: false,
@@ -618,61 +918,26 @@ export const deviceReportedStateSchema = {
             },
           },
         },
-        resource: {
+        resource: reportedResourceStateSchema,
+        capabilities: reportedCapabilitiesSchema,
+        ui: reportedResourceStateSchema,
+        firmware_ota: reportedResourceStateSchema,
+        config: {
           type: "object",
           additionalProperties: false,
-          required: [
-            "phase",
-            "currentVersion",
-            "desiredVersion",
-            "activeSlot",
-            "targetSlot",
-            "expectedBytes",
-            "downloadedBytes",
-            "securityEpoch",
-          ],
+          required: ["desiredVersion", "appliedVersion", "phase"],
           properties: {
-            phase: {
-              enum: [
-                "checking",
-                "downloading",
-                "verifying",
-                "staged",
-                "applying",
-                "active",
-                "failed",
-                "rolled_back",
-              ],
-            },
-            currentVersion: {
-              type: "string",
-              minLength: 1,
-              maxLength: 32,
-              pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
-            },
             desiredVersion: {
-              type: "string",
-              minLength: 1,
-              maxLength: 32,
-              pattern: "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
-            },
-            activeSlot: { type: "integer", minimum: 0, maximum: 1 },
-            targetSlot: { type: "integer", minimum: 0, maximum: 1 },
-            expectedBytes: {
               type: "integer",
-              minimum: 0,
-              maximum: 16_777_216,
+              minimum: 1,
+              maximum: 2_147_483_647,
             },
-            downloadedBytes: {
-              type: "integer",
-              minimum: 0,
-              maximum: 16_777_216,
-            },
-            securityEpoch: {
+            appliedVersion: {
               type: "integer",
               minimum: 0,
               maximum: 2_147_483_647,
             },
+            phase: { enum: ["checking", "applying", "active", "failed"] },
             errorCode: {
               type: "string",
               minLength: 1,
@@ -682,7 +947,7 @@ export const deviceReportedStateSchema = {
           },
           allOf: [
             {
-              if: { properties: { phase: { enum: ["failed", "rolled_back"] } } },
+              if: { properties: { phase: { const: "failed" } } },
               then: { properties: { errorCode: true }, required: ["errorCode"] },
               else: {
                 properties: { errorCode: true },
@@ -692,6 +957,12 @@ export const deviceReportedStateSchema = {
           ],
         },
       },
+      oneOf: [
+        { properties: { resource: true }, required: ["resource"] },
+        { properties: { ui: true }, required: ["ui"] },
+        { properties: { firmware_ota: true }, required: ["firmware_ota"] },
+        { properties: { config: true }, required: ["config"] },
+      ],
     },
   },
 } as const;
@@ -964,6 +1235,15 @@ export const webSocketEventSchema = {
         text: { type: "string" },
         reason: reasonCode,
       },
+      allOf: [
+        {
+          if: { properties: { state: { const: "detect" } }, required: ["state"] },
+          then: {
+            required: ["source"],
+            properties: { source: { const: "wake_word" } },
+          },
+        },
+      ],
     },
     {
       ...sessionEvent,
@@ -1038,6 +1318,7 @@ export const webSocketEventSchema = {
 } as const;
 
 export const schemas = [
+  deviceConfigSchema,
   deviceCapabilitySchema,
   resourceManifestSchema,
   firmwareManifestSchema,

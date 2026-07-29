@@ -5,7 +5,7 @@
 namespace veetee::display {
 namespace {
 
-constexpr std::array<StateVisual, 13> kVisuals = {{
+constexpr std::array<StateVisual, 14> kVisuals = {{
     {"VEETEE", "STARTING", 0xF6D6, 0x1163, 0xF3AA, VisualIcon::kBoot},
     {"SETUP WIFI", "OPEN 192.168.4.1", 0xFF36, 0x31A6, 0xE54C, VisualIcon::kWifi},
     {"WIFI", "CONNECTING", 0xE73F, 0x0945, 0x255D, VisualIcon::kLink},
@@ -19,9 +19,10 @@ constexpr std::array<StateVisual, 13> kVisuals = {{
     {"SPEAKING", "PRESS TO INTERRUPT", 0xF6FB, 0x49A5, 0xF36D, VisualIcon::kSpeak},
     {"STOPPING", "CANCELLING TURN", 0xFBAE, 0xFFFF, 0xF800, VisualIcon::kStop},
     {"GOODBYE", "SLEEPING SOON", 0xDDFB, 0x21E8, 0x7517, VisualIcon::kClose},
+    {"UPDATING", "DO NOT POWER OFF", 0x2124, 0xFFFF, 0xFD20, VisualIcon::kLink},
 }};
 
-static_assert(kVisuals.size() == 13);
+static_assert(kVisuals.size() == 14);
 
 }  // namespace
 

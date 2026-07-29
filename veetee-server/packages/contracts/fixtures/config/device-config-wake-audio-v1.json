@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "device_id": "d74f1594-765c-4bd5-b07b-6443273777ed",
+  "version": 9,
+  "wake_profile": {
+    "id": "b80f676e-2fd2-47f9-8160-e68cf7e3a260",
+    "version": 4,
+    "required_resource_version": "1.2.0",
+    "activation": {
+      "model_id": "wn9s_hiesp",
+      "threshold_ppm": 640000,
+      "cooldown_ms": 1200
+    },
+    "interrupt": null,
+    "send_wake_audio": true
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "veetee-dev-release-2026-01",
+    "security_epoch": 1,
+    "value": "IATCehRTYiooKt/WCkIn+zPf5p88LI4Cw9gbrvBqC1Fjgzsy9dHVJDAnPgnvKnyVl8udoht8t0ykW9AsL/qVDg=="
+  }
+}

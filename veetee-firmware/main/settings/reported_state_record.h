@@ -24,6 +24,7 @@ enum class ReportedArtifactKind : std::uint8_t {
     kWakeResource = 0,
     kUiPack = 1,
     kFirmware = 2,
+    kDeviceConfig = 3,
 };
 
 struct ReportedResourceState {
@@ -61,6 +62,9 @@ bool IssueReportedStateVersion(ReportedStateRecord* record,
 bool StagePendingReportedState(ReportedStateRecord* record,
                                const ReportedResourceState& state,
                                std::uint32_t* issued_version);
+bool ReplacePendingReportedState(ReportedStateRecord* record,
+                                 const ReportedResourceState& state,
+                                 std::uint32_t* issued_version);
 bool ClearPendingReportedState(ReportedStateRecord* record,
                                std::uint32_t delivered_version);
 

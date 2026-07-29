@@ -41,6 +41,19 @@ bool JsonIntegerEquals(const cJSON* object, const char* key, int expected) {
            item->valuedouble == expected;
 }
 
+bool ReadPositiveU32(const cJSON* object, const char* key,
+                     std::uint32_t* output) {
+    if (output == nullptr) return false;
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(object, key);
+    if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+        item->valuedouble < 1 || item->valuedouble > 2147483647.0 ||
+        std::floor(item->valuedouble) != item->valuedouble) {
+        return false;
+    }
+    *output = static_cast<std::uint32_t>(item->valuedouble);
+    return true;
+}
+
 bool CopySessionId(const cJSON* root, char* destination, std::size_t capacity) {
     const cJSON* item = cJSON_GetObjectItemCaseSensitive(root, "session_id");
     if (!cJSON_IsString(item) || item->valuestring == nullptr ||
@@ -289,6 +302,11 @@ bool ParseServerEvent(const char* json, std::size_t length, ServerEvent* event) 
         } else if (valid && std::strcmp(type->valuestring, "system") == 0 &&
                    JsonStringEquals(root, "command", "assistant_sleep")) {
             parsed.kind = ServerEventKind::kAssistantSleep;
+        } else if (valid && std::strcmp(type->valuestring, "system") == 0 &&
+                   JsonStringEquals(root, "command", "config_changed")) {
+            valid = ReadPositiveU32(root, "config_version",
+                                    &parsed.config_version);
+            parsed.kind = ServerEventKind::kConfigChanged;
         } else if (valid && std::strcmp(type->valuestring, "mcp") == 0) {
             const cJSON* payload =
                 cJSON_GetObjectItemCaseSensitive(root, "payload");
@@ -313,6 +331,19 @@ bool BuildListenStart(const char* session_id, WakeSource source, char* destinati
         destination, capacity,
         R"({"session_id":"%s","type":"listen","state":"start","mode":"auto","source":"%s"})",
         session_id, ToString(source));
+    return StoreFormattedLength(written, capacity, length);
+}
+
+bool BuildListenDetect(const char* session_id, char* destination,
+                       std::size_t capacity, std::size_t* length) {
+    if (!IsSafeIdentifier(session_id, kMaximumSessionIdBytes) ||
+        destination == nullptr || capacity == 0) {
+        return false;
+    }
+    const int written = std::snprintf(
+        destination, capacity,
+        R"({"session_id":"%s","type":"listen","state":"detect","source":"wake_word"})",
+        session_id);
     return StoreFormattedLength(written, capacity, length);
 }
 

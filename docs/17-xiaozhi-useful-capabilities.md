@@ -144,15 +144,20 @@ Thứ tự hợp lý:
 4. test nhiều volume/khoảng cách;
 5. chỉ quảng bá full-duplex sau khi gate đạt.
 
-### 5.2. Wake-word audio pre-roll/cache — ❌ P1
+### 5.2. Wake-word audio pre-roll/cache — ✅/🧪 P1
 
-Xiaozhi có ring buffer PCM trước thời điểm wake. Veetee nên:
+Veetee đã triển khai phiên bản bounded và privacy opt-in: signed device config mặc
+định `send_wake_audio=false` nên firmware không cấp cache hoặc upload audio ở standby.
+Khi bật rõ ràng, firmware dùng ring PSRAM cố định 32 Opus frame 60 ms (1,92 giây,
+tối đa khoảng 48 KiB), gửi đúng thứ tự `listen:detect -> binary -> listen:start`;
+Voice chỉ giữ pending buffer tối đa 2 giây và không persist raw audio. Generation,
+source, button wake, abort/close, retry và config rollback đều có guard/xóa cache để
+audio của wake cũ không rò sang phiên mới.
 
-- giữ buffer ngắn trong PSRAM;
-- chuyển phần hậu wake cần thiết vào ASR;
-- không gửi toàn bộ wake phrase nếu privacy policy không cho phép;
-- dùng generation guard chống audio từ wake cũ;
-- đo wake-to-first-uplink-frame và sample bị mất.
+Phần còn phải nghiệm thu trên board thật là wake-to-first-uplink-frame, số sample bị
+mất ở biên detector, PSRAM/queue headroom trong soak và hành vi với wake phrase thật.
+Kết quả host/protocol không thay thế benchmark production `Hey VeeTee`, mic thật hoặc
+kiểm tra privacy bằng capture trên thiết bị.
 
 ### 5.3. Production `Hey VeeTee` — 🟡 P0/P1 + 🧪
 

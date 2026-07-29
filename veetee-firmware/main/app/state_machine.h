@@ -18,6 +18,8 @@ enum class State : std::uint8_t {
     kSpeaking,
     kAborting,
     kClosing,
+    // Appended to preserve the stable UI Pack V1 indices above.
+    kUpgrading,
 };
 
 enum class Event : std::uint8_t {
@@ -31,6 +33,9 @@ enum class Event : std::uint8_t {
     kWifiDisconnected,
     kActivationCodeAvailable,
     kActivationComplete,
+    kFirmwareUpdateRequested,
+    kFirmwareAlreadyCurrent,
+    kFirmwareUpdateFailed,
     kDeviceIdentityRejected,
     kButtonShortPress,
     kButtonLongPress,

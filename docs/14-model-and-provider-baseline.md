@@ -12,11 +12,13 @@ Tài liệu này ghi baseline AI được chọn cho Veetee V1. Nó bổ sung ch
 | ASR nhanh | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | voice-server local | đường chính, streaming/chunk để giảm latency |
 | ASR chất lượng | ChunkFormer-CTC-Large-Vie | voice-server local | re-decode khi Zipformer không đủ tin cậy |
 | LLM | `openai-compatible-cliproxyapi` | CLIProxyAPI local | development/default hiện hành, model/provider vẫn do Manager publish |
-| LLM fallback | `groq-cloud` | external OpenAI-compatible | fallback retryable đã publish, chỉ trước visible output |
+| LLM optional | `groq-cloud` | external OpenAI-compatible | binding có sẵn nhưng không nằm trong chain mặc định; chỉ publish theo yêu cầu sau |
 | LLM paused | `openai-compatible-9router` | 9Router local | adapter tùy chọn/lịch sử; process `20128` đang tạm dừng |
 | TTS tiếng Việt | VieNeu-TTS v3 Turbo | voice-server local | primary `vi-VN`, sentence/stream chunk tùy khả năng runtime |
 
 Manager có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat Completions).
+Binding này không tự trở thành fallback: local seed và agent mặc định chỉ publish
+CLIProxyAPI; thêm Groq cần một agent-config publish tường minh.
 Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `topP`,
 `reasoningEffort` và `parallelToolCalls`. TTS V1 chỉ dùng VieNeu local; secret
 không nằm trong agent snapshot và không có đường gửi transcript ra dịch vụ ngoài.
@@ -223,8 +225,9 @@ Veetee dùng port `LlmProvider`, nên topology là:
 
 ```text
 voice-server -> openai-compatible adapter -> CLIProxyAPI (local primary)
-                                         -> Groq (published fallback)
-                                         -> official/self-hosted model (optional)
+                                         -> error/recovery (default chain end)
+                                         -> Groq/official/self-hosted (optional,
+                                            only after explicit publish)
 ```
 
 CLIProxyAPI không được là dependency của firmware và không được hard-code vào
@@ -272,7 +275,8 @@ Cả 20 request đều thành công. CLIProxyAPI có structured p95 tốt hơn t
 nhưng 9Router đưa first token ra sớm hơn khoảng 0,76 giây ở median và có prose p95
 ổn định hơn khoảng 1,23 giây. Đây là bằng chứng lịch sử, không còn quyết định routing.
 Từ 2026-07-29 CLIProxyAPI là default dev/LAN theo quyết định vận hành của người dùng;
-9Router tạm dừng và Groq là fallback được publish rõ trong agent config.
+9Router tạm dừng. Groq vẫn có binding riêng nhưng không nằm trong chain mặc định;
+fallback chỉ được thêm bằng publish tường minh trong một task sau.
 
 CLIProxyAPI/Codex không nhận `reasoning_effort=none` như 9Router: gateway ánh xạ nó
 thành thinking budget 0 và full strict conversation schema trả HTTP 400. Adapter
@@ -533,9 +537,10 @@ Freeze policy:
    không phá `total_turn_deadline`.
 3. VieNeu được freeze primary nếu first-audio/RTF/license đạt gate; nếu batch-only,
    ghi rõ sentence-level realtime trong capability.
-4. CLIProxyAPI là default dev khi contract streaming/tool/cancel pass; Groq fallback
-   và production adapter vẫn phải có health/circuit-breaker. 9Router chỉ opt-in khi
-   người vận hành bật lại rõ ràng.
+4. CLIProxyAPI là default dev khi contract streaming/tool/cancel pass và mặc định kết
+   thúc chain nếu lỗi. Groq/production adapter vẫn phải có health/circuit-breaker nhưng
+   chỉ tham gia sau publish tường minh. 9Router chỉ opt-in khi người vận hành bật lại rõ
+   ràng.
 
 ## 8. UI và vận hành
 

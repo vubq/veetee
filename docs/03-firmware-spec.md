@@ -72,6 +72,11 @@ ACTIVATING
   ├─ OTA update ────────────> UPGRADING -> reboot
   └─ bootstrap complete ────> IDLE
 
+UPGRADING
+  ├─ signed image staged ───> reboot (application task owns reboot)
+  ├─ update failed ─────────> ACTIVATING (authenticated bootstrap retry)
+  └─ Wi-Fi lost ────────────> NETWORK_CONNECTING (cancel OTA generation)
+
 PAIRING_RECOVERY
   ├─ hold button 5 seconds ─> WIFI_CONFIGURING (clear identity + provisioning)
   └─ short press/no input ──> PAIRING_RECOVERY (không tự xóa credential)
@@ -122,7 +127,10 @@ State transition phải chỉ đi qua một state machine; callback Wi-Fi/WebSoc
 ST7789 dùng renderer trạng thái bất đồng bộ với queue depth 1: event loop chỉ ghi
 snapshot mới nhất, display task tự vẽ `starting`, `wifi_configuring`,
 `network_connecting`, `activating`, `pairing_recovery`, `idle`, `connecting`,
-`listening`, `evaluating`, `thinking`, `speaking`, `aborting` và `closing`. Vẽ màn
+`listening`, `evaluating`, `thinking`, `speaking`, `aborting`, `closing` và
+`upgrading`. `upgrading` được append sau 13 state V1: built-in renderer có copy
+`UPDATING / DO NOT POWER OFF`, còn signed UI Pack V1 cũ dùng style `activating` để
+không đổi index/schema đã ký. Vẽ màn
 hình hoặc activation code không được chặn button abort, network callback hay audio
 hot path. Text boot/recovery tối thiểu có thể deterministic trong firmware; persona,
 semantic response và nội dung hội thoại vẫn đến từ config/AI. Visual sản phẩm có
@@ -255,7 +263,7 @@ namespace có version/migration và nút factory reset riêng.
   "firmware": {"version": "0.1.0", "url": ""},
   "config": {
     "version": 13,
-    "etag": "agent-config-13",
+    "etag": "cfg1-<43-char-sha256-base64url>",
     "url": "http://192.168.1.20:8001/veetee/config/v1/devices/AA-BB"
   },
   "resources": {
@@ -284,6 +292,28 @@ mở AP, lấy code 6 số mới rồi bind lại. `esp_http_client` có thể t
 vẫn phải đọc status code đã nhận trước khi phân loại lỗi.
 
 MVP có thể tương thích code 6 số hiện tại. Production phải thêm `expires_at`, attempt counter, CSPRNG, HTTPS bắt buộc và signature/challenge proof.
+
+### Signed executable OTA lifecycle
+
+Firmware OTA dùng journal NVS riêng có version + CRC và attempt ID đơn điệu. Worker
+chỉ tải từ byte 0 vào inactive `ota_*`, streaming SHA-256, verify image rồi persist
+phase `staged`; worker không đổi boot partition và không tự reboot. Application task
+phải persist report `rebooting`, gọi commit boot partition, rồi mới `esp_restart()`.
+Nếu report hoặc commit lỗi, boot partition được trả về image đang chạy và attempt kết
+thúc `failed` theo đường replay bền vững.
+
+Sau reboot, target mới ở `PENDING_VERIFY` chuyển journal sang `pending_health` và
+bootstrap vẫn lấy config/resource/UI nhưng defer mọi firmware target mới. Cửa sổ
+health có hai giới hạn độc lập: 30 giây bắt đầu từ `GOT_IP`, và overall bound tính từ
+boot bằng Wi-Fi connect timeout 60 giây + 30 giây bootstrap grace. Chỉ mark-valid khi
+authenticated bootstrap hoàn tất, app về `idle`, audio/wake/UI đều healthy. Health
+fail ghi `rollback_requested` trước khi gọi bootloader rollback; chỉ image cũ sau khi
+boot thật mới report `rolled_back`. Report `rebooting -> pending_health -> terminal`
+được replay đúng thứ tự; attempt chỉ clear sau khi terminal report đã persist bền.
+
+Executable OTA V1 chưa hỗ trợ HTTP Range/resume hoặc download journal theo offset:
+retry tải lại image từ byte 0. Resource/UI reconciler có transaction và resume riêng,
+không được dùng capability đó để mô tả quá khả năng executable updater.
 
 ## 6. Button, wake word và exit phrase
 
@@ -326,6 +356,13 @@ Cấu hình profile ví dụ:
 }
 ```
 
+Object trên là metadata quản trị. Snapshot đã ký gửi xuống firmware không dùng
+phrase hoặc logical alias như `wakenet:...`: `activation.model_id` và optional
+`interrupt.model_id` phải là exact WakeNet model ID mà `srmodels.bin` đang cung cấp,
+ví dụ `wn9s_hiesp`. `interrupt` được phép là `null`; nếu có thì phải dùng model ID
+khác activation. Firmware và Manager đều từ chối profile dùng cùng một model cho hai
+vai trò để tránh đổi role nhưng detector thực tế không đổi.
+
 Activation/interrupt phrase và exit phrase không được xử lý bằng một chuỗi `if/else` hard-code trong firmware. Local detector dùng signed model/config profile vì phải hoạt động khi chưa mở cloud session hoặc cần abort tức thời. Exit intent và các interrupt diễn đạt tự do do ASR + intent model/LLM trên server suy luận theo ngữ cảnh khi audio path cho phép. Các câu trong profile chỉ là examples/training/config data, không phải toàn bộ ngôn ngữ được hỗ trợ.
 
 Runtime wake V1 trên ESP32-S3 là ESP-SR: WakeNet cho activation hoặc MultiNet cho command/interrupt tùy model pack đã build. Firmware load một `srmodels.bin` tương thích resource ABI; `detector_id` chỉ chọn detector/command đã tồn tại trong model pack, không tải native operator tùy ý. Runtime khác như `sherpa-onnx` chỉ được thêm bằng firmware OTA và ADR sau khi benchmark CPU/RAM/latency trên board thật.
@@ -336,7 +373,49 @@ Firmware bring-up hiện dùng model WakeNet9s built-in `Hi ESP` sau cờ `VEETE
 
 Mic chỉ có một I2S RX reader. Mỗi frame PCM16 20 ms được gửi không-blocking vào queue detector hữu hạn; task WakeNet riêng drop frame cũ khi backpressure. Mỗi lần đổi detector role tăng generation, nên frame/kết quả của role cũ không thể đánh thức hoặc abort session mới. Detector activation chỉ chạy ở `idle/closing`; detector interrupt chỉ chạy ở `evaluating/thinking/speaking` khi có profile interrupt riêng đã validate. Button luôn hoạt động kể cả model lỗi.
 
+Wake audio là privacy opt-in trong chính snapshot đã ký. Mặc định
+`send_wake_audio=false`: firmware không cấp phát cache và không encode/upload audio ở
+standby. Khi snapshot hợp lệ đặt `true`, capture task mới cấp một ring PSRAM cố định 32
+gói Opus 60 ms (1,92 giây, tối đa khoảng 48 KiB), chỉ ghi khi activation detector đang
+hoạt động ở `idle/closing` và overwrite gói cũ nhất khi đầy. Detector generation đổi,
+button wake, abort, close hoặc loss không retryable đều làm audio cũ không thể đi vào
+phiên mới. Lỗi transport trước khi gửi opening sequence có thể retry đúng cùng
+generation/source và snapshot. Ngay khi sequence đã bắt đầu, phần cache còn lại bị
+xóa và không được replay trên retry. Config reload/rollback chuyển cờ về `false` phải
+dừng record, invalidate generation, xóa cache và giải phóng ring PSRAM trước khi reload
+wake runtime; privacy opt-out vẫn fail-closed nếu model/resource reload thất bại. Ngay
+khi opt-out đã verify, firmware đồng thời commit một privacy-revocation latch vào byte
+reserved của `DeviceConfigRecord` V2; layout vẫn 348 byte và record version vẫn là 2 để
+tương thích blob V2 hiện có. Khi boot, trạng thái effective là
+`record.revoked || !applied.send_wake_audio`, nên reload lỗi, config bị supersede hoặc
+mất điện không thể bật lại cache từ applied config cũ. Chỉ opt-in ở version mới đã qua
+health và được `SaveApplied()` commit thành công mới xóa latch trong cùng record CRC.
+Trong health window, cả direct config và config đi cùng resource đều nạp detector bằng
+runtime copy có `send_wake_audio=false`; firmware chỉ cấp ring và bắt đầu record sau
+commit. Nếu bước bật sau commit lỗi, firmware đóng/persist lại latch và report config
+`failed` thay vì để opt-in ở trạng thái runtime mơ hồ. Kết quả resource
+`already_active` hoặc config `already_applied` về sau không được nâng report thành
+`active` khi latch RAM/NVS còn đóng hoặc trạng thái pre-roll thực không khớp config.
+
+Sau server hello, activation wake phát đúng thứ tự
+`listen:detect(source=wake_word)` -> 0..32 binary Opus cũ nhất tới mới nhất ->
+`listen:start(mode=auto,source=wake_word)`. Event detect không cần chứa phrase; firmware
+không hard-code text semantic. Button vẫn chỉ gửi `listen:start(source=button)` và xóa
+cache. Reconnect trước khi bắt đầu sequence có thể giữ snapshot cùng generation; nếu đã
+gửi dở thì cache bị xóa và raw Opus không được resume trên session V1 mới.
+
 Button interrupt là guarantee của V1. Interrupt bằng giọng nói khi loa đang phát chỉ là best-effort cho tới khi audio path có far-end playback reference và AEC benchmark pass; firmware/UI không được quảng bá full-duplex trước gate này.
+
+Firmware có một đường benchmark AEC cô lập sau
+`CONFIG_VEETEE_EXPERIMENTAL_AEC` và cờ này mặc định tắt. Khi bật, PCM mono 24 kHz
+đã áp đúng software volume trước khi ghi MAX98357A được hạ mẫu 3:2, đưa qua ring
+reference PSRAM 240 ms rồi ghép với mic 16 kHz bằng direct ESP-SR 2.4.7
+`aec_process` (`AEC_MODE_SR_LOW_COST`, filter length 4). Output chỉ thay frame của
+local detector trong lúc playback thực sự active; conversation capture vẫn chỉ mở
+ở `LISTENING`, hello V1 vẫn báo `aec=false` và mode không tự chuyển `realtime`.
+Build experimental chỉ là công cụ đo, chưa phải capability sản phẩm. Chỉ đổi ba
+gate trên sau khi board thật pass ERLE, false activation/interrupt với tiếng
+Việt/media/noise, near-end preservation và interrupt latency p95 dưới 250 ms.
 
 ## 7. Input admission và conversation timeout
 
@@ -367,6 +446,64 @@ Firmware giữ:
 - inactive/active resource slot pointer;
 - apply journal có CRC để recover khi mất điện.
 
+### Signed device-config snapshot V1
+
+Manager dựng một projection riêng cho firmware từ `DeviceDesiredState.version`;
+version này độc lập với `agentConfigVersion` dùng cho Voice/memory/MCP. Snapshot tối
+đa 8 KiB, chỉ dùng số nguyên và restricted JCS, rồi ký detached Ed25519. ETag là
+`cfg1-<sha256-base64url-của-canonical-body>` và bao phủ cả chữ ký:
+
+```json
+{
+  "schema_version": 1,
+  "device_id": "d74f1594-765c-4bd5-b07b-6443273777ed",
+  "version": 8,
+  "wake_profile": {
+    "id": "b80f676e-2fd2-47f9-8160-e68cf7e3a260",
+    "version": 4,
+    "required_resource_version": "1.2.0",
+    "activation": {
+      "model_id": "wn9s_hiesp",
+      "threshold_ppm": 640000,
+      "cooldown_ms": 1200
+    },
+    "interrupt": null,
+    "send_wake_audio": false
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "veetee-dev-release-2026-01",
+    "security_epoch": 1,
+    "value": "<base64>"
+  }
+}
+```
+
+Firmware chỉ GET canonical config URL cùng bootstrap origin, không follow redirect,
+không nhận compressed response và chỉ gửi Bearer token tới route đó. Nó chỉ gửi ETag
+đã apply trong `If-None-Match`; `304` chỉ hợp lệ khi desired version và ETag cùng
+khớp record applied. Parser kiểm exact property set, device/version/key/security
+epoch, exact WakeNet ID và signature trước khi stage. `send_wake_audio=true` chỉ được
+chấp nhận từ body đã ký và chỉ bật ring PSRAM bounded nói trên; sửa cờ mà không ký lại
+bị từ chối như mọi tamper config khác.
+
+Record config trong NVS có schema/version/CRC, applied ETag và security-epoch floor.
+Firmware probe type/length trước khi đọc record. Blob từ schema prototype hoặc layout
+không tương thích chỉ được thay atomically bằng default record tại
+`veetee_config/state`; firmware không erase NVS partition/namespace `veetee`, nên Wi-Fi,
+activation và device identity vẫn còn để authenticated bootstrap tải lại signed config.
+Migration khởi tạo default record trực tiếp tại persistent object, không tạo thêm object
+348 byte trên stack. ESP-IDF main task chỉ dùng lúc boot được pin stack 8 KiB và tự xóa
+sau khi `app_main` return, nên headroom này không làm tăng task memory steady-state.
+Config chỉ apply ở `idle`; nếu yêu cầu resource mới thì resource và config được giữ
+trong cùng health transaction. Config-only cũng phải qua health window 5 giây và chỉ
+confirm/persist khi quay lại idle với gate đóng. Config mới đến trong health window
+không overwrite snapshot đang kiểm tra; target cũ bị supersede phải rollback thay vì
+trở thành LKG. Load/persist/health fail restore resource trước đó và last-known-good
+config, trong khi button wake vẫn hoạt động. Record được snapshot dưới mutex giữa
+reconciler/app task; nâng minimum security epoch sẽ invalidate riêng config cũ và
+boot button-only, không xóa Wi-Fi/identity hoặc tạo reboot-loop.
+
 ### Trạng thái triển khai resource reconcile
 
 Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implementation:
@@ -376,7 +513,9 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
 - resource task riêng kéo manifest tối đa 32 KiB bằng Bearer device token, không
   follow redirect và ưu tiên cấp phát response buffer từ PSRAM;
 - verifier kiểm tra strict schema V1, target/flash/PSRAM/slot, firmware SemVer,
-  resource ABI, runtime member được firmware hỗ trợ, SHA-256 metadata,
+  resource ABI, đúng một ESP-SR member 16 kHz cùng signed detector inventory
+  (một activation, optional interrupt, exact WakeNet ID duy nhất), runtime member
+  được firmware hỗ trợ, SHA-256 metadata,
   `security_epoch`, trusted `key_id` và detached Ed25519 signature;
 - generation cancellation làm target mới nhất thắng và callback chỉ post kết quả
   về application queue;
@@ -392,6 +531,9 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
   `esp_wn_iface_t::clean()` trong lifecycle vì ESP-SR 2.4.7 đã được đo panic trong
   `model_clean`. PCM queue, model chunk và detector task stack nằm trong PSRAM để
   Wi-Fi/TLS không làm reload thất bại do phân mảnh RAM nội;
+- capture callback đi qua close/drain in-flight gate trước khi hot-reload xóa PCM
+  queue/model; config wake mới được phép reload từ active resource slot ngay cả khi
+  runtime trước đó đang button-only;
 - activation chuyển qua `pending_health`, health window xác nhận slot mới; load/task
   health fail hoặc boot active fail sẽ reload previous slot và rollback. Nếu cả hai
   model lỗi, firmware tiếp tục button-only thay vì bootloop;
@@ -402,6 +544,11 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
   resource recovery journal. Mất HTTP response retry cùng version nên server xử lý
   idempotent; reboot không tái sử dụng version cũ.
 
+`DeviceSettings` (identity/token/bootstrap/WebSocket/config version) có mutex và API
+snapshot. Bootstrap poll/NVS writer, reporter, WebSocket, resource/config/firmware
+downloader và Wi-Fi không đọc/copy trực tiếp object đang bị mutation, tránh token/URL
+bị rỗng hoặc xé trong poll 60 giây.
+
 Phần còn thiếu của lát resource là power-loss/corrupt-payload matrix đầy đủ trên
 board thật và UI drift/apply timeline trên Manager Web.
 
@@ -411,7 +558,8 @@ soak ngắn. Kết quả này chưa thay thế matrix mất điện và soak 10 
 
 Luồng reconcile:
 
-1. Nhận optional `config_changed` invalidation hoặc kiểm tra bootstrap định kỳ.
+1. Nhận optional `config_changed` invalidation hoặc authenticated bootstrap poll mỗi
+   60 giây khi idle để bù invalidation bị mất.
 2. Pull config/manifest bằng HTTP(S) với ETag; không nhận binary qua WebSocket.
 3. Validate device target, schema, safe bounds, size, runtime ABI, hash và signature.
 4. Download bundle vào inactive resource slot; active slot không bị overwrite.
@@ -419,6 +567,12 @@ Luồng reconcile:
 6. Apply ở standby/session boundary; wake/button luôn có priority.
 7. Report desired/reported state và health window.
 8. Rollback slot/profile cũ nếu load/crash/watchdog/detector health fail.
+
+Config report dùng cùng sequence đơn điệu với artifact report và nằm dưới
+`state.config` (`desiredVersion`, `appliedVersion`, `phase`, optional `errorCode`).
+Manager shallow-merge từng subsystem nên config/resource/UI/firmware report không
+xóa trạng thái của nhau. Giữ nút vật lý để vào pairing recovery sẽ cancel cả
+reconciler và reset record config cùng identity/provisioning đã được xác nhận.
 
 Resource V1 hiện là single-member raw `srmodels.bin` ở offset 0 để tương thích trực
 tiếp `esp_srmodel_init(partition_label)`; signed manifest bên ngoài là index/hash.
@@ -451,6 +605,10 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
 - Capture PCM -> Opus chỉ mở ở `LISTENING`. Trước khi AEC pass, capture hội thoại
   dừng trong `evaluating/thinking/speaking`; button/local interrupt detector vẫn là
   đường abort ưu tiên.
+- `CONFIG_VEETEE_EXPERIMENTAL_AEC` mặc định `n`. Nếu bật để benchmark, far-end
+  reference phải lấy từ đúng decoded/local-tone PCM sau volume và cùng timeline
+  I2S, không dùng text/TTS source hoặc một signal tái tạo. Build này vẫn không mở
+  uplink khi speaking và không quảng bá full-duplex.
 - Uplink queue bounded và ưu tiên control: khi đầy, drop frame mic cũ nhất để giữ
   realtime. Downlink queue overflow làm session fail rõ ràng thay vì phát stream đã
   mất packet.

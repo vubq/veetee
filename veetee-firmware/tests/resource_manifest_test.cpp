@@ -107,6 +107,8 @@ void TestResourceManifest() {
            veetee::ota::ResourceManifestError::kOk);
     assert(std::string(manifest.bundle_id) == "01JRESOURCE0000000000000000");
     assert(std::string(manifest.version) == "1.4.0");
+    assert(std::string(manifest.activation_model_id) == "wn9s_hiesp");
+    assert(manifest.interrupt_model_id[0] == '\0');
     assert(manifest.payload_bytes == 1024);
     assert(manifest.security_epoch == 1);
     assert(!manifest.requires_reboot);
@@ -177,6 +179,29 @@ void TestResourceManifest() {
                         R"("name": "speech/../resource.bin")");
     assert(veetee::ota::VerifyResourceManifest(
                unsafe_name, Capability(), &key, 1, &manifest) ==
+           veetee::ota::ResourceManifestError::kInvalidSchema);
+
+    std::string missing_detectors = document;
+    const std::size_t detectors_start =
+        missing_detectors.find(R"(      "detectors": [)");
+    const std::size_t detectors_end =
+        missing_detectors.find(R"(      "sha256":)", detectors_start);
+    assert(detectors_start != std::string::npos);
+    assert(detectors_end != std::string::npos);
+    missing_detectors.erase(detectors_start, detectors_end - detectors_start);
+    assert(veetee::ota::VerifyResourceManifest(
+               missing_detectors, Capability(), &key, 1, &manifest) ==
+           veetee::ota::ResourceManifestError::kInvalidSchema);
+
+    std::string no_activation = document;
+    const std::size_t activation_role =
+        no_activation.find(R"("role": "activation")");
+    assert(activation_role != std::string::npos);
+    no_activation.replace(activation_role,
+                          std::strlen(R"("role": "activation")"),
+                          R"("role": "interrupt")");
+    assert(veetee::ota::VerifyResourceManifest(
+               no_activation, Capability(), &key, 1, &manifest) ==
            veetee::ota::ResourceManifestError::kInvalidSchema);
 }
 

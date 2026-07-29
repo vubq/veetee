@@ -5,13 +5,18 @@
 
 namespace veetee::settings {
 
-constexpr std::uint32_t kResourceRecordVersion = 1;
+constexpr std::uint32_t kResourceRecordVersion = 2;
 
 enum class ResourceRecordPhase : std::uint8_t {
     kStable = 0,
     kDownloading = 1,
     kStaged = 2,
     kPendingHealth = 3,
+};
+
+struct ResourceDetectorInventory {
+    char activation_model_id[65] = {};
+    char interrupt_model_id[65] = {};
 };
 
 struct ResourceRecord {
@@ -31,20 +36,44 @@ struct ResourceRecord {
     char desired_version[33] = {};
     char payload_sha256[65] = {};
     char bundle_id[65] = {};
-    std::uint8_t reserved[3] = {};
+    ResourceDetectorInventory active_detectors{};
+    ResourceDetectorInventory previous_detectors{};
+    ResourceDetectorInventory desired_detectors{};
+    std::uint8_t reserved[1] = {};
     std::uint32_t crc32 = 0;
 };
 
 ResourceRecord MakeDefaultResourceRecord(
     std::uint32_t minimum_security_epoch,
-    const char* default_version = "factory-bringup");
+    const char* default_version = "factory-bringup",
+    const char* default_activation_model_id = nullptr,
+    const char* default_interrupt_model_id = nullptr);
 void SealResourceRecord(ResourceRecord* record);
 bool IsValidResourceRecord(const ResourceRecord& record);
+bool MigrateResourceRecordV1(const void* data, std::size_t size,
+                             const char* default_version,
+                             const char* default_activation_model_id,
+                             const char* default_interrupt_model_id,
+                             ResourceRecord* record);
+
+bool HasResourceDetectorInventory(
+    const ResourceDetectorInventory& inventory);
+bool ResourceDetectorInventoryMatches(
+    const ResourceDetectorInventory& inventory,
+    const char* activation_model_id, const char* interrupt_model_id);
+bool BindActiveResourceDetectorInventory(
+    ResourceRecord* record, const char* activation_model_id,
+    const char* interrupt_model_id, bool* changed = nullptr);
+bool BindDesiredResourceDetectorInventory(
+    ResourceRecord* record, const char* activation_model_id,
+    const char* interrupt_model_id, bool* changed = nullptr);
 
 bool BeginResourceDownload(ResourceRecord* record, const char* desired_version,
                            const char* bundle_id, const char* payload_sha256,
                            std::uint32_t expected_bytes,
-                           std::uint32_t security_epoch);
+                           std::uint32_t security_epoch,
+                           const char* activation_model_id = nullptr,
+                           const char* interrupt_model_id = nullptr);
 bool UpdateResourceDownloadProgress(ResourceRecord* record,
                                     std::uint32_t downloaded_bytes);
 bool ResetResourceDownloadProgress(ResourceRecord* record);

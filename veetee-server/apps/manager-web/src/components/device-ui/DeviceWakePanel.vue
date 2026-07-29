@@ -91,7 +91,7 @@ async function apply(): Promise<void> {
         </div>
         <VtEmptyState v-else icon="mic" :title="t('wake.emptyTitle')" :text="t('wake.emptyText')" />
         <div v-if="selectedProfile" class="wake-device-actions">
-          <dl><div><dt>{{ t("wake.activation") }}</dt><dd>{{ selectedProfile.activation.detectorId }}</dd></div><div><dt>{{ t("wake.interrupt") }}</dt><dd>{{ selectedProfile.interrupt.detectorId }}</dd></div><div><dt>{{ t("wake.artifact") }}</dt><dd>{{ selectedProfile.artifactId }}</dd></div></dl>
+          <dl><div><dt>{{ t("wake.activation") }}</dt><dd>{{ selectedProfile.activation.detectorId }}</dd></div><div><dt>{{ t("wake.interrupt") }}</dt><dd>{{ selectedProfile.interrupt?.detectorId ?? t("common.notConfigured") }}</dd></div><div><dt>{{ t("wake.artifact") }}</dt><dd>{{ selectedProfile.artifactId }}</dd></div></dl>
           <VtButton :busy="busy" :disabled="!canApply" data-apply-wake-profile @click="apply"><VtIcon name="resource" :size="17" /> {{ t("wake.apply") }}</VtButton>
           <small v-if="result" class="desired-note" role="status">{{ result }}</small><small v-if="error" class="inline-error" role="alert">{{ error }}</small>
         </div>

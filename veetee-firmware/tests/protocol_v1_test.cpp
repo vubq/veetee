@@ -69,6 +69,14 @@ void TestContractBuilders() {
             "veetee-server/packages/contracts/fixtures/ws/listen-start-wake-auto.json"),
         "wake listen event matches shared fixture");
 
+    Expect(BuildListenDetect(kSession, buffer, sizeof(buffer), &length),
+           "wake detect event builds without a hard-coded phrase");
+    ExpectJsonEquals(
+        buffer,
+        ReadFixture(
+            "veetee-server/packages/contracts/fixtures/ws/listen-detect-wake-word.json"),
+        "wake detect event matches shared fixture");
+
     Expect(BuildAbort(kSession, "wake_word_detected", "button", buffer,
                       sizeof(buffer), &length),
            "abort event builds");
@@ -164,6 +172,8 @@ void TestRuntimeEventsAndBinaryAssembly() {
          ServerEventKind::kTtsStop},
         {R"({"session_id":"session-1","type":"system","command":"assistant_sleep"})",
          ServerEventKind::kAssistantSleep},
+        {R"({"session_id":"session-1","type":"system","command":"config_changed","config_version":13})",
+         ServerEventKind::kConfigChanged},
         {R"({"session_id":"session-1","type":"mcp","payload":{"jsonrpc":"2.0","id":1,"result":{}}})",
          ServerEventKind::kMcp},
     };
@@ -175,6 +185,17 @@ void TestRuntimeEventsAndBinaryAssembly() {
         Expect(std::string(event.session_id) == kSession,
                "runtime server event session");
     }
+
+    const std::string config_changed = ReadFixture(
+        "veetee-server/packages/contracts/fixtures/ws/system-config-changed.json");
+    ServerEvent config_event{};
+    Expect(ParseServerEvent(config_changed.data(), config_changed.size(),
+                            &config_event),
+           "shared config invalidation parses");
+    Expect(config_event.kind == ServerEventKind::kConfigChanged,
+           "shared config invalidation kind");
+    Expect(config_event.config_version == 13,
+           "shared config invalidation carries desired version");
 
     BinaryFrameAssembler assembler;
     const std::uint8_t* packet = nullptr;

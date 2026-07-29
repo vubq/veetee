@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "audio/wake_audio_pre_roll.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_websocket_client.h"
@@ -13,6 +14,7 @@
 #include "freertos/task.h"
 #include "settings/settings_store.h"
 #include "transport/protocol_v1.h"
+#include "transport/websocket_task_policy.h"
 
 namespace veetee::transport {
 
@@ -27,6 +29,7 @@ enum class WebSocketTransportEvent : std::uint8_t {
     kTtsStarted,
     kTtsStopped,
     kAssistantSleep,
+    kConfigChanged,
 };
 
 enum class WebSocketCloseMode : std::uint8_t {
@@ -36,6 +39,7 @@ enum class WebSocketCloseMode : std::uint8_t {
 
 struct WebSocketTransportNotification {
     WebSocketTransportEvent event;
+    std::uint32_t config_version = 0;
 };
 
 class WebSocketTransport {
@@ -47,8 +51,11 @@ public:
     using McpSink = bool (*)(const char* envelope, std::size_t length,
                              void* context);
 
-    esp_err_t Initialize(settings::DeviceSettings* settings, EventSink event_sink,
-                         AudioSink audio_sink, McpSink mcp_sink, void* context);
+    esp_err_t Initialize(settings::SettingsStore* settings_store,
+                         EventSink event_sink,
+                         AudioSink audio_sink, McpSink mcp_sink,
+                         audio::WakeAudioSource* wake_audio_source,
+                         void* context);
     esp_err_t Open(WakeSource source);
     esp_err_t Abort(const char* reason, const char* source);
     esp_err_t StopListening(const char* reason);
@@ -128,24 +135,28 @@ private:
                     bool protocol_failure = false);
     void HandleData(const esp_websocket_event_data_t& data,
                     std::uint32_t generation);
+    bool SendOpeningSequence(std::uint32_t generation);
     void Teardown(bool clean, int close_code = 1000, const char* reason = nullptr);
     bool SendText(const char* text, std::size_t length);
     bool SendMcpPayloadNow(const char* payload, std::size_t length);
     bool SendBinary(const std::uint8_t* data, std::size_t length);
     bool QueueCommand(const Command& command, TickType_t timeout);
     bool QueueUrgentCommand(const Command& command, TickType_t timeout);
+    bool QueueCriticalCommand(const Command& command, TickType_t timeout);
     bool QueuePriorityCommand(const Command& command, TickType_t timeout);
+    static WebSocketCommandPriority CommandPriority(const Command& command);
     static void ReleaseCommandPayload(const Command& command);
     bool NotifyWithRetry(WebSocketTransportEvent event,
                          std::uint32_t generation) const;
-    bool NotifyOnce(WebSocketTransportEvent event) const;
+    bool NotifyOnce(const WebSocketTransportNotification& notification) const;
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;
     [[nodiscard]] TickType_t ReceiveTimeout() const;
 
-    settings::DeviceSettings* settings_ = nullptr;
+    settings::SettingsStore* settings_store_ = nullptr;
     EventSink event_sink_ = nullptr;
     AudioSink audio_sink_ = nullptr;
     McpSink mcp_sink_ = nullptr;
+    audio::WakeAudioSource* wake_audio_source_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t command_queue_ = nullptr;
     QueueHandle_t urgent_command_queue_ = nullptr;
@@ -164,7 +175,7 @@ private:
     std::atomic<std::uint64_t> reconnect_exhausted_count_{0};
     TextFrameAssembler text_assembler_;
     BinaryFrameAssembler binary_assembler_;
-    WakeSource wake_source_ = WakeSource::kButton;
+    WakeOpeningSnapshot wake_opening_{};
     bool awaiting_hello_ = false;
     bool ready_ = false;
     bool playback_open_ = false;
@@ -178,6 +189,7 @@ private:
     std::array<char, 257> uri_{};
     std::array<char, 512> headers_{};
     std::array<char, 384> control_buffer_{};
+    std::array<std::uint8_t, kMaximumOpusPacketBytes> wake_audio_buffer_{};
 };
 
 }  // namespace veetee::transport

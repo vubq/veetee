@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
@@ -147,6 +148,48 @@ async def test_context_tool_honors_turn_cancellation() -> None:
 
     with pytest.raises(TurnCancelledError):
         await broker.call("context.get_time", {}, operation_context(token))
+
+
+async def test_registry_tool_propagates_turn_cancellation_to_running_handler() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_handler(
+        _: dict[str, Any],
+        __: OperationContext,
+    ) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    broker = RegistryToolBroker(
+        [
+            ToolSpec(
+                name="fixture.blocking",
+                description="Block until the turn is cancelled.",
+                input_schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {},
+                },
+                handler=blocking_handler,
+            )
+        ]
+    )
+    token = CancellationToken()
+    call = asyncio.create_task(
+        broker.call("fixture.blocking", {}, operation_context(token))
+    )
+    await started.wait()
+
+    token.cancel("button_interrupt")
+
+    with pytest.raises(TurnCancelledError):
+        await asyncio.wait_for(call, timeout=0.2)
+    assert cancelled.is_set()
 
 
 async def test_composite_rejects_duplicate_tool_names() -> None:

@@ -1,6 +1,16 @@
 #include "app/state_machine.h"
 
 namespace veetee::app {
+namespace {
+
+bool IsConversationState(State state) {
+    return state == State::kConnecting || state == State::kListening ||
+           state == State::kEvaluating || state == State::kThinking ||
+           state == State::kSpeaking || state == State::kAborting ||
+           state == State::kClosing;
+}
+
+}  // namespace
 
 TransitionResult StateMachine::Handle(Event event) {
     const State from = state_;
@@ -61,9 +71,7 @@ TransitionResult StateMachine::Handle(Event event) {
         case Event::kWifiDisconnected:
             if (state_ != State::kStarting && state_ != State::kWifiConfiguring &&
                 state_ != State::kNetworkConnecting) {
-                if (state_ == State::kEvaluating || state_ == State::kThinking ||
-                    state_ == State::kSpeaking || state_ == State::kClosing ||
-                    state_ == State::kAborting) {
+                if (IsConversationState(state_)) {
                     ++cancellation_generation_;
                 }
                 assistant_gate_open_ = false;
@@ -81,6 +89,30 @@ TransitionResult StateMachine::Handle(Event event) {
         case Event::kActivationComplete:
             if (state_ == State::kActivating) {
                 state_ = State::kIdle;
+                accepted = true;
+            }
+            break;
+
+        case Event::kFirmwareUpdateRequested:
+            if (state_ == State::kActivating || state_ == State::kIdle) {
+                assistant_gate_open_ = false;
+                state_ = State::kUpgrading;
+                accepted = true;
+            }
+            break;
+
+        case Event::kFirmwareAlreadyCurrent:
+            if (state_ == State::kUpgrading) {
+                assistant_gate_open_ = false;
+                state_ = State::kIdle;
+                accepted = true;
+            }
+            break;
+
+        case Event::kFirmwareUpdateFailed:
+            if (state_ == State::kUpgrading) {
+                assistant_gate_open_ = false;
+                state_ = State::kActivating;
                 accepted = true;
             }
             break;
@@ -171,13 +203,10 @@ TransitionResult StateMachine::Handle(Event event) {
             break;
 
         case Event::kTransportLost:
-            if (state_ != State::kStarting && state_ != State::kWifiConfiguring &&
-                state_ != State::kActivating && state_ != State::kIdle) {
-                if (state_ == State::kEvaluating || state_ == State::kThinking ||
-                    state_ == State::kSpeaking || state_ == State::kClosing ||
-                    state_ == State::kAborting) {
-                    ++cancellation_generation_;
-                }
+            // A stale voice callback must never tear down the executable OTA
+            // boundary. Wi-Fi loss has its own explicit upgrading transition.
+            if (IsConversationState(state_)) {
+                ++cancellation_generation_;
                 assistant_gate_open_ = false;
                 state_ = State::kIdle;
                 accepted = true;
@@ -312,6 +341,7 @@ const char* ToString(State state) {
         case State::kSpeaking: return "speaking";
         case State::kAborting: return "aborting";
         case State::kClosing: return "closing";
+        case State::kUpgrading: return "upgrading";
     }
     return "unknown";
 }
@@ -328,6 +358,9 @@ const char* ToString(Event event) {
         case Event::kWifiDisconnected: return "wifi_disconnected";
         case Event::kActivationCodeAvailable: return "activation_code_available";
         case Event::kActivationComplete: return "activation_complete";
+        case Event::kFirmwareUpdateRequested: return "firmware_update_requested";
+        case Event::kFirmwareAlreadyCurrent: return "firmware_already_current";
+        case Event::kFirmwareUpdateFailed: return "firmware_update_failed";
         case Event::kDeviceIdentityRejected: return "device_identity_rejected";
         case Event::kButtonShortPress: return "button_short_press";
         case Event::kButtonLongPress: return "button_long_press";

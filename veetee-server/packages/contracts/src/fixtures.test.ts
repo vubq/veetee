@@ -1,4 +1,4 @@
-import { createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,21 +93,6 @@ describe("contract fixtures", () => {
   });
 
   it("verifies the complete development resource manifest", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(fixtureRoot, "artifacts/resource-manifest-v1.json"), "utf8"),
-    ) as {
-      signature: {
-        algorithm: string;
-        key_id: string;
-        security_epoch: number;
-        value: string;
-      };
-    } & Record<string, unknown>;
-    const signature = manifest.signature.value;
-    delete (manifest.signature as Partial<typeof manifest.signature>).value;
-    const canonicalPayload = canonicalize(manifest);
-    expect(canonicalPayload).toBeTypeOf("string");
-
     const publicKey = createPublicKey({
       key: Buffer.from(
         "MCowBQYDK2VwAyEAI46wrFAWaXIburEHNLzXcKQWWrHWxJz7MNHie5CI17c=",
@@ -116,8 +101,115 @@ describe("contract fixtures", () => {
       format: "der",
       type: "spki",
     });
-    expect(
-      verify(null, Buffer.from(canonicalPayload ?? "", "utf8"), publicKey, Buffer.from(signature, "base64")),
-    ).toBe(true);
+    for (const name of ["resource-manifest-v1.json", "resource-config-link-v1.json"]) {
+      const manifest = JSON.parse(
+        readFileSync(join(fixtureRoot, `artifacts/${name}`), "utf8"),
+      ) as {
+        signature: {
+          algorithm: string;
+          key_id: string;
+          security_epoch: number;
+          value: string;
+        };
+      } & Record<string, unknown>;
+      const signature = manifest.signature.value;
+      delete (manifest.signature as Partial<typeof manifest.signature>).value;
+      const canonicalPayload = canonicalize(manifest);
+      expect(canonicalPayload).toBeTypeOf("string");
+      expect(
+        verify(
+          null,
+          Buffer.from(canonicalPayload ?? "", "utf8"),
+          publicKey,
+          Buffer.from(signature, "base64"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("requires a signed detector inventory in every ESP-SR V1 resource member", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(fixtureRoot, "artifacts/resource-manifest-v1.json"), "utf8"),
+    ) as { members: Array<Record<string, unknown>> };
+    delete manifest.members[0]!.detectors;
+    const result = registry.validate(
+      "https://schemas.veetee.local/artifacts/resource-manifest-v1.json",
+      manifest,
+    );
+    expect(result.valid).toBe(false);
+  });
+
+  it("verifies default-off and explicit wake-audio device config signatures", () => {
+    const publicKey = createPublicKey({
+      key: Buffer.from(
+        "MCowBQYDK2VwAyEAI46wrFAWaXIburEHNLzXcKQWWrHWxJz7MNHie5CI17c=",
+        "base64",
+      ),
+      format: "der",
+      type: "spki",
+    });
+    for (const name of ["device-config-v1.json", "device-config-wake-audio-v1.json"]) {
+      const config = JSON.parse(
+        readFileSync(join(fixtureRoot, `config/${name}`), "utf8"),
+      ) as {
+        signature: {
+          algorithm: string;
+          key_id: string;
+          security_epoch: number;
+          value: string;
+        };
+      } & Record<string, unknown>;
+      const signature = config.signature.value;
+      delete (config.signature as Partial<typeof config.signature>).value;
+      const canonicalPayload = canonicalize(config);
+      expect(canonicalPayload).toBeTypeOf("string");
+      expect(
+        verify(
+          null,
+          Buffer.from(canonicalPayload ?? "", "utf8"),
+          publicKey,
+          Buffer.from(signature, "base64"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps bootstrap config version and ETag tied to the signed device body", () => {
+    const config = JSON.parse(
+      readFileSync(join(fixtureRoot, "config/device-config-v1.json"), "utf8"),
+    ) as { version: number };
+    const bootstrap = JSON.parse(
+      readFileSync(join(fixtureRoot, "ota/bootstrap-bound.json"), "utf8"),
+    ) as { config: { version: number; etag: string } };
+    const canonicalBody = canonicalize(config);
+
+    expect(bootstrap.config.version).toBe(config.version);
+    expect(bootstrap.config.etag).toBe(
+      `cfg1-${createHash("sha256").update(canonicalBody ?? "").digest("base64url")}`,
+    );
+  });
+
+  it("accepts firmware OTA rebooting and pending-health report phases", () => {
+    const base = JSON.parse(
+      readFileSync(join(fixtureRoot, "devices/reported-state-v1.json"), "utf8"),
+    ) as {
+      state: {
+        resource?: Record<string, unknown>;
+        firmware_ota?: Record<string, unknown>;
+      };
+    };
+    const firmwareOta = { ...base.state.resource! };
+    delete base.state.resource;
+    base.state.firmware_ota = firmwareOta;
+
+    for (const phase of ["rebooting", "pending_health"]) {
+      base.state.firmware_ota.phase = phase;
+      const result = registry.validate(
+        "https://schemas.veetee.local/devices/reported-state-v1.json",
+        base,
+      );
+      expect(result.errors, JSON.stringify(result.errors, null, 2)).toEqual([]);
+      expect(result.valid).toBe(true);
+    }
   });
 });

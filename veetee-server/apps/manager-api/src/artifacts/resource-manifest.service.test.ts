@@ -43,6 +43,8 @@ function signedManifest() {
         runtime: "esp-sr",
         runtime_abi: 1,
         format_version: 1,
+        sample_rate: 16_000,
+        detectors: [{ id: "wn9s_hiesp", role: "activation" }],
         sha256: payloadHash,
         bytes: 125_943,
       },
@@ -127,8 +129,48 @@ describe("ResourceManifestService", () => {
       kind: "resource_bundle",
       runtime: "esp-sr",
       runtimeAbi: 1,
+      detectors: [{ id: "wn9s_hiesp", role: "activation" }],
       signatureKeyId: "test-release-key",
     });
+  });
+
+  it("rejects a signed model pack that does not declare its detector inventory", async () => {
+    const fixture = signedManifest();
+    delete (fixture.manifest.members[0] as { detectors?: unknown }).detectors;
+    vi.stubEnv("VEETEE_RESOURCE_SIGNING_KEY_ID", "test-release-key");
+    vi.stubEnv("VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX", fixture.publicKeyHex);
+    const files = {
+      inspectRelease: vi.fn().mockResolvedValue({
+        manifest: fixture.manifest,
+        sizeBytes: 125_943,
+        sha256: payloadHash,
+      }),
+    } as unknown as ArtifactFilesService;
+
+    await expect(new ResourceManifestService(files).validate("stable")).rejects.toThrow(
+      /detectors/i,
+    );
+  });
+
+  it("rejects duplicate signed detector ids or roles", async () => {
+    const fixture = signedManifest();
+    fixture.manifest.members[0]!.detectors = [
+      { id: "wn9s_hiesp", role: "activation" },
+      { id: "wn9s_hiesp", role: "interrupt" },
+    ];
+    vi.stubEnv("VEETEE_RESOURCE_SIGNING_KEY_ID", "test-release-key");
+    vi.stubEnv("VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX", fixture.publicKeyHex);
+    const files = {
+      inspectRelease: vi.fn().mockResolvedValue({
+        manifest: fixture.manifest,
+        sizeBytes: 125_943,
+        sha256: payloadHash,
+      }),
+    } as unknown as ArtifactFilesService;
+
+    await expect(new ResourceManifestService(files).validate("stable")).rejects.toThrow(
+      /unique/i,
+    );
   });
 
   it("rejects a signature after signed metadata is changed", async () => {

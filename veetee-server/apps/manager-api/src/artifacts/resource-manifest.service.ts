@@ -8,7 +8,13 @@ const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
 const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const semver = /^\d+\.\d+\.\d+$/;
 const sha256 = /^[a-f0-9]{64}$/;
+const wakeNetModelId = /^wn[A-Za-z0-9._-]{1,62}$/;
 const allowedChannels = new Set(["development", "canary", "stable"]);
+
+export interface SignedDetectorDescriptor {
+  id: string;
+  role: "activation" | "interrupt";
+}
 
 export interface ValidatedResourceManifest {
   artifactId: string;
@@ -25,6 +31,7 @@ export interface ValidatedResourceManifest {
   maxFirmware: string;
   signatureKeyId: string;
   securityEpoch: number;
+  detectors: SignedDetectorDescriptor[];
   manifest: Record<string, unknown>;
 }
 
@@ -129,6 +136,7 @@ export class ResourceManifestService {
 
     let runtime = "esp-idf-image";
     let runtimeAbi = 1;
+    let detectors: SignedDetectorDescriptor[] = [];
     if (manifestKind === "firmware") {
       const apply = object(manifest.apply, "apply");
       if (
@@ -157,8 +165,14 @@ export class ResourceManifestService {
       }
       runtimeAbi = integer(member.runtime_abi, "members[0].runtime_abi", 1, 1);
       integer(member.format_version, "members[0].format_version", 1, 1);
+      if (manifestKind === "resource_bundle") {
+        integer(member.sample_rate, "members[0].sample_rate", 16_000, 16_000);
+      }
       if (member.bytes !== sizeBytes || member.sha256 !== payloadHash) {
         throw new BadRequestException("Artifact member does not match the signed payload");
+      }
+      if (manifestKind === "resource_bundle") {
+        detectors = detectorDescriptors(member.detectors);
       }
     }
 
@@ -235,6 +249,7 @@ export class ResourceManifestService {
       maxFirmware,
       signatureKeyId,
       securityEpoch,
+      detectors,
       manifest,
     };
   }
@@ -292,4 +307,43 @@ function integer(value: unknown, label: string, minimum: number, maximum: number
     throw new BadRequestException(`${label} is invalid`);
   }
   return Number(value);
+}
+
+function detectorDescriptors(value: unknown): SignedDetectorDescriptor[] {
+  const values = array(value, "members[0].detectors");
+  if (values.length < 1 || values.length > 2) {
+    throw new BadRequestException(
+      "ESP-SR model pack requires one activation and at most one interrupt detector",
+    );
+  }
+  const detectors = values.map((entry, index): SignedDetectorDescriptor => {
+    const detector = object(entry, `members[0].detectors[${index}]`);
+    if (Object.keys(detector).sort().join(",") !== "id,role") {
+      throw new BadRequestException(
+        `members[0].detectors[${index}] contains unsupported properties`,
+      );
+    }
+    const id = string(
+      detector.id,
+      `members[0].detectors[${index}].id`,
+      wakeNetModelId,
+    );
+    const role = string(detector.role, `members[0].detectors[${index}].role`);
+    if (role !== "activation" && role !== "interrupt") {
+      throw new BadRequestException(
+        `members[0].detectors[${index}].role is invalid`,
+      );
+    }
+    return { id, role };
+  });
+  if (
+    detectors.filter((detector) => detector.role === "activation").length !== 1 ||
+    detectors.filter((detector) => detector.role === "interrupt").length > 1 ||
+    new Set(detectors.map((detector) => detector.id)).size !== detectors.length
+  ) {
+    throw new BadRequestException(
+      "ESP-SR detector ids and roles must be unique with exactly one activation detector",
+    );
+  }
+  return detectors;
 }

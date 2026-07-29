@@ -140,6 +140,11 @@ esp_err_t I2sAudio::Initialize(EncodedAudioSink encoded_sink,
         ESP_AUDIO_ERR_OK) {
         return ESP_FAIL;
     }
+    if ((error = experimental_aec_.Initialize()) != ESP_OK) {
+        ESP_LOGE(kTag, "Experimental AEC initialization failed: %s",
+                 esp_err_to_name(error));
+        return error;
+    }
 
     playback_queue_ = xQueueCreate(kPlaybackQueueDepth, sizeof(PlaybackItem));
     if (playback_queue_ == nullptr) return ESP_ERR_NO_MEM;
@@ -177,6 +182,30 @@ esp_err_t I2sAudio::Start(bool play_boot_chime) {
 void I2sAudio::SetCaptureEnabled(bool enabled) {
     const bool previous = capture_enabled_.exchange(enabled);
     if (previous != enabled) capture_generation_.fetch_add(1);
+}
+
+bool I2sAudio::ConfigureWakeAudioPreRoll(bool enabled) {
+    const bool configured = wake_audio_pre_roll_.Configure(enabled);
+    if (configured) capture_generation_.fetch_add(1);
+    return configured;
+}
+
+bool I2sAudio::SetWakeAudioPreRollRecording(bool recording) {
+    const bool previous = wake_audio_pre_roll_.recording();
+    if (!wake_audio_pre_roll_.SetRecording(recording)) return false;
+    if (previous != recording) capture_generation_.fetch_add(1);
+    return true;
+}
+
+bool I2sAudio::PopWakeAudioPacket(std::uint8_t* destination,
+                                  std::size_t capacity,
+                                  std::size_t* length) {
+    return wake_audio_pre_roll_.PopWakeAudioPacket(destination, capacity,
+                                                   length);
+}
+
+void I2sAudio::DiscardWakeAudio() {
+    wake_audio_pre_roll_.DiscardWakeAudio();
 }
 
 void I2sAudio::BeginPlayback() {
@@ -293,6 +322,7 @@ void I2sAudio::PlaybackTaskEntry(void* context) {
 void I2sAudio::RunCapture() {
     std::size_t captured_samples = 0;
     std::uint32_t local_generation = capture_generation_.load();
+    std::uint32_t local_wake_generation = wake_audio_pre_roll_.generation();
 #if CONFIG_VEETEE_MIC_DIAGNOSTICS
     std::int64_t sum_squares = 0;
     std::uint32_t diagnostic_samples = 0;
@@ -318,6 +348,7 @@ void I2sAudio::RunCapture() {
         const std::uint32_t generation = capture_generation_.load();
         if (generation != local_generation) {
             local_generation = generation;
+            local_wake_generation = wake_audio_pre_roll_.generation();
             captured_samples = 0;
             esp_opus_enc_reset(encoder_);
         }
@@ -330,10 +361,15 @@ void I2sAudio::RunCapture() {
             sum_squares += static_cast<std::int64_t>(pcm) * pcm;
             ++diagnostic_samples;
 #endif
-            if (capture_enabled_.load() && captured_samples < capture_pcm_.size()) {
+            if ((capture_enabled_.load() ||
+                 wake_audio_pre_roll_.recording()) &&
+                captured_samples < capture_pcm_.size()) {
                 capture_pcm_[captured_samples++] = pcm;
             }
         }
+        // The opt-in AEC path is local-detector-only. Conversation PCM remains
+        // gated to LISTENING and protocol V1 continues to advertise aec=false.
+        experimental_aec_.ProcessMicrophone16k(detector_pcm_.data(), samples);
         taskENTER_CRITICAL(&diagnostics_mux_);
         diagnostics_.ObservePcm(
             detector_pcm_.data(), samples,
@@ -359,7 +395,8 @@ void I2sAudio::RunCapture() {
         }
 #endif
 
-        if (!capture_enabled_.load()) {
+        if (!capture_enabled_.load() &&
+            !wake_audio_pre_roll_.recording()) {
             captured_samples = 0;
             continue;
         }
@@ -384,12 +421,19 @@ void I2sAudio::RunCapture() {
             ESP_LOGW(kTag, "Opus encode failed: %d", encode_error);
             continue;
         }
-        if (capture_enabled_.load() &&
-            capture_generation_.load() == local_generation &&
-            !encoded_sink_(encoded_buffer_.data(), output.encoded_bytes,
-                           sink_context_)) {
+        if (capture_generation_.load() != local_generation) continue;
+        if (capture_enabled_.load()) {
+            if (!encoded_sink_(encoded_buffer_.data(), output.encoded_bytes,
+                               sink_context_)) {
+                RecordAudioCounter(AudioCounter::kUplinkDrop);
+                ESP_LOGD(kTag, "Dropped realtime uplink frame");
+            }
+        } else if (wake_audio_pre_roll_.recording() &&
+                   !wake_audio_pre_roll_.Store(encoded_buffer_.data(),
+                                               output.encoded_bytes,
+                                               local_wake_generation)) {
             RecordAudioCounter(AudioCounter::kUplinkDrop);
-            ESP_LOGD(kTag, "Dropped realtime uplink frame");
+            ESP_LOGD(kTag, "Dropped stale wake pre-roll frame");
         }
     }
 }
@@ -418,6 +462,7 @@ void I2sAudio::RunPlayback() {
         if (item.kind == PlaybackItemKind::kBegin) {
             decoder_generation = item.generation;
             esp_opus_dec_reset(decoder_);
+            experimental_aec_.BeginPlayback();
             continue;
         }
         if (item.kind == PlaybackItemKind::kAbort ||
@@ -425,6 +470,7 @@ void I2sAudio::RunPlayback() {
             decoder_generation = item.generation;
             esp_opus_dec_reset(decoder_);
             WriteSilence();
+            experimental_aec_.EndPlayback();
             if (FinishesPlayback(item.kind) &&
                 playback_finished_sink_ != nullptr) {
                 playback_finished_sink_(sink_context_);
@@ -442,6 +488,7 @@ void I2sAudio::RunPlayback() {
         }
         if (item.kind == PlaybackItemKind::kEnd) {
             WriteSilence();
+            experimental_aec_.EndPlayback();
             if (FinishesPlayback(item.kind) &&
                 playback_finished_sink_ != nullptr) {
                 playback_finished_sink_(sink_context_);
@@ -475,6 +522,10 @@ void I2sAudio::RunPlayback() {
         if (item.generation != playback_generation_.load()) continue;
 
         const int volume_percent = volume_percent_.load();
+        if (!experimental_aec_.PushPlayback24k(
+                playback_pcm_.data(), playback_pcm_.size(), volume_percent)) {
+            ESP_LOGD(kTag, "AEC far-end reference dropped or resynchronized");
+        }
         for (std::size_t index = 0; index < playback_pcm_.size(); ++index) {
             speaker_dma_buffer_[index] =
                 ToSpeakerSample(playback_pcm_[index], volume_percent);
@@ -508,8 +559,14 @@ bool I2sAudio::WriteChimeNote(double frequency_hz, int frame_count) {
                 kPi * (static_cast<double>(sample) + 0.5) / total_samples);
             const std::int32_t pcm16 = static_cast<std::int32_t>(
                 std::sin(phase) * envelope * envelope * kAmplitude);
+            tone_pcm_buffer_[index] = static_cast<std::int16_t>(pcm16);
             tone_dma_buffer_[index] = ToSpeakerSample(
-                static_cast<std::int16_t>(pcm16), volume_percent_.load());
+                tone_pcm_buffer_[index], volume_percent_.load());
+        }
+        if (!experimental_aec_.PushPlayback24k(
+                tone_pcm_buffer_.data(), tone_pcm_buffer_.size(),
+                volume_percent_.load())) {
+            ESP_LOGD(kTag, "AEC local-tone reference dropped or resynchronized");
         }
         size_t bytes_written = 0;
         if (i2s_channel_write(tx_handle_, tone_dma_buffer_.data(),
@@ -525,9 +582,14 @@ void I2sAudio::PlayBootChime() {
     constexpr int kFirstNoteFrames = 5;
     constexpr int kGapFrames = 1;
     constexpr int kSecondNoteFrames = 7;
+    experimental_aec_.BeginPlayback();
     bool complete = WriteChimeNote(659.25, kFirstNoteFrames);
     if (complete) {
+        tone_pcm_buffer_.fill(0);
         tone_dma_buffer_.fill(0);
+        experimental_aec_.PushPlayback24k(
+            tone_pcm_buffer_.data(), tone_pcm_buffer_.size(),
+            volume_percent_.load());
         for (int frame = 0; frame < kGapFrames && complete; ++frame) {
             size_t bytes_written = 0;
             complete = i2s_channel_write(
@@ -538,6 +600,7 @@ void I2sAudio::PlayBootChime() {
     }
     if (complete) complete = WriteChimeNote(783.99, kSecondNoteFrames);
     WriteSilence();
+    experimental_aec_.EndPlayback();
     if (complete) {
         ESP_LOGI(kTag, "Startup chime complete");
     } else {
@@ -548,9 +611,14 @@ void I2sAudio::PlayBootChime() {
 void I2sAudio::PlayRecoveryChime() {
     constexpr int kNoteFrames = 4;
     constexpr int kGapFrames = 1;
+    experimental_aec_.BeginPlayback();
     bool complete = WriteChimeNote(523.25, kNoteFrames);
     if (complete) {
+        tone_pcm_buffer_.fill(0);
         tone_dma_buffer_.fill(0);
+        experimental_aec_.PushPlayback24k(
+            tone_pcm_buffer_.data(), tone_pcm_buffer_.size(),
+            volume_percent_.load());
         for (int frame = 0; frame < kGapFrames && complete; ++frame) {
             size_t bytes_written = 0;
             complete = i2s_channel_write(
@@ -561,6 +629,7 @@ void I2sAudio::PlayRecoveryChime() {
     }
     if (complete) complete = WriteChimeNote(392.00, kNoteFrames);
     WriteSilence();
+    experimental_aec_.EndPlayback();
     if (!complete) {
         ESP_LOGW(kTag, "Recovery signal interrupted by an I2S write error");
     }

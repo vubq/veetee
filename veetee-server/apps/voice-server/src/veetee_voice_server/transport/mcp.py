@@ -42,12 +42,18 @@ class DeviceTool:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingRequest:
+    future: asyncio.Future[dict[str, Any]]
+    context: OperationContext
+
+
 class DeviceMcpClient:
     def __init__(self, sender: McpSender, *, session_id: str) -> None:
         self._sender = sender
         self._session_id = session_id
         self._next_id = 1
-        self._pending: dict[int | str, asyncio.Future[dict[str, Any]]] = {}
+        self._pending: dict[int | str, _PendingRequest] = {}
         self._tools: dict[str, DeviceTool] = {}
         self._all_tools: dict[str, DeviceTool] | None = None
         self._initialize_lock = asyncio.Lock()
@@ -176,9 +182,14 @@ class DeviceMcpClient:
         request_id = payload.get("id")
         if not isinstance(request_id, (int, str)) or isinstance(request_id, bool):
             return
-        future = self._pending.get(request_id)
-        if future is None or future.done():
+        pending = self._pending.get(request_id)
+        if pending is None or pending.future.done():
             return
+        # A late JSON-RPC result/error is never allowed to revive an aborted
+        # turn, even if it races task cancellation in an adapter/SDK.
+        if pending.context.token.cancelled or pending.context.remaining_seconds <= 0:
+            return
+        future = pending.future
         error = payload.get("error")
         if isinstance(error, dict):
             code = error.get("code", -32000)
@@ -195,9 +206,9 @@ class DeviceMcpClient:
         self._closed = True
         pending = list(self._pending.values())
         self._pending.clear()
-        for future in pending:
-            if not future.done():
-                future.cancel()
+        for request in pending:
+            if not request.future.done():
+                request.future.cancel()
 
     async def _request(
         self,
@@ -211,7 +222,7 @@ class DeviceMcpClient:
         request_id = self._next_id
         self._next_id += 1
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
+        self._pending[request_id] = _PendingRequest(future, context)
         try:
             await self._sender(
                 {
@@ -221,7 +232,9 @@ class DeviceMcpClient:
                     "params": params,
                 }
             )
-            return await await_operation(future, context)
+            result = await await_operation(future, context)
+            context.checkpoint()
+            return result
         finally:
             self._pending.pop(request_id, None)
 

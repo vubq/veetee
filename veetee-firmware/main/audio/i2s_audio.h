@@ -6,7 +6,9 @@
 #include <cstdint>
 
 #include "audio/audio_diagnostics.h"
+#include "audio/experimental_aec.h"
 #include "audio/playback_control.h"
+#include "audio/wake_audio_pre_roll.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -31,6 +33,14 @@ public:
     esp_err_t Start(bool play_boot_chime);
 
     void SetCaptureEnabled(bool enabled);
+    bool ConfigureWakeAudioPreRoll(bool enabled);
+    bool SetWakeAudioPreRollRecording(bool recording);
+    [[nodiscard]] bool wake_audio_pre_roll_configured() const {
+        return wake_audio_pre_roll_.configured();
+    }
+    bool PopWakeAudioPacket(std::uint8_t* destination, std::size_t capacity,
+                            std::size_t* length);
+    void DiscardWakeAudio();
     void BeginPlayback();
     bool QueueOpusPlayback(const std::uint8_t* packet, std::size_t length);
     void EndPlayback();
@@ -88,10 +98,13 @@ private:
     std::array<std::uint8_t, 1500> encoded_buffer_{};
     std::array<std::int16_t, kDownlinkFrameSamples> playback_pcm_{};
     std::array<std::int32_t, kDownlinkFrameSamples> speaker_dma_buffer_{};
+    std::array<std::int16_t, kToneFrameSamples> tone_pcm_buffer_{};
     std::array<std::int32_t, kToneFrameSamples> tone_dma_buffer_{};
 
     std::atomic<bool> capture_enabled_{false};
     std::atomic<std::uint32_t> capture_generation_{0};
+    WakeAudioPreRoll wake_audio_pre_roll_;
+    ExperimentalAec experimental_aec_;
     std::atomic<bool> playback_accepting_{false};
     std::atomic<std::uint32_t> playback_generation_{0};
     std::atomic<int> volume_percent_{70};

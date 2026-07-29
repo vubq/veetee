@@ -10,23 +10,89 @@ export type ReportedResourcePhase =
   | "applying"
   | "active"
   | "failed"
-  | "rolled_back";
+  | "rolled_back"
+  | "rebooting"
+  | "pending_health";
+
+export type ReportedConfigPhase = "checking" | "applying" | "active" | "failed";
+
+export interface DeviceConfigDetectorV1 {
+  model_id: string;
+  threshold_ppm: number;
+  cooldown_ms: number;
+}
+
+export interface DeviceConfigV1 {
+  schema_version: 1;
+  device_id: string;
+  version: number;
+  wake_profile: {
+    id: string;
+    version: number;
+    required_resource_version: string;
+    activation: DeviceConfigDetectorV1;
+    interrupt: (DeviceConfigDetectorV1 & { enabled_while_speaking: boolean }) | null;
+    send_wake_audio: boolean;
+  } | null;
+  signature: {
+    algorithm: "ed25519";
+    key_id: string;
+    security_epoch: number;
+    value: string;
+  };
+}
+
+export interface DeviceReportedResourceStateV1 {
+  phase: ReportedResourcePhase;
+  currentVersion: string;
+  desiredVersion: string;
+  activeSlot: 0 | 1;
+  targetSlot: 0 | 1;
+  expectedBytes: number;
+  downloadedBytes: number;
+  securityEpoch: number;
+  errorCode?: string;
+}
 
 export interface DeviceReportedStateV1 {
   version: number;
   bootId: string;
   state: {
     schemaVersion: 1;
+    locale?: string;
+    timeZone?: string;
     firmware: { version: string };
-    resource: {
-      phase: ReportedResourcePhase;
-      currentVersion: string;
-      desiredVersion: string;
-      activeSlot: 0 | 1;
-      targetSlot: 0 | 1;
-      expectedBytes: number;
-      downloadedBytes: number;
-      securityEpoch: number;
+    capabilities?: {
+      board: string;
+      display: {
+        target: string;
+        controller: "st7789";
+        width: number;
+        height: number;
+        colorFormat: "rgb565";
+        resourceAbi: number;
+        uiAbi: number;
+        slotBytes: number;
+        hotReload: boolean;
+        compositions: Array<"signal" | "monolith" | "quiet">;
+      };
+      wake: {
+        runtime: "esp-sr";
+        runtimeAbi: number;
+        resourceAbi: number;
+        slotBytes: number;
+        sampleRateHz: number;
+        channels: number;
+        hotReload: boolean;
+      };
+    };
+    resource?: DeviceReportedResourceStateV1;
+    ui?: DeviceReportedResourceStateV1;
+    firmware_ota?: DeviceReportedResourceStateV1;
+    config?: {
+      desiredVersion: number;
+      appliedVersion: number;
+      phase: ReportedConfigPhase;
       errorCode?: string;
     };
   };

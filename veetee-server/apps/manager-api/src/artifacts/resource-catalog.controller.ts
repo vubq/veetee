@@ -6,6 +6,7 @@ import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsLocale,
@@ -31,7 +32,7 @@ import {
 } from "./resource-catalog.service.js";
 
 const safeArtifactId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const safeDetectorId = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,127}$/;
+const safeDetectorId = /^wn[A-Za-z0-9._-]{1,62}$/;
 const wakeStates = ["standby", "listening", "thinking", "speaking", "closing"];
 
 class RegisterArtifactDto {
@@ -58,14 +59,14 @@ class DetectorProfileDto {
   @Matches(safeDetectorId)
   detectorId!: string;
 
-  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
-  @Max(1)
+  @Max(0.9999)
   sensitivity!: number;
 
   @IsInt()
-  @Min(0)
-  @Max(60_000)
+  @Min(250)
+  @Max(10_000)
   cooldownMs!: number;
 
   @IsArray()
@@ -95,13 +96,18 @@ class WakeProfileDto {
   @Length(1, 80)
   activationPhrase!: string;
 
+  @IsOptional()
+  @IsBoolean()
+  sendWakeAudio: boolean = false;
+
   @ValidateNested()
   @Type(() => DetectorProfileDto)
   activation!: DetectorProfileDto;
 
+  @IsOptional()
   @ValidateNested()
   @Type(() => DetectorProfileDto)
-  interrupt!: DetectorProfileDto;
+  interrupt?: DetectorProfileDto | null;
 }
 
 class ResourceRolloutDto {

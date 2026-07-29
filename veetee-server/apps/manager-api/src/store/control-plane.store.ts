@@ -45,6 +45,7 @@ import {
   type VoiceRuntimeComponent,
 } from "../providers/voice-runtime-probe.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
+import { mutateDeviceDesiredState } from "./device-desired-state.js";
 
 export interface DeviceRecord {
   id: string;
@@ -57,6 +58,12 @@ export interface DeviceRecord {
   reportedState: { version: number; state: Record<string, unknown>; bootId?: string };
   pairedAt: string;
   lastSeenAt?: string;
+}
+
+export interface DeviceConfigSource {
+  deviceId: string;
+  version: number;
+  state: Record<string, unknown>;
 }
 
 export interface AgentRecord {
@@ -222,6 +229,12 @@ function recordValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function definedRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  );
+}
+
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -334,10 +347,7 @@ export class ControlPlaneStore {
       state: "active",
       deviceId: device.id,
       agentId: device.agentId,
-      configVersion: desiredAgentConfigVersion(
-        device.desiredState?.state,
-        device.agent?.publishedVersion ?? 0,
-      ),
+      configVersion: device.desiredState?.version ?? 0,
       ...(typeof resourceVersion === "string" ? { resourceVersion } : {}),
       ...(typeof resourceManifestId === "string" ? { resourceManifestId } : {}),
       ...(typeof uiVersion === "string" ? { uiVersion } : {}),
@@ -648,6 +658,21 @@ export class ControlPlaneStore {
     return this.toDeviceRecord(device);
   }
 
+  async deviceConfigSource(id: string): Promise<DeviceConfigSource> {
+    const device = await this.prisma.device.findUnique({
+      where: { id },
+      select: { id: true, desiredState: { select: { version: true, state: true } } },
+    });
+    if (!device?.desiredState || device.desiredState.version < 1) {
+      throw new NotFoundException("Device config not found");
+    }
+    return {
+      deviceId: device.id,
+      version: device.desiredState.version,
+      state: device.desiredState.state as Record<string, unknown>,
+    };
+  }
+
   async updateReportedState(
     id: string,
     version: number,
@@ -655,24 +680,41 @@ export class ControlPlaneStore {
     bootId?: string,
   ): Promise<DeviceRecord> {
     return this.prisma.$transaction(async (transaction) => {
-      const advanced = await transaction.deviceReportedState.updateMany({
-        where: { deviceId: id, version: { lt: version } },
-        data: {
-          version,
-          state: state as Prisma.InputJsonValue,
-          ...(bootId ? { bootId } : {}),
-        },
-      });
-      if (advanced.count !== 1) {
-        const current = await transaction.deviceReportedState.findUnique({
+      const rows = await transaction.$queryRaw<Array<{
+        deviceId: string;
+        version: number;
+        state: Prisma.JsonValue;
+      }>>(
+        Prisma.sql`
+          SELECT "deviceId", "version", "state"
+          FROM "DeviceReportedState"
+          WHERE "deviceId" = ${id}
+          FOR UPDATE
+        `,
+      );
+      const current = rows[0];
+      if (!current) throw new NotFoundException("Device not found");
+      if (version < current.version) {
+        throw new ConflictException("Reported state version is stale");
+      }
+      const advanced = version > current.version;
+      if (advanced) {
+        // Each report carries one reconcile subsystem. Merge at the subsystem
+        // boundary so a config report cannot erase resource/UI/firmware state,
+        // and a later artifact report cannot erase config apply state.
+        const nextState = {
+          ...recordValue(current.state),
+          ...definedRecord(state),
+        };
+        await transaction.deviceReportedState.update({
           where: { deviceId: id },
+          data: {
+            version,
+            state: nextState as Prisma.InputJsonValue,
+            ...(bootId ? { bootId } : {}),
+          },
         });
-        if (!current) throw new NotFoundException("Device not found");
-        if (version < current.version) {
-          throw new ConflictException("Reported state version is stale");
-        }
-        // Equal versions are idempotent retries and must not mutate the stored state.
-      } else {
+
         const resource = state.resource;
         if (resource && typeof resource === "object" && !Array.isArray(resource)) {
           const report = resource as Record<string, unknown>;
@@ -822,6 +864,7 @@ export class ControlPlaneStore {
           }
         }
       }
+      // Equal versions are idempotent retries and must not mutate the stored state.
       await transaction.device.update({
         where: { id },
         data: { status: DeviceStatus.ONLINE, lastSeenAt: new Date() },
@@ -841,16 +884,13 @@ export class ControlPlaneStore {
     context: MutationContext,
   ): Promise<DeviceRecord> {
     return this.prisma.$transaction(async (transaction) => {
-      const device = await transaction.device.findFirst({
-        where: { id, tenantId: context.principal.tenantId },
-        include: { desiredState: true },
-      });
-      if (!device) throw new NotFoundException("Device not found");
-      await transaction.deviceDesiredState.upsert({
-        where: { deviceId: id },
-        create: { deviceId: id, version: 1, state: state as Prisma.InputJsonValue },
-        update: { version: { increment: 1 }, state: state as Prisma.InputJsonValue },
-      });
+      const desired = await mutateDeviceDesiredState(
+        transaction,
+        id,
+        context.principal.tenantId,
+        () => ({ ...state }),
+      );
+      if (!desired) throw new NotFoundException("Device not found");
       await this.audit.record(
         {
           tenantId: context.principal.tenantId,
@@ -859,8 +899,8 @@ export class ControlPlaneStore {
           targetType: "device",
           targetId: id,
           requestId: context.requestId,
-          before: device.desiredState?.state,
-          after: state,
+          before: desired.previousState,
+          after: desired.state,
         },
         transaction,
       );
@@ -881,7 +921,7 @@ export class ControlPlaneStore {
     return this.prisma.$transaction(async (transaction) => {
       const device = await transaction.device.findFirst({
         where: { id, tenantId: context.principal.tenantId },
-        include: { desiredState: true },
+        select: { id: true },
       });
       if (!device) throw new NotFoundException("Device not found");
 
@@ -900,27 +940,31 @@ export class ControlPlaneStore {
         }
       }
 
-      const currentState = device.desiredState?.state;
-      const nextState: Record<string, unknown> =
-        currentState && typeof currentState === "object" && !Array.isArray(currentState)
-          ? { ...(currentState as Record<string, unknown>) }
-          : {};
-      if (agent) {
-        nextState.agentId = agent.id;
-        nextState.agentConfigVersion = agent.publishedVersion;
-      } else {
-        delete nextState.agentId;
-        delete nextState.agentConfigVersion;
-      }
+      const desired = await mutateDeviceDesiredState(
+        transaction,
+        id,
+        context.principal.tenantId,
+        (current) => {
+          if (agent) {
+            current.agentId = agent.id;
+            current.agentConfigVersion = agent.publishedVersion;
+          } else {
+            delete current.agentId;
+            delete current.agentConfigVersion;
+          }
+          return current;
+        },
+      );
+      if (!desired) throw new NotFoundException("Device not found");
+      const lockedDevice = await transaction.device.findUnique({
+        where: { id },
+        select: { agentId: true },
+      });
+      if (!lockedDevice) throw new NotFoundException("Device not found");
 
       await transaction.device.update({
         where: { id },
         data: { agentId: agent?.id ?? null },
-      });
-      await transaction.deviceDesiredState.upsert({
-        where: { deviceId: id },
-        create: { deviceId: id, version: 1, state: nextState as Prisma.InputJsonValue },
-        update: { version: { increment: 1 }, state: nextState as Prisma.InputJsonValue },
       });
       await this.audit.record(
         {
@@ -930,8 +974,14 @@ export class ControlPlaneStore {
           targetType: "device",
           targetId: id,
           requestId: context.requestId,
-          before: { agentId: device.agentId, desiredState: device.desiredState?.state },
-          after: { agentId: agent?.id ?? null, desiredState: nextState },
+          before: {
+            agentId: lockedDevice.agentId,
+            desiredState: desired.previousState,
+          },
+          after: {
+            agentId: agent?.id ?? null,
+            desiredState: desired.state,
+          },
         },
         transaction,
       );
@@ -1768,8 +1818,7 @@ export class ControlPlaneStore {
     device: {
       id: string;
       agentId: string | null;
-      agent: { publishedVersion: number } | null;
-      desiredState: { state: Prisma.JsonValue } | null;
+      desiredState: { version: number; state: Prisma.JsonValue } | null;
     },
     token: string,
   ): DeviceActivationResult {
@@ -1778,10 +1827,7 @@ export class ControlPlaneStore {
       agentId: device.agentId,
       token,
       websocketUrl: process.env.VEETEE_VOICE_WS_URL ?? "ws://127.0.0.1:8000/veetee/v1/",
-      configVersion: desiredAgentConfigVersion(
-        device.desiredState?.state,
-        device.agent?.publishedVersion ?? 0,
-      ),
+      configVersion: device.desiredState?.version ?? 0,
     };
   }
 

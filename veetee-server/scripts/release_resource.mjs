@@ -44,6 +44,13 @@ function validateId(value, name) {
   return value;
 }
 
+function validateWakeNetModelId(value, name) {
+  if (!/^wn[A-Za-z0-9._-]{1,62}$/.test(value)) {
+    throw new Error(`${name} must be an exact WakeNet model id`);
+  }
+  return value;
+}
+
 function semver(value, name) {
   if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error(`${name} must be x.y.z`);
   return value;
@@ -88,6 +95,18 @@ async function main() {
     options["security-epoch"] ?? process.env.VEETEE_RESOURCE_SECURITY_EPOCH ?? "1",
     "security-epoch",
   );
+  const activationModel = validateWakeNetModelId(
+    required(options, "activation-model", "VEETEE_RESOURCE_ACTIVATION_MODEL"),
+    "activation-model",
+  );
+  const interruptModelValue =
+    options["interrupt-model"] ?? process.env.VEETEE_RESOURCE_INTERRUPT_MODEL;
+  const interruptModel = interruptModelValue
+    ? validateWakeNetModelId(interruptModelValue, "interrupt-model")
+    : undefined;
+  if (interruptModel === activationModel) {
+    throw new Error("activation-model and interrupt-model must be different");
+  }
   const inputStat = await stat(input);
   if (!inputStat.isFile() || inputStat.size <= 0 || inputStat.size > maximumSlotBytes) {
     throw new Error(`Input must be a non-empty file no larger than ${maximumSlotBytes} bytes`);
@@ -132,6 +151,13 @@ async function main() {
         runtime: "esp-sr",
         runtime_abi: 1,
         format_version: 1,
+        sample_rate: 16_000,
+        detectors: [
+          { id: activationModel, role: "activation" },
+          ...(interruptModel
+            ? [{ id: interruptModel, role: "interrupt" }]
+            : []),
+        ],
         sha256: payloadHash,
         bytes: inputStat.size,
       },

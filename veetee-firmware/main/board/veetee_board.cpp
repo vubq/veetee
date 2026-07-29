@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "config/device_config_health_policy.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -51,6 +52,7 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
                                   const char* fallback_resource_partition,
                                   const char* active_ui_partition,
                                   const char* fallback_ui_partition,
+                                  const config::DeviceConfig* applied_config,
                                   void* context) {
     gpio_config_t led = {};
     led.pin_bit_mask = 1ULL << kStatusLed;
@@ -94,14 +96,10 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
         return ESP_ERR_NO_MEM;
     }
 
-    error = wake_detector_.Initialize(
-#if CONFIG_VEETEE_ESP_SR_BRINGUP
-             active_resource_partition, kBringupProfiles,
-             sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0]),
-#else
-             nullptr, nullptr, 0,
-#endif
-             detector_event_sink, context);
+    device_config_ = applied_config == nullptr ? config::DeviceConfig{}
+                                                : *applied_config;
+    error = InitializeWakeDetector(active_resource_partition, device_config_,
+                                   detector_event_sink, context);
     if (error == ESP_OK && active_resource_partition != nullptr) {
         std::snprintf(loaded_wake_partition_.data(), loaded_wake_partition_.size(),
                       "%s", active_resource_partition);
@@ -112,14 +110,9 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
                  active_resource_partition == nullptr ? "none"
                                                       : active_resource_partition,
                  esp_err_to_name(error), fallback_resource_partition);
-        error = wake_detector_.Initialize(
-#if CONFIG_VEETEE_ESP_SR_BRINGUP
-            fallback_resource_partition, kBringupProfiles,
-            sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0]),
-#else
-            nullptr, nullptr, 0,
-#endif
-            detector_event_sink, context);
+        error = InitializeWakeDetector(fallback_resource_partition,
+                                       device_config_, detector_event_sink,
+                                       context);
         if (error == ESP_OK) {
             std::snprintf(loaded_wake_partition_.data(),
                           loaded_wake_partition_.size(), "%s",
@@ -137,10 +130,14 @@ esp_err_t VeeteeBoard::Initialize(ButtonSink button_sink,
     if (error != ESP_OK ||
         (error = audio_.Initialize(encoded_audio_sink, &OnDetectorPcm,
                                    playback_finished_sink,
-                                   context, &wake_detector_)) != ESP_OK ||
-        (error = button_.Start(button_sink, context)) != ESP_OK) {
+                                   context, &wake_detector_)) != ESP_OK) {
         return error;
     }
+    if (!audio_.ConfigureWakeAudioPreRoll(device_config_.send_wake_audio)) {
+        ESP_LOGE(kTag,
+                 "Unable to allocate signed wake pre-roll cache; button wake remains available");
+    }
+    if ((error = button_.Start(button_sink, context)) != ESP_OK) return error;
 
     ESP_LOGI(kTag, "Board profile initialized: %s", kBoardName);
     return ESP_OK;
@@ -153,15 +150,35 @@ esp_err_t VeeteeBoard::StartAudio(bool play_boot_chime) {
 }
 
 esp_err_t VeeteeBoard::ReloadWakeResource(const char* partition_label) {
+    return ReloadWakeRuntime(partition_label, device_config_);
+}
+
+esp_err_t VeeteeBoard::ReloadWakeRuntime(
+    const char* partition_label, const config::DeviceConfig& config) {
+    const bool previous_send_wake_audio = device_config_.send_wake_audio;
+    // Apply privacy revocation before detector/resource reload. Configure(false)
+    // stops recording, invalidates capture generations, clears cached Opus and
+    // releases the PSRAM ring even when the later detector reload fails.
+    if (!audio_.ConfigureWakeAudioPreRoll(config.send_wake_audio)) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (!config.send_wake_audio) {
+        device_config_.send_wake_audio = false;
+    }
+    std::array<audio::DetectorProfile, 2> profiles{};
+    const std::size_t profile_count = BuildDetectorProfiles(config, &profiles);
     esp_err_t error = wake_detector_.Reload(
-#if CONFIG_VEETEE_ESP_SR_BRINGUP
-        partition_label, kBringupProfiles,
-        sizeof(kBringupProfiles) / sizeof(kBringupProfiles[0])
-#else
-        nullptr, nullptr, 0
-#endif
-    );
+        profile_count == 0 ? nullptr : partition_label,
+        profile_count == 0 ? nullptr : profiles.data(), profile_count);
     if (error != ESP_OK) {
+        // Enabling is transactional: a failed reload cannot retain an unused
+        // allocation. Disabling is fail-closed and is never rolled back to an
+        // earlier opt-in merely because the detector/resource failed.
+        const bool fallback_send_wake_audio =
+            config.send_wake_audio ? previous_send_wake_audio : false;
+        if (!audio_.ConfigureWakeAudioPreRoll(fallback_send_wake_audio)) {
+            ESP_LOGE(kTag, "Unable to restore wake pre-roll after reload failure");
+        }
         loaded_wake_partition_[0] = '\0';
         return error;
     }
@@ -171,12 +188,68 @@ esp_err_t VeeteeBoard::ReloadWakeResource(const char* partition_label) {
         std::snprintf(loaded_wake_partition_.data(), loaded_wake_partition_.size(),
                       "%s", partition_label);
     }
+    device_config_ = config;
     ApplyState(state_);
     return ESP_OK;
 }
 
+bool VeeteeBoard::RevokeWakeAudioConsent() {
+    device_config_.send_wake_audio = false;
+    return audio_.ConfigureWakeAudioPreRoll(false);
+}
+
+bool VeeteeBoard::EnableWakeAudioConsentAfterCommit(
+    std::uint32_t expected_config_version) {
+    if (device_config_.version != expected_config_version ||
+        !device_config_.has_wake_profile) {
+        return false;
+    }
+    if (device_config_.send_wake_audio &&
+        audio_.wake_audio_pre_roll_configured()) {
+        return true;
+    }
+    if (!audio_.ConfigureWakeAudioPreRoll(true)) return false;
+    device_config_.send_wake_audio = true;
+    ApplyState(state_);
+    return true;
+}
+
+bool VeeteeBoard::WakeAudioConsentMatches(
+    std::uint32_t expected_config_version,
+    bool expected_send_wake_audio) const {
+    return device_config_.version == expected_config_version &&
+           config::WakeAudioRuntimeMatchesRequest(
+               expected_send_wake_audio, device_config_.send_wake_audio,
+               audio_.wake_audio_pre_roll_configured());
+}
+
+bool VeeteeBoard::WakeRuntimeConfigVersionMatches(
+    std::uint32_t expected_config_version) const {
+    return device_config_.version == expected_config_version;
+}
+
+esp_err_t VeeteeBoard::ApplyDeviceConfig(
+    const config::DeviceConfig& config,
+    const char* active_resource_partition) {
+    const char* partition = loaded_wake_partition();
+    if (config.has_wake_profile && partition == nullptr) {
+        partition = active_resource_partition;
+    }
+    if (config.has_wake_profile && partition == nullptr) {
+        if (!config.send_wake_audio) {
+            // Privacy disable is independent from model availability.
+            audio_.ConfigureWakeAudioPreRoll(false);
+            device_config_.send_wake_audio = false;
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ReloadWakeRuntime(partition, config);
+}
+
 bool VeeteeBoard::WakeResourceHealthy() const {
-    return wake_detector_.healthy();
+    return wake_detector_.healthy() &&
+           (!device_config_.send_wake_audio ||
+            audio_.wake_audio_pre_roll_configured());
 }
 
 esp_err_t VeeteeBoard::ReloadUiPack(const char* partition_label) {
@@ -201,7 +274,11 @@ void VeeteeBoard::UseBuiltInSignal() {
 }
 
 bool VeeteeBoard::UiPackHealthy() const {
-    return display_.UiPackHealthy();
+    if (display_mutex_ == nullptr) return false;
+    xSemaphoreTake(display_mutex_, portMAX_DELAY);
+    const bool healthy = display_.UiPackHealthy();
+    xSemaphoreGive(display_mutex_);
+    return healthy;
 }
 
 esp_err_t VeeteeBoard::ShowActivationCode(const char* code) {
@@ -232,10 +309,17 @@ void VeeteeBoard::ApplyState(app::State state) {
     const audio::DetectorRole detector_role = audio::DetectorRoleForState(
         state,
         wake_detector_.HasProfile(audio::DetectorRole::kActivation),
-        wake_detector_.HasProfile(audio::DetectorRole::kInterrupt));
+        wake_detector_.HasProfile(audio::DetectorRole::kInterrupt),
+        device_config_.version == 0 ||
+            device_config_.interrupt.enabled_while_speaking);
     if (!wake_detector_.SetRole(detector_role)) {
         ESP_LOGW(kTag, "Unable to apply detector role %s",
                  audio::ToString(detector_role));
+    }
+    if (!audio_.SetWakeAudioPreRollRecording(
+            device_config_.send_wake_audio &&
+            detector_role == audio::DetectorRole::kActivation)) {
+        ESP_LOGW(kTag, "Unable to apply wake pre-roll recording state");
     }
     const esp_err_t display_error = QueueDisplay(
         DisplayCommand{.kind = DisplayCommandKind::kState, .state = state});
@@ -243,6 +327,52 @@ void VeeteeBoard::ApplyState(app::State state) {
         ESP_LOGW(kTag, "Unable to queue state screen %s: %s",
                  app::ToString(state), esp_err_to_name(display_error));
     }
+}
+
+std::size_t VeeteeBoard::BuildDetectorProfiles(
+    const config::DeviceConfig& config,
+    std::array<audio::DetectorProfile, 2>* profiles) const {
+    if (profiles == nullptr) return 0;
+    *profiles = {};
+    if (config.version == 0) {
+#if CONFIG_VEETEE_ESP_SR_BRINGUP
+        (*profiles)[0] = kBringupProfiles[0];
+        return 1;
+#else
+        return 0;
+#endif
+    }
+    if (!config.has_wake_profile || !config.activation.enabled) return 0;
+
+    (*profiles)[0] = audio::DetectorProfile{
+        .role = audio::DetectorRole::kActivation,
+        .profile_id = config.wake_profile_id.data(),
+        .model_id = config.activation.model_id.data(),
+        .cooldown_ms = config.activation.cooldown_ms,
+        .detection_threshold =
+            static_cast<float>(config.activation.threshold_ppm) / 1000000.0F,
+    };
+    if (!config.interrupt.enabled) return 1;
+    (*profiles)[1] = audio::DetectorProfile{
+        .role = audio::DetectorRole::kInterrupt,
+        .profile_id = config.wake_profile_id.data(),
+        .model_id = config.interrupt.model_id.data(),
+        .cooldown_ms = config.interrupt.cooldown_ms,
+        .detection_threshold =
+            static_cast<float>(config.interrupt.threshold_ppm) / 1000000.0F,
+    };
+    return 2;
+}
+
+esp_err_t VeeteeBoard::InitializeWakeDetector(
+    const char* partition_label, const config::DeviceConfig& config,
+    DetectorEventSink detector_event_sink, void* context) {
+    std::array<audio::DetectorProfile, 2> profiles{};
+    const std::size_t profile_count = BuildDetectorProfiles(config, &profiles);
+    return wake_detector_.Initialize(
+        profile_count == 0 ? nullptr : partition_label,
+        profile_count == 0 ? nullptr : profiles.data(), profile_count,
+        detector_event_sink, context);
 }
 
 void VeeteeBoard::DisplayTaskEntry(void* context) {
@@ -319,6 +449,16 @@ bool VeeteeBoard::StartAudioDiagnostic(std::uint32_t duration_seconds,
 
 audio::AudioRuntimeHealth VeeteeBoard::AudioHealth(std::uint64_t now_ms) {
     return audio_.Health(now_ms);
+}
+
+bool VeeteeBoard::PopWakeAudioPacket(std::uint8_t* destination,
+                                     std::size_t capacity,
+                                     std::size_t* length) {
+    return audio_.PopWakeAudioPacket(destination, capacity, length);
+}
+
+void VeeteeBoard::DiscardWakeAudio() {
+    audio_.DiscardWakeAudio();
 }
 
 }  // namespace veetee::board

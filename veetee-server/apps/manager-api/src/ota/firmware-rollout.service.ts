@@ -16,6 +16,7 @@ import {
 import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
 import { PrismaService } from "../database/prisma.service.js";
+import { mergeDeviceDesiredState } from "../store/device-desired-state.js";
 
 export interface FirmwareReleaseRecord {
   id: string;
@@ -240,14 +241,19 @@ export class FirmwareRolloutService {
       where: { id },
       data: { status: FirmwareRolloutStatus.ROLLED_BACK },
     });
-    const selected = rollout.selectedDeviceIds;
+    const selected = [...rollout.selectedDeviceIds].sort();
     await this.prisma.$transaction(async (transaction) => {
       for (const deviceId of selected) {
-        await this.writeDesired(transaction, deviceId, {
-          firmwareVersion: previous.version,
-          firmwareManifestId: previous.id,
-          firmwareChannel: previous.channel,
-        });
+        await this.writeDesired(
+          transaction,
+          deviceId,
+          context.principal.tenantId,
+          {
+            firmwareVersion: previous.version,
+            firmwareManifestId: previous.id,
+            firmwareChannel: previous.channel,
+          },
+        );
       }
     });
     await this.audit.record({
@@ -298,7 +304,7 @@ export class FirmwareRolloutService {
       rollout.canaryDeviceIds,
       rollout.artifact.version,
     );
-    const assigned = [...new Set([...rollout.selectedDeviceIds, ...selected])];
+    const assigned = [...new Set([...rollout.selectedDeviceIds, ...selected])].sort();
     const artifact = rollout.artifact;
     await this.prisma.$transaction(async (transaction) => {
       await transaction.firmwareRollout.update({
@@ -306,7 +312,7 @@ export class FirmwareRolloutService {
         data: { selectedDeviceIds: assigned },
       });
       for (const deviceId of assigned) {
-        await this.writeDesired(transaction, deviceId, {
+        await this.writeDesired(transaction, deviceId, tenantId, {
           firmwareVersion: artifact.version,
           firmwareManifestId: artifact.id,
           firmwareChannel: artifact.channel,
@@ -356,15 +362,16 @@ export class FirmwareRolloutService {
   private async writeDesired(
     transaction: Prisma.TransactionClient,
     deviceId: string,
+    tenantId: string,
     firmware: Record<string, string>,
   ): Promise<void> {
-    const current = await transaction.deviceDesiredState.findUnique({ where: { deviceId } });
-    const next = { ...((current?.state ?? {}) as Record<string, unknown>), ...firmware };
-    await transaction.deviceDesiredState.upsert({
-      where: { deviceId },
-      create: { deviceId, version: 1, state: next as Prisma.InputJsonValue },
-      update: { version: (current?.version ?? 0) + 1, state: next as Prisma.InputJsonValue },
-    });
+    const desired = await mergeDeviceDesiredState(
+      transaction,
+      deviceId,
+      tenantId,
+      firmware,
+    );
+    if (!desired) throw new NotFoundException("Firmware rollout device not found");
   }
 
   private async find(id: string, tenantId: string) {

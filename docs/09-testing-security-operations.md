@@ -12,6 +12,8 @@
 - OTA manifest/version/signature parser.
 - Config snapshot schema/ETag/desired-reported reconciliation.
 - Resource manifest/member hash/ABI/capability/partition budget validation.
+- ESP-SR signed detector inventory: exact 16 kHz member, one activation, optional
+  distinct interrupt, và device config không được tham chiếu model/role ngoài pack.
 - UI Pack VTPACK1 header/index/member bounds, CRC32, SHA-256, required locale/theme,
   executable/path-traversal rejection và built-in Mobile (`signal`) fallback.
 - Restricted JCS canonicalization, detached Ed25519 vector, duplicate/NUL/trailing

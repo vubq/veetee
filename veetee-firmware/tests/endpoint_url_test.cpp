@@ -18,6 +18,8 @@ int main() {
     using veetee::network::IsHttpEndpointUrl;
     using veetee::network::IsWebSocketEndpointUrl;
     using veetee::network::BuildHttpOriginEndpoint;
+    using veetee::network::IsCanonicalArtifactContentUrl;
+    using veetee::network::IsCanonicalArtifactManifestUrl;
 
     Expect(IsHttpEndpointUrl("http://192.168.1.20:8001/veetee/ota/"),
            "LAN bootstrap URL");
@@ -60,6 +62,29 @@ int main() {
                                     "/veetee/report?secret=yes", endpoint,
                                     sizeof(endpoint)),
            "endpoint query rejected");
+
+    constexpr char bootstrap[] =
+        "http://192.168.1.20:8001/veetee/ota/";
+    Expect(IsCanonicalArtifactManifestUrl(
+               bootstrap,
+               "http://192.168.1.20:8001/veetee/artifacts/manifests/fw-0.4.0"),
+           "canonical same-origin manifest accepted");
+    Expect(IsCanonicalArtifactContentUrl(
+               bootstrap,
+               "http://192.168.1.20:8001/veetee/artifacts/fw-0.4.0/content"),
+           "canonical same-origin content accepted");
+    Expect(!IsCanonicalArtifactManifestUrl(
+               bootstrap,
+               "http://attacker.local/veetee/artifacts/manifests/fw-0.4.0"),
+           "cross-origin manifest rejected");
+    Expect(!IsCanonicalArtifactContentUrl(
+               bootstrap,
+               "http://192.168.1.20:8001/veetee/artifacts/fw-0.4.0/other"),
+           "non-content artifact route rejected");
+    Expect(!IsCanonicalArtifactManifestUrl(
+               bootstrap,
+               "http://192.168.1.20:8001/veetee/artifacts/manifests/../secret"),
+           "non-canonical artifact id rejected");
 
     std::cout << "endpoint URL tests passed\n";
     return 0;

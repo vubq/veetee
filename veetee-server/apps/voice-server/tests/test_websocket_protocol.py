@@ -29,8 +29,10 @@ from veetee_voice_server.conversation.types import (
 )
 from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.transport.lab import SimulatedLabToolBroker
+from veetee_voice_server.transport.opus import OpusEncoder
 from veetee_voice_server.transport.protocol import (
     AbortEvent,
+    ListenEvent,
     ProtocolViolationError,
     assistant_sleep_payload,
     llm_payload,
@@ -317,6 +319,196 @@ async def test_protocol_parser_enforces_size_audio_and_session_contract() -> Non
             "params": {"capabilities": {}},
         },
     ) == json.loads((FIXTURES.parent / "mcp/initialize.json").read_text(encoding="utf-8"))
+
+
+async def test_wake_detect_buffers_binary_until_matching_start_without_reset() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        wake_audio_pre_roll_max_ms=2_000,
+    )
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    telemetry = FakeTelemetry()
+    voice_session._telemetry = telemetry  # type: ignore[assignment]
+    encoder = OpusEncoder(16_000)
+    try:
+        packet = encoder.encode(b"\0\0" * 960, frame_samples=960)
+        await voice_session._handle_control(
+            ListenEvent(
+                session_id=voice_session.session_id,
+                type="listen",
+                state="detect",
+                source="wake_word",
+            )
+        )
+        await voice_session._handle_audio(packet)
+
+        assert voice_session.arbiter.snapshot.state is ConversationState.STANDBY
+        assert len(voice_session._pending_wake_audio) == 960 * 2
+
+        with patch.object(
+            voice_session,
+            "_replay_pending_wake_audio",
+            new=AsyncMock(),
+        ) as replay:
+            await voice_session._handle_control(
+                ListenEvent(
+                    session_id=voice_session.session_id,
+                    type="listen",
+                    state="start",
+                    mode="auto",
+                    source="wake_word",
+                )
+            )
+
+        replay.assert_awaited_once()
+        assert len(replay.await_args.args[0]) == 960 * 2
+        assert voice_session._pending_wake_audio == b""
+        assert any(
+            event == "wake_audio.preroll_applied"
+            and payload["audio_bytes"] == 960 * 2
+            for event, payload in telemetry.events
+        )
+    finally:
+        encoder.close()
+        await voice_session.close()
+
+
+async def test_wake_preroll_is_bounded_and_stale_paths_discard_it() -> None:
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        wake_audio_pre_roll_max_ms=60,
+    )
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    encoder = OpusEncoder(16_000)
+    try:
+        packet = encoder.encode(b"\0\0" * 960, frame_samples=960)
+        detect = ListenEvent(
+            session_id=voice_session.session_id,
+            type="listen",
+            state="detect",
+            source="wake_word",
+        )
+        await voice_session._handle_control(detect)
+        await voice_session._handle_audio(packet)
+        await voice_session._handle_audio(packet)
+        assert len(voice_session._pending_wake_audio) == 960 * 2
+        assert voice_session._pending_wake_dropped_bytes == 960 * 2
+
+        await voice_session._handle_control(
+            AbortEvent(
+                session_id=voice_session.session_id,
+                type="abort",
+                reason="button_interrupt",
+                source="button",
+            )
+        )
+        assert voice_session._pending_wake_audio == b""
+        assert voice_session._pending_wake_generation is None
+
+        await voice_session._handle_control(detect)
+        await voice_session._handle_audio(packet)
+        with patch.object(
+            voice_session,
+            "_replay_pending_wake_audio",
+            new=AsyncMock(),
+        ) as replay:
+            await voice_session._handle_control(
+                ListenEvent(
+                    session_id=voice_session.session_id,
+                    type="listen",
+                    state="start",
+                    mode="auto",
+                    source="button",
+                )
+            )
+        replay.assert_not_awaited()
+        assert voice_session._pending_wake_audio == b""
+
+        await voice_session._handle_control(
+            ListenEvent(
+                session_id=voice_session.session_id,
+                type="listen",
+                state="stop",
+                reason="user_disable",
+            )
+        )
+        assert voice_session.arbiter.snapshot.state is ConversationState.STANDBY
+        await voice_session._handle_control(detect)
+        await voice_session._handle_audio(packet)
+        assert voice_session._pending_wake_audio
+        await voice_session.close()
+        assert voice_session._pending_wake_audio == b""
+        assert voice_session._pending_wake_generation is None
+    finally:
+        encoder.close()
+        await voice_session.close()
+
+
+async def test_listen_detect_requires_explicit_wake_source_but_not_phrase_text() -> None:
+    session_id = "session-1"
+    parsed = parse_client_event(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "type": "listen",
+                "state": "detect",
+                "source": "wake_word",
+            }
+        ),
+        session_id=session_id,
+    )
+    assert isinstance(parsed, ListenEvent)
+    assert parsed.text is None
+
+    with pytest.raises(ProtocolViolationError, match="invalid client event"):
+        parse_client_event(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "type": "listen",
+                    "state": "detect",
+                    "source": "button",
+                }
+            ),
+            session_id=session_id,
+        )
+
+
+async def test_wake_detect_is_rejected_outside_standby_or_closing() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+    websocket = FakeWebSocket()
+    voice_session = session(websocket, settings)
+    await voice_session._handle_control(
+        ListenEvent(
+            session_id=voice_session.session_id,
+            type="listen",
+            state="start",
+            mode="auto",
+            source="button",
+        )
+    )
+
+    with pytest.raises(
+        ProtocolViolationError,
+        match="wake detect outside standby or closing",
+    ) as error:
+        await voice_session._handle_control(
+            ListenEvent(
+                session_id=voice_session.session_id,
+                type="listen",
+                state="detect",
+                source="wake_word",
+            )
+        )
+
+    assert error.value.close_code == 1008
+    assert voice_session._pending_wake_audio == b""
+    assert voice_session._pending_wake_generation is None
+    await voice_session.close()
 
 
 async def test_session_bootstraps_device_mcp_catalog_after_hello() -> None:

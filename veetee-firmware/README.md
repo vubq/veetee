@@ -86,6 +86,13 @@ mono/chunk 512, startup chime, microphone, Wi-Fi, activation và resource apply.
 I2S TX giữ clock bằng zero PCM khi idle để tránh MAX98357A pop/chirp do clock
 stop/start; đây là mitigation mặc định, còn xác nhận âm thanh thực tế và phương án
 hardware `SD/MUTE` thuộc board acceptance.
+
+AEC có đường đo opt-in `CONFIG_VEETEE_EXPERIMENTAL_AEC=y`, mặc định `n`. Đường này
+dùng direct ESP-SR 2.4.7 low-cost AEC: reference là đúng PCM loa đã áp volume, hạ
+24 kHz xuống 16 kHz và giữ bounded trong PSRAM. Nó chỉ làm sạch local detector khi
+playback active; không đổi hello `aec=false`, không mở uplink lúc `SPEAKING` và không
+cam kết full-duplex. Sau khi bật cờ phải build/flash rồi đo ERLE, false wake, bảo toàn
+near-end và interrupt p95 trên board thật; host test chỉ xác nhận resampler/gate.
 `resource_1` đã qua health window thành `active` và soak ngắn hơn một phút không
 panic/watchdog; soak 10 phút cùng power-loss matrix vẫn là release gate.
 
@@ -143,8 +150,63 @@ Wi-Fi scan buffers nằm trong manager thay vì system-event stack; event task d
 - Mã được vẽ bằng renderer số local, không chứa câu semantic hard-code. Sau bind,
   màn hình xóa code và chuyển sang trạng thái standby.
 
-Authenticated bootstrap cũng nhận optional config/resource desired state. Firmware
-đã có task bounded để pull manifest tối đa 32 KiB, từ chối redirect, verify strict
+Authenticated bootstrap cũng nhận optional config/resource desired state. Device
+config là signed firmware projection tối đa 8 KiB, version theo
+`DeviceDesiredState.version` (không phải agent config version), restricted JCS +
+detached Ed25519 và ETag `cfg1-<sha256-base64url>`. Firmware chỉ pull canonical URL
+cùng bootstrap origin, không redirect/compression, chỉ gửi applied ETag trong
+`If-None-Match` và chỉ chấp nhận `304` khi version/ETag đã apply khớp tuyệt đối.
+Parser kiểm exact schema/device/version/key/security epoch, integer-only bounds và
+exact WakeNet model IDs. Interrupt profile được phép `null`; activation/interrupt
+không được dùng cùng model. `send_wake_audio` mặc định tắt; opt-in đã ký mới cấp ring
+PSRAM 32 gói Opus (1,92 giây) và gửi theo thứ tự
+`listen:detect -> cached binary -> listen:start`. Button/abort/close không tái sử dụng
+cache. Retry transport chỉ giữ nguyên snapshot/cache nếu chưa bắt đầu gửi sequence;
+sau khi `detect` hoặc một phần sequence đã được thử gửi, cache bị xóa và không replay.
+Mọi config reload/rollback từ `true` về `false` dừng record, xóa Opus cache và giải
+phóng ring PSRAM ngay cả khi wake model/resource reload sau đó thất bại.
+
+Config signer rotation phải đi cùng một lần tăng `DeviceDesiredState.version` cho
+mọi device bị ảnh hưởng. Firmware coi version/ETag là immutable pair và không nhận
+chữ ký/ETag mới dưới cùng version. Nếu firmware nâng minimum security epoch cao hơn
+record cũ, nó atomically bỏ applied config cũ, giữ Wi-Fi/identity, boot button-only
+và pull snapshot mới thay vì reboot-loop.
+
+Config record NVS có version + CRC + security-epoch floor. WebSocket
+`config_changed` chỉ invalidation; authenticated poll 60 giây ở idle bù event bị
+mất. Config apply ở idle và chỉ sau đúng `required_resource_version`. Nếu resource
+và config cùng đổi, firmware giữ một health transaction chung; target mới không
+overwrite snapshot đang kiểm tra, và lỗi load/persist/health restore previous
+resource cùng last-known-good config. Config-only cũng chờ health 5 giây, chỉ
+confirm/persist ở idle với gate đóng; target bị supersede sẽ rollback. Store dùng
+mutex snapshot giữa app/reconciler task. Physical pairing recovery cancel reconciler
+và reset config record. Config-only report dùng cùng sequence đơn điệu và Manager
+merge theo subsystem nên không xóa resource/UI/firmware state.
+
+Shared device settings dùng mutex + snapshot; bootstrap poll không mutation token/URL
+trước mắt reporter, WebSocket hay downloader. Wake hot-reload đóng input gate và đợi
+mọi PCM submission in-flight rời queue trước khi destroy/recreate runtime; config có
+thể khôi phục wake từ active resource khi board đang button-only.
+
+Signed executable OTA dùng journal `veetee_fw_ota` versioned + CRC. OTA worker chỉ
+download từ byte 0, verify và stage inactive `ota_*`; application task persist
+`rebooting`, commit boot partition rồi mới reboot. Image pending-verify defer target
+firmware mới nhưng vẫn hoàn tất authenticated bootstrap/config/resource/UI. Health
+deadline là 30 giây sau `GOT_IP` và overall 90 giây từ boot với Wi-Fi timeout mặc định
+60 giây. `active/rolled_back/failed` chỉ clear attempt sau durable terminal report;
+rollback chỉ được report sau khi bootloader thực sự quay về image cũ. Executable OTA
+V1 chưa có Range/resume hoặc download-offset journal.
+
+Signed executable OTA chiếm activation boundary trước config/resource/UI. Application
+task vào `upgrading`, tắt audio/wake, cancel các reconciler rồi mới schedule worker.
+Manifest/content chỉ được lấy từ canonical artifact route cùng bootstrap origin, không
+redirect/compression; stale generation không emit/set boot/reboot. Worker không tự
+restart. Image pending chỉ mark-valid trong deadline 30 giây sau authenticated
+bootstrap + idle + capture/playback/wake/UI health; report reboot/health/result được
+persist để replay qua reboot. UI Pack V1 vẫn giữ 13 style, state `upgrading` dùng style
+`activating` với built-in warning copy riêng.
+
+Resource task bounded kéo manifest tối đa 32 KiB, từ chối redirect, verify strict
 schema/board/flash/PSRAM/slot/SemVer/resource ABI/runtime, security epoch và
 detached Ed25519. Sau đó firmware stream raw ESP-SR payload vào inactive resource
 slot với HTTP Range resume, SHA-256, CRC-protected NVS journal, safe-boundary hot
@@ -153,9 +215,9 @@ reload, health window và rollback. Cancellation giữ active slot cùng checkpo
 dùng PSA Crypto. Reporter task gửi apply state bằng authenticated `PUT`, persist
 sequence/terminal retry trong NVS riêng và coalesce trạng thái trung gian. Hardware
 E2E portal -> Wi-Fi -> bootstrap -> code 6 số -> bind -> activate -> signed resource
-apply đã pass trên thiết bị hiện tại. Phần resource còn lại là chạy đủ
-power-loss/corruption matrix và hiển thị drift/timeline trên web. Voice E2E vật lý
-vẫn chờ voice-server/local AI hoàn chỉnh và bài test nói trực tiếp với thiết bị.
+apply đã pass trên thiết bị hiện tại. Phần config/resource mới vẫn cần live smoke,
+power-loss/corruption matrix và drift/timeline trên Web. Voice E2E vật lý vẫn cần
+bài test nói-nghe trực tiếp với thiết bị.
 
 ## WebSocket handshake hiện tại
 

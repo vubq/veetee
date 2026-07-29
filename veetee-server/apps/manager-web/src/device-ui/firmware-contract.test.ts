@@ -30,7 +30,8 @@ describe("Device UI firmware contract", () => {
         `{"${copy.number}", "${copy.kicker}", "${copy.title}", "${copy.hint}"}`,
       );
     }
-    expect(displaySource).toContain("constexpr std::array<ScreenCopy, 13> kScreenCopy");
+    // Executable OTA adds the built-in upgrading screen after the 13-state UI ABI.
+    expect(displaySource).toContain("constexpr std::array<ScreenCopy, 14> kScreenCopy");
     expect(uiPackSource).toContain("constexpr std::array<const char*, 13> kStateNames");
   });
 

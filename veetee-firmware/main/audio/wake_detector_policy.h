@@ -14,7 +14,8 @@ enum class DetectorRole : std::uint8_t {
 
 DetectorRole DetectorRoleForState(app::State state,
                                   bool activation_available,
-                                  bool interrupt_available);
+                                  bool interrupt_available,
+                                  bool interrupt_while_speaking = true);
 
 const char* ToString(DetectorRole role);
 

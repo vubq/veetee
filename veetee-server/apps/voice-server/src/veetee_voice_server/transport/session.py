@@ -578,6 +578,16 @@ class VoiceSession:
         self._speech = bytearray()
         self._pre_roll = bytearray()
         self._pre_roll_bytes = settings.input_sample_rate * settings.vad_pre_roll_ms // 1000 * 2
+        self._pending_wake_audio = bytearray()
+        self._pending_wake_audio_max_bytes = (
+            settings.input_sample_rate
+            * settings.wake_audio_pre_roll_max_ms
+            // 1_000
+            * 2
+        )
+        self._pending_wake_generation: int | None = None
+        self._pending_wake_source: WakeSource | None = None
+        self._pending_wake_dropped_bytes = 0
         self._noise_reference = b""
         self._vad_probabilities: list[float] = []
         self._vad_processing_ms = 0.0
@@ -642,6 +652,7 @@ class VoiceSession:
         if self.remote_mcp is not None:
             await self.remote_mcp.close()
         await self._cancel_asr()
+        self._clear_pending_wake_audio()
         await self.inactivity.close()
         await self.arbiter.abort("socket_closed")
         self._decoder.close()
@@ -649,8 +660,23 @@ class VoiceSession:
         await self._telemetry.close()
 
     async def _handle_control(self, event: ClientEvent) -> None:
-        if isinstance(event, ListenEvent) and event.state in {"start", "detect"}:
+        if isinstance(event, ListenEvent) and event.state == "detect":
+            if self.arbiter.snapshot.state not in {
+                ConversationState.STANDBY,
+                ConversationState.CLOSING,
+            }:
+                self._clear_pending_wake_audio()
+                raise ProtocolViolationError(
+                    "wake detect outside standby or closing",
+                    close_code=1008,
+                )
+            self._clear_pending_wake_audio()
+            self._pending_wake_generation = self.arbiter.snapshot.generation
+            self._pending_wake_source = WakeSource.WAKE_WORD
+            return
+        if isinstance(event, ListenEvent) and event.state == "start":
             source = WakeSource(event.source or "button")
+            pending_wake_audio = self._take_pending_wake_audio(source)
             self._wake_source = source
             if self.arbiter.snapshot.state is ConversationState.CLOSING:
                 await self.inactivity.wake_during_closing(source)
@@ -662,6 +688,18 @@ class VoiceSession:
             await self.sink.send_listening(
                 source, generation=self.arbiter.snapshot.generation
             )
+            if pending_wake_audio:
+                self._telemetry.record(
+                    self.session_id,
+                    "wake_audio.preroll_applied",
+                    generation=self.arbiter.snapshot.generation,
+                    payload={
+                        "audio_bytes": len(pending_wake_audio),
+                        "dropped_bytes": self._pending_wake_dropped_bytes,
+                    },
+                )
+                self._pending_wake_dropped_bytes = 0
+                await self._replay_pending_wake_audio(pending_wake_audio)
             return
         if isinstance(event, ListenEvent) and event.state == "stop":
             await self._close_assistant(event.reason or "listen_stop")
@@ -693,6 +731,7 @@ class VoiceSession:
             )
 
     async def _abort_current(self, reason: str) -> None:
+        self._clear_pending_wake_audio()
         was_closing = self.arbiter.snapshot.state is ConversationState.CLOSING
         receipt = await self.arbiter.abort(reason)
         self._telemetry.record(
@@ -713,6 +752,7 @@ class VoiceSession:
             await self.inactivity.turn_completed()
 
     async def _close_assistant(self, reason: str) -> None:
+        self._clear_pending_wake_audio()
         await self.inactivity.assistant_closed(reason)
         snapshot = self.arbiter.snapshot
         self.sink.mark_cancelled(snapshot.generation)
@@ -729,6 +769,12 @@ class VoiceSession:
             raise ProtocolViolationError("invalid Opus packet") from error
         if not pcm:
             return
+        if self._pending_wake_generation is not None:
+            self._append_pending_wake_audio(pcm)
+            return
+        await self._handle_pcm(pcm)
+
+    async def _handle_pcm(self, pcm: bytes) -> None:
         if self.arbiter.snapshot.state is not ConversationState.LISTENING:
             return
         if self._asr_task is not None and not self._asr_task.done():
@@ -800,6 +846,52 @@ class VoiceSession:
                 },
             )
             self._start_asr()
+
+    async def _replay_pending_wake_audio(self, pcm: bytes) -> None:
+        frame_bytes = (
+            self.settings.input_sample_rate
+            * self.settings.input_frame_duration_ms
+            // 1_000
+            * 2
+        )
+        if frame_bytes <= 0:
+            return
+        for offset in range(0, len(pcm), frame_bytes):
+            await self._handle_pcm(pcm[offset : offset + frame_bytes])
+            if self._asr_task is not None and not self._asr_task.done():
+                break
+
+    def _append_pending_wake_audio(self, pcm: bytes) -> None:
+        maximum = self._pending_wake_audio_max_bytes
+        if maximum <= 0:
+            self._pending_wake_dropped_bytes += len(pcm)
+            return
+        self._pending_wake_audio.extend(pcm)
+        overflow = len(self._pending_wake_audio) - maximum
+        if overflow > 0:
+            del self._pending_wake_audio[:overflow]
+            self._pending_wake_dropped_bytes += overflow
+
+    def _take_pending_wake_audio(self, source: WakeSource) -> bytes:
+        current_generation = self.arbiter.snapshot.generation
+        valid = (
+            source is WakeSource.WAKE_WORD
+            and self._pending_wake_source is source
+            and self._pending_wake_generation == current_generation
+        )
+        audio = bytes(self._pending_wake_audio) if valid else b""
+        self._pending_wake_audio.clear()
+        self._pending_wake_generation = None
+        self._pending_wake_source = None
+        if not valid:
+            self._pending_wake_dropped_bytes = 0
+        return audio
+
+    def _clear_pending_wake_audio(self) -> None:
+        self._pending_wake_audio.clear()
+        self._pending_wake_generation = None
+        self._pending_wake_source = None
+        self._pending_wake_dropped_bytes = 0
 
     def _append_speech(self, pcm: bytes | bytearray) -> bool:
         remaining = self.settings.max_utterance_buffer_bytes - len(self._speech)

@@ -87,8 +87,9 @@ describe("firmware rollout policy", () => {
       updatedAt: new Date("2026-07-23T00:01:00.000Z"),
       artifact: { version: "0.4.0" },
     };
-    const upsert = vi.fn().mockResolvedValue(undefined);
+    const upsert = vi.fn().mockResolvedValue({ version: 3 });
     const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "locked-device" }]),
       deviceDesiredState: {
         findUnique: vi.fn().mockResolvedValue({
           version: 2,

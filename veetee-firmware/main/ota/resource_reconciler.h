@@ -52,7 +52,7 @@ public:
     using EventSink = bool (*)(const ResourceReconcileNotification& notification,
                                void* context);
 
-    esp_err_t Initialize(settings::DeviceSettings* settings, EventSink sink,
+    esp_err_t Initialize(settings::SettingsStore* settings_store, EventSink sink,
                          void* context,
                          ResourceClass resource_class = ResourceClass::kWakeModel);
     bool Schedule(const char* desired_version, const char* manifest_url);
@@ -104,7 +104,7 @@ private:
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;
     [[nodiscard]] const char* PartitionLabel(std::uint8_t slot) const;
 
-    settings::DeviceSettings* settings_ = nullptr;
+    settings::SettingsStore* settings_store_ = nullptr;
     ResourceClass resource_class_ = ResourceClass::kWakeModel;
     EventSink sink_ = nullptr;
     void* sink_context_ = nullptr;

@@ -92,6 +92,18 @@ menu "Veetee hardware bring-up"
             MAX98357A breakout boards. Disable only after the exact amplifier
             wiring has a validated hardware mute/SD control path.
 
+    config VEETEE_EXPERIMENTAL_AEC
+        bool "Enable experimental ESP-SR AEC for local detector validation"
+        default n
+        help
+            Feeds the actual volume-adjusted 24 kHz speaker PCM through a
+            bounded 24-to-16 kHz reference path into direct ESP-SR AEC. This
+            only cleans local detector PCM while playback is active. It does
+            not advertise AEC in protocol V1, enable conversation capture
+            while speaking, or claim full-duplex support. Enable only for
+            physical ERLE, false-wake and interrupt-latency measurements on
+            the exact INMP441 + MAX98357A assembly.
+
     config VEETEE_DEFAULT_VOLUME_PERCENT
         int "Default software speaker volume (percent)"
         range 0 100
@@ -176,5 +188,14 @@ menu "Veetee hardware bring-up"
         default 1
         help
             Rejects manifests signed before a revoked key/security epoch.
+
+    config VEETEE_MIN_CONFIG_SECURITY_EPOCH
+        int "Minimum accepted device-config security epoch"
+        range 1 2147483647
+        default 1
+        help
+            Rejects signed device snapshots issued before a revoked
+            configuration key/security epoch. The applied epoch floor is also
+            persisted in NVS so an older snapshot cannot replace it.
 
 endmenu

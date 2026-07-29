@@ -1,0 +1,15 @@
+{
+  "version": 13,
+  "bootId": "95eff5a6-3dcf-4cb4-a6d9-e31cd6d82f63",
+  "state": {
+    "schemaVersion": 1,
+    "firmware": {
+      "version": "0.4.0"
+    },
+    "config": {
+      "desiredVersion": 8,
+      "appliedVersion": 7,
+      "phase": "applying"
+    }
+  }
+}

@@ -1,8 +1,10 @@
 import { PATH_METADATA } from "@nestjs/common/constants";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
+import type { FastifyReply } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 
+import type { DeviceConfigService } from "../config/device-config.service.js";
 import type { ControlPlaneStore } from "../store/control-plane.store.js";
 import { AssignAgentDto, DevicesController, ReportedStateDto } from "./devices.controller.js";
 
@@ -71,11 +73,29 @@ describe("DevicesController reported state", () => {
     ).resolves.toEqual([]);
   });
 
+  it("accepts a config-only reconcile report without an artifact subsystem", async () => {
+    const input = plainToInstance(ReportedStateDto, {
+      ...validReport,
+      state: {
+        schemaVersion: 1,
+        firmware: { version: "0.2.0" },
+        config: {
+          desiredVersion: 13,
+          appliedVersion: 12,
+          phase: "applying",
+        },
+      },
+    });
+    await expect(
+      validate(input, { whitelist: true, forbidNonWhitelisted: true }),
+    ).resolves.toEqual([]);
+  });
+
   it("rejects invalid progress and failure semantics", async () => {
     const store = {
       updateReportedState: vi.fn(),
     } as unknown as ControlPlaneStore;
-    const controller = new DevicesController(store);
+    const controller = new DevicesController(store, {} as DeviceConfigService);
     const invalidProgress = plainToInstance(ReportedStateDto, {
       ...validReport,
       state: {
@@ -106,7 +126,94 @@ describe("DevicesController reported state", () => {
       state: { ...validReport.state, ui: validReport.state.resource },
     });
     await expect(controller.report("device-1", ambiguous)).rejects.toThrow(
-      /exactly one artifact subsystem/,
+      /exactly one reconcile subsystem/,
+    );
+  });
+
+  it("validates config version and failure semantics before storing", async () => {
+    const store = {
+      updateReportedState: vi.fn().mockResolvedValue({ id: "device-1" }),
+    } as unknown as ControlPlaneStore;
+    const controller = new DevicesController(store, {} as DeviceConfigService);
+    const report = (config: Record<string, unknown>) => plainToInstance(ReportedStateDto, {
+      ...validReport,
+      state: {
+        schemaVersion: 1,
+        firmware: { version: "0.2.0" },
+        config,
+      },
+    });
+
+    await expect(controller.report("device-1", report({
+      desiredVersion: 4,
+      appliedVersion: 5,
+      phase: "applying",
+    }))).rejects.toThrow(/appliedVersion/);
+    await expect(controller.report("device-1", report({
+      desiredVersion: 5,
+      appliedVersion: 4,
+      phase: "active",
+    }))).rejects.toThrow(/do not match/);
+    await expect(controller.report("device-1", report({
+      desiredVersion: 5,
+      appliedVersion: 4,
+      phase: "failed",
+    }))).rejects.toThrow(/errorCode/);
+
+    await expect(controller.report("device-1", report({
+      desiredVersion: 5,
+      appliedVersion: 4,
+      phase: "failed",
+      errorCode: "signature_invalid",
+    }))).resolves.toEqual({ id: "device-1" });
+  });
+
+  it("serves only the signed projection and returns 304 for a matching ETag", async () => {
+    const body = {
+      schema_version: 1 as const,
+      device_id: "device-1",
+      version: 7,
+      wake_profile: null,
+      signature: {
+        algorithm: "ed25519" as const,
+        key_id: "test-key",
+        security_epoch: 1,
+        value: "signature",
+      },
+    };
+    const deviceConfig = {
+      snapshot: vi.fn().mockResolvedValue({
+        body,
+        etag: "cfg1-current",
+        canonicalBody: "{}",
+      }),
+    } as unknown as DeviceConfigService;
+    const store = {
+      deviceForAuthenticatedDevice: vi.fn(),
+    } as unknown as ControlPlaneStore;
+    const headers: Record<string, string> = {};
+    let status = 200;
+    const reply = {
+      header: vi.fn((name: string, value: string) => {
+        headers[name] = value;
+      }),
+      code: vi.fn((value: number) => {
+        status = value;
+      }),
+    } as unknown as FastifyReply;
+    const controller = new DevicesController(store, deviceConfig);
+
+    await expect(controller.desired("device-1", undefined, reply)).resolves.toEqual(body);
+    expect(headers).toMatchObject({
+      ETag: '"cfg1-current"',
+      "Cache-Control": "private, no-cache",
+    });
+    expect(store.deviceForAuthenticatedDevice).not.toHaveBeenCalled();
+
+    await expect(controller.desired("device-1", 'W/"cfg1-current"', reply)).resolves.toBeUndefined();
+    expect(status).toBe(304);
+    expect(Reflect.getMetadata(PATH_METADATA, DevicesController.prototype.desired)).toBe(
+      "veetee/config/v1/devices/:id",
     );
   });
 

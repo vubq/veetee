@@ -168,7 +168,6 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
     vad: "silero-local",
     asr: "sherpa-onnx",
     llm: "openai-compatible-cliproxyapi",
-    llmFallback: "groq-cloud",
     tts: "vieneu-local",
   } as const;
   const providerIds = Object.fromEntries(
@@ -240,10 +239,7 @@ export function defaultAgentConfig(providerIds: Record<string, string> = {}): Re
           providerChains: ["vad", "asr", "llm", "tts"].map((kind) => ({
             kind,
             locale: "vi-VN",
-            providerIds:
-              kind === "llm"
-                ? [providerIds.llm, providerIds.llmFallback].filter(Boolean)
-                : [providerIds[kind]],
+            providerIds: [providerIds[kind]],
           })),
         }
       : {}),

@@ -8,6 +8,7 @@
 
 #include "board/board_config.h"
 #include "display/state_visual.h"
+#include "display/ui_state_policy.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -59,7 +60,7 @@ struct ScreenCopy {
     const char* hint;
 };
 
-constexpr std::array<ScreenCopy, 13> kScreenCopy = {{
+constexpr std::array<ScreenCopy, 14> kScreenCopy = {{
     {"00", "SYSTEM / BOOT", "VEE TEE", "INITIALIZING HARDWARE"},
     {"01", "NETWORK / CONFIG", "WI-FI SETUP", "OPEN 192.168.4.1"},
     {"02", "NETWORK / LINK", "CONNECTING", "TRYING SAVED NETWORKS"},
@@ -73,6 +74,7 @@ constexpr std::array<ScreenCopy, 13> kScreenCopy = {{
     {"10", "AUDIO / OUTPUT", "SPEAKING", "PRESS TO INTERRUPT"},
     {"11", "TURN / CANCEL", "STOPPING", "CLEARING CURRENT TURN"},
     {"12", "SESSION / CLOSE", "GOODBYE", "READY TO WAKE AGAIN"},
+    {"13", "SYSTEM / UPDATE", "UPDATING", "DO NOT POWER OFF"},
 }};
 
 std::uint16_t ToPanelEndian(std::uint16_t color) {
@@ -427,7 +429,7 @@ esp_err_t St7789Display::RenderState(app::State state,
         transfer_faulted_) {
         return ESP_ERR_INVALID_STATE;
     }
-    const std::size_t state_index = static_cast<std::size_t>(state);
+    const std::size_t state_index = UiPackV1StyleIndex(state);
     if (state_index >= theme_.states.size()) return ESP_ERR_INVALID_ARG;
     const UiStateStyle& style = theme_.states[state_index];
     switch (theme_.composition) {

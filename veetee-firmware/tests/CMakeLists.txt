@@ -15,6 +15,15 @@ target_compile_options(state_machine_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME state_machine_test COMMAND state_machine_test)
 
 add_executable(
+    application_queue_policy_test
+    application_queue_policy_test.cpp
+)
+target_include_directories(application_queue_policy_test PRIVATE ../main)
+target_compile_features(application_queue_policy_test PRIVATE cxx_std_17)
+target_compile_options(application_queue_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME application_queue_policy_test COMMAND application_queue_policy_test)
+
+add_executable(
     websocket_task_policy_test
     websocket_task_policy_test.cpp
 )
@@ -37,6 +46,15 @@ target_compile_options(state_visual_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME state_visual_test COMMAND state_visual_test)
 
 add_executable(
+    ui_state_policy_test
+    ui_state_policy_test.cpp
+)
+target_include_directories(ui_state_policy_test PRIVATE ../main)
+target_compile_features(ui_state_policy_test PRIVATE cxx_std_17)
+target_compile_options(ui_state_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME ui_state_policy_test COMMAND ui_state_policy_test)
+
+add_executable(
     wake_detector_policy_test
     wake_detector_policy_test.cpp
     ../main/audio/wake_detector_policy.cpp
@@ -46,6 +64,34 @@ target_compile_features(wake_detector_policy_test PRIVATE cxx_std_17)
 target_compile_options(wake_detector_policy_test PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME wake_detector_policy_test COMMAND wake_detector_policy_test)
+
+add_executable(
+    pcm_submission_gate_test
+    pcm_submission_gate_test.cpp
+)
+target_include_directories(pcm_submission_gate_test PRIVATE ../main)
+target_compile_features(pcm_submission_gate_test PRIVATE cxx_std_17)
+target_compile_options(pcm_submission_gate_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME pcm_submission_gate_test COMMAND pcm_submission_gate_test)
+
+add_executable(
+    wake_audio_pre_roll_test
+    wake_audio_pre_roll_test.cpp
+    ../main/audio/wake_audio_pre_roll.cpp
+)
+target_include_directories(wake_audio_pre_roll_test PRIVATE ../main)
+target_compile_features(wake_audio_pre_roll_test PRIVATE cxx_std_17)
+target_compile_options(wake_audio_pre_roll_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME wake_audio_pre_roll_test COMMAND wake_audio_pre_roll_test)
+
+add_executable(
+    experimental_aec_policy_test
+    experimental_aec_policy_test.cpp
+)
+target_include_directories(experimental_aec_policy_test PRIVATE ../main)
+target_compile_features(experimental_aec_policy_test PRIVATE cxx_std_17)
+target_compile_options(experimental_aec_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME experimental_aec_policy_test COMMAND experimental_aec_policy_test)
 
 add_executable(
     audio_diagnostics_test
@@ -246,6 +292,100 @@ target_compile_features(firmware_manifest_test PRIVATE cxx_std_17)
 target_compile_options(firmware_manifest_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(firmware_manifest_test PRIVATE cjson_host monocypher_host)
 add_test(NAME firmware_manifest_test COMMAND firmware_manifest_test)
+
+add_executable(
+    firmware_boot_health_policy_test
+    firmware_boot_health_policy_test.cpp
+    ../main/ota/firmware_boot_health_policy.cpp
+)
+target_include_directories(firmware_boot_health_policy_test PRIVATE ../main)
+target_compile_features(firmware_boot_health_policy_test PRIVATE cxx_std_17)
+target_compile_options(firmware_boot_health_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME firmware_boot_health_policy_test COMMAND firmware_boot_health_policy_test)
+
+add_executable(
+    firmware_bootstrap_policy_test
+    firmware_bootstrap_policy_test.cpp
+)
+target_include_directories(firmware_bootstrap_policy_test PRIVATE ../main)
+target_compile_features(firmware_bootstrap_policy_test PRIVATE cxx_std_17)
+target_compile_options(firmware_bootstrap_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME firmware_bootstrap_policy_test COMMAND firmware_bootstrap_policy_test)
+
+add_executable(
+    firmware_ota_attempt_record_test
+    firmware_ota_attempt_record_test.cpp
+    ../main/settings/firmware_ota_attempt_record.cpp
+)
+target_include_directories(firmware_ota_attempt_record_test PRIVATE ../main)
+target_compile_features(firmware_ota_attempt_record_test PRIVATE cxx_std_17)
+target_compile_options(firmware_ota_attempt_record_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME firmware_ota_attempt_record_test COMMAND firmware_ota_attempt_record_test)
+
+add_executable(
+    firmware_ota_recovery_policy_test
+    firmware_ota_recovery_policy_test.cpp
+    ../main/settings/firmware_ota_attempt_record.cpp
+    ../main/ota/firmware_ota_recovery_policy.cpp
+)
+target_include_directories(firmware_ota_recovery_policy_test PRIVATE ../main)
+target_compile_features(firmware_ota_recovery_policy_test PRIVATE cxx_std_17)
+target_compile_options(firmware_ota_recovery_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME firmware_ota_recovery_policy_test COMMAND firmware_ota_recovery_policy_test)
+
+add_executable(
+    device_config_test
+    device_config_test.cpp
+    ../main/config/device_config.cpp
+    ../main/config/device_config_resource_policy.cpp
+    ../main/ota/resource_manifest.cpp
+    ../main/network/endpoint_url.cpp
+    ../main/security/signed_json.cpp
+)
+target_include_directories(
+    device_config_test PRIVATE
+    ../main
+    ../managed_components/espressif__cjson/cJSON
+    ../components/monocypher/include
+)
+target_compile_definitions(
+    device_config_test PRIVATE
+    VEETEE_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+target_compile_features(device_config_test PRIVATE cxx_std_17)
+target_compile_options(device_config_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(device_config_test PRIVATE cjson_host monocypher_host)
+add_test(NAME device_config_test COMMAND device_config_test)
+
+add_executable(
+    device_config_record_test
+    device_config_record_test.cpp
+    ../main/settings/device_config_record.cpp
+)
+target_include_directories(device_config_record_test PRIVATE ../main)
+target_compile_features(device_config_record_test PRIVATE cxx_std_17)
+target_compile_options(device_config_record_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME device_config_record_test COMMAND device_config_record_test)
+
+add_executable(
+    device_config_health_policy_test
+    device_config_health_policy_test.cpp
+    ../main/config/device_config_health_policy.cpp
+)
+target_include_directories(device_config_health_policy_test PRIVATE ../main)
+target_compile_features(device_config_health_policy_test PRIVATE cxx_std_17)
+target_compile_options(device_config_health_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME device_config_health_policy_test COMMAND device_config_health_policy_test)
+
+add_executable(
+    device_config_resource_policy_test
+    device_config_resource_policy_test.cpp
+    ../main/config/device_config_resource_policy.cpp
+)
+target_include_directories(device_config_resource_policy_test PRIVATE ../main)
+target_compile_features(device_config_resource_policy_test PRIVATE cxx_std_17)
+target_compile_options(device_config_resource_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME device_config_resource_policy_test COMMAND device_config_resource_policy_test)
 
 add_executable(
     resource_record_test

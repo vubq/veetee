@@ -12,6 +12,7 @@ import {
 import type { FastifyReply } from "fastify";
 
 import { Public } from "../auth/public.decorator.js";
+import { DeviceConfigService } from "../config/device-config.service.js";
 import { ControlPlaneStore } from "../store/control-plane.store.js";
 
 type RequestHeaders = Record<string, string | string[] | undefined>;
@@ -35,7 +36,10 @@ interface BootstrapResponse {
 @Public()
 @Controller()
 export class OtaController {
-  constructor(private readonly store: ControlPlaneStore) {}
+  constructor(
+    private readonly store: ControlPlaneStore,
+    private readonly deviceConfig: DeviceConfigService,
+  ) {}
 
   @Post("veetee/ota")
   @HttpCode(HttpStatus.OK)
@@ -95,9 +99,10 @@ export class OtaController {
     }
 
     const managerUrl = this.managerUrl();
+    const config = await this.deviceConfig.snapshot(state.deviceId);
     response.config = {
-      version: state.configVersion,
-      etag: `agent-config-${state.configVersion}`,
+      version: config.body.version,
+      etag: config.etag,
       url: `${managerUrl}/veetee/config/v1/devices/${encodeURIComponent(state.deviceId)}`,
     };
     const manifestUrl = state.resourceManifestId

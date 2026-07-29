@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "audio/wake_detector_policy.h"
+#include "audio/pcm_submission_gate.h"
 #include "esp_err.h"
 #include "esp_wn_iface.h"
 #include "freertos/FreeRTOS.h"
@@ -106,6 +107,7 @@ private:
     std::atomic<std::uint32_t> stack_free_bytes_{0};
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> task_running_{false};
+    PcmSubmissionGate pcm_submission_gate_;
 };
 
 }  // namespace veetee::audio

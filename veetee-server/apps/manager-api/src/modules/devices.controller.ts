@@ -3,9 +3,12 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
+  HttpStatus,
   Param,
   Put,
   Req,
+  Res,
   UseGuards,
 } from "@nestjs/common";
 import { TenantRole } from "@prisma/client";
@@ -26,12 +29,18 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
+import type { FastifyReply } from "fastify";
 
 import { CurrentPrincipal } from "../auth/current-principal.decorator.js";
 import { DeviceAuthGuard } from "../auth/device-auth.guard.js";
 import { Public } from "../auth/public.decorator.js";
 import { Roles } from "../auth/roles.decorator.js";
 import type { Principal, RequestWithPrincipal } from "../auth/auth.types.js";
+import {
+  DeviceConfigService,
+  matchesDeviceConfigEtag,
+  type SignedDeviceConfigV1,
+} from "../config/device-config.service.js";
 import { ControlPlaneStore, type DeviceRecord } from "../store/control-plane.store.js";
 
 class DesiredStateDto {
@@ -57,6 +66,8 @@ const resourcePhases = [
   "rebooting",
   "pending_health",
 ] as const;
+
+const configPhases = ["checking", "applying", "active", "failed"] as const;
 
 export class ReportedFirmwareStateDto {
   @IsString()
@@ -210,6 +221,27 @@ export class ReportedResourceStateDto {
   errorCode?: string;
 }
 
+export class ReportedConfigStateDto {
+  @IsInt()
+  @Min(1)
+  @Max(2_147_483_647)
+  desiredVersion!: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(2_147_483_647)
+  appliedVersion!: number;
+
+  @IsIn(configPhases)
+  phase!: (typeof configPhases)[number];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  @Matches(/^[a-z0-9][a-z0-9._-]*$/)
+  errorCode?: string;
+}
+
 export class ReportedDeviceStateDto {
   @IsInt()
   @Min(1)
@@ -256,6 +288,12 @@ export class ReportedDeviceStateDto {
   @ValidateNested()
   @Type(() => ReportedResourceStateDto)
   firmware_ota?: ReportedResourceStateDto;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReportedConfigStateDto)
+  config?: ReportedConfigStateDto;
 }
 
 export class ReportedStateDto {
@@ -275,7 +313,10 @@ export class ReportedStateDto {
 
 @Controller()
 export class DevicesController {
-  constructor(private readonly store: ControlPlaneStore) {}
+  constructor(
+    private readonly store: ControlPlaneStore,
+    private readonly deviceConfig: DeviceConfigService,
+  ) {}
 
   @Get("api/v1/devices")
   async list(@CurrentPrincipal() principal: Principal): Promise<DeviceRecord[]> {
@@ -285,9 +326,19 @@ export class DevicesController {
   @Public()
   @UseGuards(DeviceAuthGuard)
   @Get("veetee/config/v1/devices/:id")
-  async desired(@Param("id") id: string): Promise<DeviceRecord["desiredState"]> {
-    const device = await this.store.deviceForAuthenticatedDevice(id);
-    return device.desiredState;
+  async desired(
+    @Param("id") id: string,
+    @Headers("if-none-match") ifNoneMatch: string | string[] | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<SignedDeviceConfigV1 | undefined> {
+    const config = await this.deviceConfig.snapshot(id);
+    reply.header("ETag", `"${config.etag}"`);
+    reply.header("Cache-Control", "private, no-cache");
+    if (matchesDeviceConfigEtag(ifNoneMatch, config.etag)) {
+      reply.code(HttpStatus.NOT_MODIFIED);
+      return undefined;
+    }
+    return config.body;
   }
 
   @Roles(TenantRole.OPERATOR)
@@ -320,18 +371,32 @@ export class DevicesController {
   @Put("veetee/devices/:id/reported-state")
   async report(@Param("id") id: string, @Body() input: ReportedStateDto): Promise<DeviceRecord> {
     const artifacts = [input.state.resource, input.state.ui, input.state.firmware_ota].filter(
-      (artifact): artifact is ReportedResourceStateDto => artifact !== undefined,
+      (artifact): artifact is ReportedResourceStateDto => artifact != null,
     );
-    if (artifacts.length !== 1) {
-      throw new BadRequestException("Reported state must contain exactly one artifact subsystem");
+    const subsystemCount = artifacts.length + (input.state.config ? 1 : 0);
+    if (subsystemCount !== 1) {
+      throw new BadRequestException("Reported state must contain exactly one reconcile subsystem");
     }
-    const artifact = artifacts[0]!;
-    if (artifact.downloadedBytes > artifact.expectedBytes) {
-      throw new BadRequestException("Reported downloadedBytes exceeds expectedBytes");
-    }
-    const failure = ["failed", "rolled_back"].includes(artifact.phase);
-    if (failure !== Boolean(artifact.errorCode)) {
-      throw new BadRequestException("Reported artifact failure state has an invalid errorCode");
+    const config = input.state.config;
+    if (config) {
+      if (config.appliedVersion > config.desiredVersion) {
+        throw new BadRequestException("Reported config appliedVersion exceeds desiredVersion");
+      }
+      if (config.phase === "active" && config.appliedVersion !== config.desiredVersion) {
+        throw new BadRequestException("Reported active config versions do not match");
+      }
+      if ((config.phase === "failed") !== Boolean(config.errorCode)) {
+        throw new BadRequestException("Reported config failure state has an invalid errorCode");
+      }
+    } else {
+      const artifact = artifacts[0]!;
+      if (artifact.downloadedBytes > artifact.expectedBytes) {
+        throw new BadRequestException("Reported downloadedBytes exceeds expectedBytes");
+      }
+      const failure = ["failed", "rolled_back"].includes(artifact.phase);
+      if (failure !== Boolean(artifact.errorCode)) {
+        throw new BadRequestException("Reported artifact failure state has an invalid errorCode");
+      }
     }
     return this.store.updateReportedState(
       id,

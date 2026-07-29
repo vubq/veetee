@@ -52,7 +52,9 @@ manager-web ──REST──> manager-api ──Postgres/Redis/MinIO
 - Provider secret chỉ đi qua secret resolver/service credential, không nằm trong agent snapshot và không gửi xuống firmware.
 - Baseline local `vi-VN`: Silero VAD -> Sherpa-ONNX Zipformer 30M INT8 ->
   ChunkFormer-CTC-Large-Vie re-decode có điều kiện -> LLM qua
-  `openai-compatible-cliproxyapi` (Groq fallback đã publish) -> VieNeu-TTS v3 Turbo.
+  `openai-compatible-cliproxyapi` (không có fallback trong chain mặc định) ->
+  VieNeu-TTS v3 Turbo. Groq giữ như binding độc lập để người vận hành có thể cấu hình
+  sau, không được seed/publish tự động.
   9Router là adapter tùy chọn đang tạm dừng, không phải dependency khởi động.
 - Local speech model là process/worker của server, không nhúng vào ESP32. Worker có
   concurrency limit, health, warmup, cancellation và memory budget riêng.

@@ -18,6 +18,7 @@ constexpr UBaseType_t kPcmQueueDepth = 8;
 constexpr std::uint32_t kMinimumCooldownMs = 250;
 constexpr std::uint32_t kMaximumCooldownMs = 10000;
 constexpr std::uint32_t kStopTimeoutMs = 1000;
+constexpr std::uint32_t kSubmissionDrainTimeoutMs = 1000;
 
 bool CopyId(const char* source, std::array<char, 65>* target) {
     if (source == nullptr || target == nullptr) return false;
@@ -217,13 +218,27 @@ esp_err_t WakeDetector::Reload(const char* partition_label,
                                const DetectorProfile* profiles,
                                std::size_t profile_count) {
     if (event_sink_ == nullptr) return ESP_ERR_INVALID_STATE;
+    pcm_submission_gate_.Close();
+    const TickType_t drain_started = xTaskGetTickCount();
+    const TickType_t drain_timeout = pdMS_TO_TICKS(kSubmissionDrainTimeoutMs);
+    while (!pcm_submission_gate_.drained()) {
+        if (xTaskGetTickCount() - drain_started >= drain_timeout) {
+            pcm_submission_gate_.Open();
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(1);
+    }
     esp_err_t error = Stop();
-    if (error != ESP_OK) return error;
+    if (error != ESP_OK) {
+        pcm_submission_gate_.Open();
+        return error;
+    }
     ReleaseRuntime();
     error = Initialize(partition_label, profiles, profile_count, event_sink_,
                        event_context_);
-    if (error != ESP_OK) return error;
-    return Start();
+    if (error == ESP_OK) error = Start();
+    pcm_submission_gate_.Open();
+    return error;
 }
 
 bool WakeDetector::SubmitPcm(const std::int16_t* samples,
@@ -234,7 +249,12 @@ bool WakeDetector::SubmitPcm(const std::int16_t* samples,
     }
     const DetectorRole active_role = role_.load(std::memory_order_acquire);
     if (active_role == DetectorRole::kDisabled) return true;
-    if (pcm_queue_ == nullptr) return false;
+    if (!pcm_submission_gate_.TryEnter()) return true;
+    QueueHandle_t queue = pcm_queue_;
+    if (queue == nullptr) {
+        pcm_submission_gate_.Leave();
+        return false;
+    }
 
     PcmFrame frame{};
     frame.role = active_role;
@@ -242,15 +262,20 @@ bool WakeDetector::SubmitPcm(const std::int16_t* samples,
     frame.length = static_cast<std::uint16_t>(sample_count);
     std::memcpy(frame.samples.data(), samples,
                 sample_count * sizeof(std::int16_t));
-    if (xQueueSend(pcm_queue_, &frame, 0) == pdTRUE) return true;
+    if (xQueueSend(queue, &frame, 0) == pdTRUE) {
+        pcm_submission_gate_.Leave();
+        return true;
+    }
 
     PcmFrame discarded{};
-    if (xQueueReceive(pcm_queue_, &discarded, 0) != pdTRUE ||
-        xQueueSend(pcm_queue_, &frame, 0) != pdTRUE) {
+    if (xQueueReceive(queue, &discarded, 0) != pdTRUE ||
+        xQueueSend(queue, &frame, 0) != pdTRUE) {
         dropped_frames_.fetch_add(1, std::memory_order_relaxed);
+        pcm_submission_gate_.Leave();
         return false;
     }
     dropped_frames_.fetch_add(1, std::memory_order_relaxed);
+    pcm_submission_gate_.Leave();
     return true;
 }
 

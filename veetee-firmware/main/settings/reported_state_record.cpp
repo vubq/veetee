@@ -52,6 +52,19 @@ bool IsErrorToken(const char* value) {
     });
 }
 
+bool ParseConfigVersion(const char* value, std::uint32_t* output) {
+    if (value == nullptr || output == nullptr || value[0] == '\0') return false;
+    std::uint32_t parsed = 0;
+    for (const char* cursor = value; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return false;
+        const std::uint32_t digit = static_cast<std::uint32_t>(*cursor - '0');
+        if (parsed > (kMaximumReportedStateVersion - digit) / 10U) return false;
+        parsed = parsed * 10U + digit;
+    }
+    *output = parsed;
+    return true;
+}
+
 bool IsZeroed(const ReportedResourceState& state) {
     const ReportedResourceState empty{};
     return std::memcmp(&state, &empty, sizeof(state)) == 0;
@@ -88,14 +101,17 @@ const char* ReportedResourcePhaseName(ReportedResourcePhase phase) {
 bool IsTerminalReportedResourcePhase(ReportedResourcePhase phase) {
     return phase == ReportedResourcePhase::kActive ||
            phase == ReportedResourcePhase::kFailed ||
-           phase == ReportedResourcePhase::kRolledBack;
+           phase == ReportedResourcePhase::kRolledBack ||
+           phase == ReportedResourcePhase::kRebooting ||
+           phase == ReportedResourcePhase::kPendingHealth;
 }
 
 bool IsValidReportedResourceState(const ReportedResourceState& state) {
     if (ReportedResourcePhaseName(state.phase) == nullptr ||
         (state.artifact_kind != ReportedArtifactKind::kWakeResource &&
          state.artifact_kind != ReportedArtifactKind::kUiPack &&
-         state.artifact_kind != ReportedArtifactKind::kFirmware) ||
+         state.artifact_kind != ReportedArtifactKind::kFirmware &&
+         state.artifact_kind != ReportedArtifactKind::kDeviceConfig) ||
         state.active_slot > 1 || state.target_slot > 1 ||
         state.downloaded_bytes > state.expected_bytes ||
         !IsTerminated(state.current_version) ||
@@ -104,6 +120,25 @@ bool IsValidReportedResourceState(const ReportedResourceState& state) {
         !IsVersionToken(state.current_version) ||
         !IsVersionToken(state.desired_version) || !IsErrorToken(state.error_code)) {
         return false;
+    }
+    if (state.artifact_kind == ReportedArtifactKind::kDeviceConfig) {
+        std::uint32_t applied_version = 0;
+        std::uint32_t desired_version = 0;
+        if (state.active_slot != 0 || state.target_slot != 0 ||
+            state.expected_bytes != 0 || state.downloaded_bytes != 0 ||
+            state.security_epoch != 0 ||
+            (state.phase != ReportedResourcePhase::kChecking &&
+             state.phase != ReportedResourcePhase::kApplying &&
+             state.phase != ReportedResourcePhase::kActive &&
+             state.phase != ReportedResourcePhase::kFailed &&
+             state.phase != ReportedResourcePhase::kRolledBack) ||
+            !ParseConfigVersion(state.current_version, &applied_version) ||
+            !ParseConfigVersion(state.desired_version, &desired_version) ||
+            desired_version == 0 || applied_version > desired_version ||
+            (state.phase == ReportedResourcePhase::kActive &&
+             applied_version != desired_version)) {
+            return false;
+        }
     }
     const bool failure = state.phase == ReportedResourcePhase::kFailed ||
                          state.phase == ReportedResourcePhase::kRolledBack;
@@ -141,6 +176,7 @@ bool IssueReportedStateVersion(ReportedStateRecord* record,
                                std::uint32_t* issued_version) {
     if (record == nullptr || issued_version == nullptr ||
         !IsValidReportedStateRecord(*record) ||
+        record->has_pending != 0 ||
         record->last_issued_version >= kMaximumReportedStateVersion) {
         return false;
     }
@@ -163,6 +199,25 @@ bool StagePendingReportedState(ReportedStateRecord* record,
     ++record->last_issued_version;
     record->pending_version = record->last_issued_version;
     record->has_pending = 1;
+    record->pending = state;
+    *issued_version = record->pending_version;
+    SealReportedStateRecord(record);
+    return true;
+}
+
+bool ReplacePendingReportedState(ReportedStateRecord* record,
+                                 const ReportedResourceState& state,
+                                 std::uint32_t* issued_version) {
+    if (record == nullptr || issued_version == nullptr ||
+        !IsValidReportedStateRecord(*record) || record->has_pending == 0 ||
+        !IsTerminalReportedResourcePhase(state.phase) ||
+        !IsValidReportedResourceState(state) ||
+        record->pending.artifact_kind != state.artifact_kind ||
+        record->last_issued_version >= kMaximumReportedStateVersion) {
+        return false;
+    }
+    ++record->last_issued_version;
+    record->pending_version = record->last_issued_version;
     record->pending = state;
     *issued_version = record->pending_version;
     SealReportedStateRecord(record);

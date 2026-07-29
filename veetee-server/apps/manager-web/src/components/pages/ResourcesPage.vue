@@ -7,7 +7,7 @@ import type { Artifact, Device, FirmwareRelease, FirmwareRollout, ResourceRollou
 import { formatBytes, statusTone } from "../../utils/format";
 import { normalizeRollouts } from "../../utils/rollouts";
 import RolloutHistory from "../delivery/RolloutHistory.vue";
-import { VtBadge, VtButton, VtEmptyState, VtField, VtIcon, VtInput, VtMetricStrip, VtOperationsHero, VtPageHeader, VtSelect } from "../ui";
+import { VtBadge, VtButton, VtEmptyState, VtField, VtIcon, VtInput, VtMetricStrip, VtOperationsHero, VtPageHeader, VtSelect, VtSwitch } from "../ui";
 
 const props = defineProps<{
   artifacts: Artifact[];
@@ -21,8 +21,9 @@ const props = defineProps<{
   publishArtifact: (id: string) => Promise<void>;
   createWakeProfile: (input: {
     artifactId: string; name: string; locale: string; channel: string; activationPhrase: string;
+    sendWakeAudio: boolean;
     activation: { detectorId: string; sensitivity: number; cooldownMs: number; allowedStates: string[] };
-    interrupt: { detectorId: string; sensitivity: number; cooldownMs: number; allowedStates: string[] };
+    interrupt: { detectorId: string; sensitivity: number; cooldownMs: number; allowedStates: string[] } | null;
   }) => Promise<void>;
   publishWakeProfile: (id: string) => Promise<void>;
   publishFirmwareRelease: (id: string) => Promise<void>;
@@ -34,7 +35,7 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const artifactForm = reactive({ id: "", license: "" });
-const wakeForm = reactive({ name: "Hey VeeTee", artifactId: "", phrase: "Hey VeeTee", channel: "development", locale: "vi-VN", activationDetector: "", interruptDetector: "" });
+const wakeForm = reactive({ name: "Hey VeeTee", artifactId: "", phrase: "Hey VeeTee", channel: "development", locale: "vi-VN", activationDetector: "", interruptDetector: "", sendWakeAudio: false });
 const busyKey = ref("");
 const error = ref("");
 const firmwareForm = reactive({ artifactId: "", canaryDeviceId: "", percentage: 10 });
@@ -101,8 +102,11 @@ async function createWake(): Promise<void> {
       artifactId: wakeForm.artifactId,
       name: wakeForm.name.trim(), locale: wakeForm.locale, channel: wakeForm.channel,
       activationPhrase: wakeForm.phrase.trim(),
+      sendWakeAudio: wakeForm.sendWakeAudio,
       activation: { detectorId: wakeForm.activationDetector.trim(), sensitivity: 0.55, cooldownMs: 1500, allowedStates: ["standby"] },
-      interrupt: { detectorId: wakeForm.interruptDetector.trim(), sensitivity: 0.62, cooldownMs: 800, allowedStates: ["thinking", "speaking"] },
+      interrupt: wakeForm.interruptDetector.trim()
+        ? { detectorId: wakeForm.interruptDetector.trim(), sensitivity: 0.62, cooldownMs: 800, allowedStates: ["thinking", "speaking"] }
+        : null,
     });
   });
 }
@@ -182,8 +186,8 @@ async function createFirmware(): Promise<void> {
               <div v-if="wakeProfiles.length" class="wake-list">
                 <article v-for="profile in wakeProfiles" :key="profile.id">
                   <div class="wake-phrase"><span>“</span><b>{{ profile.activationPhrase }}</b><span>”</span></div>
-                  <div class="wake-info"><h3>{{ profile.name }}</h3><p>{{ profile.locale }} · {{ profile.channel }} · artifact {{ profile.artifactId }}</p><div><VtBadge :tone="profile.productReady ? 'success' : 'warning'">{{ t(profile.productReady ? "resources.wake.productReady" : "resources.wake.notBenchmarked") }}</VtBadge><VtBadge tone="info">Activation ≠ Interrupt</VtBadge></div></div>
-                  <dl><div><dt>Activation</dt><dd>{{ profile.activation.detectorId }}</dd></div><div><dt>Interrupt</dt><dd>{{ profile.interrupt.detectorId }}</dd></div></dl>
+                  <div class="wake-info"><h3>{{ profile.name }}</h3><p>{{ profile.locale }} · {{ profile.channel }} · artifact {{ profile.artifactId }}</p><div><VtBadge :tone="profile.productReady ? 'success' : 'warning'">{{ t(profile.productReady ? "resources.wake.productReady" : "resources.wake.notBenchmarked") }}</VtBadge><VtBadge tone="info">Activation ≠ Interrupt</VtBadge><VtBadge :tone="profile.sendWakeAudio ? 'warning' : 'neutral'">{{ t(profile.sendWakeAudio ? "resources.wake.audioEnabled" : "resources.wake.audioDisabled") }}</VtBadge></div></div>
+                  <dl><div><dt>Activation</dt><dd>{{ profile.activation.detectorId }}</dd></div><div><dt>Interrupt</dt><dd>{{ profile.interrupt?.detectorId ?? t("common.notConfigured") }}</dd></div></dl>
                   <VtButton v-if="profile.publishedVersion === 0" size="sm" :busy="busyKey === `wake-publish-${profile.id}`" @click="perform(`wake-publish-${profile.id}`, () => publishWakeProfile(profile.id))">{{ t("common.publish") }} v{{ profile.version }}</VtButton>
                   <VtBadge v-else tone="info">Áp dụng trong Thiết bị</VtBadge>
                 </article>
@@ -197,8 +201,9 @@ async function createFirmware(): Promise<void> {
                 <VtField label="Tên profile" required><VtInput v-model="wakeForm.name" required /></VtField>
                 <VtField label="Model artifact" required><VtSelect v-model="wakeForm.artifactId" required><option value="">Chọn artifact</option><option v-for="artifact in wakeArtifacts" :key="artifact.id" :value="artifact.id">{{ artifact.id }} · {{ artifact.status }}</option></VtSelect></VtField>
                 <div class="form-grid two"><VtField label="Activation phrase"><VtInput v-model="wakeForm.phrase" /></VtField><VtField label="Locale"><VtSelect v-model="wakeForm.locale"><option value="vi-VN">vi-VN</option><option value="en-US">en-US</option></VtSelect></VtField></div>
-                <VtField label="Activation detector ID" required><VtInput v-model="wakeForm.activationDetector" placeholder="wakenet:hey_veetee_vi" required /></VtField>
-                <VtField label="Interrupt detector ID" required><VtInput v-model="wakeForm.interruptDetector" placeholder="multinet:stop_vi" required /></VtField>
+                <VtField label="Activation detector ID" required><VtInput v-model="wakeForm.activationDetector" placeholder="wn9s_hiesp" required /></VtField>
+                <VtField label="Interrupt detector ID"><VtInput v-model="wakeForm.interruptDetector" :placeholder="t('common.notConfigured')" /></VtField>
+                <VtSwitch v-model="wakeForm.sendWakeAudio" :label="t('resources.wake.audioOptIn')" :description="t('resources.wake.audioOptInDescription')" />
                 <VtField label="Channel"><VtSelect v-model="wakeForm.channel"><option value="development">development</option><option value="canary">canary</option><option value="stable">stable · yêu cầu benchmark pass</option></VtSelect></VtField>
                 <VtButton type="submit" :busy="busyKey === 'create-wake'" :disabled="!wakeForm.artifactId">Tạo wake profile draft</VtButton>
               </form>

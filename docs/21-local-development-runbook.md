@@ -54,6 +54,20 @@ npm run env:local:init
 Lệnh này tạo `apps/manager-api/.env` và `data/local-admin.txt` ở dạng ignored, mode
 `0600`. Không copy nội dung hai file này vào chat, log hoặc commit.
 
+Device config và resource dev còn cần private Ed25519 signer ignored khớp đúng public
+key đã build trong firmware:
+
+```bash
+stat -c '%a %n' data/signing/veetee-dev-release-2026-01.pem
+# expected: 600; tuyệt đối không in nội dung file
+```
+
+Không tự sinh một key khác rồi giữ nguyên firmware: chữ ký sẽ bị device từ chối. Nếu
+rotate signer, phải đổi `key_id`/security epoch, cập nhật trust root bằng signed firmware
+OTA và publish lại artifact/config theo `docs/12-dynamic-config-and-artifacts.md`.
+Local init mới không tự gán một resource manifest `stable`; resource chỉ xuất hiện sau
+một release + rollout immutable có signed detector inventory hợp lệ.
+
 Áp dụng schema và seed control plane:
 
 ```bash
@@ -114,6 +128,18 @@ VAD 1 thread, LLM prewarm 12 giây và planner ceiling 15 giây. OpenBLAS là pr
 cap phải có trước khi Python import NumPy; `VEETEE_TTS_THREADS=2` chỉ giới hạn ONNX
 Runtime. Manager agent snapshot có thể override voice/style/rate/volume và provider
 deadlines cho session; nó không đổi process-wide backend/thread count hoặc BLAS cap.
+
+`VEETEE_WAKE_AUDIO_PRE_ROLL_MAX_MS=2000` chỉ là trần RAM tạm ở Voice cho sequence
+device `listen:detect -> binary -> listen:start`; nó không tự bật thu âm. Quyền gửi vẫn
+đến duy nhất từ `send_wake_audio=true` trong wake profile/device snapshot đã ký và mặc
+định vẫn tắt.
+
+Sau khi nâng từ schema prototype, `db:deploy` có thể bỏ riêng một `wakeProfile` desired
+state còn dùng logical detector alias và tăng version. Đây là recovery fail-closed có
+chủ đích: resource, agent, Wi-Fi và identity không đổi; bootstrap trả config ký hợp lệ
+với wake profile rỗng để thiết bị vẫn boot/button-only. Không sửa alias trực tiếp trong
+database thành một model ID phỏng đoán; publish lại profile qua Manager sau khi artifact
+đã khai báo exact signed detector inventory.
 
 | Nhóm biến | Owner/source | Secret | Khi có hiệu lực |
 |---|---|---|---|
@@ -511,6 +537,8 @@ tự (`sha256[:16]=ff611923af5ccce5`) chạy 22 batch, first audio 1,260 giây, 
 RTF 0,812 và starvation 0. Local Opus E2E cũng pass lifecycle TTS với request RTF 0,817.
 Sau khi route 9Router cũ không còn được chọn, agent version 4 đã publish chain
 `openai-compatible-cliproxyapi:gpt-5.6-terra -> groq-cloud:llama-3.3-70b-versatile`.
+Đây là evidence lịch sử của lần đo đó, không còn là default vận hành: quyết định sau
+cùng giữ agent hiện hành ở CLIProxyAPI-only và không seed/publish Groq fallback.
 `env:voice:sync` và default readiness cũng dùng CLIProxyAPI trực tiếp; 9Router không còn
 là dependency khởi động. Một `provider_deadline` của CLIProxyAPI vẫn làm cycle fail dù
 TTS cleanup đúng; không tăng TTS thread/deadline để che lỗi upstream.
@@ -545,6 +573,22 @@ do Realtime Lab drain audio đã buffer theo thời lượng phát; CPU đã v�
 phải VieNeu còn inference. Có một cycle trước đó chạm đúng CLIProxyAPI deadline 15 giây
 khi proxy đồng thời phục vụ nhiều request Codex dài; cycle đó bị tính fail và được báo
 riêng, không tăng deadline hay che bằng fallback.
+
+Lần recheck cuối trên merged tree cùng ngày dùng agent `Veetee Việt` version 6 đã
+publish với đúng một LLM binding
+`openai-compatible-cliproxyapi:gpt-5.6-terra`; resolver/DB không có Groq fallback.
+Runtime giữ nguyên cấu hình nói trên và không chạy build khác trong cửa sổ đo. Cycle
+đầu bị fail rõ ràng vì prose CLIProxyAPI của lượt dài
+không có first token trong budget 5 giây dù HTTP đã trả `200`; không Groq/9Router
+fallback và không tăng deadline. Một controlled retry có nhãn riêng pass hai warmup,
+một stream LLM 8.086 ký tự tạo 416 PCM frame / 464,56 giây audio và ba follow-up bình
+thường. Cả sáu turn của retry đều có planner + prose qua `127.0.0.1:8317` HTTP `200`,
+`tts.stop -> listen.start`, zero schedule gap/error/stale; port `20128` vẫn trống.
+CPU Voice ở riêng long-generation avg/p95/peak là 151,184/169/178%, còn toàn retry là
+82,064/165/178%. Sau event synthesis cuối có một mẫu chuyển tiếp 32%, mẫu kế tiếp là
+0%; quãng 202,512 giây từ PCM cuối tới `tts.stop` chỉ avg 0,274%, p95 1%, nên đó là
+playback drain. RSS toàn sampler 834,29 MiB -> peak 1.044,54 MiB -> tail 1.020,93 MiB;
+61 mẫu cuối không đổi một KiB, và thread count giữ 27 từ đầu tới cuối.
 
 ## 5. Dừng và khởi động lại sạch
 
@@ -590,6 +634,31 @@ npm run infra:host:down
 # hoặc nếu đang dùng Docker:
 npm run infra:down
 ```
+
+### 5.1 Boot firmware sau khi đổi layout device-config NVS
+
+`DeviceConfigRecord` hiện có schema version 2 và kích thước 348 byte. Board từng chạy
+prototype có thể còn blob `veetee_config/state` 508 byte dù schema cũ cũng mang version
+1. Firmware phải probe type/length trước khi đọc và chỉ thay record config không tương
+thích; không erase NVS partition hoặc namespace `veetee`, vì Wi-Fi và device identity
+nằm ở store riêng và phải được giữ lại. Nhánh tạo default khởi tạo thẳng vào record
+persistent; `CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192` là boot-time headroom cho migration,
+không phải lý do tăng stack các task audio/realtime.
+
+Khi flash bản mới lên board đã provision/pair, không dùng `erase-flash`. Kiểm tra hai
+lần boot độc lập:
+
+1. Boot đầu có thể ghi đúng một lần
+   `Replacing incompatible device-config blob stored_bytes=508 expected_bytes=348 ...`.
+   Phải đồng thời còn `provisioned=yes paired=yes`, không có stack overflow/panic/watchdog
+   và state đi qua `activating` tới `idle`.
+2. Reset/reboot lần hai không còn log replace; record 348 byte/version 2 phải load bình
+   thường, Wi-Fi/identity vẫn còn và firmware lại tới `idle`.
+
+Nếu một gate fail, giữ nguyên NVS để điều tra và lưu reset reason, blob status/length,
+boot log cùng state transition đã redact. Không chữa reboot loop bằng full erase trước
+khi xác nhận record nào lỗi; host test migration chỉ chứng minh policy, không thay thế
+hai boot trên ESP32-S3 thật.
 
 ## 6. Hướng dẫn ngắn cho AI
 

@@ -17,6 +17,7 @@ enum class BootstrapEvent : std::uint8_t {
     kActivationCodeAvailable,
     kActivationComplete,
     kDeviceIdentityRejected,
+    kConfigDesired,
     kResourceDesired,
     kUiPackDesired,
     kFirmwareDesired,
@@ -25,6 +26,9 @@ enum class BootstrapEvent : std::uint8_t {
 struct BootstrapNotification {
     BootstrapEvent event;
     char activation_code[7] = {};
+    std::uint32_t config_version = 0;
+    char config_etag[65] = {};
+    char config_url[257] = {};
     char resource_version[33] = {};
     char resource_manifest_url[257] = {};
     char ui_version[33] = {};
@@ -43,6 +47,9 @@ public:
                          EventSink sink, void* context);
     void Start();
     void Cancel();
+    void SetFirmwareUpdatesDeferred(bool deferred) {
+        firmware_updates_deferred_.store(deferred);
+    }
 
 private:
     struct BootstrapPayload {
@@ -105,6 +112,7 @@ private:
     TaskHandle_t task_ = nullptr;
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<bool> active_{false};
+    std::atomic<bool> firmware_updates_deferred_{false};
     char hardware_id_[18] = {};
     std::array<char, 8193> response_{};
     std::size_t response_size_ = 0;

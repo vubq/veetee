@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "network/endpoint_url.h"
+#include "ota/firmware_bootstrap_policy.h"
 #include "sdkconfig.h"
 
 namespace veetee::ota {
@@ -155,7 +156,7 @@ void BootstrapClient::TaskLoop() {
 }
 
 void BootstrapClient::Run(std::uint32_t generation) {
-    settings::DeviceSettings snapshot = *settings_;
+    settings::DeviceSettings snapshot = store_->Snapshot();
     std::uint32_t retry_ms = kInitialRetryMs;
     std::uint32_t activation_elapsed_ms = 0;
     bool refresh_activation_ticket = snapshot.HasPendingActivation();
@@ -173,9 +174,25 @@ void BootstrapClient::Run(std::uint32_t generation) {
             BootstrapPayload payload{};
             error = RequestBootstrap(snapshot, true, &payload, generation);
             if (error == ESP_OK && IsCurrent(generation)) {
+                if (FirmwareBootstrapRequiresUpdate(
+                        payload.has_firmware, payload.firmware_version,
+                        CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION,
+                        firmware_updates_deferred_.load())) {
+                    EmitWithRetry(BootstrapEvent::kFirmwareDesired, nullptr,
+                                  &payload, generation);
+                    return;
+                }
+                const std::uint32_t config_version =
+                    payload.has_config ? payload.config_version
+                                       : snapshot.config_version;
                 error = store_->SaveBoundBootstrap(payload.websocket_url,
-                                                   payload.config_version, settings_);
+                                                   config_version, settings_);
                 if (error == ESP_OK) {
+                    if (payload.has_config &&
+                        !EmitWithRetry(BootstrapEvent::kConfigDesired, nullptr,
+                                       &payload, generation)) {
+                        return;
+                    }
                     if (payload.has_resources &&
                         !EmitWithRetry(BootstrapEvent::kResourceDesired, nullptr,
                                        &payload, generation)) {
@@ -183,11 +200,6 @@ void BootstrapClient::Run(std::uint32_t generation) {
                     }
                     if (payload.has_ui &&
                         !EmitWithRetry(BootstrapEvent::kUiPackDesired, nullptr,
-                                       &payload, generation)) {
-                        return;
-                    }
-                    if (payload.has_firmware &&
-                        !EmitWithRetry(BootstrapEvent::kFirmwareDesired, nullptr,
                                        &payload, generation)) {
                         return;
                     }
@@ -215,7 +227,7 @@ void BootstrapClient::Run(std::uint32_t generation) {
                             ticket.activation_code, ticket.activation_challenge,
                             settings_);
                         if (error == ESP_OK) {
-                            snapshot = *settings_;
+                            snapshot = store_->Snapshot();
                             if (!EmitWithRetry(
                                     BootstrapEvent::kActivationCodeAvailable,
                                     snapshot.activation_code, nullptr,
@@ -246,9 +258,13 @@ void BootstrapClient::Run(std::uint32_t generation) {
                     payload.device_id, payload.device_token, payload.websocket_url,
                     payload.config_version, settings_);
                 if (error == ESP_OK) {
-                    EmitWithRetry(BootstrapEvent::kActivationComplete, nullptr,
-                                  nullptr, generation);
-                    return;
+                    // The activation response has no immutable snapshot ETag or
+                    // canonical URL. Re-enter authenticated bootstrap before
+                    // declaring activation complete so first boot reconciles
+                    // config without requiring a reboot.
+                    snapshot = store_->Snapshot();
+                    retry_ms = kInitialRetryMs;
+                    continue;
                 }
             } else if (error == ESP_ERR_TIMEOUT) {
                 retry_ms = kInitialRetryMs;
@@ -266,7 +282,7 @@ void BootstrapClient::Run(std::uint32_t generation) {
                 error = store_->SavePendingActivation(
                     payload.activation_code, payload.activation_challenge, settings_);
                 if (error == ESP_OK) {
-                    snapshot = *settings_;
+                    snapshot = store_->Snapshot();
                     if (!EmitWithRetry(BootstrapEvent::kActivationCodeAvailable,
                                        snapshot.activation_code, nullptr,
                                        generation)) {
@@ -287,7 +303,7 @@ void BootstrapClient::Run(std::uint32_t generation) {
                  esp_err_to_name(error), retry_ms);
         if (!Delay(generation, retry_ms)) return;
         retry_ms = std::min(kMaximumRetryMs, retry_ms * 2);
-        snapshot = *settings_;
+        snapshot = store_->Snapshot();
     }
 }
 
@@ -539,6 +555,16 @@ bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
         std::snprintf(notification.resource_manifest_url,
                       sizeof(notification.resource_manifest_url), "%s",
                       payload->resource_manifest_url);
+    }
+    if (event == BootstrapEvent::kConfigDesired && payload != nullptr &&
+        payload->has_config) {
+        notification.config_version = payload->config_version;
+        std::snprintf(notification.config_etag,
+                      sizeof(notification.config_etag), "%s",
+                      payload->config_etag);
+        std::snprintf(notification.config_url,
+                      sizeof(notification.config_url), "%s",
+                      payload->config_url);
     }
     if (event == BootstrapEvent::kUiPackDesired && payload != nullptr &&
         payload->has_ui) {

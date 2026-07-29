@@ -54,6 +54,8 @@ struct VerifiedResourceManifest {
     char version[33] = {};
     char payload_url[257] = {};
     char payload_sha256[65] = {};
+    char activation_model_id[65] = {};
+    char interrupt_model_id[65] = {};
     std::uint64_t payload_bytes = 0;
     std::uint32_t security_epoch = 0;
     bool requires_reboot = false;

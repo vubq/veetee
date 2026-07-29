@@ -40,6 +40,7 @@ async function mockManagerApi(
     withResources?: boolean;
     withRollouts?: boolean;
     rolloutCalls?: unknown[];
+    wakeProfileCalls?: unknown[];
     toolCalls?: unknown[];
     agentPatches?: unknown[];
     providerPatches?: unknown[];
@@ -485,6 +486,17 @@ async function mockManagerApi(
         updatedAt: "2026-07-23T05:00:00.000Z",
       });
     }
+    if (url.pathname === "/api/v1/wake-profiles" && request.method() === "POST") {
+      const input = request.postDataJSON() as Record<string, unknown>;
+      options.wakeProfileCalls?.push(input);
+      return json({
+        id: "wake-profile-created",
+        ...input,
+        version: 1,
+        publishedVersion: 0,
+        productReady: false,
+      });
+    }
     if (url.pathname === "/api/v1/wake-profiles") {
       return json(
         options.withResources
@@ -496,18 +508,14 @@ async function mockManagerApi(
                 locale: "vi-VN",
                 channel: "development",
                 activationPhrase: "Hi ESP",
+                sendWakeAudio: false,
                 activation: {
-                  detectorId: "wakenet:hi_esp",
+                  detectorId: "wn9s_hiesp",
                   sensitivity: 0.5,
                   cooldownMs: 1500,
                   allowedStates: ["standby"],
                 },
-                interrupt: {
-                  detectorId: "multinet:stop",
-                  sensitivity: 0.6,
-                  cooldownMs: 800,
-                  allowedStates: ["thinking", "speaking"],
-                },
+                interrupt: null,
                 version: 2,
                 publishedVersion: 2,
                 productReady: false,
@@ -2433,7 +2441,8 @@ test("keeps wake profiles global but applies them from a compatible online devic
   page,
 }) => {
   const rolloutCalls: unknown[] = [];
-  await mockManagerApi(page, { withDevice: true, withResources: true, rolloutCalls });
+  const wakeProfileCalls: unknown[] = [];
+  await mockManagerApi(page, { withDevice: true, withResources: true, rolloutCalls, wakeProfileCalls });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
@@ -2444,6 +2453,20 @@ test("keeps wake profiles global but applies them from a compatible online devic
   await expect(page.locator(".wake-list")).toContainText("Hi ESP");
   await expect(page.locator(".wake-list")).toContainText("Chưa benchmark");
   await expect(page.locator(".wake-list")).toContainText("Áp dụng trong Thiết bị");
+  await expect(page.locator(".wake-list")).toContainText("Wake audio: Tắt");
+  const wakeAudioSwitch = page.getByRole("switch", { name: "Gửi âm thanh trước wake word" });
+  await expect(wakeAudioSwitch).toHaveAttribute("aria-checked", "false");
+  await page.getByLabel("Model artifact").selectOption("stable");
+  await page.getByLabel("Activation detector ID").fill("wn9s_hiesp");
+  await wakeAudioSwitch.click();
+  await page.getByRole("button", { name: "Tạo wake profile draft" }).click();
+  await expect.poll(() => wakeProfileCalls).toEqual([
+    expect.objectContaining({
+      artifactId: "stable",
+      sendWakeAudio: true,
+      interrupt: null,
+    }),
+  ]);
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByRole("tab", { name: /Wake word/ }).click();
   await page.locator("[data-apply-wake-profile]").click();

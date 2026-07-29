@@ -33,7 +33,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | ASR baseline | Sherpa-ONNX Zipformer Vietnamese 30M INT8 là primary; ChunkFormer-CTC-Large-Vie chỉ re-decode khi confidence/ổn định thấp hoặc policy yêu cầu chất lượng cao. Không chạy cả hai trên mọi utterance. |
 | TTS baseline | VieNeu-TTS v3 Turbo ONNX INT8 CPU là primary `vi-VN`; process pin `OPENBLAS_NUM_THREADS=1` trước Python và ONNX dùng `VEETEE_TTS_THREADS=2`. Natural sentence cap 160, emergency punctuation-free 256, Trúc Ly/`tu_nhien`/1.0x/lead-in 16. Native CPU là profile batch-only tùy chọn 72/72 sau benchmark, không tự fallback. Tempo chính xác theo agent config, playback bounded và generation cancellation. Cloud TTS không tự bật trong privacy profile local-only. |
 | VAD baseline | Silero VAD (`silero-local`) chạy server để speech/endpoint; không coi VAD là noise classifier hay semantic admission. |
-| LLM baseline | CLIProxyAPI `7.2.97` local ở `127.0.0.1:8317/v1`, model dev/LAN `gpt-5.6-terra`; agent publish Groq làm fallback retryable trước visible output. Veetee chỉ giữ client key gateway, không sao chép OAuth upstream. 9Router là adapter tùy chọn đang tạm dừng. |
+| LLM baseline | CLIProxyAPI `7.2.97` local ở `127.0.0.1:8317/v1`, model dev/LAN `gpt-5.6-terra`; chain mặc định chỉ có CLIProxyAPI. Groq là binding độc lập nhưng chưa được cấu hình fallback; chỉ thêm bằng task/publish tường minh sau. Veetee chỉ giữ client key gateway, không sao chép OAuth upstream. 9Router là adapter tùy chọn đang tạm dừng. |
 
 ## 2. Mặc định đề xuất để bắt đầu code
 
@@ -48,7 +48,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Resource layout | Executable A/B 3.625 MiB; wake `resource_0/1` 2 MiB; UI `ui_0/1` 2 MiB; journal/rollback độc lập. | Mở ADR nếu app hoặc artifact vượt slot đã freeze. |
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
 | ASR | Zipformer Vietnamese 30M INT8 primary; ChunkFormer-CTC-Large-Vie fallback có điều kiện. | Có thể tạm Zipformer-only trong bring-up nếu server chưa đủ tài nguyên. |
-| LLM | `openai-compatible-cliproxyapi` cho dev/LAN; Groq là fallback đã publish. Adapter giữ Chat Completions SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu CLIProxyAPI không đạt contract hoặc không phù hợp quyền sử dụng. |
+| LLM | `openai-compatible-cliproxyapi` cho dev/LAN, không seed fallback. Adapter giữ Chat Completions SSE, structured output, tool calling và cancellation; Groq chỉ là lựa chọn opt-in. | Publish fallback/official API/self-hosted bằng task riêng nếu CLIProxyAPI không đạt contract, quota hoặc không phù hợp quyền sử dụng. |
 | TTS | VieNeu-TTS v3 Turbo ONNX INT8 CPU local primary `vi-VN`; OpenBLAS 1 thread + ONNX 2 threads; native CPU chỉ là profile benchmark tùy chọn và fail readiness nếu artifact thiếu. | Đổi backend/thread budget hoặc thêm local/cloud fallback chỉ sau same-host A/B, license, privacy, latency, cancellation và live quality benchmark. |
 | Tenant | Schema tenant-aware, UI V1 một workspace/owner. | Mở full tenant/RBAC sau khi voice loop ổn định. |
 | LAN security | HTTP/WS chỉ cho dev LAN; release LAN dùng HTTPS/WSS với local CA/SPKI pinning. | Public cần tunnel/domain/TLS. |

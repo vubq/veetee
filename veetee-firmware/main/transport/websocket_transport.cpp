@@ -35,18 +35,21 @@ void CopyBounded(char* destination, std::size_t capacity, const char* source) {
 
 }  // namespace
 
-esp_err_t WebSocketTransport::Initialize(settings::DeviceSettings* settings,
+esp_err_t WebSocketTransport::Initialize(settings::SettingsStore* settings_store,
                                          EventSink event_sink,
                                          AudioSink audio_sink, McpSink mcp_sink,
+                                         audio::WakeAudioSource* wake_audio_source,
                                          void* context) {
-    if (settings == nullptr || event_sink == nullptr || audio_sink == nullptr ||
-        mcp_sink == nullptr || task_ != nullptr) {
+    if (settings_store == nullptr || event_sink == nullptr ||
+        audio_sink == nullptr ||
+        mcp_sink == nullptr || wake_audio_source == nullptr || task_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    settings_ = settings;
+    settings_store_ = settings_store;
     event_sink_ = event_sink;
     audio_sink_ = audio_sink;
     mcp_sink_ = mcp_sink;
+    wake_audio_source_ = wake_audio_source;
     sink_context_ = context;
 
     std::uint8_t mac[6] = {};
@@ -91,18 +94,22 @@ esp_err_t WebSocketTransport::Initialize(settings::DeviceSettings* settings,
 }
 
 esp_err_t WebSocketTransport::Open(WakeSource source) {
-    if (task_ == nullptr || settings_ == nullptr ||
-        !settings_->HasDeviceIdentity() ||
-        !network::IsWebSocketEndpointUrl(settings_->websocket_url)) {
+    const settings::DeviceSettings settings_snapshot =
+        settings_store_ == nullptr ? settings::DeviceSettings{}
+                                   : settings_store_->Snapshot();
+    if (task_ == nullptr || !settings_snapshot.HasDeviceIdentity() ||
+        !network::IsWebSocketEndpointUrl(settings_snapshot.websocket_url)) {
         return ESP_ERR_INVALID_STATE;
     }
     const std::uint32_t previous_generation = requested_generation_.fetch_add(1);
     const std::uint32_t generation = previous_generation + 1;
     ready_for_audio_.store(false);
     xQueueReset(outbound_audio_queue_);
+    if (source == WakeSource::kButton) wake_audio_source_->DiscardWakeAudio();
     Command command{.type = CommandType::kOpen, .generation = generation,
                     .wake_source = source};
-    if (QueueCommand(command, kCommandSendTimeout)) return ESP_OK;
+    if (QueuePriorityCommand(command, kCommandSendTimeout)) return ESP_OK;
+    wake_audio_source_->DiscardWakeAudio();
     std::uint32_t expected = generation;
     requested_generation_.compare_exchange_strong(expected, previous_generation);
     return ESP_ERR_TIMEOUT;
@@ -114,6 +121,7 @@ esp_err_t WebSocketTransport::Abort(const char* reason, const char* source) {
     }
     ready_for_audio_.store(false);
     xQueueReset(outbound_audio_queue_);
+    wake_audio_source_->DiscardWakeAudio();
     Command command{.type = CommandType::kAbort,
                     .generation = requested_generation_.load()};
     CopyBounded(command.reason, sizeof(command.reason), reason);
@@ -131,6 +139,7 @@ esp_err_t WebSocketTransport::StopListening(const char* reason) {
     const std::uint32_t generation = previous_generation + 1;
     ready_for_audio_.store(false);
     xQueueReset(outbound_audio_queue_);
+    wake_audio_source_->DiscardWakeAudio();
     Command command{.type = CommandType::kStopListening,
                     .generation = generation};
     CopyBounded(command.reason, sizeof(command.reason), reason);
@@ -202,6 +211,7 @@ void WebSocketTransport::Close(WebSocketCloseMode mode) {
     const std::uint32_t generation = previous_generation + 1;
     ready_for_audio_.store(false);
     xQueueReset(outbound_audio_queue_);
+    wake_audio_source_->DiscardWakeAudio();
     const Command command{.type = CommandType::kClose,
                           .generation = generation,
                           .close_mode = effective_mode};
@@ -275,7 +285,7 @@ void WebSocketTransport::TaskLoop() {
             reconnect_pending_ = false;
             ++reconnect_attempt_;
             reconnect_attempt_count_.fetch_add(1);
-            StartClient(reconnect_generation_, wake_source_, false);
+            StartClient(reconnect_generation_, wake_opening_.source(), false);
             continue;
         }
         if (ready_ &&
@@ -365,24 +375,33 @@ void WebSocketTransport::HandleCommand(const Command& command) {
 void WebSocketTransport::StartClient(std::uint32_t generation,
                                      WakeSource source,
                                      bool reset_reconnect_policy) {
+    if (reset_reconnect_policy) {
+        wake_opening_.Begin(generation, source);
+    } else if (!wake_opening_.Matches(generation, source)) {
+        HandleLoss(generation, "wake_opening_snapshot_mismatch", true);
+        return;
+    }
     Teardown(false);
     if (reset_reconnect_policy) {
         reconnect_enabled_.store(true);
         reconnect_pending_ = false;
         reconnect_attempt_ = 0;
     }
-    if (!IsCurrent(generation) || settings_ == nullptr ||
-        !settings_->HasDeviceIdentity() ||
-        !network::IsWebSocketEndpointUrl(settings_->websocket_url)) {
+    const settings::DeviceSettings settings_snapshot =
+        settings_store_ == nullptr ? settings::DeviceSettings{}
+                                   : settings_store_->Snapshot();
+    if (!IsCurrent(generation) || !settings_snapshot.HasDeviceIdentity() ||
+        !network::IsWebSocketEndpointUrl(settings_snapshot.websocket_url)) {
         HandleLoss(generation, "invalid_transport_configuration", true);
         return;
     }
 
-    CopyBounded(uri_.data(), uri_.size(), settings_->websocket_url);
+    CopyBounded(uri_.data(), uri_.size(), settings_snapshot.websocket_url);
     const int header_length = std::snprintf(
         headers_.data(), headers_.size(),
         "Authorization: Bearer %s\r\nProtocol-Version: 1\r\nDevice-Id: %s\r\nClient-Id: %s\r\n",
-        settings_->device_token, hardware_id_, settings_->client_id);
+        settings_snapshot.device_token, hardware_id_,
+        settings_snapshot.client_id);
     if (header_length <= 0 ||
         static_cast<std::size_t>(header_length) >= headers_.size()) {
         HandleLoss(generation, "transport_headers_invalid", true);
@@ -411,7 +430,6 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
     }
     callback_client_.store(client_);
     client_generation_.store(generation);
-    wake_source_ = source;
     text_assembler_.Reset();
     binary_assembler_.Reset();
     xQueueReset(outbound_audio_queue_);
@@ -465,11 +483,9 @@ void WebSocketTransport::HandleServerEvent(std::uint32_t generation,
             return;
         }
         CopyBounded(session_id_, sizeof(session_id_), event.session_id);
-        std::size_t length = 0;
-        if (!BuildListenStart(session_id_, wake_source_, control_buffer_.data(),
-                              control_buffer_.size(), &length) ||
-            !SendText(control_buffer_.data(), length)) {
-            HandleLoss(generation, "listen_start_send_failed");
+        if (!SendOpeningSequence(generation)) {
+            wake_audio_source_->DiscardWakeAudio();
+            HandleLoss(generation, "listen_opening_sequence_failed");
             return;
         }
         awaiting_hello_ = false;
@@ -489,37 +505,41 @@ void WebSocketTransport::HandleServerEvent(std::uint32_t generation,
         return;
     }
 
-    WebSocketTransportEvent notification{};
+    WebSocketTransportNotification notification{};
     bool handled = true;
     switch (event.kind) {
         case ServerEventKind::kListenStart:
             ready_for_audio_.store(true);
-            notification = WebSocketTransportEvent::kListenStarted;
+            notification.event = WebSocketTransportEvent::kListenStarted;
             break;
         case ServerEventKind::kStt:
-            notification = WebSocketTransportEvent::kSttFinal;
+            notification.event = WebSocketTransportEvent::kSttFinal;
             break;
         case ServerEventKind::kLlm:
-            notification = WebSocketTransportEvent::kLlmStarted;
+            notification.event = WebSocketTransportEvent::kLlmStarted;
             break;
         case ServerEventKind::kTurnError:
             ready_for_audio_.store(true);
-            notification = WebSocketTransportEvent::kTurnFailed;
+            notification.event = WebSocketTransportEvent::kTurnFailed;
             break;
         case ServerEventKind::kTtsStart:
             ready_for_audio_.store(false);
             xQueueReset(outbound_audio_queue_);
             playback_open_ = true;
-            notification = WebSocketTransportEvent::kTtsStarted;
+            notification.event = WebSocketTransportEvent::kTtsStarted;
             break;
         case ServerEventKind::kTtsStop:
             ready_for_audio_.store(true);
             playback_open_ = false;
-            notification = WebSocketTransportEvent::kTtsStopped;
+            notification.event = WebSocketTransportEvent::kTtsStopped;
             break;
         case ServerEventKind::kAssistantSleep:
             ready_for_audio_.store(false);
-            notification = WebSocketTransportEvent::kAssistantSleep;
+            notification.event = WebSocketTransportEvent::kAssistantSleep;
+            break;
+        case ServerEventKind::kConfigChanged:
+            notification.event = WebSocketTransportEvent::kConfigChanged;
+            notification.config_version = event.config_version;
             break;
         case ServerEventKind::kMcp:
         case ServerEventKind::kOther:
@@ -531,6 +551,42 @@ void WebSocketTransport::HandleServerEvent(std::uint32_t generation,
     if (handled && !NotifyOnce(notification)) {
         HandleLoss(generation, "application_event_rejected", true);
     }
+}
+
+bool WebSocketTransport::SendOpeningSequence(std::uint32_t generation) {
+    if (!IsCurrent(generation) || !wake_opening_.Matches(generation) ||
+        session_id_[0] == '\0') {
+        return false;
+    }
+    std::size_t length = 0;
+    std::size_t wake_packets = 0;
+    const WakeSource source = wake_opening_.source();
+    if (source == WakeSource::kWakeWord) {
+        if (!wake_opening_.MarkStarted(generation)) return false;
+        if (!BuildListenDetect(session_id_, control_buffer_.data(),
+                               control_buffer_.size(), &length) ||
+            !SendText(control_buffer_.data(), length)) {
+            return false;
+        }
+        std::size_t packet_length = 0;
+        while (wake_audio_source_->PopWakeAudioPacket(
+            wake_audio_buffer_.data(), wake_audio_buffer_.size(),
+            &packet_length)) {
+            if (!IsCurrent(generation) || packet_length == 0 ||
+                !SendBinary(wake_audio_buffer_.data(), packet_length)) {
+                return false;
+            }
+            ++wake_packets;
+        }
+        ESP_LOGI(kTag,
+                 "Wake opening sent detect then %u cached Opus packets",
+                 static_cast<unsigned>(wake_packets));
+    } else {
+        wake_audio_source_->DiscardWakeAudio();
+    }
+    return BuildListenStart(session_id_, source, control_buffer_.data(),
+                            control_buffer_.size(), &length) &&
+           SendText(control_buffer_.data(), length);
 }
 
 void WebSocketTransport::HandleMcpEnvelope(std::uint32_t generation,
@@ -555,8 +611,12 @@ void WebSocketTransport::HandleLoss(std::uint32_t generation,
     if (!IsCurrent(generation)) return;
     ESP_LOGW(kTag, "WebSocket session lost: %s", reason);
     Teardown(false, 1002, reason);
-    if (CanRetryWebSocket(
-            reconnect_enabled_.load(), protocol_failure, reconnect_attempt_)) {
+    const bool retry = CanRetryWebSocket(
+        reconnect_enabled_.load(), protocol_failure, reconnect_attempt_);
+    if (!wake_opening_.PreserveAudioForRetry(retry, generation)) {
+        wake_audio_source_->DiscardWakeAudio();
+    }
+    if (retry) {
         reconnect_generation_ = generation;
         reconnect_deadline_ =
             xTaskGetTickCount() +
@@ -766,10 +826,43 @@ bool WebSocketTransport::QueueUrgentCommand(const Command& command,
            xQueueSend(urgent_command_queue_, &command, timeout) == pdTRUE;
 }
 
+bool WebSocketTransport::QueueCriticalCommand(const Command& command,
+                                              TickType_t timeout) {
+    return urgent_command_queue_ != nullptr &&
+           xQueueSendToFront(urgent_command_queue_, &command, timeout) == pdTRUE;
+}
+
 bool WebSocketTransport::QueuePriorityCommand(const Command& command,
                                               TickType_t timeout) {
-    return QueueUrgentCommand(command, timeout) ||
-           QueueCommand(command, timeout);
+    const WebSocketCommandPriority priority = CommandPriority(command);
+    if (ShouldReplaceOldestUrgentCommand(priority)) {
+        if (QueueCriticalCommand(command, timeout)) return true;
+        Command displaced{};
+        if (urgent_command_queue_ != nullptr &&
+            xQueueReceive(urgent_command_queue_, &displaced, 0) == pdTRUE) {
+            ReleaseCommandPayload(displaced);
+            return QueueCriticalCommand(command, 0);
+        }
+        return false;
+    }
+    if (QueueUrgentCommand(command, timeout)) return true;
+    return CanFallbackToRegularQueue(priority) && QueueCommand(command, timeout);
+}
+
+WebSocketCommandPriority WebSocketTransport::CommandPriority(
+    const Command& command) {
+    switch (command.type) {
+        case CommandType::kOpen:
+        case CommandType::kClose:
+        case CommandType::kAbort:
+        case CommandType::kStopListening:
+            return WebSocketCommandPriority::kCriticalControl;
+        case CommandType::kSocketLost:
+        case CommandType::kProtocolError:
+            return WebSocketCommandPriority::kUrgent;
+        default:
+            return WebSocketCommandPriority::kRegular;
+    }
 }
 
 void WebSocketTransport::ReleaseCommandPayload(const Command& command) {
@@ -790,10 +883,10 @@ bool WebSocketTransport::NotifyWithRetry(WebSocketTransportEvent event,
     return false;
 }
 
-bool WebSocketTransport::NotifyOnce(WebSocketTransportEvent event) const {
+bool WebSocketTransport::NotifyOnce(
+    const WebSocketTransportNotification& notification) const {
     if (event_sink_ == nullptr) return false;
-    return event_sink_(WebSocketTransportNotification{.event = event},
-                       sink_context_);
+    return event_sink_(notification, sink_context_);
 }
 
 bool WebSocketTransport::IsCurrent(std::uint32_t generation) const {

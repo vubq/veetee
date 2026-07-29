@@ -14,7 +14,9 @@ public:
 
     esp_err_t Initialize(std::uint32_t minimum_security_epoch,
                          const char* nvs_namespace = "veetee_resource",
-                         const char* default_version = "factory-bringup");
+                         const char* default_version = "factory-bringup",
+                         const char* default_activation_model_id = nullptr,
+                         const char* default_interrupt_model_id = nullptr);
     esp_err_t Save(const ResourceRecord& record);
 
     [[nodiscard]] const ResourceRecord& record() const { return record_; }

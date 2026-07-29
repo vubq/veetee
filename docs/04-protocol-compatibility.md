@@ -92,11 +92,21 @@ Hai nguồn đánh thức phải hội tụ vào cùng flow:
 
 ```jsonl
 {"type":"listen","state":"start","mode":"auto","source":"button"}
-{"type":"listen","state":"detect","text":"Hey VeeTee","source":"wake_word"}
+{"type":"listen","state":"detect","source":"wake_word"}
 {"type":"listen","state":"start","mode":"auto","source":"wake_word"}
 ```
 
 `source` là metadata optional để trace/policy, không tạo hai conversation implementation khác nhau.
+Khi signed config đặt `send_wake_audio=true`, hai event wake-word ở trên bao lấy tối đa
+32 binary Opus frame 60 ms theo thứ tự `detect -> cached binary -> start`. `text` ở
+`detect` vẫn optional cho client tương thích nhưng Veetee firmware không cần gửi và
+server không dùng nó làm intent/phrase rule. Voice giữ cache pending tối đa 2 giây theo
+session generation; `start` cùng `source=wake_word` phải replay cache vào VAD thay vì
+reset nó. Button start, abort/stop/close, generation mismatch và socket mới đều xóa
+pending cache; binary trước `detect` không được nhận làm wake pre-roll. `detect` chỉ
+hợp lệ khi session mới đang standby hoặc trong closing grace; gửi nó giữa một lượt
+listening/thinking/speaking bị từ chối để không biến pending cache thành đường chặn
+audio hội thoại hiện tại.
 
 ### Abort semantics
 
@@ -138,7 +148,7 @@ Bootstrap giữ các field Xiaozhi cũ và có thể thêm optional `config`/`re
 {
   "config": {
     "version": 13,
-    "etag": "agent-config-13",
+    "etag": "cfg1-<43-char-sha256-base64url>",
     "url": "http://192.168.1.20:8001/veetee/config/v1/devices/AA-BB"
   },
   "resources": {
@@ -149,6 +159,12 @@ Bootstrap giữ các field Xiaozhi cũ và có thể thêm optional `config`/`re
 ```
 
 Firmware phải validate schema/target/version/size/hash/signature/ABI rồi mới stage. Resource bundle được tải qua HTTP range/resume nếu có, ghi inactive slot và activate atomically. WebSocket chỉ gửi invalidation metadata:
+
+Resource ABI V1 có đúng một ESP-SR model-pack member, `sample_rate=16000`, và
+inventory đã ký gồm đúng một detector role `activation` cùng tối đa một role
+`interrupt`. Mỗi `id` là exact WakeNet model ID và phải duy nhất. Manager không ký
+device config nếu activation/interrupt ID không tồn tại đúng role trong artifact;
+firmware cũng từ chối manifest thiếu hoặc khai báo inventory sai trước khi stage.
 
 ```json
 {
@@ -161,6 +177,16 @@ Firmware phải validate schema/target/version/size/hash/signature/ABI rồi m�
 ```
 
 `config_changed` không chứa URL tùy ý hoặc binary. Device dùng bootstrap trust và URL allowlist để pull; khi đang voice turn, reconcile được hoãn tới session boundary.
+
+Config GET trả một firmware projection signed riêng, không trả raw desired/agent
+state. `version` là `DeviceDesiredState.version`, độc lập với agent config version.
+Response dùng exact ETag `cfg1-<sha256-base64url>`; request có matching
+`If-None-Match` nhận `304` không body. Firmware chỉ được dùng ETag đã apply làm
+validator và chỉ chấp nhận `304` khi cả desired version lẫn applied ETag trùng.
+Snapshot V1 dùng restricted JCS + detached Ed25519, tối đa 8 KiB, exact WakeNet
+model IDs; interrupt có thể `null`. `send_wake_audio` mặc định `false`; giá trị `true`
+chỉ có hiệu lực trong snapshot ký hợp lệ và bật bounded wake pre-roll, không bật lưu
+audio/transcript hay upload nền ngoài activation boundary.
 
 ## 3. Binary protocol
 
@@ -288,6 +314,7 @@ Mỗi release chạy fixture hai chiều:
 | protocol/config socket failure | yes | yes | no retry; close to idle cleanly |
 | inactivity timeout + closing grace | yes | yes | goodbye, sleep or cancel closing |
 | config/resource manifest signature | yes | yes | verify before stage |
+| config ETag + 304 | yes | yes | only an exactly applied version/ETag is reusable |
 | config_changed invalidation | yes | yes | pull later, no binary over WS |
 | resource A/B rollback | yes | yes | active slot remains usable |
 | resource reported-state retry | yes | yes | equal version idempotent, lower version `409` |
@@ -312,4 +339,7 @@ Contract changes require a fixture update, changelog entry và compatibility run
   `/veetee/devices/:deviceId/reported-state`. Body V1 dùng Manager REST camelCase
   theo fixture `devices/reported-state-v1.json`; firmware không gửi token, URL
   manifest hoặc transcript trong state.
+- Config reconcile report nằm dưới `state.config` với `desiredVersion`,
+  `appliedVersion`, `phase` và optional `errorCode`. Manager shallow-merge từng
+  subsystem để config/resource/UI/firmware report kế tiếp không xóa nhau.
 - `audio_params.sample_rate` trong device hello là uplink mic rate; trong server hello là downlink TTS rate. Implementation không được coi hai giá trị này là cùng một hướng audio.

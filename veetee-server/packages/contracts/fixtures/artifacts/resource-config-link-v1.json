@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "bundle_id": "01JRESOURCECONFIGLINK00000000",
+  "kind": "resource_bundle",
+  "version": "1.2.0",
+  "channel": "stable",
+  "target": {
+    "board": "veetee-s3-n16r8",
+    "chip": "esp32s3",
+    "flash_bytes": 16777216,
+    "psram_bytes": 8388608
+  },
+  "compatibility": {
+    "min_firmware": "0.2.0",
+    "max_firmware_exclusive": "0.3.0",
+    "resource_abi": 1
+  },
+  "payload": {
+    "url": "http://192.168.1.20:8003/veetee/artifacts/01JRESOURCECONFIGLINK00000000/content",
+    "size": 1024,
+    "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+    "content_type": "application/vnd.veetee.esp-sr-model-pack"
+  },
+  "apply": {
+    "mode": "when_standby",
+    "requires_reboot": false,
+    "rollback_allowed": true
+  },
+  "members": [
+    {
+      "name": "speech/esp-sr-models",
+      "kind": "model_pack",
+      "runtime": "esp-sr",
+      "runtime_abi": 1,
+      "format_version": 1,
+      "sample_rate": 16000,
+      "detectors": [
+        {
+          "id": "wn9s_hiesp",
+          "role": "activation"
+        }
+      ],
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+      "bytes": 1024
+    }
+  ],
+  "created_at": "2026-07-30T00:00:00.000Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "veetee-dev-release-2026-01",
+    "security_epoch": 1,
+    "value": "mKFphzdBz/MsDD4ismMD+6mUYb9D3y/5hw36T7fZqe2qWgsnPqLEiEijbs0GMk30V/Kvl8Lv9le6QjPvBNlFBA=="
+  }
+}

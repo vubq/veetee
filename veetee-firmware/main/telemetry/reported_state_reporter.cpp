@@ -62,6 +62,19 @@ bool AddBoolean(cJSON* object, const char* name, bool value) {
     return cJSON_AddBoolToObject(object, name, value) != nullptr;
 }
 
+bool ParseDecimalU32(const char* value, std::uint32_t* output) {
+    if (value == nullptr || output == nullptr || value[0] == '\0') return false;
+    std::uint32_t parsed = 0;
+    for (const char* cursor = value; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return false;
+        const std::uint32_t digit = static_cast<std::uint32_t>(*cursor - '0');
+        if (parsed > (UINT32_MAX - digit) / 10U) return false;
+        parsed = parsed * 10U + digit;
+    }
+    *output = parsed;
+    return true;
+}
+
 std::uint32_t PartitionBytes(const char* first_label, const char* second_label) {
     const esp_partition_t* first = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, first_label);
@@ -74,9 +87,11 @@ std::uint32_t PartitionBytes(const char* first_label, const char* second_label) 
 }  // namespace
 
 esp_err_t ReportedStateReporter::Initialize(
-    settings::DeviceSettings* settings) {
-    if (settings == nullptr || settings_ != nullptr) return ESP_ERR_INVALID_ARG;
-    settings_ = settings;
+    settings::SettingsStore* settings_store) {
+    if (settings_store == nullptr || settings_store_ != nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    settings_store_ = settings_store;
     GenerateBootId(&boot_id_);
 
     std::uint8_t mac[6] = {};
@@ -89,11 +104,20 @@ esp_err_t ReportedStateReporter::Initialize(
     error = state_store_.Initialize();
     if (error != ESP_OK) return error;
     outbox_mutex_ = xSemaphoreCreateMutex();
-    if (outbox_mutex_ == nullptr) return ESP_ERR_NO_MEM;
+    state_mutex_ = xSemaphoreCreateMutex();
+    if (outbox_mutex_ == nullptr || state_mutex_ == nullptr) {
+        if (outbox_mutex_ != nullptr) vSemaphoreDelete(outbox_mutex_);
+        if (state_mutex_ != nullptr) vSemaphoreDelete(state_mutex_);
+        outbox_mutex_ = nullptr;
+        state_mutex_ = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
     if (xTaskCreate(&ReportedStateReporter::TaskEntry, "veetee_report", 7168,
                     this, 3, &task_) != pdPASS) {
         vSemaphoreDelete(outbox_mutex_);
+        vSemaphoreDelete(state_mutex_);
         outbox_mutex_ = nullptr;
+        state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(kTag, "Reporter ready boot_id=%s", boot_id_.data());
@@ -117,23 +141,73 @@ bool ReportedStateReporter::Schedule(
     return true;
 }
 
+bool ReportedStateReporter::PersistForReplay(
+    const settings::ReportedResourceState& state, bool supersede_pending) {
+    if (task_ == nullptr || state_mutex_ == nullptr ||
+        !settings::IsTerminalReportedResourcePhase(state.phase) ||
+        !settings::IsValidReportedResourceState(state)) {
+        return false;
+    }
+    xSemaphoreTake(state_mutex_, portMAX_DELAY);
+    settings::ReportedStateRecord record = state_store_.record();
+    std::uint32_t version = 0;
+    const bool staged = record.has_pending == 0
+                            ? settings::StagePendingReportedState(
+                                  &record, state, &version)
+                            : supersede_pending &&
+                                  settings::ReplacePendingReportedState(
+                                      &record, state, &version);
+    const esp_err_t error = staged ? state_store_.Save(record)
+                                   : ESP_ERR_INVALID_STATE;
+    xSemaphoreGive(state_mutex_);
+    if (error != ESP_OK) return false;
+    xTaskNotifyGive(task_);
+    return true;
+}
+
 void ReportedStateReporter::TaskEntry(void* context) {
     static_cast<ReportedStateReporter*>(context)->TaskLoop();
 }
 
 void ReportedStateReporter::TaskLoop() {
     settings::ReportedResourceState current{};
+    settings::ReportedResourceState deferred_terminal{};
     std::uint32_t current_version = 0;
     bool have_current = false;
+    bool have_deferred_terminal = false;
     bool terminal = false;
     std::uint32_t retry_ms = kInitialRetryMs;
 
     while (true) {
-        const auto& persisted = state_store_.record();
+        xSemaphoreTake(state_mutex_, portMAX_DELAY);
+        const settings::ReportedStateRecord persisted = state_store_.record();
+        xSemaphoreGive(state_mutex_);
+        if (have_current && !terminal && persisted.has_pending != 0) {
+            // A durable boot/terminal boundary always wins over coalescable
+            // progress.  The intermediate may already own a lower unused
+            // sequence; dropping it is safe, while sending or assigning it
+            // after the pending boundary could regress Manager state.
+            ESP_LOGI(kTag,
+                     "Dropping intermediate phase=%s version=%" PRIu32
+                     " for pending terminal version=%" PRIu32,
+                     settings::ReportedResourcePhaseName(current.phase),
+                     current_version, persisted.pending_version);
+            have_current = false;
+            current_version = 0;
+            retry_ms = kInitialRetryMs;
+            continue;
+        }
         if (!have_current && persisted.has_pending != 0) {
             current = persisted.pending;
             current_version = persisted.pending_version;
             have_current = true;
+            terminal = true;
+        }
+        if (!have_current && have_deferred_terminal) {
+            current = deferred_terminal;
+            current_version = 0;
+            have_current = true;
+            have_deferred_terminal = false;
             terminal = true;
         }
         if (!have_current) {
@@ -154,6 +228,42 @@ void ReportedStateReporter::TaskLoop() {
         if (error == ESP_OK) error = Send(current, current_version);
         if (error == ESP_OK && terminal) {
             error = ClearDeliveredTerminal(current_version);
+        }
+        if (error == ESP_ERR_INVALID_STATE && terminal) {
+            xSemaphoreTake(state_mutex_, portMAX_DELAY);
+            const settings::ReportedStateRecord latest = state_store_.record();
+            xSemaphoreGive(state_mutex_);
+            if (current_version == 0 && latest.has_pending != 0) {
+                // PersistForReplay won the race after this FIFO terminal was
+                // popped.  Keep FIFO ownership in RAM, replay the durable
+                // boundary first, then assign this terminal a later version.
+                deferred_terminal = current;
+                have_deferred_terminal = true;
+                have_current = false;
+                retry_ms = kInitialRetryMs;
+                continue;
+            }
+            const bool superseded =
+                latest.has_pending == 0 ||
+                latest.pending_version != current_version;
+            if (superseded) {
+                have_current = false;
+                current_version = 0;
+                retry_ms = kInitialRetryMs;
+                continue;
+            }
+        }
+        if (error == ESP_ERR_INVALID_STATE && !terminal) {
+            xSemaphoreTake(state_mutex_, portMAX_DELAY);
+            const bool pending_terminal =
+                state_store_.record().has_pending != 0;
+            xSemaphoreGive(state_mutex_);
+            if (pending_terminal) {
+                have_current = false;
+                current_version = 0;
+                retry_ms = kInitialRetryMs;
+                continue;
+            }
         }
         if (error == ESP_OK) {
             ESP_LOGI(kTag, "Reported resource phase=%s version=%" PRIu32,
@@ -186,26 +296,34 @@ void ReportedStateReporter::TaskLoop() {
 esp_err_t ReportedStateReporter::PersistVersion(
     const settings::ReportedResourceState& state, bool terminal,
     std::uint32_t* version) {
+    xSemaphoreTake(state_mutex_, portMAX_DELAY);
     settings::ReportedStateRecord record = state_store_.record();
     const bool valid = terminal
                            ? settings::StagePendingReportedState(&record, state,
                                                                  version)
                            : settings::IssueReportedStateVersion(&record, version);
-    return valid ? state_store_.Save(record) : ESP_ERR_INVALID_STATE;
+    const esp_err_t error = valid ? state_store_.Save(record)
+                                  : ESP_ERR_INVALID_STATE;
+    xSemaphoreGive(state_mutex_);
+    return error;
 }
 
 esp_err_t ReportedStateReporter::ClearDeliveredTerminal(
     std::uint32_t version) {
+    xSemaphoreTake(state_mutex_, portMAX_DELAY);
     settings::ReportedStateRecord record = state_store_.record();
-    return settings::ClearPendingReportedState(&record, version)
-               ? state_store_.Save(record)
-               : ESP_ERR_INVALID_STATE;
+    const esp_err_t error =
+        settings::ClearPendingReportedState(&record, version)
+            ? state_store_.Save(record)
+            : ESP_ERR_INVALID_STATE;
+    xSemaphoreGive(state_mutex_);
+    return error;
 }
 
 esp_err_t ReportedStateReporter::Send(
     const settings::ReportedResourceState& state, std::uint32_t version) {
-    if (settings_ == nullptr) return ESP_ERR_INVALID_STATE;
-    const settings::DeviceSettings snapshot = *settings_;
+    if (settings_store_ == nullptr) return ESP_ERR_INVALID_STATE;
+    const settings::DeviceSettings snapshot = settings_store_->Snapshot();
     if (!snapshot.HasDeviceIdentity() ||
         !IsSafeDeviceId(snapshot.device_id)) {
         return ESP_ERR_INVALID_STATE;
@@ -223,7 +341,7 @@ esp_err_t ReportedStateReporter::Send(
     }
 
     std::array<char, kMaximumBodyBytes> body{};
-    if (!BuildBody(state, version, body.data(), body.size())) {
+    if (!BuildBody(state, version, snapshot, body.data(), body.size())) {
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -281,7 +399,8 @@ esp_err_t ReportedStateReporter::Send(
 
 bool ReportedStateReporter::BuildBody(
     const settings::ReportedResourceState& state, std::uint32_t version,
-    char* output, std::size_t output_size) const {
+    const settings::DeviceSettings& settings_snapshot, char* output,
+    std::size_t output_size) const {
     if (!settings::IsValidReportedResourceState(state) || version == 0 ||
         output == nullptr || output_size == 0) {
         return false;
@@ -303,16 +422,24 @@ bool ReportedStateReporter::BuildBody(
     cJSON* wake = capabilities == nullptr
                       ? nullptr
                       : cJSON_AddObjectToObject(capabilities, "wake");
+    const bool is_config =
+        state.artifact_kind == settings::ReportedArtifactKind::kDeviceConfig;
     const char* artifact_name =
         state.artifact_kind == settings::ReportedArtifactKind::kUiPack
             ? "ui"
             : state.artifact_kind == settings::ReportedArtifactKind::kFirmware
                   ? "firmware_ota"
-                  : "resource";
+                  : is_config ? "config" : "resource";
     cJSON* resource = reported == nullptr
                           ? nullptr
                           : cJSON_AddObjectToObject(reported, artifact_name);
     const char* phase = settings::ReportedResourcePhaseName(state.phase);
+    std::uint32_t applied_config_version = 0;
+    std::uint32_t desired_config_version = 0;
+    const bool config_versions =
+        !is_config ||
+        (ParseDecimalU32(state.current_version, &applied_config_version) &&
+         ParseDecimalU32(state.desired_version, &desired_config_version));
     char display_target[48] = {};
     const int display_target_length = std::snprintf(
         display_target, sizeof(display_target), "st7789-%dx%d-rgb565",
@@ -324,13 +451,14 @@ bool ReportedStateReporter::BuildBody(
         cJSON_AddItemToArray(compositions, cJSON_CreateString("quiet"));
     const bool valid = root != nullptr && reported != nullptr && firmware != nullptr &&
                        capabilities != nullptr && display != nullptr && wake != nullptr &&
-                       resource != nullptr && display_target_length > 0 &&
+                       resource != nullptr && config_versions &&
+                       display_target_length > 0 &&
                        display_target_length < static_cast<int>(sizeof(display_target)) &&
                        AddNumber(root, "version", version) &&
                        AddString(root, "bootId", boot_id_.data()) &&
                        AddNumber(reported, "schemaVersion", 1) &&
-                       AddString(reported, "locale", settings_->locale) &&
-                       AddString(reported, "timeZone", settings_->time_zone) &&
+                       AddString(reported, "locale", settings_snapshot.locale) &&
+                       AddString(reported, "timeZone", settings_snapshot.time_zone) &&
                        AddString(firmware, "version",
                                  CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION) &&
                        AddString(capabilities, "board", board::kBoardName) &&
@@ -354,17 +482,25 @@ bool ReportedStateReporter::BuildBody(
                        AddNumber(wake, "channels", 1) &&
                        AddBoolean(wake, "hotReload", true) &&
                        AddString(resource, "phase", phase) &&
-                       AddString(resource, "currentVersion",
-                                 state.current_version) &&
-                       AddString(resource, "desiredVersion",
-                                 state.desired_version) &&
-                       AddNumber(resource, "activeSlot", state.active_slot) &&
-                       AddNumber(resource, "targetSlot", state.target_slot) &&
-                       AddNumber(resource, "expectedBytes", state.expected_bytes) &&
-                       AddNumber(resource, "downloadedBytes",
-                                 state.downloaded_bytes) &&
-                       AddNumber(resource, "securityEpoch",
-                                 state.security_epoch) &&
+                       (is_config
+                            ? AddNumber(resource, "appliedVersion",
+                                        applied_config_version) &&
+                                  AddNumber(resource, "desiredVersion",
+                                            desired_config_version)
+                            : AddString(resource, "currentVersion",
+                                        state.current_version) &&
+                                  AddString(resource, "desiredVersion",
+                                            state.desired_version) &&
+                                  AddNumber(resource, "activeSlot",
+                                            state.active_slot) &&
+                                  AddNumber(resource, "targetSlot",
+                                            state.target_slot) &&
+                                  AddNumber(resource, "expectedBytes",
+                                            state.expected_bytes) &&
+                                  AddNumber(resource, "downloadedBytes",
+                                            state.downloaded_bytes) &&
+                                  AddNumber(resource, "securityEpoch",
+                                            state.security_epoch)) &&
                        (state.error_code[0] == '\0' ||
                         AddString(resource, "errorCode", state.error_code));
     const bool printed = valid &&

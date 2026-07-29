@@ -29,6 +29,8 @@ The device edge now serves rollout-scoped immutable `manifest.json` and
 resume without buffering artifact bodies in process memory. A release remains
 invisible until its immutable directory contains the signer-created `.complete`
 marker. Local signed releases are generated with
-`npm run resources:release -- ...` into the ignored artifact root. Remaining
+`npm run resources:release -- ... --activation-model <exact-wakenet-id>` (plus an
+optional distinct `--interrupt-model`) into the ignored artifact root. The signed
+member inventory is enforced again when a wake profile is created or published. Remaining
 artifact work is admin upload/publish CRUD, object-store URLs, canary orchestration
 and reported-state dashboards.

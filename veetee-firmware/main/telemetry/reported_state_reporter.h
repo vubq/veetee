@@ -17,8 +17,10 @@ namespace veetee::telemetry {
 
 class ReportedStateReporter {
 public:
-    esp_err_t Initialize(settings::DeviceSettings* settings);
+    esp_err_t Initialize(settings::SettingsStore* settings_store);
     bool Schedule(const settings::ReportedResourceState& state);
+    bool PersistForReplay(const settings::ReportedResourceState& state,
+                          bool supersede_pending = false);
 
     [[nodiscard]] const char* boot_id() const { return boot_id_.data(); }
 
@@ -32,11 +34,14 @@ private:
     esp_err_t Send(const settings::ReportedResourceState& state,
                    std::uint32_t version);
     bool BuildBody(const settings::ReportedResourceState& state,
-                   std::uint32_t version, char* output,
+                   std::uint32_t version,
+                   const settings::DeviceSettings& settings_snapshot,
+                   char* output,
                    std::size_t output_size) const;
 
-    settings::DeviceSettings* settings_ = nullptr;
+    settings::SettingsStore* settings_store_ = nullptr;
     SemaphoreHandle_t outbox_mutex_ = nullptr;
+    SemaphoreHandle_t state_mutex_ = nullptr;
     TaskHandle_t task_ = nullptr;
     ReportedStateOutbox outbox_{};
     settings::ReportedStateStore state_store_{};

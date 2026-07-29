@@ -4,7 +4,8 @@ namespace veetee::audio {
 
 DetectorRole DetectorRoleForState(app::State state,
                                   bool activation_available,
-                                  bool interrupt_available) {
+                                  bool interrupt_available,
+                                  bool interrupt_while_speaking) {
     switch (state) {
         case app::State::kIdle:
         case app::State::kClosing:
@@ -12,9 +13,12 @@ DetectorRole DetectorRoleForState(app::State state,
                                         : DetectorRole::kDisabled;
         case app::State::kEvaluating:
         case app::State::kThinking:
-        case app::State::kSpeaking:
             return interrupt_available ? DetectorRole::kInterrupt
                                        : DetectorRole::kDisabled;
+        case app::State::kSpeaking:
+            return interrupt_available && interrupt_while_speaking
+                       ? DetectorRole::kInterrupt
+                       : DetectorRole::kDisabled;
         case app::State::kStarting:
         case app::State::kWifiConfiguring:
         case app::State::kNetworkConnecting:
@@ -23,6 +27,7 @@ DetectorRole DetectorRoleForState(app::State state,
         case app::State::kConnecting:
         case app::State::kListening:
         case app::State::kAborting:
+        case app::State::kUpgrading:
             return DetectorRole::kDisabled;
     }
     return DetectorRole::kDisabled;

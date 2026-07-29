@@ -149,9 +149,14 @@ Fallback policy V1:
 ```text
 VAD vi-VN: silero-local -> provider-native-vad (chỉ nếu cùng session contract)
 ASR vi-VN: sherpa-onnx-zipformer-vi -> chunkformer-ctc-vie (low confidence) -> ask_again
-LLM: openai-compatible-cliproxyapi -> groq-cloud -> error
+LLM mặc định: openai-compatible-cliproxyapi -> error
+LLM opt-in sau publish tường minh: primary -> configured fallback(s) -> error
 TTS vi-VN: vieneu-local -> cached_system_audio/text-only error
 ```
+
+Registry hỗ trợ fallback chain và binding Groq độc lập, nhưng seed/local agent hiện
+không tự đưa Groq vào chain. Thêm fallback là một thay đổi agent config có chủ đích,
+không phải behavior mặc định khi CLIProxyAPI lỗi hoặc hết quota.
 
 ChunkFormer là quality re-decode chứ không phải retry mù. Chỉ chạy khi còn deadline
 và transcript mới có cơ hội cải thiện; không chạy lại sau `abort`.
