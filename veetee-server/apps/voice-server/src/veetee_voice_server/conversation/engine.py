@@ -683,9 +683,9 @@ class ConversationEngine:
         *,
         cancelled: bool,
     ) -> None:
-        if not speech.started or not self._arbiter.is_current(context):
+        if not speech.started:
             return
-        await self._emit(
+        await self._emit_cleanup_if_current(
             context,
             ConversationOutput(
                 kind=OutputKind.TTS_STOP,
@@ -697,6 +697,18 @@ class ConversationEngine:
 
     async def _emit(self, context: OperationContext, output: ConversationOutput) -> None:
         self._arbiter.require_current(context)
+        await self._sink.emit(output)
+
+    async def _emit_cleanup_if_current(
+        self,
+        context: OperationContext,
+        output: ConversationOutput,
+    ) -> None:
+        # A parent turn deadline may expire after audio has started. The same
+        # generation still needs a terminal cleanup event even though no new
+        # provider output is allowed past that deadline.
+        if not self._arbiter.is_current(context):
+            return
         await self._sink.emit(output)
 
     async def _emit_if_current_error(

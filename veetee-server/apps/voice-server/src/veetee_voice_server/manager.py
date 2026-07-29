@@ -154,11 +154,11 @@ class SessionProfile:
             ),
             llm_chain=(
                 LlmEndpoint(
-                    provider_id="settings:9router",
-                    adapter="openai-compatible-9router",
-                    base_url=str(settings.nine_router_base_url),
-                    model=settings.nine_router_model,
-                    api_key=settings.nine_router_api_key,
+                    provider_id="settings:cliproxyapi",
+                    adapter="openai-compatible-cliproxyapi",
+                    base_url=str(settings.cliproxy_base_url),
+                    model=settings.cliproxy_model,
+                    api_key=settings.cliproxy_api_key,
                     reasoning_effort="none",
                     config={"streamProseResponse": True},
                 ),
@@ -616,7 +616,9 @@ def _llm_environment_secret(adapter: str, settings: Settings) -> str:
         return settings.cliproxy_api_key
     if "groq" in normalized:
         return settings.groq_cloud_api_key
-    return settings.nine_router_api_key
+    if "9router" in normalized or "nine-router" in normalized:
+        return settings.nine_router_api_key
+    return ""
 
 
 def _tts_endpoint(

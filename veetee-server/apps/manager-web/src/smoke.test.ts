@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import indexHtml from "../index.html?raw";
 import managerShell from "./components/ManagerShell.vue?raw";
+import themeSelector from "./components/ui/VtThemeSelector.vue?raw";
+import themeRuntime from "./theme.ts?raw";
 import agentsPage from "./components/pages/AgentsPage.vue?raw";
 import devicesPage from "./components/pages/DevicesPage.vue?raw";
 import deviceUiPage from "./components/pages/DeviceUiPage.vue?raw";
@@ -18,12 +21,16 @@ describe("Vue-native Manager Web", () => {
       "ProvidersPage",
       "RealtimeLabPage",
       "ResourcesPage",
+      "OperationsPage",
     ]) {
       expect(managerShell).toContain(component);
     }
     expect(managerShell).not.toContain("prototypePage");
     expect(managerShell).not.toContain("v-html");
     expect(managerShell).not.toContain("initializePrototype");
+    expect(managerShell).toContain("defineAsyncComponent");
+    expect(managerShell).toContain('import("./pages/OverviewPage.vue")');
+    expect(managerShell).toContain('import("./pages/ResourcesPage.vue")');
     for (const devicePanel of ["DeviceUiPage", "DeviceWakePanel", "McpPage", "TelemetryPage"]) {
       expect(devicesPage).toContain(devicePanel);
     }
@@ -36,6 +43,19 @@ describe("Vue-native Manager Web", () => {
     expect(deviceDiagnosticsPanel).toContain("không giả lập packet-loss mạng");
     expect(deviceDiagnosticsPanel).toContain("websocketReconnectAttemptCount");
     expect(deviceDiagnosticsPanel).toContain("WS exhausted");
+  });
+
+  it("applies a persisted theme before paint and exposes three accessible choices", () => {
+    for (const source of [indexHtml, themeRuntime]) {
+      expect(source).toContain("veetee.manager.theme");
+      expect(source).toContain("themePreference");
+    }
+    expect(indexHtml).toContain("root.dataset.theme = resolved");
+    expect(indexHtml.indexOf("root.dataset.theme = resolved")).toBeLessThan(indexHtml.indexOf("/src/main.ts"));
+    expect(managerShell).toContain("VtThemeSelector");
+    for (const preference of ["light", "system", "dark"]) {
+      expect(themeSelector).toContain(`value: \"${preference}\"`);
+    }
   });
 
   it("keeps Mobile as the default UI and exposes all three synchronized styles", () => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Device } from "../../api/schemas";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../../utils/device-delivery";
 import { VtBadge, VtIcon } from "../ui";
 
+const { t } = useI18n();
 const props = defineProps<{ device: Device }>();
 const summary = computed(() => summarizeDeviceDelivery(props.device));
 const icon = computed(() => summary.value.state === "synced" ? "check" : summary.value.state === "unmanaged" ? "telemetry" : "warning");
@@ -35,30 +37,30 @@ const icon = computed(() => summary.value.state === "synced" ? "check" : summary
           <VtBadge :tone="deliveryTone(item.state)">{{ deliveryLabel(item.state) }}</VtBadge>
         </header>
         <dl>
-          <div><dt>Desired</dt><dd>{{ item.desiredVersion ?? "Chưa đặt" }}</dd></div>
-          <div><dt>Active</dt><dd>{{ item.currentVersion ?? "Chưa report" }}</dd></div>
-          <div><dt>Phase</dt><dd>{{ item.phase ?? "—" }}</dd></div>
+          <div><dt>{{ t("delivery.desired") }}</dt><dd>{{ item.desiredVersion ?? "Chưa đặt" }}</dd></div>
+          <div><dt>{{ t("delivery.active") }}</dt><dd>{{ item.currentVersion ?? "Chưa report" }}</dd></div>
+          <div><dt>{{ t("delivery.phase") }}</dt><dd>{{ item.phase ?? "—" }}</dd></div>
         </dl>
         <p>{{ item.message }}</p>
       </article>
     </div>
 
     <div class="state-revision-note">
-      <span><small>Desired revision</small><b>v{{ device.desiredState.version }}</b></span>
+      <span><small>{{ t("delivery.desiredRevision") }}</small><b>v{{ device.desiredState.version }}</b></span>
       <i></i>
-      <span><small>Report sequence</small><b>#{{ device.reportedState.version }}</b></span>
-      <p>Hai giá trị dùng cho versioning và idempotency riêng; không cần bằng nhau.</p>
+      <span><small>{{ t("delivery.reportSequence") }}</small><b>#{{ device.reportedState.version }}</b></span>
+      <p>{{ t("delivery.revisionNote") }}</p>
     </div>
 
     <details class="state-raw-details">
-      <summary>Dữ liệu state kỹ thuật <VtIcon name="chevron" :size="16" /></summary>
+      <summary>{{ t("delivery.technicalState") }} <VtIcon name="chevron" :size="16" /></summary>
       <div class="state-grid">
         <article class="vt-panel state-card">
-          <header><span class="vt-kicker">DESIRED STATE</span><VtBadge tone="info">revision {{ device.desiredState.version }}</VtBadge></header>
+          <header><span class="vt-kicker">{{ t("delivery.desiredState") }}</span><VtBadge tone="info">revision {{ device.desiredState.version }}</VtBadge></header>
           <pre>{{ JSON.stringify(device.desiredState.state, null, 2) }}</pre>
         </article>
         <article class="vt-panel state-card">
-          <header><span class="vt-kicker">REPORTED STATE</span><VtBadge tone="neutral">sequence {{ device.reportedState.version }}</VtBadge></header>
+          <header><span class="vt-kicker">{{ t("delivery.reportedState") }}</span><VtBadge tone="neutral">sequence {{ device.reportedState.version }}</VtBadge></header>
           <pre>{{ JSON.stringify(device.reportedState.state, null, 2) }}</pre>
         </article>
       </div>

@@ -40,7 +40,8 @@ Baseline local tiếng Việt của cascade:
 Silero VAD (server local)
   -> Sherpa-ONNX Zipformer Vietnamese 30M INT8 (primary)
   -> ChunkFormer-CTC-Large-Vie (re-decode khi low confidence/unstable)
-  -> openai-compatible-9router (streaming LLM candidate)
+  -> openai-compatible-cliproxyapi (streaming LLM local primary)
+     -> groq-cloud (published retryable fallback before visible output)
   -> VieNeu-TTS v3 Turbo (local `vi-VN`)
 ```
 
@@ -51,8 +52,9 @@ thay vì gọi LLM với transcript không đáng tin. VieNeu capability phải 
 `streaming` hay `batch`; nếu batch, sentence chunker vẫn phát incremental nhưng
 không được tính như true streaming.
 
-`9router` là adapter OpenAI-compatible local/dev, không phải ràng buộc conversation
-core. Nó phải pass structured output, tool calling, SSE và cancellation conformance;
+CLIProxyAPI là adapter OpenAI-compatible local/dev hiện hành, không phải ràng buộc
+conversation core. Nó phải pass structured output, tool calling, SSE và cancellation;
+9Router vẫn là adapter tùy chọn nhưng đang tạm dừng. Mọi gateway phải pass conformance;
 ChatGPT Plus/Codex login/token không được đưa trực tiếp vào firmware hay provider
 secret. Xem `docs/14-model-and-provider-baseline.md` để biết điều kiện freeze.
 
@@ -468,8 +470,9 @@ Nếu chưa đạt, UI phải hiển thị “Bấm nút để ngắt” chứ k
 
 ## 8. Latency budget
 
-Structured conversation gate dùng `response_format=json_schema` strict của 9Router khi
-provider quảng cáo capability này, rồi vẫn validate toàn bộ object bằng Draft 2020-12
+Structured conversation gate dùng `response_format=json_schema` strict khi gateway
+quảng cáo capability và schema tương thích; CLIProxyAPI dùng JSON Object Mode cho schema
+MCP động không đạt ràng buộc strict. Voice Server vẫn validate toàn bộ object bằng Draft 2020-12
 JSON Schema ở voice-server trước khi cho phép planner/tool. Adapter giữ mã lỗi bounded
 (`invalid_sse_json`, `empty_structured_output`, `invalid_structured_json`,
 `structured_output_truncated`, `structured_schema_mismatch`) và không ghi raw output. Các field tương thích bị model bỏ
@@ -572,3 +575,9 @@ nằm tại `veetee-server/packages/contracts/fixtures/lab/`.
 17. Hai phiên dùng chung VieNeu không xen kẽ sentence chunk; chờ TTS worker lâu hơn
     `ttsSeconds` không làm hỏng turn, còn worker đã nhận lượt nhưng ngừng phát audio
     quá `ttsSeconds` phải hủy và dọn playback.
+18. Một response kể chuyện tạo 300--600 giây PCM vẫn giữ một lifecycle
+    `tts.start` -> binary audio -> `tts.stop`, không provider deadline, schedule gap,
+    stale output hoặc absolute-turn cutoff; playback drain không tiêu thụ LLM/TTS idle
+    deadline khi stream vẫn có progress.
+19. Sau long response, ít nhất ba turn hội thoại thường vẫn hoàn tất và mỗi turn quay
+    lại `listen.start`; Lab/browser evidence phải tách khỏi nghe Opus/I2S/loa ESP32 thật.

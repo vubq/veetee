@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/vue";
 import { computed, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Artifact, Device, FirmwareRelease, FirmwareRollout, ResourceRollout, UiPackRollout, WakeProfile } from "../../api/schemas";
 import { formatBytes, statusTone } from "../../utils/format";
@@ -30,6 +31,7 @@ const props = defineProps<{
   resumeFirmwareRollout: (id: string, percentage?: number) => Promise<void>;
   rollbackFirmwareRollout: (id: string) => Promise<void>;
 }>();
+const { t } = useI18n();
 
 const artifactForm = reactive({ id: "", license: "" });
 const wakeForm = reactive({ name: "Hey VeeTee", artifactId: "", phrase: "Hey VeeTee", channel: "development", locale: "vi-VN", activationDetector: "", interruptDetector: "" });
@@ -50,17 +52,39 @@ function percentagePending(rollout: FirmwareRollout): boolean {
 const activeRollouts = computed(() => deliveryRollouts.value.filter((rollout) => rollout.status === "active").length);
 const completeRollouts = computed(() => deliveryRollouts.value.filter((rollout) => rollout.status === "complete").length);
 const problemRollouts = computed(() => deliveryRollouts.value.filter((rollout) => ["failed", "rolled_back"].includes(rollout.status)).length);
+const problemFirmwareRollouts = computed(() => props.firmwareRollouts.filter((rollout) => ["failed", "rolled_back"].includes(rollout.status)).length);
+const allProblemRollouts = computed(() => problemRollouts.value + problemFirmwareRollouts.value);
 const rolloutMetrics = computed(() => [
-  { label: "Đang chờ thiết bị", value: activeRollouts.value, detail: "Desired đã tạo, chưa có ACK", tone: activeRollouts.value ? "warning" as const : "neutral" as const },
-  { label: "Đã áp dụng", value: completeRollouts.value, detail: "Firmware report active", tone: "success" as const },
-  { label: "Cần xử lý", value: problemRollouts.value, detail: "Thất bại hoặc đã rollback", tone: problemRollouts.value ? "danger" as const : "neutral" as const },
+  { label: t("resources.metrics.pending"), value: activeRollouts.value, detail: t("resources.metrics.pendingDetail"), tone: activeRollouts.value ? "warning" as const : "neutral" as const },
+  { label: t("resources.metrics.applied"), value: completeRollouts.value, detail: t("resources.metrics.appliedDetail"), tone: "success" as const },
+  { label: t("resources.metrics.problem"), value: problemRollouts.value, detail: t("resources.metrics.problemDetail"), tone: problemRollouts.value ? "danger" as const : "neutral" as const },
+]);
+const resourceMetrics = computed(() => [
+  {
+    label: t("resources.metrics.artifacts"),
+    value: props.artifacts.length,
+    detail: t("resources.metrics.publishedCount", { count: props.artifacts.filter((artifact) => artifact.status === "published").length }),
+    tone: "info" as const,
+  },
+  {
+    label: t("resources.metrics.wakeProfiles"),
+    value: props.wakeProfiles.length,
+    detail: t("resources.metrics.productReadyCount", { count: props.wakeProfiles.filter((profile) => profile.productReady).length }),
+    tone: props.wakeProfiles.some((profile) => !profile.productReady) ? "warning" as const : "success" as const,
+  },
+  {
+    label: t("resources.metrics.delivery"),
+    value: deliveryRollouts.value.length + props.firmwareRollouts.length,
+    detail: t("resources.metrics.deliveryDetail"),
+    tone: allProblemRollouts.value ? "danger" as const : "neutral" as const,
+  },
 ]);
 
 async function perform(key: string, action: () => Promise<void>): Promise<void> {
   busyKey.value = key;
   error.value = "";
   try { await action(); }
-  catch (exception) { error.value = exception instanceof Error ? exception.message : "Không thể thực hiện thao tác."; }
+  catch (exception) { error.value = exception instanceof Error ? exception.message : t("resources.errors.operationFailed"); }
   finally { busyKey.value = ""; }
 }
 
@@ -88,7 +112,7 @@ async function createFirmware(): Promise<void> {
     const release = props.firmwareReleases.find((item) => item.id === firmwareForm.artifactId);
     const canaries = firmwareForm.canaryDeviceId ? [firmwareForm.canaryDeviceId] : [];
     if (release?.channel === "stable" && canaries.length === 0) {
-      throw new Error("Stable rollout bắt buộc có thiết bị canary.");
+      throw new Error(t("resources.errors.canaryRequired"));
     }
     await props.createFirmwareRollout(
       firmwareForm.artifactId,
@@ -102,38 +126,50 @@ async function createFirmware(): Promise<void> {
 
 <template>
   <section class="vt-page" data-page="resources">
-    <VtPageHeader eyebrow="SIGNED DELIVERY / RESOURCES" title="Model, wake word và OTA assets" description="Quản lý artifact có chữ ký, wake profile tách activation/interrupt và rollout có thể rollback theo desired state." />
+    <VtPageHeader :eyebrow="t('pages.resources.eyebrow')" :title="t('pages.resources.title')" :description="t('pages.resources.description')" />
+    <div class="resource-dashboard" data-page-section="summary">
+      <VtOperationsHero
+        :eyebrow="t('resources.hero.eyebrow')"
+        :title="t('resources.hero.title')"
+        :description="t('resources.hero.description')"
+        :value="artifacts.length"
+        :value-label="t('resources.hero.artifacts')"
+        :value-hint="t('resources.hero.deliveryCount', { count: deliveryRollouts.length + firmwareRollouts.length })"
+        icon="resource"
+      />
+      <VtMetricStrip :items="resourceMetrics" />
+    </div>
     <p v-if="error" class="inline-error page-error" role="alert">{{ error }}</p>
 
-    <TabGroup as="div" class="resource-tabs">
+    <TabGroup as="div" class="resource-tabs" data-page-section="primary-workspace">
       <TabList class="vt-tabs">
-        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="resource" :size="17" /> Artifacts <span>{{ artifacts.length }}</span></button></Tab>
-        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="mic" :size="17" /> Wake profiles <span>{{ wakeProfiles.length }}</span></button></Tab>
-        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="telemetry" :size="17" /> Rollouts <span>{{ deliveryRollouts.length }}</span></button></Tab>
-        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="upload" :size="17" /> Firmware OTA <span>{{ firmwareRollouts.length }}</span></button></Tab>
+        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="resource" :size="17" /> {{ t("resources.tabs.artifacts") }} <span>{{ artifacts.length }}</span></button></Tab>
+        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="mic" :size="17" /> {{ t("resources.tabs.wakeProfiles") }} <span>{{ wakeProfiles.length }}</span></button></Tab>
+        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="telemetry" :size="17" /> {{ t("resources.tabs.rollouts") }} <span>{{ deliveryRollouts.length }}</span></button></Tab>
+        <Tab v-slot="{ selected }" as="template"><button :class="{ active: selected }"><VtIcon name="upload" :size="17" /> {{ t("resources.tabs.firmware") }} <span>{{ firmwareRollouts.length }}</span></button></Tab>
       </TabList>
 
       <TabPanels>
         <TabPanel class="tab-panel">
           <div class="content-grid is-wide-left">
             <article class="vt-panel">
-              <header class="panel-header"><div><span class="vt-kicker">ARTIFACT CATALOG</span><h2>Gói tài nguyên</h2></div></header>
+              <header class="panel-header"><div><span class="vt-kicker">{{ t("resources.artifacts.eyebrow") }}</span><h2>{{ t("resources.artifacts.title") }}</h2></div></header>
               <div v-if="artifacts.length" class="artifact-list">
                 <div v-for="artifact in artifacts" :key="artifact.id">
                   <span class="artifact-icon"><VtIcon :name="artifact.kind === 'display_assets' ? 'display' : 'resource'" :size="20" /></span>
                   <div><b>{{ artifact.id }}</b><small>{{ artifact.kind }} · {{ artifact.version }} · {{ formatBytes(artifact.sizeBytes) }}</small><code>{{ artifact.sha256.slice(0, 18) }}…</code></div>
                   <span><VtBadge :tone="statusTone(artifact.status)">{{ artifact.status }}</VtBadge><small>{{ artifact.channel }}</small></span>
-                  <VtButton v-if="artifact.status === 'validated'" size="sm" variant="secondary" :busy="busyKey === `publish-${artifact.id}`" @click="perform(`publish-${artifact.id}`, () => publishArtifact(artifact.id))">Publish</VtButton>
+                  <VtButton v-if="artifact.status === 'validated'" size="sm" variant="secondary" :busy="busyKey === `publish-${artifact.id}`" @click="perform(`publish-${artifact.id}`, () => publishArtifact(artifact.id))">{{ t("common.publish") }}</VtButton>
                 </div>
               </div>
-              <VtEmptyState v-else icon="resource" title="Chưa có artifact" text="Đăng ký artifact đã được release pipeline tạo và ký." />
+              <VtEmptyState v-else icon="resource" :title="t('resources.artifacts.emptyTitle')" :text="t('resources.artifacts.emptyBody')" />
             </article>
             <article class="vt-panel form-section">
-              <header class="panel-header"><div><span class="vt-kicker">REGISTER RELEASE</span><h2>Đăng ký artifact</h2><p>Manager không tạo binary; chỉ nhận artifact ID đã có trong storage cùng metadata release.</p></div></header>
+              <header class="panel-header"><div><span class="vt-kicker">{{ t("resources.register.eyebrow") }}</span><h2>{{ t("resources.register.title") }}</h2><p>{{ t("resources.register.description") }}</p></div></header>
               <form class="form-stack" @submit.prevent="register">
-                <VtField label="Artifact ID" required><VtInput v-model="artifactForm.id" placeholder="wake-vi-1.0.0" required /></VtField>
-                <VtField label="License / provenance" required><VtInput v-model="artifactForm.license" placeholder="Internal model pack · corpus approved" required /></VtField>
-                <VtButton type="submit" :busy="busyKey === 'register'"><VtIcon name="plus" :size="16" /> Đăng ký</VtButton>
+                <VtField :label="t('resources.register.artifactId')" required><VtInput v-model="artifactForm.id" placeholder="wake-vi-1.0.0" required /></VtField>
+                <VtField :label="t('resources.register.license')" required><VtInput v-model="artifactForm.license" placeholder="Internal model pack · corpus approved" required /></VtField>
+                <VtButton type="submit" :busy="busyKey === 'register'"><VtIcon name="plus" :size="16" /> {{ t("resources.register.action") }}</VtButton>
               </form>
             </article>
           </div>
@@ -142,17 +178,17 @@ async function createFirmware(): Promise<void> {
         <TabPanel class="tab-panel">
           <div class="content-grid is-wide-left">
             <article class="vt-panel">
-              <header class="panel-header"><div><span class="vt-kicker">WAKE CATALOG</span><h2>Wake profile</h2></div></header>
+              <header class="panel-header"><div><span class="vt-kicker">{{ t("resources.wake.eyebrow") }}</span><h2>{{ t("resources.wake.title") }}</h2></div></header>
               <div v-if="wakeProfiles.length" class="wake-list">
                 <article v-for="profile in wakeProfiles" :key="profile.id">
                   <div class="wake-phrase"><span>“</span><b>{{ profile.activationPhrase }}</b><span>”</span></div>
-                  <div class="wake-info"><h3>{{ profile.name }}</h3><p>{{ profile.locale }} · {{ profile.channel }} · artifact {{ profile.artifactId }}</p><div><VtBadge :tone="profile.productReady ? 'success' : 'warning'">{{ profile.productReady ? "Product-ready" : "Chưa benchmark" }}</VtBadge><VtBadge tone="info">Activation ≠ Interrupt</VtBadge></div></div>
+                  <div class="wake-info"><h3>{{ profile.name }}</h3><p>{{ profile.locale }} · {{ profile.channel }} · artifact {{ profile.artifactId }}</p><div><VtBadge :tone="profile.productReady ? 'success' : 'warning'">{{ t(profile.productReady ? "resources.wake.productReady" : "resources.wake.notBenchmarked") }}</VtBadge><VtBadge tone="info">Activation ≠ Interrupt</VtBadge></div></div>
                   <dl><div><dt>Activation</dt><dd>{{ profile.activation.detectorId }}</dd></div><div><dt>Interrupt</dt><dd>{{ profile.interrupt.detectorId }}</dd></div></dl>
-                  <VtButton v-if="profile.publishedVersion === 0" size="sm" :busy="busyKey === `wake-publish-${profile.id}`" @click="perform(`wake-publish-${profile.id}`, () => publishWakeProfile(profile.id))">Publish v{{ profile.version }}</VtButton>
+                  <VtButton v-if="profile.publishedVersion === 0" size="sm" :busy="busyKey === `wake-publish-${profile.id}`" @click="perform(`wake-publish-${profile.id}`, () => publishWakeProfile(profile.id))">{{ t("common.publish") }} v{{ profile.version }}</VtButton>
                   <VtBadge v-else tone="info">Áp dụng trong Thiết bị</VtBadge>
                 </article>
               </div>
-              <VtEmptyState v-else icon="mic" title="Chưa có wake profile" text="Tạo profile từ model pack đã ký; phrase text không tự sinh ra wake model." />
+              <VtEmptyState v-else icon="mic" :title="t('resources.wake.emptyTitle')" :text="t('resources.wake.emptyBody')" />
             </article>
 
             <article class="vt-panel form-section">
@@ -209,7 +245,7 @@ async function createFirmware(): Promise<void> {
                   <span class="artifact-icon"><VtIcon name="upload" :size="20" /></span>
                   <div><b>{{ release.version }}</b><small>{{ release.id }} · {{ release.channel }} · {{ formatBytes(release.sizeBytes) }}</small><code>{{ release.sha256.slice(0, 18) }}… · epoch {{ release.securityEpoch }}</code></div>
                   <VtBadge :tone="statusTone(release.status)">{{ release.status }}</VtBadge>
-                  <VtButton v-if="release.status === 'validated'" size="sm" variant="secondary" :busy="busyKey === `fw-publish-${release.id}`" @click="perform(`fw-publish-${release.id}`, () => publishFirmwareRelease(release.id))">Publish</VtButton>
+                  <VtButton v-if="release.status === 'validated'" size="sm" variant="secondary" :busy="busyKey === `fw-publish-${release.id}`" @click="perform(`fw-publish-${release.id}`, () => publishFirmwareRelease(release.id))">{{ t("common.publish") }}</VtButton>
                 </div>
               </div>
               <VtEmptyState v-else icon="resource" title="Chưa có firmware release" text="Chạy firmware:release, đăng ký artifact, rồi publish tại đây." />

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
+
 import type { Provider } from "../../api/schemas";
 import { formatDate, statusTone } from "../../utils/format";
 import { VtBadge, VtButton, VtIcon } from "../ui";
@@ -12,52 +14,49 @@ const emit = defineEmits<{
   test: [];
   edit: [];
 }>();
+const { t } = useI18n();
 
 const kindLabels: Record<Provider["kind"], string> = {
-  vad: "Phát hiện giọng nói",
-  asr: "Nhận dạng tiếng nói",
-  llm: "Mô hình ngôn ngữ",
-  tts: "Tổng hợp giọng nói",
-  realtime: "Realtime speech",
-  memory: "Bộ nhớ",
+  vad: "providerCommon.kinds.vad",
+  asr: "providerCommon.kinds.asr",
+  llm: "providerCommon.kinds.llm",
+  tts: "providerCommon.kinds.tts",
+  realtime: "providerCommon.kinds.realtime",
+  memory: "providerCommon.kinds.memory",
 };
 
 const healthLabels: Record<Provider["health"], string> = {
-  healthy: "Khỏe",
-  degraded: "Cần kiểm tra",
-  unknown: "Chưa đo",
+  healthy: "providerCommon.health.healthy",
+  degraded: "providerCommon.health.degraded",
+  unknown: "providerCommon.health.unknown",
 };
 
 const errorMessages: Record<string, string> = {
-  runtime_probe_unavailable: "Bản ghi cũ chưa có phép đo runtime. Test lại để đọc trạng thái từ Voice Server.",
-  voice_runtime_unreachable: "Manager API chưa kết nối được Voice Server nội bộ.",
-  runtime_component_unreported: "Voice Server chưa công bố component tương ứng trong readiness.",
-  runtime_component_unhealthy: "Component đã nạp nhưng readiness đang báo chưa khỏe.",
-  timeout: "Runtime phản hồi quá thời gian cho phép.",
-  unreachable: "Không thể kết nối endpoint đã cấu hình.",
+  runtime_probe_unavailable: "providerCard.errors.runtimeProbeUnavailable",
+  voice_runtime_unreachable: "providerCard.errors.voiceRuntimeUnreachable",
+  runtime_component_unreported: "providerCard.errors.runtimeComponentUnreported",
+  runtime_component_unhealthy: "providerCard.errors.runtimeComponentUnhealthy",
+  timeout: "providerCard.errors.timeout",
+  unreachable: "providerCard.errors.unreachable",
 };
 
 function healthDescription(provider: Provider): string {
-  if (!provider.enabled) return "Provider đang tắt nên không tham gia routing.";
-  if (provider.health === "healthy") return "Runtime phản hồi bình thường và sẵn sàng tham gia routing.";
+  if (!provider.enabled) return t("providerCard.health.disabled");
+  if (provider.health === "healthy") return t("providerCard.health.ready");
   if (provider.healthErrorCode?.startsWith("http_")) {
-    return `Endpoint trả về HTTP ${provider.healthErrorCode.slice(5)}.`;
+    return t("providerCard.health.httpError", { status: provider.healthErrorCode.slice(5) });
   }
-  if (provider.healthErrorCode) return errorMessages[provider.healthErrorCode] ?? "Phép kiểm tra runtime chưa thành công.";
-  return provider.health === "unknown"
-    ? "Chưa có kết quả kiểm tra. Nhấn Test để đo runtime hiện tại."
-    : "Runtime đang giảm chất lượng; kiểm tra endpoint và log dịch vụ.";
+  if (provider.healthErrorCode) return t(errorMessages[provider.healthErrorCode] ?? "providerCard.health.probeFailed");
+  return t(provider.health === "unknown" ? "providerCard.health.notChecked" : "providerCard.health.degraded");
 }
 
 function circuitLabel(value: Provider["circuitState"]): string {
-  if (value === "closed") return "Đóng · cho phép route";
-  if (value === "half_open") return "Thử phục hồi";
-  return "Mở · tạm ngắt route";
+  return t(`providerCard.circuit.${value}`);
 }
 
 function authLabel(provider: Provider): string {
-  if (!provider.baseUrl) return "Nội bộ tiến trình";
-  return provider.secretConfigured ? "Bearer secret" : "Không dùng secret";
+  if (!provider.baseUrl) return t("providerCard.auth.inProcess");
+  return t(provider.secretConfigured ? "providerCard.auth.bearerSecret" : "providerCard.auth.noSecret");
 }
 </script>
 
@@ -66,41 +65,41 @@ function authLabel(provider: Provider): string {
     <header>
       <span class="provider-kind-icon"><VtIcon name="provider" :size="20" /></span>
       <div class="provider-identity">
-        <span class="vt-kicker">{{ kindLabels[provider.kind] }} · P{{ provider.priority }}</span>
+        <span class="vt-kicker">{{ t(kindLabels[provider.kind]) }} · P{{ provider.priority }}</span>
         <h2>{{ provider.model }}</h2>
         <p>{{ provider.adapter }}</p>
       </div>
       <div class="provider-badges">
-        <VtBadge :tone="provider.enabled ? 'info' : 'neutral'">{{ provider.enabled ? "Đang bật" : "Đã tắt" }}</VtBadge>
-        <VtBadge :tone="statusTone(provider.health)" dot>{{ healthLabels[provider.health] }}</VtBadge>
+        <VtBadge :tone="provider.enabled ? 'info' : 'neutral'">{{ t(provider.enabled ? "providerCommon.enabled" : "providerCommon.disabled") }}</VtBadge>
+        <VtBadge :tone="statusTone(provider.health)" dot>{{ t(healthLabels[provider.health]) }}</VtBadge>
       </div>
     </header>
 
     <div class="provider-runtime">
       <span><VtIcon :name="provider.baseUrl ? 'telemetry' : 'device'" :size="16" /></span>
       <div>
-        <small>{{ provider.baseUrl ? "HTTP RUNTIME" : "VOICE SERVER RUNTIME" }}</small>
-        <code>{{ provider.baseUrl ?? "In-process · kiểm tra qua /health/ready" }}</code>
+        <small>{{ t(provider.baseUrl ? "providerCard.runtime.http" : "providerCard.runtime.voiceServer") }}</small>
+        <code>{{ provider.baseUrl ?? t("providerCard.runtime.inProcessReady") }}</code>
       </div>
     </div>
 
     <dl class="provider-facts">
-      <div><dt title="LLM được kiểm tra bằng một inference tối thiểu; provider khác dùng readiness endpoint">Runtime probe</dt><dd>{{ provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : "Chưa đo" }}</dd></div>
-      <div><dt>Circuit breaker</dt><dd>{{ circuitLabel(provider.circuitState) }}</dd></div>
-      <div><dt>Ngôn ngữ</dt><dd>{{ provider.locales.join(", ") || "—" }}</dd></div>
-      <div><dt>Xác thực</dt><dd>{{ authLabel(provider) }}</dd></div>
+      <div><dt :title="t('providerCard.facts.probeHint')">{{ t("providerCard.facts.probe") }}</dt><dd>{{ provider.healthLatencyMs !== undefined ? `${provider.healthLatencyMs} ms` : t("providerCommon.health.unknown") }}</dd></div>
+      <div><dt>{{ t("providerCard.facts.circuit") }}</dt><dd>{{ circuitLabel(provider.circuitState) }}</dd></div>
+      <div><dt>{{ t("providerCard.facts.languages") }}</dt><dd>{{ provider.locales.join(", ") || "—" }}</dd></div>
+      <div><dt>{{ t("providerCard.facts.auth") }}</dt><dd>{{ authLabel(provider) }}</dd></div>
     </dl>
 
     <div class="provider-health-note" :class="`is-${provider.health}`">
       <span><VtIcon :name="provider.health === 'healthy' ? 'check' : 'warning'" :size="16" /></span>
-      <div><b>{{ healthLabels[provider.health] }}</b><p>{{ healthDescription(provider) }}</p></div>
+      <div><b>{{ t(healthLabels[provider.health]) }}</b><p>{{ healthDescription(provider) }}</p></div>
     </div>
 
     <footer>
-      <small>{{ provider.healthCheckedAt ? `Kiểm tra ${formatDate(provider.healthCheckedAt)}` : "Chưa kiểm tra kết nối" }}</small>
+      <small>{{ provider.healthCheckedAt ? t("providerCard.checkedAt", { date: formatDate(provider.healthCheckedAt) }) : t("providerCard.notChecked") }}</small>
       <div>
-        <VtButton size="sm" variant="secondary" :busy="testing" @click="emit('test')"><VtIcon name="refresh" :size="15" /> Test runtime</VtButton>
-        <VtButton size="sm" variant="quiet" @click="emit('edit')"><VtIcon name="edit" :size="15" /> Cấu hình</VtButton>
+        <VtButton size="sm" variant="secondary" :busy="testing" @click="emit('test')"><VtIcon name="refresh" :size="15" /> {{ t("providerCard.actions.test") }}</VtButton>
+        <VtButton size="sm" variant="quiet" @click="emit('edit')"><VtIcon name="edit" :size="15" /> {{ t("providerCard.actions.configure") }}</VtButton>
       </div>
     </footer>
   </article>

@@ -113,9 +113,13 @@ Chỉ probe captive đã biết mới redirect; favicon trả `204` và URL lạ
 định để resource phụ không thể reload portal giữa lúc người dùng nhập cấu hình.
 Khi client cuối rời AP mà chưa lưu, firmware đóng captive HTTP session cũ, hủy scan
 đang chạy và giữ DHCP hoạt động; reconnect không cần reboot ESP32.
-HTML/CSS/JavaScript được tách thành resource và gửi theo chunk 1 KiB để tránh lỗi
-gửi dừng tại 4.320 byte đã đo trên phần cứng. Sau khi lưu,
-firmware giữ AP thêm 750 ms để response hoàn tất trước khi chuyển sang station.
+HTML/CSS/JavaScript là source asset dưới `main/network/portal`, được embed lúc build,
+kiểm byte budget và gửi theo chunk 1 KiB để tránh lỗi dừng tại 4.320 byte đã đo trên
+phần cứng. Sau khi lưu, firmware chờ 750 ms rồi kết nối station trong `APSTA` để
+browser poll status in-memory tới mốc DHCP. Success chỉ có nghĩa robot đã nhận IP;
+portal hướng dẫn nhập mã 6 số trên màn hình robot, không trả activation code qua AP
+mở. SoftAP đóng sau grace quan sát 3 giây hoặc hard fallback 15 giây; cleanup chạy
+qua application task.
 Wi-Fi scan buffers nằm trong manager thay vì system-event stack; event task dùng
 4 KiB để tránh reboot loop sau `WIFI_EVENT_SCAN_DONE`.
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Provider } from "../../api/schemas";
 import type { ProviderUpdateInput } from "../../types/manager";
@@ -12,6 +13,7 @@ const props = defineProps<{
   save: (id: string, input: ProviderUpdateInput) => Promise<void>;
 }>();
 const emit = defineEmits<{ close: [] }>();
+const { t } = useI18n();
 
 const form = reactive({
   adapter: "", model: "", baseUrl: "", enabled: true, priority: 10, locales: "vi-VN",
@@ -24,19 +26,19 @@ const form = reactive({
 const busy = ref(false);
 const error = ref("");
 const kindLabels: Record<Provider["kind"], string> = {
-  vad: "Phát hiện giọng nói",
-  asr: "Nhận dạng tiếng nói",
-  llm: "Mô hình ngôn ngữ",
-  tts: "Tổng hợp giọng nói",
-  realtime: "Realtime speech",
-  memory: "Bộ nhớ",
+  vad: "providerCommon.kinds.vad",
+  asr: "providerCommon.kinds.asr",
+  llm: "providerCommon.kinds.llm",
+  tts: "providerCommon.kinds.tts",
+  realtime: "providerCommon.kinds.realtime",
+  memory: "providerCommon.kinds.memory",
 };
 const healthLabels: Record<Provider["health"], string> = {
-  healthy: "Khỏe",
-  degraded: "Cần kiểm tra",
-  unknown: "Chưa đo",
+  healthy: "providerCommon.health.healthy",
+  degraded: "providerCommon.health.degraded",
+  unknown: "providerCommon.health.unknown",
 };
-const dialogTitle = computed(() => props.provider ? `Cấu hình ${props.provider.kind.toUpperCase()}` : "Cấu hình provider");
+const dialogTitle = computed(() => props.provider ? t("providerDialog.titleKind", { kind: t(kindLabels[props.provider.kind]) }) : t("providerDialog.title"));
 const isLlm = computed(() => props.provider?.kind === "llm");
 const isGroq = computed(() => form.adapter.toLowerCase().includes("groq"));
 const isTts = computed(() => props.provider?.kind === "tts");
@@ -46,10 +48,10 @@ const ttsQualityWarnings = computed(() => {
   if (!isTts.value || !isVieNeu.value) return [];
   const warnings: string[] = [];
   if (Number(form.rate) > 1.2) {
-    warnings.push("Rate được áp dụng đúng sau inference; trên 1,2× có thể phát nhanh hơn throughput CPU và làm thiếu audio đệm.");
+    warnings.push(t("providerDialog.warnings.rate"));
   }
   if (Number(form.volume) > 1) {
-    warnings.push("Volume trên 1,0 có thể clipping; không làm model TTS rõ hơn.");
+    warnings.push(t("providerDialog.warnings.volume"));
   }
   return warnings;
 });
@@ -90,7 +92,7 @@ watch(
 async function submit(): Promise<void> {
   if (!props.provider) return;
   if (form.secretAction === "rotate" && !form.secret) {
-    error.value = "Hãy nhập secret mới hoặc chọn giữ nguyên.";
+    error.value = t("providerDialog.errors.secretRequired");
     return;
   }
   busy.value = true;
@@ -131,7 +133,7 @@ async function submit(): Promise<void> {
     });
     emit("close");
   } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : "Không thể lưu provider.";
+    error.value = exception instanceof Error ? exception.message : t("providerDialog.errors.saveFailed");
   } finally {
     busy.value = false;
   }
@@ -139,73 +141,73 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <VtDialog :open="open" :title="dialogTitle" eyebrow="AI ROUTING / PROVIDER" icon="provider" description="Thay đổi binding runtime, policy route và secret mà không làm lộ credential hiện tại." width="lg" @close="emit('close')">
+  <VtDialog :open="open" :title="dialogTitle" :eyebrow="t('providerDialog.eyebrow')" icon="provider" :description="t('providerDialog.description')" width="lg" @close="emit('close')">
     <form v-if="provider" id="provider-config-form" class="provider-dialog-form" @submit.prevent="submit">
       <section class="provider-dialog-context">
         <span><VtIcon name="provider" :size="20" /></span>
-        <div><small>{{ kindLabels[provider.kind] }}</small><b>{{ provider.model }}</b><code>{{ provider.adapter }}</code></div>
-        <div><VtBadge :tone="provider.enabled ? 'info' : 'neutral'">{{ provider.enabled ? "Đang bật" : "Đã tắt" }}</VtBadge><VtBadge :tone="statusTone(provider.health)" dot>{{ healthLabels[provider.health] }}</VtBadge></div>
+        <div><small>{{ t(kindLabels[provider.kind]) }}</small><b>{{ provider.model }}</b><code>{{ provider.adapter }}</code></div>
+        <div><VtBadge :tone="provider.enabled ? 'info' : 'neutral'">{{ t(provider.enabled ? "providerCommon.enabled" : "providerCommon.disabled") }}</VtBadge><VtBadge :tone="statusTone(provider.health)" dot>{{ t(healthLabels[provider.health]) }}</VtBadge></div>
       </section>
 
       <section class="provider-form-section">
-        <header><span>01</span><div><h3>Runtime binding</h3><p>Chọn adapter, model và endpoint mà Voice Server sẽ sử dụng.</p></div></header>
+        <header><span>01</span><div><h3>{{ t("providerDialog.runtime.title") }}</h3><p>{{ t("providerDialog.runtime.description") }}</p></div></header>
         <div class="form-grid two">
-          <VtField label="Adapter" required><VtInput v-model="form.adapter" maxlength="120" required /></VtField>
-          <VtField label="Model" required><VtInput v-model="form.model" maxlength="200" required /></VtField>
-          <VtField label="Base URL" hint="Để trống cho provider chạy in-process trong Voice Server" class="span-two"><VtInput v-model="form.baseUrl" placeholder="http://127.0.0.1:20128/v1" /></VtField>
+          <VtField :label="t('providerDialog.runtime.adapter')" required><VtInput v-model="form.adapter" maxlength="120" required /></VtField>
+          <VtField :label="t('providerDialog.runtime.model')" required><VtInput v-model="form.model" maxlength="200" required /></VtField>
+          <VtField :label="t('providerDialog.runtime.baseUrl')" :hint="t('providerDialog.runtime.baseUrlHint')" class="span-two"><VtInput v-model="form.baseUrl" placeholder="http://127.0.0.1:8317/v1" /></VtField>
         </div>
       </section>
 
       <section class="provider-form-section">
-        <header><span>02</span><div><h3>Routing policy</h3><p>Priority nhỏ hơn được ưu tiên trước trong provider chain cùng capability.</p></div></header>
+        <header><span>02</span><div><h3>{{ t("providerDialog.routing.title") }}</h3><p>{{ t("providerDialog.routing.description") }}</p></div></header>
         <div class="form-grid two">
-          <VtField label="Priority" hint="0 là ưu tiên cao nhất"><VtInput v-model="form.priority" type="number" min="0" max="1000" /></VtField>
-          <VtField label="Locales" hint="Danh sách locale phân cách bằng dấu phẩy"><VtInput v-model="form.locales" placeholder="vi-VN, en-US" /></VtField>
-          <div class="provider-switch span-two"><VtSwitch v-model="form.enabled" label="Bật provider" description="Cho phép provider tham gia routing chain đã publish." /></div>
+          <VtField :label="t('providerDialog.routing.priority')" :hint="t('providerDialog.routing.priorityHint')"><VtInput v-model="form.priority" type="number" min="0" max="1000" /></VtField>
+          <VtField :label="t('providerDialog.routing.locales')" :hint="t('providerDialog.routing.localesHint')"><VtInput v-model="form.locales" placeholder="vi-VN, en-US" /></VtField>
+          <div class="provider-switch span-two"><VtSwitch v-model="form.enabled" :label="t('providerDialog.routing.enabled')" :description="t('providerDialog.routing.enabledDescription')" /></div>
         </div>
       </section>
 
       <section v-if="isLlm || isTts" class="provider-form-section">
-        <header><span>03</span><div><h3>Tham số provider</h3><p>Giá trị được validate và đóng băng vào agent snapshot khi publish.</p></div></header>
+        <header><span>03</span><div><h3>{{ t("providerDialog.parameters.title") }}</h3><p>{{ t("providerDialog.parameters.description") }}</p></div></header>
         <div v-if="isLlm" class="form-grid two">
-          <VtField label="Temperature" hint="0–2"><VtInput v-model="form.temperature" type="number" min="0" max="2" step="0.05" /></VtField>
-          <VtField label="Top P" hint="0–1"><VtInput v-model="form.topP" type="number" min="0" max="1" step="0.05" /></VtField>
-          <VtField label="Max completion tokens" hint="64–16.384"><VtInput v-model="form.maxCompletionTokens" type="number" min="64" max="16384" /></VtField>
-          <VtField v-if="isGroq" label="Service tier"><VtSelect v-model="form.serviceTier"><option value="on_demand">On demand</option><option value="auto">Auto</option><option value="flex">Flex</option><option value="performance">Performance</option></VtSelect></VtField>
-          <VtField label="Reasoning effort"><VtSelect v-model="form.reasoningEffort"><option value="none">None</option><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></VtSelect></VtField>
-          <VtField label="Structured response"><VtSelect v-model="form.responseFormat"><option value="auto">Auto</option><option value="json_schema">Strict JSON Schema</option><option value="json_object">JSON Object</option></VtSelect></VtField>
-          <VtField label="Token parameter"><VtSelect v-model="form.completionTokenParameter"><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></VtSelect></VtField>
-          <div class="provider-switch span-two"><VtSwitch v-model="form.parallelToolCalls" label="Cho phép parallel tool calls" description="Provider có thể đề xuất nhiều tool; schema và policy MCP vẫn kiểm tra từng lệnh." /></div>
-          <div class="provider-switch span-two"><VtSwitch v-model="form.streamProseResponse" label="Stream câu trả lời sang TTS" description="Planner chỉ quyết định luồng; nội dung trả lời được stream theo từng câu để TTS bắt đầu sớm." /></div>
+          <VtField :label="t('providerDialog.parameters.temperature')" :hint="t('providerDialog.parameters.temperatureRange')"><VtInput v-model="form.temperature" type="number" min="0" max="2" step="0.05" /></VtField>
+          <VtField :label="t('providerDialog.parameters.topP')" :hint="t('providerDialog.parameters.topPRange')"><VtInput v-model="form.topP" type="number" min="0" max="1" step="0.05" /></VtField>
+          <VtField :label="t('providerDialog.parameters.maxTokens')" :hint="t('providerDialog.parameters.maxTokensRange')"><VtInput v-model="form.maxCompletionTokens" type="number" min="64" max="16384" /></VtField>
+          <VtField v-if="isGroq" :label="t('providerDialog.parameters.serviceTier')"><VtSelect v-model="form.serviceTier"><option value="on_demand">{{ t("providerDialog.options.onDemand") }}</option><option value="auto">{{ t("providerDialog.options.auto") }}</option><option value="flex">{{ t("providerDialog.options.flex") }}</option><option value="performance">{{ t("providerDialog.options.performance") }}</option></VtSelect></VtField>
+          <VtField :label="t('providerDialog.parameters.reasoningEffort')"><VtSelect v-model="form.reasoningEffort"><option value="none">{{ t("providerDialog.options.none") }}</option><option value="default">{{ t("providerDialog.options.default") }}</option><option value="low">{{ t("providerDialog.options.low") }}</option><option value="medium">{{ t("providerDialog.options.medium") }}</option><option value="high">{{ t("providerDialog.options.high") }}</option></VtSelect></VtField>
+          <VtField :label="t('providerDialog.parameters.structuredResponse')"><VtSelect v-model="form.responseFormat"><option value="auto">{{ t("providerDialog.options.auto") }}</option><option value="json_schema">{{ t("providerDialog.options.strictJsonSchema") }}</option><option value="json_object">{{ t("providerDialog.options.jsonObject") }}</option></VtSelect></VtField>
+          <VtField :label="t('providerDialog.parameters.tokenParameter')"><VtSelect v-model="form.completionTokenParameter"><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></VtSelect></VtField>
+          <div class="provider-switch span-two"><VtSwitch v-model="form.parallelToolCalls" :label="t('providerDialog.parameters.parallelTools')" :description="t('providerDialog.parameters.parallelToolsDescription')" /></div>
+          <div class="provider-switch span-two"><VtSwitch v-model="form.streamProseResponse" :label="t('providerDialog.parameters.streamToTts')" :description="t('providerDialog.parameters.streamToTtsDescription')" /></div>
         </div>
         <div v-else class="form-grid two">
-          <VtField label="Voice mặc định" hint="Preset giọng của VieNeu local"><VtInput v-model="form.voice" placeholder="Trúc Ly" /></VtField>
-          <VtField v-if="isVieNeu" label="Phong cách mặc định"><VtSelect v-model="form.style"><option value="tu_nhien">Tự nhiên / hội thoại</option><option value="doc_truyen">Đọc truyện</option><option value="tin_tuc">Tin tức</option></VtSelect></VtField>
-          <VtField label="Tốc độ" hint="1,0 cho chất lượng và stream ổn định nhất"><VtInput v-model="form.rate" type="number" min="0.5" max="2" step="0.05" /></VtField>
-          <VtField v-if="supportsPitch" label="Cao độ Hz"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
-          <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>
-          <VtField label="Sample rate" hint="8.000–48.000 Hz"><VtInput v-model="form.outputSampleRate" type="number" min="8000" max="48000" step="1000" /></VtField>
+          <VtField :label="t('providerDialog.tts.defaultVoice')" :hint="t('providerDialog.tts.defaultVoiceHint')"><VtInput v-model="form.voice" placeholder="Trúc Ly" /></VtField>
+          <VtField v-if="isVieNeu" :label="t('providerDialog.tts.defaultStyle')"><VtSelect v-model="form.style"><option value="tu_nhien">{{ t("providerDialog.tts.natural") }}</option><option value="doc_truyen">{{ t("providerDialog.tts.story") }}</option><option value="tin_tuc">{{ t("providerDialog.tts.news") }}</option></VtSelect></VtField>
+          <VtField :label="t('providerDialog.tts.rate')" :hint="t('providerDialog.tts.rateHint')"><VtInput v-model="form.rate" type="number" min="0.5" max="2" step="0.05" /></VtField>
+          <VtField v-if="supportsPitch" :label="t('providerDialog.tts.pitch')"><VtInput v-model="form.pitchHz" type="number" min="-100" max="100" /></VtField>
+          <VtField :label="t('providerDialog.tts.volume')" :hint="t('providerDialog.tts.volumeRange')"><VtInput v-model="form.volume" type="number" min="0" max="1.5" step="0.05" /></VtField>
+          <VtField :label="t('providerDialog.tts.sampleRate')" :hint="t('providerDialog.tts.sampleRateRange')"><VtInput v-model="form.outputSampleRate" type="number" min="8000" max="48000" step="1000" /></VtField>
         </div>
         <div v-if="ttsQualityWarnings.length" class="provider-tts-quality-warning" role="status">
           <VtIcon name="warning" :size="17" />
-          <div><b>Cấu hình vẫn được phép lưu, nhưng cần benchmark lại.</b><p v-for="warning in ttsQualityWarnings" :key="warning">{{ warning }}</p></div>
+          <div><b>{{ t("providerDialog.warnings.benchmark") }}</b><p v-for="warning in ttsQualityWarnings" :key="warning">{{ warning }}</p></div>
         </div>
       </section>
 
       <section class="provider-form-section">
-        <header><span>04</span><div><h3>Credential</h3><p>Manager chỉ cho phép giữ, thay hoặc xóa secret; giá trị hiện tại không bao giờ được đọc ngược.</p></div></header>
+        <header><span>04</span><div><h3>{{ t("providerDialog.credential.title") }}</h3><p>{{ t("providerDialog.credential.description") }}</p></div></header>
         <div class="form-grid two">
-          <VtField label="Xử lý secret"><VtSelect v-model="form.secretAction" name="secretAction"><option value="keep">Giữ nguyên</option><option value="rotate">Thay secret</option><option value="clear">Xóa secret</option></VtSelect></VtField>
-          <VtField v-if="form.secretAction === 'rotate'" label="Secret mới" :error="error" required><VtInput v-model="form.secret" type="password" autocomplete="new-password" /></VtField>
-          <div v-else class="provider-secret-note"><VtIcon name="check" :size="17" /><span><b>{{ form.secretAction === "clear" ? "Secret sẽ được xóa" : "Secret được giữ nguyên" }}</b><small>Không có credential nào được gửi về trình duyệt.</small></span></div>
+          <VtField :label="t('providerDialog.credential.action')"><VtSelect v-model="form.secretAction" name="secretAction"><option value="keep">{{ t("providerDialog.credential.keep") }}</option><option value="rotate">{{ t("providerDialog.credential.rotate") }}</option><option value="clear">{{ t("providerDialog.credential.clear") }}</option></VtSelect></VtField>
+          <VtField v-if="form.secretAction === 'rotate'" :label="t('providerDialog.credential.newSecret')" :error="error" required><VtInput v-model="form.secret" type="password" autocomplete="new-password" /></VtField>
+          <div v-else class="provider-secret-note"><VtIcon name="check" :size="17" /><span><b>{{ t(form.secretAction === "clear" ? "providerDialog.credential.willClear" : "providerDialog.credential.willKeep") }}</b><small>{{ t("providerDialog.credential.browserNote") }}</small></span></div>
         </div>
       </section>
       <p v-if="error && form.secretAction !== 'rotate'" class="inline-error" role="alert">{{ error }}</p>
     </form>
     <template #footer>
       <div class="dialog-action-layout">
-        <span><VtIcon name="warning" :size="16" /> Lưu cấu hình sẽ đưa health về trạng thái chưa đo cho đến lần Test tiếp theo.</span>
-        <div><VtButton variant="quiet" @click="emit('close')">Hủy</VtButton><VtButton form="provider-config-form" type="submit" :busy="busy">Lưu provider</VtButton></div>
+        <span><VtIcon name="warning" :size="16" /> {{ t("providerDialog.footer.healthReset") }}</span>
+        <div><VtButton variant="quiet" @click="emit('close')">{{ t("common.cancel") }}</VtButton><VtButton form="provider-config-form" type="submit" :busy="busy">{{ t("providerDialog.footer.save") }}</VtButton></div>
       </div>
     </template>
   </VtDialog>

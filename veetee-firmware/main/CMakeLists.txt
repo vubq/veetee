@@ -14,6 +14,7 @@ set(VEETEE_SRCS
     "network/captive_portal_routes.cpp"
     "network/endpoint_url.cpp"
     "network/provisioning_portal.cpp"
+    "network/provisioning_status.cpp"
     "network/wifi_candidate_order.cpp"
     "network/wifi_manager.cpp"
     "ota/bootstrap_client.cpp"
@@ -38,6 +39,13 @@ set(VEETEE_SRCS
 idf_component_register(
     SRCS ${VEETEE_SRCS}
     INCLUDE_DIRS "."
+    EMBED_TXTFILES
+        "network/portal/index.html"
+        "network/portal/portal.css"
+        "network/portal/portal-en.js"
+        "network/portal/portal-i18n.js"
+        "network/portal/portal-ui.js"
+        "network/portal/portal.js"
     REQUIRES
         esp_driver_gpio
         esp_driver_i2s
@@ -59,6 +67,24 @@ idf_component_register(
         monocypher
         nvs_flash
 )
+
+set(VEETEE_PORTAL_ASSETS
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/index.html|4096"
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/portal.css|8192"
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/portal-en.js|4096"
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/portal-i18n.js|4096"
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/portal-ui.js|4096"
+    "${CMAKE_CURRENT_LIST_DIR}/network/portal/portal.js|4096"
+)
+foreach(PORTAL_ASSET IN LISTS VEETEE_PORTAL_ASSETS)
+    string(REPLACE "|" ";" PORTAL_PARTS "${PORTAL_ASSET}")
+    list(GET PORTAL_PARTS 0 PORTAL_PATH)
+    list(GET PORTAL_PARTS 1 PORTAL_MAX_BYTES)
+    file(SIZE "${PORTAL_PATH}" PORTAL_BYTES)
+    if(PORTAL_BYTES GREATER PORTAL_MAX_BYTES)
+        message(FATAL_ERROR "Portal asset ${PORTAL_PATH} is ${PORTAL_BYTES} bytes; maximum is ${PORTAL_MAX_BYTES}")
+    endif()
+endforeach()
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
 

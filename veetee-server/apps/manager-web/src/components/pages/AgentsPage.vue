@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Agent, AgentPromptCatalog, PersonalityPreset, Provider } from "../../api/schemas";
 import type { AgentDraftInput } from "../../types/manager";
 import { voiceQualityWarnings as collectVoiceQualityWarnings } from "../../utils/voice-quality";
-import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtPageHeader, VtSelect, VtTextarea } from "../ui";
+import { VtBadge, VtButton, VtDialog, VtEmptyState, VtField, VtIcon, VtInput, VtMetricStrip, VtOperationsHero, VtPageHeader, VtSelect, VtTextarea } from "../ui";
 
 const props = defineProps<{
   agents: Agent[];
@@ -15,6 +16,9 @@ const props = defineProps<{
   createPersonalityPreset: (input: { label: string; summary: string; accent: string; instructions: string }) => Promise<PersonalityPreset>;
   deletePersonalityPreset: (id: string) => Promise<void>;
 }>();
+const { t } = useI18n();
+const defaultLanguage = () => t("agents.defaults.language");
+const defaultResponseStyle = () => t("agents.defaults.responseStyle");
 
 interface PromptDraft {
   schemaVersion: 1;
@@ -46,7 +50,7 @@ const deletedPersonalityIds = ref(new Set<string>());
 const createForm = reactive({
   name: "",
   locale: "vi-VN",
-  language: "Tiếng Việt",
+  language: defaultLanguage(),
   mode: "auto" as Agent["interactionMode"],
   persona: "",
   personalityPresetId: "",
@@ -54,23 +58,23 @@ const createForm = reactive({
 const personalityForm = reactive({
   label: "",
   summary: "",
-  accent: "coral",
+  accent: "coral" as "coral" | "sun" | "cyan" | "lime" | "violet" | "navy" | "pink",
   instructions: "",
 });
 const personalityAccents = [
-  { id: "coral", label: "San hô", color: "#e06b51" },
-  { id: "sun", label: "Nắng", color: "#c99324" },
-  { id: "cyan", label: "Biển", color: "#287f8e" },
-  { id: "lime", label: "Mầm xanh", color: "#7e9b2f" },
-  { id: "violet", label: "Tím khói", color: "#735b91" },
-  { id: "navy", label: "Xanh đậm", color: "#173e49" },
-  { id: "pink", label: "Hồng đất", color: "#c25973" },
+  { id: "coral", labelKey: "agents.accents.coral", color: "#e06b51" },
+  { id: "sun", labelKey: "agents.accents.sun", color: "#c99324" },
+  { id: "cyan", labelKey: "agents.accents.cyan", color: "#287f8e" },
+  { id: "lime", labelKey: "agents.accents.lime", color: "#7e9b2f" },
+  { id: "violet", labelKey: "agents.accents.violet", color: "#735b91" },
+  { id: "navy", labelKey: "agents.accents.navy", color: "#173e49" },
+  { id: "pink", labelKey: "agents.accents.pink", color: "#c25973" },
 ] as const;
 const form = reactive({
   name: "", locale: "vi-VN", mode: "auto" as Agent["interactionMode"], persona: "",
-  language: "Tiếng Việt", timeZone: browserTimeZone(), timeZoneSource: "device" as "device" | "fixed",
+  language: defaultLanguage(), timeZone: browserTimeZone(), timeZoneSource: "device" as "device" | "fixed",
   personalityPresetId: "", customPersonality: "",
-  responseStyle: "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
+  responseStyle: defaultResponseStyle(),
   userAddress: "", promptTemplate: "",
   firstInput: 180, betweenTurns: 180, closingGrace: 5, maxSession: 0,
   vad: "", asr: "", llm: "", tts: "",
@@ -79,6 +83,30 @@ const form = reactive({
 });
 
 const selected = computed(() => props.agents.find((agent) => agent.id === selectedId.value) ?? props.agents[0]);
+const agentMetrics = computed(() => {
+  const agent = selected.value;
+  if (!agent) return [];
+  return [
+    {
+      label: t("agents.metrics.draft"),
+      value: `v${agent.version}`,
+      detail: t(agent.version === agent.publishedVersion ? "agents.metrics.matchesPublished" : "agents.metrics.unpublishedChanges"),
+      tone: agent.version === agent.publishedVersion ? "success" as const : "warning" as const,
+    },
+    {
+      label: t("agents.metrics.published"),
+      value: `v${agent.publishedVersion}`,
+      detail: t("agents.metrics.immutableSnapshot"),
+      tone: agent.publishedVersion ? "info" as const : "warning" as const,
+    },
+    {
+      label: t("agents.metrics.mode"),
+      value: agent.interactionMode,
+      detail: t("agents.metrics.currentLocale", { locale: agent.defaultLocale }),
+      tone: "neutral" as const,
+    },
+  ];
+});
 const personalityPresets = computed(() => {
   const serverPresets = (props.promptCatalog?.personalityPresets ?? []).filter(
     (preset) => !deletedPersonalityIds.value.has(preset.id),
@@ -192,7 +220,7 @@ function promptDraft(value: unknown, locale: string): PromptDraft {
     customPersonality: stringValue(prompt.customPersonality),
     responseStyle: stringValue(
       prompt.responseStyle,
-      "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
+      defaultResponseStyle(),
     ),
     userAddress: stringValue(prompt.userAddress),
   };
@@ -293,7 +321,7 @@ async function publish(): Promise<void> {
       },
     });
   } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : "Không thể publish agent.";
+    error.value = exception instanceof Error ? exception.message : t("agents.errors.publishFailed");
   } finally {
     busy.value = false;
   }
@@ -301,11 +329,11 @@ async function publish(): Promise<void> {
 
 async function create(): Promise<void> {
   if (!createForm.name.trim() || !createForm.language.trim()) {
-    createError.value = "Tên và ngôn ngữ AI là bắt buộc.";
+    createError.value = t("agents.errors.nameLanguageRequired");
     return;
   }
   if (!props.promptCatalog) {
-    createError.value = "Catalog prompt chưa tải xong.";
+    createError.value = t("agents.errors.catalogLoading");
     return;
   }
   createBusy.value = true;
@@ -325,7 +353,7 @@ async function create(): Promise<void> {
           timeZoneSource: "device",
           personalityPresetId: createForm.personalityPresetId,
           customPersonality: "",
-          responseStyle: "Tự nhiên, rõ ràng và vừa đủ chi tiết cho một cuộc trò chuyện bằng giọng nói.",
+          responseStyle: defaultResponseStyle(),
           userAddress: "",
         },
       },
@@ -336,7 +364,7 @@ async function create(): Promise<void> {
     createForm.persona = "";
     createForm.personalityPresetId = "";
   } catch (exception) {
-    createError.value = exception instanceof Error ? exception.message : "Không thể tạo trợ lý.";
+    createError.value = exception instanceof Error ? exception.message : t("agents.errors.createFailed");
   } finally {
     createBusy.value = false;
   }
@@ -357,7 +385,7 @@ async function createPersonality(): Promise<void> {
     !personalityForm.summary.trim() ||
     !personalityForm.instructions.trim()
   ) {
-    personalityError.value = "Tên, mô tả ngắn và hướng dẫn tính cách là bắt buộc.";
+    personalityError.value = t("agents.errors.personalityRequired");
     return;
   }
   personalityBusy.value = true;
@@ -377,7 +405,7 @@ async function createPersonality(): Promise<void> {
     createForm.personalityPresetId = preset.id;
   } catch (exception) {
     personalityError.value =
-      exception instanceof Error ? exception.message : "Không thể tạo tính cách.";
+      exception instanceof Error ? exception.message : t("agents.errors.personalityCreateFailed");
   } finally {
     personalityBusy.value = false;
   }
@@ -414,7 +442,7 @@ async function deletePersonality(): Promise<void> {
     deletePersonalityError.value =
       exception instanceof Error
         ? exception.message
-        : "Không thể xóa tính cách này.";
+        : t("agents.errors.personalityDeleteFailed");
   } finally {
     deletePersonalityBusy.value = false;
   }
@@ -426,8 +454,38 @@ function addVariable(name: string): void {
   form.promptTemplate += `${separator}${token}`;
 }
 
+function moveRadioSelection<T extends string>(
+  items: readonly T[],
+  currentIndex: number,
+  direction: -1 | 1,
+  select: (item: T) => void,
+  groupSelector: string,
+): void {
+  if (!items.length) return;
+  const index = (currentIndex + direction + items.length) % items.length;
+  select(items[index]!);
+  void nextTick(() => {
+    document.querySelector<HTMLElement>(`${groupSelector} [role="radio"][tabindex="0"]`)?.focus();
+  });
+}
+
+function movePersonality(direction: -1 | 1): void {
+  const ids = ["", ...personalityPresets.value.map((preset) => preset.id)];
+  moveRadioSelection(ids, Math.max(0, ids.indexOf(form.personalityPresetId)), direction,
+    (id) => { form.personalityPresetId = id; }, ".personality-grid");
+}
+
+function movePersonalityAccent(direction: -1 | 1): void {
+  const accents = personalityAccents.map((accent) => accent.id);
+  moveRadioSelection(accents, Math.max(0, accents.indexOf(personalityForm.accent)), direction,
+    (accent) => { personalityForm.accent = accent; }, ".personality-accent-picker");
+}
+
 function scrollToSection(id: string): void {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById(id)?.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    block: "start",
+  });
 }
 
 function resetPromptTemplate(): void {
@@ -437,8 +495,8 @@ function resetPromptTemplate(): void {
 const promptPreview = computed(() => {
   const now = new Date();
   const previewTimeZone = form.timeZoneSource === "device" ? browserTimeZone() : form.timeZone;
-  let currentDate = "[múi giờ chưa hợp lệ]";
-  let currentTime = "[múi giờ chưa hợp lệ]";
+  let currentDate = t("agents.preview.invalidTimeZone");
+  let currentTime = t("agents.preview.invalidTimeZone");
   try {
     currentDate = new Intl.DateTimeFormat("en-CA", {
       timeZone: previewTimeZone || "UTC",
@@ -472,8 +530,8 @@ const promptPreview = computed(() => {
     timezone: previewTimeZone,
     device_locale: form.locale,
     device_timezone: previewTimeZone,
-    device_timezone_offset: "UTC offset theo thiết bị",
-    available_tools: "[runtime tool catalog]",
+    device_timezone_offset: t("agents.preview.deviceUtcOffset"),
+    available_tools: t("agents.preview.toolCatalog"),
   };
   return form.promptTemplate.replace(
     /{{\s*([a-z_][a-z0-9_]*)\s*}}/g,
@@ -484,8 +542,8 @@ const promptPreview = computed(() => {
 
 <template>
   <section class="vt-page" data-page="agents">
-    <VtPageHeader eyebrow="ASSISTANTS / AGENT CONFIG" title="Tính cách và luồng hội thoại" description="Mỗi lần publish tạo một version bất biến. Draft mới không ảnh hưởng robot cho đến khi được publish và rollout.">
-      <template #actions><VtButton @click="createOpen = true"><VtIcon name="plus" :size="16" /> Tạo trợ lý</VtButton></template>
+    <VtPageHeader :eyebrow="t('pages.agents.eyebrow')" :title="t('pages.agents.title')" :description="t('pages.agents.description')">
+      <template #actions><VtButton @click="createOpen = true"><VtIcon name="plus" :size="16" /> {{ t("agents.actions.create") }}</VtButton></template>
     </VtPageHeader>
 
     <div v-if="agents.length" class="agent-layout">
@@ -496,34 +554,41 @@ const promptPreview = computed(() => {
       </aside>
 
       <form v-if="selected" class="agent-editor" @submit.prevent="publish">
-        <article class="vt-panel agent-editor-hero">
-          <div class="agent-editor-avatar">{{ form.name.slice(0, 1).toUpperCase() || "V" }}</div>
-          <div><span class="vt-kicker">AGENT {{ selected.id }}</span><h2>{{ form.name }}</h2><p>Draft v{{ selected.version }} · Published v{{ selected.publishedVersion }}</p></div>
-          <VtBadge :tone="selected.version === selected.publishedVersion ? 'success' : 'warning'" dot>{{ selected.version === selected.publishedVersion ? "Đang đồng bộ" : "Có thay đổi draft" }}</VtBadge>
-        </article>
+        <div class="agent-editor-dashboard" data-page-section="assistant-summary">
+          <VtOperationsHero
+            :eyebrow="t('agents.hero.eyebrow', { id: selected.id })"
+            :title="form.name"
+            :description="t('agents.hero.description')"
+            :value="`v${selected.publishedVersion}`"
+            :value-label="t('agents.hero.published')"
+            :value-hint="t(selected.version === selected.publishedVersion ? 'agents.hero.synced' : 'agents.hero.draftChanged')"
+            icon="agent"
+          />
+          <VtMetricStrip :items="agentMetrics" />
+        </div>
 
-        <nav class="agent-config-nav" aria-label="Các phần cấu hình trợ lý">
-          <a href="#agent-identity" @click.prevent="scrollToSection('agent-identity')"><span>01</span><div><b>Danh tính</b><small>Tên & ngôn ngữ</small></div></a>
-          <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>Tính cách</b><small>Giới thiệu & giọng điệu</small></div></a>
-          <a href="#agent-prompt" @click.prevent="scrollToSection('agent-prompt')"><span>03</span><div><b>Base prompt</b><small>Template & preview</small></div></a>
-          <a href="#agent-runtime" @click.prevent="scrollToSection('agent-runtime')"><span>04</span><div><b>Runtime</b><small>Provider & timeout</small></div></a>
+        <nav class="agent-config-nav" :aria-label="t('agents.nav.label')">
+          <a href="#agent-identity" @click.prevent="scrollToSection('agent-identity')"><span>01</span><div><b>{{ t("agents.nav.identity") }}</b><small>{{ t("agents.nav.identityShort") }}</small></div></a>
+          <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>{{ t("agents.nav.personality") }}</b><small>{{ t("agents.nav.personalityShort") }}</small></div></a>
+          <a href="#agent-prompt" @click.prevent="scrollToSection('agent-prompt')"><span>03</span><div><b>{{ t("agents.nav.prompt") }}</b><small>{{ t("agents.nav.promptShort") }}</small></div></a>
+          <a href="#agent-runtime" @click.prevent="scrollToSection('agent-runtime')"><span>04</span><div><b>{{ t("agents.nav.runtime") }}</b><small>{{ t("agents.nav.runtimeShort") }}</small></div></a>
         </nav>
 
         <article id="agent-identity" class="vt-panel form-section agent-config-section">
           <header class="agent-section-header">
             <span class="agent-section-index">01</span>
-            <div><span class="vt-kicker">CORE PROFILE</span><h2>Danh tính và ngôn ngữ</h2><p>Tên, locale kỹ thuật và tên ngôn ngữ được đóng băng trong version publish.</p></div>
+            <div><span class="vt-kicker">{{ t("agents.identity.kicker") }}</span><h2>{{ t("agents.identity.title") }}</h2><p>{{ t("agents.identity.description") }}</p></div>
           </header>
           <div class="agent-section-content">
           <div class="form-grid two">
-            <VtField label="Tên trợ lý" hint="Tên hiển thị trên Manager và màn hình robot" required><VtInput v-model="form.name" maxlength="80" required /></VtField>
-            <VtField label="Ngôn ngữ mặc định" hint="Locale agent/provider là fallback BCP-47; thiết bị sẽ báo locale thực tế sau provisioning." required><VtInput v-model="form.locale" maxlength="35" placeholder="vi-VN" required /></VtField>
-            <VtField label="Ngôn ngữ AI trả lời" hint="Giá trị tự do cho biến {{language}}, ví dụ Tiếng Việt tự nhiên" required><VtInput v-model="form.language" maxlength="120" placeholder="Tiếng Việt tự nhiên" required /></VtField>
-            <VtField label="Nguồn múi giờ" hint="Ưu tiên timezone thiết bị đã báo; fallback dùng khi chưa có report." required><VtSelect v-model="form.timeZoneSource"><option value="device">Thiết bị · khuyến nghị</option><option value="fixed">Cố định theo agent</option></VtSelect></VtField>
-            <VtField v-if="form.timeZoneSource === 'fixed'" label="Múi giờ fallback" hint="IANA cho {{current_date}} và {{current_time}}" required><VtInput v-model="form.timeZone" maxlength="80" placeholder="Asia/Bangkok" required /></VtField>
-            <div v-else class="agent-mode-note span-two"><VtIcon name="check" :size="18" /><p><b>Timezone lấy từ thiết bị khi có thể.</b><span>Wi‑Fi chỉ cung cấp đường truyền; firmware gửi locale và múi giờ đã lưu trong reported state. Live preview dùng múi giờ của trình duyệt.</span></p></div>
-            <VtField label="Chế độ tương tác" class="span-two" hint="Tự động là trải nghiệm mặc định; nút và wake word cùng mở hoặc ngắt một phiên."><VtSelect v-model="form.mode"><option value="auto">Tự động · nói là xử lý trong phiên</option><option value="realtime">Realtime thử nghiệm · yêu cầu AEC/barge-in</option><option value="manual">Thủ công / PTT · chế độ tương thích</option></VtSelect></VtField>
-            <div v-if="form.mode === 'realtime'" class="agent-mode-note span-two"><VtIcon name="warning" :size="18" /><p><b>Realtime đang ở mức thử nghiệm.</b><span>Chỉ dùng khi provider realtime, AEC và barge-in đã vượt benchmark; chế độ này không thay đổi logic nói → AI nghe → xử lý → trả lời.</span></p></div>
+            <VtField  :label="t('agents.identity.name')"  :hint="t('agents.identity.nameHint')" required><VtInput v-model="form.name" maxlength="80" required /></VtField>
+            <VtField  :label="t('agents.identity.defaultLocale')"  :hint="t('agents.identity.defaultLocaleHint')" required><VtInput v-model="form.locale" maxlength="35" placeholder="vi-VN" required /></VtField>
+            <VtField  :label="t('agents.identity.aiLanguage')"  :hint="t('agents.identity.aiLanguageHint')" required><VtInput v-model="form.language" maxlength="120"  :placeholder="t('agents.identity.aiLanguagePlaceholder')" required /></VtField>
+            <VtField  :label="t('agents.identity.timeZoneSource')"  :hint="t('agents.identity.timeZoneSourceHint')" required><VtSelect v-model="form.timeZoneSource"><option value="device">{{ t("agents.identity.deviceTimeZone") }}</option><option value="fixed">{{ t("agents.identity.fixedTimeZone") }}</option></VtSelect></VtField>
+            <VtField v-if="form.timeZoneSource === 'fixed'"  :label="t('agents.identity.timeZoneFallback')"  :hint="t('agents.identity.timeZoneFallbackHint')" required><VtInput v-model="form.timeZone" maxlength="80" placeholder="Asia/Bangkok" required /></VtField>
+            <div v-else class="agent-mode-note span-two"><VtIcon name="check" :size="18" /><p><b>{{ t("agents.identity.timeZoneNoteTitle") }}</b><span>{{ t("agents.identity.timeZoneNoteBody") }}</span></p></div>
+            <VtField  :label="t('agents.identity.mode')" class="span-two"  :hint="t('agents.identity.modeHint')"><VtSelect v-model="form.mode"><option value="auto">{{ t("agents.identity.autoMode") }}</option><option value="realtime">{{ t("agents.identity.realtimeMode") }}</option><option value="manual">{{ t("agents.identity.manualMode") }}</option></VtSelect></VtField>
+            <div v-if="form.mode === 'realtime'" class="agent-mode-note span-two"><VtIcon name="warning" :size="18" /><p><b>{{ t("agents.identity.realtimeTitle") }}</b><span>{{ t("agents.identity.realtimeBody") }}</span></p></div>
           </div>
           </div>
         </article>
@@ -531,29 +596,34 @@ const promptPreview = computed(() => {
         <article id="agent-personality" class="vt-panel form-section agent-config-section">
           <header class="agent-section-header">
             <span class="agent-section-index">02</span>
-            <div><span class="vt-kicker">VOICE & STANCE</span><h2>Tính cách</h2><p>Preset là dữ liệu prompt, không tạo nhánh logic trong runtime. An toàn, quyền tool và sự thật luôn được giữ riêng.</p></div>
-            <VtButton type="button" variant="quiet" size="sm" data-testid="create-personality" @click="openPersonalityCreate"><VtIcon name="plus" :size="15" /> Thêm tính cách</VtButton>
+            <div><span class="vt-kicker">{{ t("agents.personality.kicker") }}</span><h2>{{ t("agents.personality.title") }}</h2><p>{{ t("agents.personality.description") }}</p></div>
+            <VtButton type="button" variant="quiet" size="sm" data-testid="create-personality" @click="openPersonalityCreate"><VtIcon name="plus" :size="15" /> {{ t("agents.personality.add") }}</VtButton>
           </header>
           <div class="agent-section-content">
           <div v-if="selectedPersonality" class="personality-feature">
             <span class="personality-feature-mark">{{ selectedPersonality.label.slice(0, 1) }}</span>
-            <div><span class="personality-feature-kicker">{{ selectedPersonality.builtIn ? "PRESET THƯ VIỆN" : "PRESET TÙY CHỈNH" }}</span><h3>{{ selectedPersonality.label }}</h3><p>{{ selectedPersonality.summary }}</p></div>
-            <span class="personality-feature-state"><VtIcon name="check" :size="14" /> ĐANG CHỌN</span>
+            <div><span class="personality-feature-kicker">{{ t(selectedPersonality.builtIn ? "agents.personality.libraryPreset" : "agents.personality.customPreset") }}</span><h3>{{ selectedPersonality.label }}</h3><p>{{ selectedPersonality.summary }}</p></div>
+            <span class="personality-feature-state"><VtIcon name="check" :size="14" /> {{ t("agents.personality.selected") }}</span>
           </div>
-          <div class="personality-grid" role="radiogroup" aria-label="Chọn tính cách">
+          <div class="personality-grid" role="radiogroup" :aria-label="t('agents.personality.groupLabel')">
             <div :class="['personality-card', 'personality-none', { active: !form.personalityPresetId }]">
               <button
                 type="button"
                 class="personality-choice"
                 role="radio"
                 :aria-checked="!form.personalityPresetId"
+                :tabindex="!form.personalityPresetId ? 0 : -1"
                 @click="form.personalityPresetId = ''"
+                @keydown.left.prevent="movePersonality(-1)"
+                @keydown.right.prevent="movePersonality(1)"
+                @keydown.up.prevent="movePersonality(-1)"
+                @keydown.down.prevent="movePersonality(1)"
               >
                 <span class="personality-mark" aria-hidden="true">—</span>
                 <span class="personality-copy">
-                  <span class="personality-card-meta">TÙY CHỌN</span>
-                  <b>Không dùng preset</b>
-                  <small>Base prompt tự quyết định vai trò và giọng điệu.</small>
+                  <span class="personality-card-meta">{{ t("agents.personality.optional") }}</span>
+                  <b>{{ t("agents.personality.none") }}</b>
+                  <small>{{ t("agents.personality.noneDescription") }}</small>
                 </span>
                 <i v-if="!form.personalityPresetId" class="personality-selected" aria-hidden="true"><VtIcon name="check" :size="13" /></i>
               </button>
@@ -575,11 +645,16 @@ const promptPreview = computed(() => {
                 class="personality-choice"
                 role="radio"
                 :aria-checked="form.personalityPresetId === preset.id"
+                :tabindex="form.personalityPresetId === preset.id ? 0 : -1"
                 @click="form.personalityPresetId = preset.id"
+                @keydown.left.prevent="movePersonality(-1)"
+                @keydown.right.prevent="movePersonality(1)"
+                @keydown.up.prevent="movePersonality(-1)"
+                @keydown.down.prevent="movePersonality(1)"
               >
                 <span class="personality-mark" aria-hidden="true">{{ preset.label.slice(0, 1) }}</span>
                 <span class="personality-copy">
-                  <span class="personality-card-meta">{{ preset.builtIn ? "THƯ VIỆN" : "TÙY CHỈNH" }}</span>
+                  <span class="personality-card-meta">{{ t(preset.builtIn ? "agents.personality.library" : "agents.personality.custom") }}</span>
                   <b>{{ preset.label }}</b>
                   <small>{{ preset.summary }}</small>
                 </span>
@@ -589,7 +664,7 @@ const promptPreview = computed(() => {
                 v-if="preset.deletable && !preset.builtIn"
                 type="button"
                 class="personality-delete"
-                :aria-label="`Xóa tính cách ${preset.label}`"
+                :aria-label="t('agents.personality.deleteLabel', { label: preset.label })"
                 @click.stop="askDeletePersonality(preset)"
               >
                 <VtIcon name="trash" :size="14" />
@@ -597,13 +672,13 @@ const promptPreview = computed(() => {
             </div>
           </div>
           <div class="form-grid two personality-details">
-            <VtField label="Giới thiệu trợ lý" hint="Tùy chọn. Mô tả vai trò, chuyên môn và bối cảnh cho {{persona}}. Bạn cũng có thể viết trực tiếp phần này trong base prompt."><VtTextarea v-model="form.persona" rows="5" placeholder="Ví dụ: Bạn là trợ giảng khoa học, giải thích bằng ví dụ gần gũi và chính xác." /></VtField>
-            <VtField label="Tinh chỉnh tính cách" hint="Bổ sung cho preset, không thay thế safety/tool policy."><VtTextarea v-model="form.customPersonality" rows="5" maxlength="4000" placeholder="Ví dụ: thích bắt bẻ vui khi người dùng đang trêu đùa." /></VtField>
-            <VtField label="Phong cách trả lời" hint="Nội dung cho {{response_style}}"><VtTextarea v-model="form.responseStyle" rows="3" maxlength="2000" /></VtField>
-            <VtField label="Cách xưng hô" hint="Nội dung cho {{user_address}}; có thể để trống."><VtInput v-model="form.userAddress" maxlength="120" placeholder="bạn, anh Khoa, chị…" /></VtField>
+            <VtField :label="t('agents.personality.introduction')" :hint="t('agents.personality.introductionHint')"><VtTextarea v-model="form.persona" rows="5" :placeholder="t('agents.personality.introductionPlaceholder')" /></VtField>
+            <VtField :label="t('agents.personality.refinement')" :hint="t('agents.personality.refinementHint')"><VtTextarea v-model="form.customPersonality" rows="5" maxlength="4000" :placeholder="t('agents.personality.refinementPlaceholder')" /></VtField>
+            <VtField :label="t('agents.personality.responseStyle')" :hint="t('agents.personality.responseStyleHint')"><VtTextarea v-model="form.responseStyle" rows="3" maxlength="2000" /></VtField>
+            <VtField :label="t('agents.personality.userAddress')" :hint="t('agents.personality.userAddressHint')"><VtInput v-model="form.userAddress" maxlength="120" :placeholder="t('agents.personality.userAddressPlaceholder')" /></VtField>
           </div>
           <div v-if="selectedPersonality" class="personality-preview">
-            <span>PRESET ĐƯỢC ĐÓNG BĂNG KHI PUBLISH</span>
+            <span>{{ t("agents.personality.frozen") }}</span>
             <p>{{ selectedPersonality.instructions }}</p>
           </div>
           </div>
@@ -612,32 +687,32 @@ const promptPreview = computed(() => {
         <article id="agent-prompt" class="vt-panel form-section agent-config-section prompt-section">
           <header class="agent-section-header prompt-section-header">
             <span class="agent-section-index">03</span>
-            <div><span class="vt-kicker">PROMPT WORKBENCH</span><h2>Agent base prompt</h2><p>Template raw tương tự `agent-base-prompt.txt`, chỉ hỗ trợ token allowlist và không chạy biểu thức.</p></div>
-            <VtButton type="button" variant="quiet" size="sm" @click="resetPromptTemplate"><VtIcon name="refresh" :size="15" /> Khôi phục mặc định</VtButton>
+            <div><span class="vt-kicker">{{ t("agents.prompt.kicker") }}</span><h2>{{ t("agents.prompt.title") }}</h2><p>{{ t("agents.prompt.description") }}</p></div>
+            <VtButton type="button" variant="quiet" size="sm" @click="resetPromptTemplate"><VtIcon name="refresh" :size="15" /> {{ t("agents.prompt.reset") }}</VtButton>
           </header>
           <div class="agent-section-content">
           <div class="prompt-token-bar">
             <div class="prompt-token-heading">
-              <b>Chèn biến vào template</b>
-              <small>Chọn một token để thêm vào vị trí cuối con trỏ.</small>
+              <b>{{ t("agents.prompt.insertTitle") }}</b>
+              <small>{{ t("agents.prompt.insertDescription") }}</small>
             </div>
-            <div class="prompt-variables" aria-label="Biến template">
+            <div class="prompt-variables" :aria-label="t('agents.prompt.variablesLabel')">
               <button v-for="variable in promptCatalog?.variables ?? []" :key="variable.name" type="button" :title="variable.description" @click="addVariable(variable.name)">
                 <code v-text="`{{${variable.name}}}`"></code>
-                <span>{{ variable.required ? "bắt buộc" : variable.dynamic ? "runtime" : "tùy chọn" }}</span>
+                <span>{{ t(variable.required ? "agents.prompt.required" : variable.dynamic ? "agents.prompt.runtime" : "agents.prompt.optional") }}</span>
               </button>
             </div>
           </div>
           <div class="prompt-editor-grid">
             <section class="prompt-workbench-pane">
               <header class="prompt-pane-header">
-                <div><span class="prompt-pane-kicker">SOURCE / DRAFT</span><b>Template bản nháp</b><small>Bắt buộc có &#123;&#123;agent_name&#125;&#125; và &#123;&#123;language&#125;&#125;. Các biến giới thiệu, tính cách và runtime đều tùy chọn.</small></div>
-                <VtBadge tone="warning">Chưa publish</VtBadge>
+                <div><span class="prompt-pane-kicker">{{ t("agents.prompt.sourceKicker") }}</span><b>{{ t("agents.prompt.draftTitle") }}</b><small>{{ t("agents.prompt.draftDescription") }}</small></div>
+                <VtBadge tone="warning">{{ t("agents.prompt.unpublished") }}</VtBadge>
               </header>
-              <VtTextarea v-model="form.promptTemplate" class="prompt-template-input" aria-label="Template bản nháp" rows="18" maxlength="20000" spellcheck="false" required />
+              <VtTextarea v-model="form.promptTemplate" class="prompt-template-input" :aria-label="t('agents.prompt.draftTitle')" rows="18" maxlength="20000" spellcheck="false" required />
             </section>
             <section class="prompt-render-preview">
-              <header><div><span>LIVE PREVIEW</span><small>Render với dữ liệu agent hiện tại</small></div><VtBadge tone="success">Token safe</VtBadge></header>
+              <header><div><span>{{ t("agents.prompt.previewKicker") }}</span><small>{{ t("agents.prompt.previewDescription") }}</small></div><VtBadge tone="success">{{ t("agents.prompt.safe") }}</VtBadge></header>
               <pre>{{ promptPreview }}</pre>
             </section>
           </div>
@@ -647,114 +722,119 @@ const promptPreview = computed(() => {
         <article id="agent-runtime" class="vt-panel form-section agent-config-section">
           <header class="agent-section-header">
             <span class="agent-section-index">04</span>
-            <div><span class="vt-kicker">RUNTIME POLICY</span><h2>Provider và nhịp hội thoại</h2><p>Routing theo capability và locale; phiên chỉ tự chào khi không còn hoạt động hội thoại.</p></div>
+            <div><span class="vt-kicker">{{ t("agents.runtime.kicker") }}</span><h2>{{ t("agents.runtime.title") }}</h2><p>{{ t("agents.runtime.description") }}</p></div>
           </header>
           <div class="agent-section-content agent-runtime-grid">
             <section class="agent-runtime-card">
-              <header><span class="agent-runtime-icon"><VtIcon name="provider" :size="17" /></span><div><b>Provider chain</b><small>Fallback theo locale của agent</small></div></header>
+              <header><span class="agent-runtime-icon"><VtIcon name="provider" :size="17" /></span><div><b>{{ t("agents.runtime.providerChain") }}</b><small>{{ t("agents.runtime.providerChainHint") }}</small></div></header>
               <div class="form-grid two">
-                <VtField label="VAD"><VtSelect v-model="form.vad"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('vad')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-                <VtField label="ASR"><VtSelect v-model="form.asr"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('asr')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-                <VtField label="LLM"><VtSelect v-model="form.llm"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('llm')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
-                <VtField label="TTS"><VtSelect v-model="form.tts"><option value="">Chưa chọn</option><option v-for="provider in enabledProviders('tts')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="VAD"><VtSelect v-model="form.vad"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-for="provider in enabledProviders('vad')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="ASR"><VtSelect v-model="form.asr"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-for="provider in enabledProviders('asr')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="LLM"><VtSelect v-model="form.llm"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-for="provider in enabledProviders('llm')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
+                <VtField label="TTS"><VtSelect v-model="form.tts"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-for="provider in enabledProviders('tts')" :key="provider.id" :value="provider.id">{{ provider.adapter }} · {{ provider.model }}</option></VtSelect></VtField>
               </div>
             </section>
             <section class="agent-runtime-card agent-voice-card">
-              <header><span class="agent-runtime-icon"><VtIcon name="mic" :size="17" /></span><div><b>Giọng trợ lý</b><small>Voice, giới tính và nhịp đọc của TTS đã chọn</small></div></header>
+              <header><span class="agent-runtime-icon"><VtIcon name="mic" :size="17" /></span><div><b>{{ t("agents.runtime.voiceTitle") }}</b><small>{{ t("agents.runtime.voiceDescription") }}</small></div></header>
               <div class="form-grid two">
-                <VtField label="Voice"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">Chưa chọn</option><option v-if="form.voiceId && !voiceOptions.some((voice) => String(voice.id) === form.voiceId)" :value="form.voiceId">{{ form.voiceId }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ String(voice.label ?? voice.id) }} · {{ String(voice.gender ?? "neutral") }}</option></VtSelect></VtField>
-                <VtField label="Giới tính"><VtSelect v-model="form.voiceGender"><option value="female">Nữ</option><option value="male">Nam</option><option value="neutral">Trung tính</option></VtSelect></VtField>
-                <VtField label="Phong cách đọc" hint="Tự nhiên phù hợp hội thoại"><VtSelect v-model="form.voiceStyle" :disabled="!voiceStyleOptions.length"><option v-if="!voiceStyleOptions.length" value="tu_nhien">Tự nhiên / hội thoại</option><option v-for="style in voiceStyleOptions" :key="String(style.id)" :value="String(style.id)">{{ String(style.label ?? style.id) }}</option></VtSelect></VtField>
-                <VtField label="Tốc độ" hint="0,5–2,0"><VtInput v-model="form.voiceRate" type="number" min="0.5" max="2" step="0.05" /></VtField>
-                <VtField label="Cao độ (Hz)" :hint="ttsSupportsPitch ? 'Điều chỉnh từ -100 đến +100 Hz' : 'Provider này không hỗ trợ đổi cao độ'"><VtInput v-model="form.voicePitch" type="number" min="-100" max="100" step="1" :disabled="!ttsSupportsPitch" /></VtField>
-                <VtField label="Âm lượng" hint="0–1,5"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>
+                <VtField :label="t('agents.runtime.voice')"><VtSelect v-model="form.voiceId" :disabled="!form.tts"><option value="">{{ t("agents.runtime.notSelected") }}</option><option v-if="form.voiceId && !voiceOptions.some((voice) => String(voice.id) === form.voiceId)" :value="form.voiceId">{{ form.voiceId }}</option><option v-for="voice in voiceOptions" :key="String(voice.id)" :value="String(voice.id)">{{ String(voice.label ?? voice.id) }} · {{ String(voice.gender ?? "neutral") }}</option></VtSelect></VtField>
+                <VtField :label="t('agents.runtime.gender')"><VtSelect v-model="form.voiceGender"><option value="female">{{ t("agents.runtime.female") }}</option><option value="male">{{ t("agents.runtime.male") }}</option><option value="neutral">{{ t("agents.runtime.neutral") }}</option></VtSelect></VtField>
+                <VtField :label="t('agents.runtime.voiceStyle')" :hint="t('agents.runtime.voiceStyleHint')"><VtSelect v-model="form.voiceStyle" :disabled="!voiceStyleOptions.length"><option v-if="!voiceStyleOptions.length" value="tu_nhien">{{ t("agents.runtime.natural") }}</option><option v-for="style in voiceStyleOptions" :key="String(style.id)" :value="String(style.id)">{{ String(style.label ?? style.id) }}</option></VtSelect></VtField>
+                <VtField :label="t('agents.runtime.rate')" :hint="t('agents.runtime.rateRange')"><VtInput v-model="form.voiceRate" type="number" min="0.5" max="2" step="0.05" /></VtField>
+                <VtField :label="t('agents.runtime.pitch')" :hint="t(ttsSupportsPitch ? 'agents.runtime.pitchHint' : 'agents.runtime.pitchUnsupported')"><VtInput v-model="form.voicePitch" type="number" min="-100" max="100" step="1" :disabled="!ttsSupportsPitch" /></VtField>
+                <VtField :label="t('agents.runtime.volume')" :hint="t('agents.runtime.volumeRange')"><VtInput v-model="form.voiceVolume" type="number" min="0" max="1.5" step="0.05" /></VtField>
               </div>
-              <p v-if="form.tts && !voiceOptions.length" class="agent-runtime-hint">Provider này chưa công bố catalog voice; có thể nhập voice ID ở cấu hình provider trước.</p>
+              <p v-if="form.tts && !voiceOptions.length" class="agent-runtime-hint">{{ t("agents.runtime.noVoiceCatalog") }}</p>
               <div v-if="voiceQualityWarnings.length" class="tts-quality-warnings" role="status">
                 <VtIcon name="warning" :size="17" />
-                <div><b>Profile có rủi ro chất lượng</b><p v-for="warning in voiceQualityWarnings" :key="warning">{{ warning }}</p></div>
+                <div><b>{{ t("agents.runtime.qualityRisk") }}</b><p v-for="warning in voiceQualityWarnings" :key="warning">{{ warning }}</p></div>
               </div>
             </section>
             <section class="agent-runtime-card">
-              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>Inactivity hội thoại</b><small>Không giới hạn tổng phiên hoặc tổng lượt</small></div></header>
+              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>{{ t("agents.runtime.inactivity") }}</b><small>{{ t("agents.runtime.inactivityHint") }}</small></div></header>
               <div class="form-grid two">
-                <VtField label="Chờ hoạt động đầu tiên" hint="Mặc định 180 giây"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
-                <VtField label="Giữa các lượt" hint="Mặc định 180 giây"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
-                <VtField label="Chào kết thúc" hint="0,5–60 giây"><VtInput v-model="form.closingGrace" type="number" min="0.5" max="60" step="0.5" /></VtField>
-                <VtField label="Giới hạn phiên" hint="0 = không giới hạn"><VtInput v-model="form.maxSession" type="number" min="0" max="3600" /></VtField>
+                <VtField :label="t('agents.runtime.firstActivity')" :hint="t('agents.runtime.default180')"><VtInput v-model="form.firstInput" type="number" min="3" max="300" /></VtField>
+                <VtField :label="t('agents.runtime.betweenTurns')" :hint="t('agents.runtime.default180')"><VtInput v-model="form.betweenTurns" type="number" min="3" max="600" /></VtField>
+                <VtField :label="t('agents.runtime.closingGrace')" :hint="t('agents.runtime.closingRange')"><VtInput v-model="form.closingGrace" type="number" min="0.5" max="60" step="0.5" /></VtField>
+                <VtField :label="t('agents.runtime.sessionLimit')" :hint="t('agents.runtime.unlimited')"><VtInput v-model="form.maxSession" type="number" min="0" max="3600" /></VtField>
               </div>
             </section>
           </div>
         </article>
 
-        <div class="sticky-publish"><span class="publish-mark"><VtIcon name="upload" :size="18" /></span><div><b>Publish tạo version mới</b><small>Robot chỉ nhận sau rollout; extension fields không thuộc form này vẫn được giữ.</small></div><p v-if="error" class="inline-error">{{ error }}</p><span class="publish-target"><small>VERSION</small><b>v{{ selected.version + 1 }}</b></span><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> Publish version {{ selected.version + 1 }}</VtButton></div>
+        <div class="sticky-publish"><span class="publish-mark"><VtIcon name="upload" :size="18" /></span><div><b>{{ t("agents.publish.title") }}</b><small>{{ t("agents.publish.description") }}</small></div><p v-if="error" class="inline-error">{{ error }}</p><span class="publish-target"><small>VERSION</small><b>v{{ selected.version + 1 }}</b></span><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> {{ t("agents.publish.action", { version: selected.version + 1 }) }}</VtButton></div>
       </form>
     </div>
-    <VtEmptyState v-else icon="agent" title="Chưa có agent" text="Manager API chưa trả về agent nào cho workspace này." />
+    <VtEmptyState v-else icon="agent" :title="t('agents.empty.title')" :text="t('agents.empty.body')" />
 
-    <VtDialog :open="createOpen" title="Tạo trợ lý mới" eyebrow="ASSISTANTS / NEW PROFILE" icon="agent" description="Tạo draft độc lập. Trợ lý chỉ dùng được cho Lab hoặc thiết bị sau khi đã publish config." width="sm" @close="createOpen = false">
+    <VtDialog :open="createOpen" :title="t('agents.createDialog.title')" :eyebrow="t('agents.createDialog.eyebrow')" icon="agent" :description="t('agents.createDialog.description')" width="sm" @close="createOpen = false">
       <form id="create-agent-form" class="form-stack" @submit.prevent="create">
-        <VtField label="Tên trợ lý" required><VtInput v-model="createForm.name" maxlength="80" placeholder="Ví dụ: Cô giáo Khoa học" required /></VtField>
+        <VtField  :label="t('agents.identity.name')" required><VtInput v-model="createForm.name" maxlength="80" :placeholder="t('agents.createDialog.namePlaceholder')" required /></VtField>
         <div class="form-grid two">
-          <VtField label="Locale"><VtInput v-model="createForm.locale" maxlength="35" placeholder="vi-VN" /></VtField>
-          <VtField label="Ngôn ngữ AI" required><VtInput v-model="createForm.language" maxlength="120" placeholder="Tiếng Việt tự nhiên" required /></VtField>
-          <VtField label="Chế độ"><VtSelect v-model="createForm.mode"><option value="auto">Tự động</option><option value="manual">PTT tương thích</option><option value="realtime">Realtime thử nghiệm</option></VtSelect></VtField>
-          <VtField label="Preset tính cách"><VtSelect v-model="createForm.personalityPresetId"><option value="">Không chọn preset</option><option v-for="preset in personalityPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option></VtSelect></VtField>
+          <VtField :label="t('agents.createDialog.locale')"><VtInput v-model="createForm.locale" maxlength="35" placeholder="vi-VN" /></VtField>
+          <VtField :label="t('agents.createDialog.aiLanguage')" required><VtInput v-model="createForm.language" maxlength="120"  :placeholder="t('agents.identity.aiLanguagePlaceholder')" required /></VtField>
+          <VtField :label="t('agents.createDialog.mode')"><VtSelect v-model="createForm.mode"><option value="auto">{{ t("agents.createDialog.auto") }}</option><option value="manual">{{ t("agents.createDialog.manual") }}</option><option value="realtime">{{ t("agents.createDialog.realtime") }}</option></VtSelect></VtField>
+          <VtField :label="t('agents.createDialog.personality')"><VtSelect v-model="createForm.personalityPresetId"><option value="">{{ t("agents.createDialog.noPersonality") }}</option><option v-for="preset in personalityPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option></VtSelect></VtField>
         </div>
-        <VtField label="Giới thiệu trợ lý" hint="Tùy chọn. Có thể để trống và viết phần giới thiệu trực tiếp trong base prompt."><VtTextarea v-model="createForm.persona" rows="5" placeholder="Ví dụ: Bạn là trợ giảng khoa học cho trẻ em." /></VtField>
+        <VtField :label="t('agents.personality.introduction')" :hint="t('agents.createDialog.introductionHint')"><VtTextarea v-model="createForm.persona" rows="5" :placeholder="t('agents.createDialog.introductionPlaceholder')" /></VtField>
         <p v-if="createError" class="inline-error" role="alert">{{ createError }}</p>
       </form>
-      <template #footer><VtButton variant="quiet" @click="createOpen = false">Hủy</VtButton><VtButton form="create-agent-form" type="submit" :busy="createBusy"><VtIcon name="plus" :size="16" /> Tạo draft</VtButton></template>
+      <template #footer><VtButton variant="quiet" @click="createOpen = false">{{ t("common.cancel") }}</VtButton><VtButton form="create-agent-form" type="submit" :busy="createBusy"><VtIcon name="plus" :size="16" /> {{ t("agents.createDialog.submit") }}</VtButton></template>
     </VtDialog>
 
-    <VtDialog :open="personalityOpen" title="Thêm tính cách riêng" eyebrow="VOICE & STANCE / CUSTOM" icon="agent" description="Tạo một preset dữ liệu dùng lại cho agent, Realtime Lab và snapshot thiết bị." width="md" @close="personalityOpen = false">
+    <VtDialog :open="personalityOpen" :title="t('agents.personalityDialog.title')" :eyebrow="t('agents.personalityDialog.eyebrow')" icon="agent" :description="t('agents.personalityDialog.description')" width="md" @close="personalityOpen = false">
       <form id="create-personality-form" class="form-stack" @submit.prevent="createPersonality">
-        <VtField label="Tên tính cách" hint="Tên ngắn, dễ nhận ra trong thư viện." required><VtInput v-model="personalityForm.label" maxlength="80" placeholder="Ví dụ: Cà khịa vui" required /></VtField>
-        <VtField label="Mô tả ngắn" hint="Hiển thị trên thẻ chọn tính cách." required><VtInput v-model="personalityForm.summary" maxlength="240" placeholder="Trêu nhẹ, sắc nhưng biết dừng đúng lúc." required /></VtField>
+        <VtField :label="t('agents.personalityDialog.name')" :hint="t('agents.personalityDialog.nameHint')" required><VtInput v-model="personalityForm.label" maxlength="80" :placeholder="t('agents.personalityDialog.namePlaceholder')" required /></VtField>
+        <VtField :label="t('agents.personalityDialog.summary')" :hint="t('agents.personalityDialog.summaryHint')" required><VtInput v-model="personalityForm.summary" maxlength="240" :placeholder="t('agents.personalityDialog.summaryPlaceholder')" required /></VtField>
         <fieldset class="personality-accent-field">
-          <legend>Màu nhận diện</legend>
-          <div class="personality-accent-picker" role="radiogroup" aria-label="Màu nhận diện">
+          <legend>{{ t("agents.personalityDialog.accent") }}</legend>
+          <div class="personality-accent-picker" role="radiogroup" :aria-label="t('agents.personalityDialog.accent')">
             <button
               v-for="accent in personalityAccents"
               :key="accent.id"
               type="button"
               role="radio"
               :aria-checked="personalityForm.accent === accent.id"
+              :tabindex="personalityForm.accent === accent.id ? 0 : -1"
               :class="{ active: personalityForm.accent === accent.id }"
               :style="{ '--accent-swatch': accent.color }"
               @click="personalityForm.accent = accent.id"
+              @keydown.left.prevent="movePersonalityAccent(-1)"
+              @keydown.right.prevent="movePersonalityAccent(1)"
+              @keydown.up.prevent="movePersonalityAccent(-1)"
+              @keydown.down.prevent="movePersonalityAccent(1)"
             >
               <i aria-hidden="true"></i>
-              <span>{{ accent.label }}</span>
+              <span>{{ t(accent.labelKey) }}</span>
               <VtIcon v-if="personalityForm.accent === accent.id" name="check" :size="12" />
             </button>
           </div>
         </fieldset>
-        <VtField label="Hướng dẫn cho AI" hint="Chỉ mô tả tone và stance; safety, quyền tool và sự thật vẫn do policy riêng." required><VtTextarea v-model="personalityForm.instructions" rows="7" maxlength="4000" placeholder="Giữ giọng lém lỉnh..., phản biện lập luận thay vì công kích người dùng..." required /></VtField>
+        <VtField :label="t('agents.personalityDialog.instructions')" :hint="t('agents.personalityDialog.instructionsHint')" required><VtTextarea v-model="personalityForm.instructions" rows="7" maxlength="4000" :placeholder="t('agents.personalityDialog.instructionsPlaceholder')" required /></VtField>
         <section
           class="personality-create-preview"
           :style="{ '--preview-accent': selectedPersonalityAccent.color }"
-          aria-label="Xem trước thẻ tính cách"
+          :aria-label="t('agents.personalityDialog.previewLabel')"
         >
           <span class="personality-create-preview-mark">{{ personalityForm.label.trim().slice(0, 1) || "T" }}</span>
           <div>
-            <small>PRESET TÙY CHỈNH · XEM TRƯỚC</small>
-            <b>{{ personalityForm.label.trim() || "Tên tính cách" }}</b>
-            <p>{{ personalityForm.summary.trim() || "Mô tả ngắn sẽ xuất hiện ở đây." }}</p>
+            <small>{{ t("agents.personalityDialog.previewKicker") }}</small>
+            <b>{{ personalityForm.label.trim() || t("agents.personalityDialog.previewName") }}</b>
+            <p>{{ personalityForm.summary.trim() || t("agents.personalityDialog.previewSummary") }}</p>
           </div>
         </section>
         <p v-if="personalityError" class="inline-error" role="alert">{{ personalityError }}</p>
       </form>
-      <template #footer><VtButton variant="quiet" @click="personalityOpen = false">Hủy</VtButton><VtButton form="create-personality-form" type="submit" :busy="personalityBusy"><VtIcon name="plus" :size="16" /> Lưu tính cách</VtButton></template>
+      <template #footer><VtButton variant="quiet" @click="personalityOpen = false">{{ t("common.cancel") }}</VtButton><VtButton form="create-personality-form" type="submit" :busy="personalityBusy"><VtIcon name="plus" :size="16" /> {{ t("agents.personalityDialog.submit") }}</VtButton></template>
     </VtDialog>
 
-    <VtDialog :open="deletePersonalityOpen" title="Xóa tính cách riêng?" eyebrow="VOICE & STANCE / REMOVE" icon="warning" description="Preset mặc định luôn được bảo vệ. Snapshot đã publish không bị thay đổi." width="sm" @close="deletePersonalityOpen = false">
+    <VtDialog :open="deletePersonalityOpen" :title="t('agents.deleteDialog.title')" :eyebrow="t('agents.deleteDialog.eyebrow')" icon="warning" :description="t('agents.deleteDialog.description')" width="sm" @close="deletePersonalityOpen = false">
       <div class="delete-personality-confirm">
         <span class="delete-personality-mark"><VtIcon name="trash" :size="19" /></span>
-        <div><b>{{ personalityToDelete?.label }}</b><p>Chỉ xóa được khi không còn agent draft nào đang tham chiếu preset này. Bạn có thể đổi preset và publish trước nếu API báo đang được dùng.</p></div>
+        <div><b>{{ personalityToDelete?.label }}</b><p>{{ t("agents.deleteDialog.body") }}</p></div>
       </div>
       <p v-if="deletePersonalityError" class="inline-error" role="alert">{{ deletePersonalityError }}</p>
-      <template #footer><VtButton variant="quiet" @click="deletePersonalityOpen = false">Hủy</VtButton><VtButton variant="danger" :busy="deletePersonalityBusy" @click="deletePersonality"><VtIcon name="trash" :size="16" /> Xóa preset</VtButton></template>
+      <template #footer><VtButton variant="quiet" @click="deletePersonalityOpen = false">{{ t("common.cancel") }}</VtButton><VtButton variant="danger" :busy="deletePersonalityBusy" @click="deletePersonality"><VtIcon name="trash" :size="16" /> {{ t("agents.deleteDialog.submit") }}</VtButton></template>
     </VtDialog>
   </section>
 </template>
@@ -762,6 +842,11 @@ const promptPreview = computed(() => {
 <style scoped>
 .agent-editor {
   gap: 16px;
+}
+
+.agent-editor-dashboard {
+  display: grid;
+  gap: 10px;
 }
 
 .agent-config-nav {
@@ -791,7 +876,7 @@ const promptPreview = computed(() => {
 .agent-config-nav a:hover,
 .agent-config-nav a:focus-visible {
   color: var(--navy);
-  background: #fffaf3;
+  background: color-mix(in srgb, var(--orange) 5%, var(--paper-strong));
 }
 
 .agent-config-nav a:focus-visible {
@@ -806,7 +891,7 @@ const promptPreview = computed(() => {
   place-items: center;
   border-radius: 10px;
   color: var(--orange-dark);
-  background: #ffebe5;
+  background: color-mix(in srgb, var(--orange) 12%, var(--paper));
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .08em;
@@ -846,7 +931,7 @@ const promptPreview = computed(() => {
   gap: 13px;
   border-bottom: 1px solid var(--line);
   padding: 21px 23px 18px;
-  background: linear-gradient(135deg, #fffdfa, #f5f8f3);
+  background: linear-gradient(135deg, var(--paper-strong), var(--paper));
 }
 
 .agent-section-index {
@@ -857,7 +942,7 @@ const promptPreview = computed(() => {
   border: 1px solid #f4c4b4;
   border-radius: 13px;
   color: var(--orange-dark);
-  background: #ffebe5;
+  background: color-mix(in srgb, var(--orange) 12%, var(--paper));
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .08em;
@@ -890,7 +975,7 @@ const promptPreview = computed(() => {
 .agent-mode-note {
   border-color: #cfe2d5;
   color: var(--success);
-  background: #f0f8f3;
+  background: color-mix(in srgb, var(--success) 8%, var(--paper));
 }
 
 .agent-mode-note span {
@@ -906,7 +991,7 @@ const promptPreview = computed(() => {
   border: 1px solid #d7e5d8;
   border-radius: 16px;
   padding: 13px 15px;
-  background: linear-gradient(115deg, #eef8df, #f7fbf0);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--lime) 12%, var(--paper)), var(--paper));
 }
 
 .personality-feature-mark {
@@ -963,7 +1048,7 @@ const promptPreview = computed(() => {
   gap: 9px;
   border-radius: 13px;
   padding: 11px;
-  background: #fbfcf9;
+  background: var(--paper);
   box-shadow: none;
 }
 
@@ -977,13 +1062,13 @@ const promptPreview = computed(() => {
 
 .personality-card:hover {
   border-color: var(--line-strong);
-  background: #fffdfa;
+  background: var(--paper-strong);
   transform: translateY(-1px);
 }
 
 .personality-card.active {
   border-color: var(--orange);
-  background: #fff8f5;
+  background: color-mix(in srgb, var(--orange) 7%, var(--paper));
   box-shadow: 0 0 0 3px rgba(242, 100, 60, .1);
 }
 
@@ -995,7 +1080,7 @@ const promptPreview = computed(() => {
   place-items: center;
   border-radius: 9px;
   color: color-mix(in srgb, var(--personality-accent) 78%, var(--navy));
-  background: color-mix(in srgb, var(--personality-accent) 14%, white);
+  background: color-mix(in srgb, var(--personality-accent) 14%, var(--paper-strong));
   font-size: 10px;
   font-weight: 800;
 }
@@ -1047,13 +1132,13 @@ const promptPreview = computed(() => {
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 16px;
-  background: #f4f7f2;
+  background: var(--color-surface-inset);
 }
 
 .personality-preview {
   margin-top: 14px;
   border-color: #d7e5d8;
-  background: #f0f8f3;
+  background: color-mix(in srgb, var(--success) 8%, var(--paper));
 }
 
 .prompt-section-header {
@@ -1067,7 +1152,7 @@ const promptPreview = computed(() => {
 .prompt-token-bar {
   margin-bottom: 13px;
   border-color: var(--line);
-  background: #f7f9f5;
+  background: var(--color-surface-inset);
 }
 
 .prompt-editor-grid {
@@ -1083,7 +1168,7 @@ const promptPreview = computed(() => {
   border: 1px solid var(--line);
   border-radius: 15px;
   padding: 13px;
-  background: #f7f9f5;
+  background: var(--color-surface-inset);
   box-shadow: none;
 }
 
@@ -1099,13 +1184,13 @@ const promptPreview = computed(() => {
   border-color: var(--line);
   border-radius: 15px;
   color: var(--ink);
-  background: #f7f9f5;
+  background: var(--color-surface-inset);
   box-shadow: none;
 }
 
 .prompt-render-preview header {
   padding: 13px 14px 11px;
-  background: linear-gradient(180deg, #fffdfa, #f3f7f2);
+  background: linear-gradient(180deg, var(--paper-strong), var(--paper));
 }
 
 .prompt-render-preview pre {
@@ -1115,7 +1200,7 @@ const promptPreview = computed(() => {
   border-radius: 11px;
   padding: 13px;
   color: var(--ink-2);
-  background: #eef2ec;
+  background: var(--color-surface-inset);
 }
 
 .agent-runtime-grid {
@@ -1132,7 +1217,7 @@ const promptPreview = computed(() => {
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 16px;
-  background: #f7f9f5;
+  background: var(--color-surface-inset);
 }
 
 .agent-runtime-card > header {
@@ -1184,7 +1269,7 @@ const promptPreview = computed(() => {
   border-radius: 10px;
   padding: 9px 11px;
   color: var(--muted);
-  background: #eef2ec;
+  background: var(--color-surface-inset);
   font-size: 9px;
   line-height: 1.55;
 }
@@ -1197,7 +1282,7 @@ const promptPreview = computed(() => {
   border-radius: 12px;
   padding: 10px 11px;
   color: var(--warning);
-  background: #fff8e9;
+  background: color-mix(in srgb, var(--warning) 8%, var(--paper));
 }
 
 .tts-quality-warnings > div {
@@ -1299,7 +1384,7 @@ const promptPreview = computed(() => {
   border: 1px solid var(--line);
   border-radius: 15px;
   padding: 0;
-  background: #fbfcf9;
+  background: var(--paper);
   box-shadow: none;
 }
 
@@ -1309,7 +1394,7 @@ const promptPreview = computed(() => {
 
 .personality-card.active {
   border-color: var(--orange);
-  background: #fff8f5;
+  background: color-mix(in srgb, var(--orange) 7%, var(--paper));
   box-shadow: 0 0 0 3px rgba(242, 100, 60, .1);
 }
 
@@ -1333,7 +1418,7 @@ const promptPreview = computed(() => {
 
 .personality-choice:hover,
 .personality-choice:focus-visible {
-  background: rgba(255, 255, 255, .62);
+  background: color-mix(in srgb, var(--paper-strong) 70%, transparent);
 }
 
 .personality-choice:focus-visible {
@@ -1349,7 +1434,7 @@ const promptPreview = computed(() => {
   place-items: center;
   border-radius: 10px;
   color: color-mix(in srgb, var(--personality-accent) 78%, var(--navy));
-  background: color-mix(in srgb, var(--personality-accent) 14%, white);
+  background: color-mix(in srgb, var(--personality-accent) 14%, var(--paper-strong));
   font-size: 11px;
   font-weight: 800;
 }
@@ -1406,28 +1491,28 @@ const promptPreview = computed(() => {
   width: 23px;
   height: 23px;
   place-items: center;
-  border: 1px solid #efc9c0;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
   border-radius: 7px;
-  color: #b65342;
-  background: #fff7f4;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, var(--paper));
 }
 
 .personality-delete:hover,
 .personality-delete:focus-visible {
-  border-color: #c45e4b;
+  border-color: var(--danger);
   color: white;
-  background: #c45e4b;
+  background: var(--danger);
 }
 
 .personality-feature-state {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid #cfe2d5;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--line));
   border-radius: 999px;
   padding: 6px 9px;
   color: var(--success);
-  background: rgba(255, 255, 255, .62);
+  background: color-mix(in srgb, var(--paper-strong) 70%, transparent);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: .05em;
@@ -1455,7 +1540,7 @@ const promptPreview = computed(() => {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 15px;
-  background: #f7f9f5;
+  background: var(--color-surface-inset);
   box-shadow: none;
 }
 
@@ -1511,7 +1596,7 @@ const promptPreview = computed(() => {
 .prompt-render-preview > header {
   border-bottom: 1px solid var(--line);
   padding-inline: 14px;
-  background: linear-gradient(180deg, #fffdfa, #f3f7f2);
+  background: linear-gradient(180deg, var(--paper-strong), var(--paper));
 }
 
 .prompt-render-preview > header span {
@@ -1527,7 +1612,7 @@ const promptPreview = computed(() => {
   border-radius: 11px;
   padding: 13px;
   color: var(--ink-2);
-  background: #eef2ec;
+  background: var(--color-surface-inset);
 }
 
 .delete-personality-confirm {
@@ -1538,7 +1623,7 @@ const promptPreview = computed(() => {
   border: 1px solid #f0d0c8;
   border-radius: 14px;
   padding: 14px;
-  background: #fff7f4;
+  background: color-mix(in srgb, var(--danger) 6%, var(--paper));
 }
 
 .delete-personality-mark {
@@ -1548,7 +1633,7 @@ const promptPreview = computed(() => {
   place-items: center;
   border-radius: 12px;
   color: #b65342;
-  background: #fbe2db;
+  background: color-mix(in srgb, var(--danger) 14%, var(--paper));
 }
 
 .delete-personality-confirm b {
@@ -1608,7 +1693,7 @@ const promptPreview = computed(() => {
 .personality-accent-picker button.active {
   border-color: var(--accent-swatch);
   color: var(--ink);
-  background: color-mix(in srgb, var(--accent-swatch) 7%, white);
+  background: color-mix(in srgb, var(--accent-swatch) 7%, var(--paper-strong));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-swatch) 13%, transparent);
 }
 
@@ -1644,7 +1729,7 @@ const promptPreview = computed(() => {
   border: 1px solid color-mix(in srgb, var(--preview-accent) 45%, var(--line));
   border-radius: 14px;
   padding: 12px 14px 12px 17px;
-  background: color-mix(in srgb, var(--preview-accent) 6%, white);
+  background: color-mix(in srgb, var(--preview-accent) 6%, var(--paper-strong));
 }
 
 .personality-create-preview::before {
@@ -1662,7 +1747,7 @@ const promptPreview = computed(() => {
   place-items: center;
   border-radius: 12px;
   color: color-mix(in srgb, var(--preview-accent) 76%, var(--navy));
-  background: color-mix(in srgb, var(--preview-accent) 15%, white);
+  background: color-mix(in srgb, var(--preview-accent) 15%, var(--paper-strong));
   font-size: 13px;
   font-weight: 800;
 }

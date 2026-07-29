@@ -6,7 +6,7 @@ Vertical slice hiện chạy thật tại `/veetee/v1/`:
 
 ```text
 Opus -> Silero VAD -> Zipformer Vietnamese INT8 -> local admission
-     -> structured planner/9Router -> streaming LLM -> VieNeu native/ONNX
+     -> structured planner/CLIProxyAPI -> streaming LLM -> VieNeu native/ONNX
      -> Opus
 ```
 
@@ -40,8 +40,14 @@ first-160/steady-256 giảm inference starts nhưng làm aggregate RTF xấu hơ
 định; agent có thể chọn riêng `doc_truyen` hoặc `tin_tuc`. Tempo từ agent được áp
 dụng đúng, còn runtime log headroom và cảnh báo quality khi profile quá nhanh.
 
-Nếu 9Router bật `Require API key`, đặt key riêng của app trong
-`VEETEE_9ROUTER_API_KEY`; không commit key và không đưa key xuống firmware.
+Chạy `npm run env:voice:sync` để lấy CLIProxyAPI client key từ trusted local config
+vào ignored Voice `.env` mode `0600`. Không đặt key trên command line, không commit key
+và không đưa key xuống firmware. Lệnh sync giữ `OPENBLAS_NUM_THREADS=1`; bare
+`dev:voice`, local E2E và benchmark cũng pin giá trị đó trước khi Python khởi động. Đây
+là cap process-wide cho NumPy/OpenBLAS; `VEETEE_TTS_THREADS=2` chỉ giới hạn ONNX Runtime
+nên không thay thế được cap này. 9Router
+đang tạm dừng. Quy trình restart, kiểm tra effective env và soak 5--10 phút nằm ở
+`../../docs/21-local-development-runbook.md`.
 
 Conversation mặc định là `mode=auto`: button/wake word chỉ mở assistant gate; VAD tự finalize, admission gate quyết định có gọi LLM/MCP, inactivity timeout phát goodbye rồi sleep.
 

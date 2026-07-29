@@ -150,14 +150,14 @@ const actionLabel = computed(() => ({
         <article class="vt-panel">
           <header class="panel-header"><div><span class="vt-kicker">BUILT-IN THEMES</span><h2>Phong cách</h2></div></header>
           <div class="theme-list">
-            <button v-for="item in themes" :key="item.id" type="button" :class="{ active: theme === item.id }" :data-ui-theme="item.id" @click="theme = item.id">
+            <button v-for="item in themes" :key="item.id" type="button" :class="{ active: theme === item.id }" :aria-pressed="theme === item.id" :data-ui-theme="item.id" @click="theme = item.id">
               <span>{{ item.index }}</span><div><b>{{ item.name }}</b><small>{{ item.note }}</small></div><i></i>
             </button>
           </div>
         </article>
         <article class="vt-panel">
           <header class="panel-header"><div><span class="vt-kicker">CONVERSATION STATE</span><h2>Trạng thái</h2></div></header>
-          <div class="state-picker firmware-states"><button v-for="item in states" :key="item.id" type="button" :class="{ active: previewState === item.id }" :data-ui-state="item.id" @click="previewState = item.id">{{ item.name }}</button></div>
+          <div class="state-picker firmware-states"><button v-for="item in states" :key="item.id" type="button" :class="{ active: previewState === item.id }" :aria-pressed="previewState === item.id" :data-ui-state="item.id" @click="previewState = item.id">{{ item.name }}</button></div>
         </article>
       </aside>
 

@@ -15,8 +15,9 @@ npm run dev:voice
 ```
 
 `env:voice:sync` tạo file ignored `apps/voice-server/.env` mode `0600`, dùng cùng
-Manager service token và API key active do local 9Router quản lý. Script không đọc
-hoặc copy Codex OAuth token, không in secret và có thể chạy lại sau khi rotate key.
+Manager service token và CLIProxyAPI client key trong trusted local config. Script
+không đọc hoặc copy OAuth token upstream, không in secret và có thể chạy lại sau khi
+rotate key. 9Router đang tạm dừng và không phải dependency của lệnh này.
 
 PostgreSQL/Redis có thể dùng bản cài trên host hoặc khởi động riêng bằng:
 
@@ -24,7 +25,7 @@ PostgreSQL/Redis có thể dùng bản cài trên host hoặc khởi động ri�
 npm run infra:up
 ```
 
-Lệnh này không chạy voice-server, manager, web, ASR, TTS hay 9Router trong
+Lệnh này không chạy voice-server, manager, web, ASR, TTS hay CLIProxyAPI trong
 container. MinIO cũng không chạy trừ khi bật profile `object-storage` rõ ràng.
 
 Backend monorepo của Veetee. Realtime voice path và management control plane được
@@ -54,7 +55,7 @@ prototypes/
 | Voice WebSocket | 8000 | `ws://192.168.1.20:8000/veetee/v1/` |
 | Manager API + device edge | 8001 | `http://192.168.1.20:8001/veetee/ota/` |
 | Manager Web | 8081 | `http://192.168.1.20:8081` |
-| 9Router (internal) | 20128 | `http://127.0.0.1:20128/v1` |
+| CLIProxyAPI (internal) | 8317 | `http://127.0.0.1:8317/v1` |
 
 Runtime chỉ publish canonical namespace `/veetee/...`. Wire semantics tương thích được khóa bằng schema/fixture; nếu cần thử một client tham chiếu cũ thì dùng rewrite tạm ở reverse proxy development, không thêm branded route vào source sản phẩm.
 
@@ -68,9 +69,9 @@ Device report resource apply state qua authenticated
 advance atomically, cùng sequence là retry không mutate và sequence thấp hơn trả
 `409`; contract nằm ở `packages/contracts/fixtures/devices/reported-state-v1.json`.
 
-V1 là single-node deployment: voice-server, manager, 9Router, VAD/ASR/TTS workers
-chạy trên cùng máy. Port `20128` chỉ dành cho voice-server nội bộ; không cho ESP32
-hoặc LAN gọi trực tiếp.
+V1 là single-node deployment: voice-server, manager, CLIProxyAPI, VAD/ASR/TTS workers
+chạy trên cùng máy. Veetee chỉ gọi port `8317` qua loopback với client key; không cho
+ESP32/LAN/Tailscale gọi trực tiếp. 9Router/port `20128` đang tạm dừng.
 
 ## Voice WebSocket hiện tại
 

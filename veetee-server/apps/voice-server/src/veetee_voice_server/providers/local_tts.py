@@ -18,6 +18,7 @@ from audiotsm import wsola  # type: ignore[import-untyped]
 from audiotsm.io.array import ArrayReader, ArrayWriter  # type: ignore[import-untyped]
 
 from veetee_voice_server.conversation.cancellation import (
+    CancellationToken,
     OperationContext,
     await_operation,
 )
@@ -25,6 +26,10 @@ from veetee_voice_server.conversation.sentence_chunker import TtsTextChunkingPol
 from veetee_voice_server.conversation.types import AudioChunk
 
 logger = structlog.get_logger(__name__)
+
+_TTS_PREWARM_TEXT = "Xin chào, tôi là VeeTee. Giọng nói đã sẵn sàng."
+_TTS_PREWARM_SESSION_ID = "voice-server:tts-prewarm"
+_TTS_PREWARM_TIMEOUT_SECONDS = 60.0
 
 
 class VieNeuTtsProvider:
@@ -87,6 +92,8 @@ class VieNeuTtsProvider:
             default=False,
         )
         self._worker_lock = worker_lock or threading.Lock()
+        self._prewarm_lock = asyncio.Lock()
+        self._prewarmed = False
         self._conversion_samples = 0
         self._conversion_clipped_samples = 0
         self._normalized_chunk_count = 0
@@ -174,7 +181,47 @@ class VieNeuTtsProvider:
         )
 
     async def prewarm(self) -> None:
-        await asyncio.to_thread(self._load_engine)
+        async with self._prewarm_lock:
+            if self._prewarmed:
+                return
+            await asyncio.to_thread(self._load_engine)
+            started_at = monotonic()
+            context = OperationContext(
+                session_id=_TTS_PREWARM_SESSION_ID,
+                turn_id=_TTS_PREWARM_SESSION_ID,
+                generation=0,
+                token=CancellationToken(),
+                deadline_at=started_at + _TTS_PREWARM_TIMEOUT_SECONDS,
+            )
+            chunk_count = 0
+            audio_bytes = 0
+            async for chunk in self.synthesize(
+                _TTS_PREWARM_TEXT,
+                "vi-VN",
+                context,
+            ):
+                if not chunk.data:
+                    continue
+                chunk_count += 1
+                audio_bytes += len(chunk.data)
+            if chunk_count == 0 or audio_bytes == 0:
+                raise RuntimeError("VieNeu TTS prewarm produced no audio")
+            duration_seconds = max(monotonic() - started_at, 0.001)
+            audio_seconds = audio_bytes / (self._output_sample_rate * 2)
+            logger.info(
+                "vieneu_tts_prewarm_complete",
+                backend=self._backend,
+                threads=self._num_threads,
+                voice=self._voice,
+                style=self._style,
+                requested_speed=self._speed,
+                input_characters=len(_TTS_PREWARM_TEXT),
+                chunk_count=chunk_count,
+                audio_ms=round(audio_seconds * 1_000, 1),
+                duration_ms=round(duration_seconds * 1_000, 1),
+                request_wall_rtf=round(duration_seconds / audio_seconds, 3),
+            )
+            self._prewarmed = True
 
     async def close(self) -> None:
         engine = self._engine
@@ -326,6 +373,11 @@ class VieNeuTtsProvider:
                 )
                 logger.info(
                     "vieneu_tts_completed",
+                    purpose=(
+                        "prewarm"
+                        if context.session_id == _TTS_PREWARM_SESSION_ID
+                        else "request"
+                    ),
                     voice=self._voice,
                     style=self._style,
                     requested_speed=self._speed,

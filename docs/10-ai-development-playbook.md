@@ -136,7 +136,8 @@ from the resource bundle.
 - Config/artifact publish có immutable version, signature/hash/ABI/capability check và desired/reported apply evidence.
 - Session state không dùng global mutable config.
 - Zipformer/ChunkFormer fallback is quality-gated, not blind retry; VieNeu capability
-  declares stream/batch; 9router adapter has a tested backup and cancel path.
+  declares stream/batch; active CLIProxyAPI adapter has tested fallback/cancel paths,
+  while 9Router remains paused unless an operator explicitly enables its conformance run.
 - Secret/transcript redaction và metric label bounded.
 
 ### Manager API/web

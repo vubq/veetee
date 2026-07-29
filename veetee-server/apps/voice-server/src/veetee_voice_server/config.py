@@ -58,12 +58,26 @@ class Settings(BaseSettings):
         repr=False,
         validation_alias=AliasChoices("VEETEE_GROQ_CLOUD_API_KEY", "GROQ_API_KEY"),
     )
+    cliproxy_base_url: HttpUrl = Field(
+        default=HttpUrl("http://127.0.0.1:8317/v1"),
+        validation_alias=AliasChoices(
+            "VEETEE_CLIPROXY_BASE_URL",
+            "VEETEE_CLIPROXYAPI_BASE_URL",
+        ),
+    )
     cliproxy_api_key: str = Field(
         default="",
         repr=False,
         validation_alias=AliasChoices(
             "VEETEE_CLIPROXY_API_KEY",
             "VEETEE_CLIPROXYAPI_API_KEY",
+        ),
+    )
+    cliproxy_model: str = Field(
+        default="gpt-5.6-terra",
+        validation_alias=AliasChoices(
+            "VEETEE_CLIPROXY_MODEL",
+            "VEETEE_CLIPROXYAPI_MODEL",
         ),
     )
     llm_prewarm: bool = True
@@ -100,9 +114,9 @@ class Settings(BaseSettings):
     lab_allowed_origins: str = "http://127.0.0.1:8081,http://localhost:8081"
     lab_max_sessions: int = Field(default=4, ge=1, le=32)
     input_sample_rate: int = Field(default=16_000, ge=8_000, le=48_000)
-    input_frame_duration_ms: Literal[20, 40, 60] = 60
+    input_frame_duration_ms: int = Field(default=60, ge=20, le=60, multiple_of=20)
     wire_sample_rate: int = Field(default=24_000, ge=8_000, le=48_000)
-    wire_frame_duration_ms: Literal[20, 40, 60] = 60
+    wire_frame_duration_ms: int = Field(default=60, ge=20, le=60, multiple_of=20)
     hello_timeout_seconds: float = Field(default=10.0, gt=0.1, le=30.0)
     vad_threads: int = Field(default=1, ge=1, le=4)
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)

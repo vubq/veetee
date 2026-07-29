@@ -863,6 +863,52 @@ async def test_tts_idle_deadline_cancels_playback_when_audio_stalls() -> None:
     assert stop.payload == {"cancelled": True}
 
 
+async def test_total_turn_deadline_after_tts_start_still_emits_cancelled_stop() -> None:
+    arbiter = TurnArbiter("session-parent-deadline")
+    sink = MemoryConversationSink()
+
+    class ParentDeadlineTts:
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del text, locale, context
+            yield AudioChunk(0, 24_000, "pcm_s16le", b"audio")
+            await asyncio.sleep(0.08)
+            yield AudioChunk(1, 24_000, "pcm_s16le", b"late")
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Đây là câu trả lời.")),
+        llm=FakeLlm(),
+        tts=ParentDeadlineTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            total_turn_seconds=0.03,
+            tts_first_audio_seconds=0.2,
+            tts_stream_idle_seconds=0.2,
+            sentence_min_characters=1,
+        ),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("fixture", "vi-VN")),
+        timeout=1.0,
+    )
+
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TTS_START]) == 1
+    assert len([output for output in sink.outputs if output.kind is OutputKind.AUDIO]) == 1
+    stops = [output for output in sink.outputs if output.kind is OutputKind.TTS_STOP]
+    assert len(stops) == 1
+    assert stops[0].payload == {"cancelled": True}
+    assert [output.payload for output in sink.outputs if output.kind is OutputKind.ERROR] == [
+        {"code": "provider_deadline", "stage": "provider"}
+    ]
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
 async def test_llm_idle_deadline_stops_stalled_stream_and_cancels_playback() -> None:
     arbiter = TurnArbiter("session-stalled-response")
     sink = MemoryConversationSink()

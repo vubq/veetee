@@ -23,10 +23,12 @@ ignored by Git; preparation scripts verify their hashes before a worker uses the
 | TTS current baseline | VieNeu-TTS v3 Turbo ONNX INT8 | CPU, 2 threads, Trúc Ly, neutral 1.0x, 16-frame lead-in | best portable/intelligibility profile on this host |
 | TTS optional | VieNeu-TTS.cpp native CPU | batch-only, serialized | use only after explicit native benchmark |
 
-The repository example and known-good runtime baseline use `VEETEE_TTS_BACKEND=onnx`
-and `VEETEE_TTS_THREADS=2`. Do not infer the active backend from this document alone:
-the ignored `apps/voice-server/.env` and the published Manager agent profile determine
-the effective session behavior.
+The repository example and known-good runtime baseline use `OPENBLAS_NUM_THREADS=1`,
+`VEETEE_TTS_BACKEND=onnx` and `VEETEE_TTS_THREADS=2`. The OpenBLAS cap is a process
+environment setting that must exist before NumPy is imported; the TTS setting only
+limits ONNX Runtime and does not constrain NumPy/OpenBLAS workers. Do not infer the
+active backend from this document alone: the ignored `apps/voice-server/.env` and the
+published Manager agent profile determine the effective session behavior.
 
 For both VieNeu backends, complete short sentences are grouped into natural TTS batches
 (ONNX 160, native 72 characters). Normal boundaries remain confirmed sentence
@@ -81,11 +83,42 @@ Six ONNX TTS threads had similar median first audio but worse p95/RTF and much h
 sustained CPU temperature. Keep ONNX at two TTS threads. Select native four threads
 only after confirming its model pack and measuring sustained host CPU.
 
+This table controls ONNX Runtime threads only. NumPy matrix work uses OpenBLAS and has a
+separate process-wide budget; without `OPENBLAS_NUM_THREADS=1`, the two-thread ONNX row
+can still consume nearly all logical CPUs. Always record both values in a benchmark.
+
+### Host power profile
+
+The CPU power profile is part of the measured local runtime, not a TTS thread setting.
+On 2026-07-29 this host was plugged into AC but manually left in `power-saver`, with all
+logical CPUs observed near 900 MHz. A fresh real-prewarm plus three-request run then had
+first audio 3.908 s median, RTF 2.695 and 2.746 s estimated starvation. Under
+`performance`, the same ONNX/2-thread/Trúc Ly/1.0x process measured first audio 1.047 s
+median, RTF 0.804 and zero estimated starvation. That short comparison isolated a power
+profile problem; it did not test long-run OpenBLAS oversubscription.
+
+A same-profile load-only control under `performance` also measured RTF 0.805. Therefore
+real prewarm is a functional readiness/observability check, not a way to make inherently
+slow inference faster; the active power profile was the cause of this measured
+slow/high-CPU incident. CPU percentage alone is misleading: `performance` used more
+aggregate CPU while active but completed each request much sooner. For realtime
+acceptance on this host, record `powerprofilesctl get` and intentionally use
+`performance` while on AC. Do not compensate for `power-saver` by increasing TTS threads,
+lead-in, chunk size or playback buffer.
+
+A later five-minute soak on the same host found a second, independent runtime problem:
+without an explicit OpenBLAS cap, NumPy opened about seven additional BLAS workers even
+though ONNX was configured for two threads. The Voice process then used nearly all eight
+logical CPUs, heated the package into the 92--95 C range and thermally throttled. Keep the
+power profile as a recorded benchmark precondition, but always verify
+`OPENBLAS_NUM_THREADS=1` before attributing slow/high CPU only to the power profile.
+
 ## Runtime controls
 
 The checked-in example and known-good portable baseline use the following values:
 
 ```env
+OPENBLAS_NUM_THREADS=1
 VEETEE_MODELS_ROOT=models
 VEETEE_ASR_THREADS=2
 VEETEE_VAD_THREADS=1
@@ -105,7 +138,8 @@ VEETEE_TTS_PLAYBACK_QUEUE_SECONDS=5
 VEETEE_LLM_PREWARM=true
 VEETEE_LLM_PREWARM_SECONDS=12
 VEETEE_PLANNER_SECONDS=15
-VEETEE_9ROUTER_MODEL=cx/gpt-5.6-terra
+VEETEE_CLIPROXY_BASE_URL=http://127.0.0.1:8317/v1
+VEETEE_CLIPROXY_MODEL=gpt-5.6-terra
 ```
 
 Prepare the default stack:
@@ -118,9 +152,32 @@ npm run models:benchmark
 ```
 
 `env:voice:sync` renders the ignored voice environment from `.env.example`; it may
-reset local backend/thread edits. After syncing, verify the effective backend, thread
-count, speed and model paths without printing the file or secrets. The generated file
-is mode `0600` and the sync command does not print credentials.
+reset local backend/thread edits. Run it only after the existing Manager `.env` is valid,
+then verify the OpenBLAS cap, effective backend, thread count, speed and model paths with
+a non-secret allowlist rather than printing the file. The generated file is mode `0600`
+and the sync command does not print credentials. `npm run dev:voice` pins
+`OPENBLAS_NUM_THREADS=1` in the command and passes this file to `uv --env-file`, so the
+cap exists before Python imports NumPy even if the parent shell contains another value.
+The sync reads the CLIProxyAPI client key from the existing trusted local config, writes
+only `VEETEE_CLIPROXY_*` gateway settings and does not read or require a 9Router store.
+
+The active local profile selected on 2026-07-29 keeps 9Router paused and publishes the
+agent LLM chain as `openai-compatible-cliproxyapi` on `http://127.0.0.1:8317/v1`, then
+`groq-cloud` as fallback. After sync, start Voice directly from `veetee-server`:
+
+```bash
+npm run dev:voice
+```
+
+The bare `dev:voice`, `test:voice:local-e2e` and `models:benchmark` scripts all pin this
+baseline before Python starts. A deliberate OpenBLAS A/B must invoke the underlying
+`uv run ...` command with one explicit candidate at a time and report that it bypassed
+the bare-command default; do not edit the accepted default just to collect a probe.
+
+Do not pass the gateway key on the command line and do not expose port `8317` through
+LAN, Tailscale Serve/Funnel or public ingress. CLIProxyAPI currently authenticates
+clients even though its host process listens on more than loopback; Veetee calls it only
+through `127.0.0.1`. Port `20128` is not part of this startup profile.
 
 To deliberately test native:
 
@@ -143,15 +200,29 @@ or thread count.
 ## Startup, readiness and reboot behavior
 
 Voice-server startup prewarms ASR, TTS and (when enabled) LLM concurrently before ready.
-High CPU while models load is expected. High CPU that persists after `/health/ready` is
-`200`, or a delayed `vieneu_tts_completed` after cancelled playback, indicates an
-inference/deadline issue rather than a normal reboot cost.
+VieNeu readiness now executes one bounded fixed-phrase synthesis through the normal
+phonemization, inference, codec, watermark, resampling and PCM conversion path. The PCM
+is fully drained and discarded inside the provider; it is never emitted to Lab,
+WebSocket, Opus, browser, device or speaker. Startup fails if that synthesis produces no
+audio. A successful process emits one `vieneu_tts_prewarm_complete` event containing
+bounded profile/timing/count metadata, never the phrase or audio.
 
-The repository does not provide a voice-server boot service. `npm run dev:voice` is a
+High CPU before `vieneu_tts_prewarm_complete` is expected because startup is executing a
+complete synthesis and loading model state. The event proves the path produced PCM but
+does not by itself prove realtime throughput; inspect its RTF and run the fixed benchmark.
+Sustained idle CPU after `/health/ready` is `200`, a first user request that repeats RTF
+`2--3` / first-audio `3--4` seconds, or a delayed `vieneu_tts_completed` after cancelled
+playback indicates an inference/deadline or host-performance issue rather than normal
+reboot cost. On the baseline host, check the power profile before changing application
+settings.
+
+The repository does not provide a voice-server boot service. Voice startup is a
 foreground command and relative `.env`/model paths require `veetee-server` as the
 working directory. Docker Compose starts only PostgreSQL/Redis (and optional MinIO),
-not voice-server, Manager API/Web, 9Router, ASR, VAD or TTS. CLIProxyAPI/9Router startup
-is external to this repository and must be probed independently.
+not voice-server, Manager API/Web, CLIProxyAPI, ASR, VAD or TTS. CLIProxyAPI is an
+external dependency and must pass authenticated model/inference prewarm before Voice
+readiness can pass. Plain `npm run dev:voice` uses the `VEETEE_CLIPROXY_*` values rendered
+by `env:voice:sync`; 9Router remains paused.
 
 Published Manager agent settings are loaded again after process restart. An effective
 `totalTurnSeconds > 0` is an absolute parent deadline and can stop a progressing turn;
@@ -185,10 +256,12 @@ authorized live Realtime Lab path is different: Manager login issues a one-use t
 then the client connects to `/veetee/lab/v1/` and sends a `lab.auth` frame. The runbook
 describes that path and its unavoidable audit/rate-limit side effects.
 
-A clean 9Router upstream can take about 4.3 seconds for its first structured call and
-about 1.3 seconds after warmup. Readiness remains false while the required LLM endpoint
-is unavailable; a later readiness probe retries bounded prewarm without restarting the
-server.
+A clean LLM gateway can still take several seconds for its first structured call.
+Readiness remains false while the required endpoint is unavailable; a later readiness
+probe retries bounded prewarm without restarting the server. The active CLIProxyAPI
+route has a five-second first-token budget for the published agent, so an occasional
+`provider_deadline` is an upstream-cycle failure, not evidence that TTS should receive
+more threads or buffering.
 
 The first-audio watchdog applies only until the speech turn emits its first non-empty
 PCM. Later provider batches use the synthesis-idle watchdog while the device sees one
@@ -215,6 +288,34 @@ for 24 characters, 1.95--2.13 s for 50 and 3.32--3.79 s for 82, with RTF about
 0.72--0.75; native still remains optional because the C call is batch-only and cannot
 cooperatively stop mid-inference.
 
+On 2026-07-29, after real synthesis prewarm and with the host intentionally set to
+`performance`, a fresh three-request ONNX/2-thread run measured first audio 1.047 s
+median / 1.114 s p95, RTF 0.804 / 0.814 p95 and zero estimated starvation. A separate
+2,374-character fixture (`sha256[:16]=ff611923af5ccce5`) used 22 natural batches, reached
+first audio in 1.260 s, synthesized 136.56 s of audio at aggregate RTF 0.812 and estimated
+zero starvation. The isolated canonical Opus E2E also completed one `tts.start`/`tts.stop`
+lifecycle with VieNeu request RTF 0.817. Its configured Codex route was unavailable and
+the conversation used the bounded semantic fallback, so that run is transport/TTS
+evidence, not canonical 9Router/LLM acceptance.
+
+The same-day long-run A/B isolated OpenBLAS. With the cap absent, 324 s of generated
+audio took 416.3 s wall time; Voice CPU average/p95/peak was 584/690/714%, the process
+had 34 threads, and the Lab scheduler estimated 112 gaps totalling 62.4 s. With
+`OPENBLAS_NUM_THREADS=1`, a comparable 306.96 s run took 313.7 s, CPU fell to
+124/174/208%, the process held 27 threads, and the scheduler estimated zero gaps. CPU
+work per audio second fell by about 83% while wall/audio improved from 1.285 to 1.022.
+This A/B is the reason the cap is part of the checked-in runtime baseline; increasing
+`VEETEE_TTS_THREADS` or changing the power profile does not substitute for it.
+
+An end-to-end CLIProxyAPI -> VieNeu Lab soak then produced 308.56 s (5 min 8.6 s) of
+24 kHz mono PCM in 323 frames with zero schedule gaps and no turn error. Planner and
+prose both returned HTTP 200 from local CLIProxyAPI `gpt-5.6-terra`; 9Router remained
+stopped and no Groq fallback was used. Voice CPU average/p95/peak was
+120.9/174/188.3%; RSS moved from 1055.5 to 1058.8 MiB and flattened at the tail. The
+first attempt had a prose `provider_deadline` at 4.999 s and is recorded as a failed
+cycle; one controlled retry passed. Never hide a retry or average a failed provider
+cycle into the passing soak.
+
 The 2026-07-28 accepted live HTTPS Realtime Lab session used the current ONNX/2-thread,
 Trúc Ly, `tu_nhien`, 1.0x profile. Two natural user turns completed with one
 `tts.start`/`tts.stop` lifecycle each, no deadline, turn error or stale output. Their
@@ -238,6 +339,8 @@ playback.
 
 Prefer structured Voice Server logs and wire events over bounded telemetry. Correlate:
 
+- startup `vieneu_tts_prewarm_complete` (`backend`, threads, profile, counts, duration,
+  RTF); high CPU before this event is startup work, not a user turn
 - `conversation_tts_text_chunk_ready` (`reason`, `text_characters`)
 - `conversation_tts_request`, turn-level `conversation_tts_first_audio`, and
   `conversation_tts_batch_first_audio` (`reason`, character count, duration)
@@ -248,6 +351,19 @@ Prefer structured Voice Server logs and wire events over bounded telemetry. Corr
 - Lab `lab_playback_schedule_summary` and device `tts.paced_sender_summary`; these are
   schedule/starvation diagnostics, not measured speaker underruns
 - device transport loss/abort and firmware playback queue diagnostics
+
+Do not use the `%CPU` column from a single `ps` snapshot as instantaneous CPU. On Linux
+it is a process-lifetime average and can decay slowly after a large synthesis burst. Use
+`pidstat -p <voice-pid> 1` or another interval/delta sampler for the post-synthesis tail.
+In the accepted long soak, instantaneous Voice CPU returned to approximately zero in
+less than 0.5 s even while the lifetime average remained visibly high.
+
+RSS also need not return to its prewarm value: resident model pages and the ONNX allocator
+retain a high-water mark. Treat a flat 30--60 s tail or a plateau across repeated turns
+as the expected resident state; diagnose a leak only when repeated comparable turns keep
+raising the plateau. Likewise, the last binary PCM frame may precede terminal `tts.stop`
+while Lab/device playback drains buffered audio. That interval is not continued inference
+when interval CPU is idle and synthesis-complete events have already arrived.
 
 A typical deadline signature is first audio, then `conversation_provider_deadline`, then
 cancelled `tts.stop`; native work can continue briefly under its worker lock. A device
@@ -262,11 +378,13 @@ with sensitive fields removed, event names/timings and the hardware-only gap sep
 
 ## Production decision
 
-1. Keep Zipformer/Silero and baseline VieNeu ONNX on CPU; use native only after explicit
+1. Start Python with `OPENBLAS_NUM_THREADS=1`; keep ONNX TTS at two threads unless a
+   same-host A/B benchmark replaces this baseline.
+2. Keep Zipformer/Silero and baseline VieNeu ONNX on CPU; use native only after explicit
    host benchmark and model validation.
-2. Prewarm model sessions and expose component state through `/health/ready`.
-3. Keep sentence-sized TTS batching, bounded playback and generation rejection.
-4. Add cooperative progress/cancellation to native C inference before making it the
+3. Prewarm model sessions and expose component state through `/health/ready`.
+4. Keep sentence-sized TTS batching, bounded playback and generation rejection.
+5. Add cooperative progress/cancellation to native C inference before making it the
    default realtime backend.
 
 The end-to-end target is VAD final -> ASR final <= 600 ms, ASR final -> first LLM token

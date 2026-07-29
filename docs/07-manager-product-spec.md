@@ -22,6 +22,10 @@ tenant-scoped đã redact, runtime LAN/Tailscale profile, privacy retention và
 firmware inventory. Màn này không tạo firmware rollout khi API chưa có release
 artifact đã ký; publish/apply vẫn được phân biệt rõ theo desired/reported state.
 
+Ngày 2026-07-28, visual authority được chuyển từ prototype lịch sử sang
+`docs/22-veetee-interface-language.md`. Redesign giữ nguyên API/query/payload và
+được triển khai theo lát cắt: shell/primitives trước, page body sau.
+
 ## 2. Data model lõi
 
 Các bảng/aggregate nên bắt đầu nhỏ hơn Xiaozhi nhưng giữ đường mở rộng:
@@ -168,11 +172,12 @@ không được cấp pairing code mới chỉ vì request thiếu hoặc sai to
 
 ## 5. Manager Web information architecture
 
-Visual/interaction direction đã được duyệt tại
-`veetee-server/prototypes/manager-web/index.html`. Implementation Vue phải giữ
-layout, typography, CSS tokens, responsive behavior và interaction hiện tại; không
-redesign khi nối API. Provider name/model/metric trong prototype là fake data để
-duyệt bố cục, không phải lựa chọn production.
+Visual/interaction authority nằm tại `docs/22-veetee-interface-language.md`.
+Prototype `veetee-server/prototypes/manager-web/index.html` chỉ còn là tài liệu lịch
+sử về sitemap và interaction. Implementation phải dùng Vue component, giữ stable
+hash, API/query/payload và behavior; không inject prototype HTML/JavaScript hoặc
+`v-html`. Provider name/model/metric trong prototype là fake data, không phải lựa
+chọn production.
 
 ### Overview
 
@@ -230,7 +235,7 @@ rộng ngoài ý muốn.
 - Health/test request, latency và quota.
 - Model/voice capability theo locale.
 - Hiển thị baseline local: Silero VAD, Zipformer primary, ChunkFormer conditional
-  fallback, VieNeu-TTS và 9router/OpenAI-compatible LLM binding.
+  fallback, VieNeu-TTS và CLIProxyAPI/OpenAI-compatible LLM binding.
 - Hiển thị `local/external`, streaming/batch, CPU/GPU worker, model/version/license,
   fallback trigger, deadline, circuit state và p50/p95 benchmark.
 - Không cho operator cấu hình “chạy cả hai ASR luôn” nếu không có evaluation profile;

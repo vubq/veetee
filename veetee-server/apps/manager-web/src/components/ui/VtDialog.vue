@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { Dialog, DialogPanel, DialogTitle, TransitionChild, TransitionRoot } from "@headlessui/vue";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { VtIconName } from "./VtIcon.vue";
 import VtIcon from "./VtIcon.vue";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     open: boolean;
     title: string;
@@ -12,10 +14,13 @@ withDefaults(
     width?: "sm" | "md" | "lg";
     eyebrow?: string;
     icon?: VtIconName;
+    closeLabel?: string;
   }>(),
   { description: "", width: "md", eyebrow: "VEETEE MANAGER" },
 );
 const emit = defineEmits<{ close: [] }>();
+const { t } = useI18n();
+const resolvedCloseLabel = computed(() => props.closeLabel ?? t("common.close"));
 </script>
 
 <template>
@@ -32,7 +37,7 @@ const emit = defineEmits<{ close: [] }>();
               <span v-if="icon" class="vt-dialog-icon"><VtIcon :name="icon" :size="21" /></span>
               <div><span class="vt-kicker">{{ eyebrow }}</span><DialogTitle as="h2">{{ title }}</DialogTitle><p v-if="description">{{ description }}</p></div>
             </div>
-            <button class="vt-icon-button" type="button" aria-label="Đóng" @click="emit('close')"><VtIcon name="close" :size="19" /></button>
+            <button class="vt-icon-button" type="button" :aria-label="resolvedCloseLabel" @click="emit('close')"><VtIcon name="close" :size="19" /></button>
           </header>
           <div class="vt-dialog-body"><slot /></div>
           <footer v-if="$slots.footer" class="vt-dialog-footer"><slot name="footer" /></footer>

@@ -4,7 +4,9 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -23,41 +25,46 @@ constexpr std::size_t kMaxScanResults = 16;
 constexpr std::size_t kHttpServerStackBytes = 12 * 1024;
 constexpr std::size_t kStaticResponseChunkBytes = 1024;
 constexpr std::uint64_t kScanRetryIntervalUs = 1500000ULL;
-constexpr char kPortalHtml[] = R"HTML(<!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Thiết lập Veetee</title><link rel="stylesheet" href="/portal.css"></head><body><main><header class="hero"><div class="brand-row"><span class="brand"><i></i><i></i></span><span><b>VEETEE</b><small>DEVICE SETUP</small></span><em><i></i> LOCAL</em></div><div class="hero-copy"><span>GET ONLINE</span><h1>Kết nối robot với mạng của bạn.</h1><p>Thiết lập trực tiếp trên thiết bị. Không cần domain và không gửi mật khẩu Wi-Fi ra Internet.</p></div><div class="hero-meta"><span><b>01</b> Wi-Fi</span><i></i><span><b>02</b> Manager</span><i></i><span><b>03</b> Sẵn sàng</span></div></header>
-<form id="setup" novalidate><section class="section"><div class="section-head"><div><small>BƯỚC 01</small><h2>Chọn mạng Wi-Fi</h2></div><button type="button" id="refresh">Quét lại</button></div><div class="scan-status" id="scanStatus">Đang quét các mạng gần đây...</div><div class="network-list" id="networkList"></div>
-<label>Tên mạng<input id="ssid" name="ssid" maxlength="32" required autocomplete="off" placeholder="Chọn ở trên hoặc nhập mạng ẩn"><span class="hint">Bạn có thể nhập thủ công nếu mạng không phát SSID.</span></label>
-<label>Mật khẩu Wi-Fi<div class="password-wrap"><input id="password" name="password" type="password" maxlength="64" autocomplete="new-password" placeholder="Nhập mật khẩu"><button type="button" id="togglePassword">Hiện</button></div><span class="hint">Để trống nếu muốn dùng lại mật khẩu của mạng đã lưu.</span></label></section>
-<section class="section"><div class="section-head"><div><small>BƯỚC 02</small><h2>Kết nối Veetee Manager</h2></div></div><label>Bootstrap URL<input id="bootstrapUrl" name="bootstrap_url" maxlength="256" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="http://192.168.1.10:8001/veetee/ota/" required><span class="hint">Dùng địa chỉ LAN của máy đang chạy Manager API.</span></label></section>
-<details><summary>Cấu hình nâng cao <b>+</b></summary><div class="row"><label>Ngôn ngữ<input id="locale" name="locale" maxlength="15" value="vi-VN" required><span class="hint">Thiết bị gửi locale này cho Manager.</span></label><label>Múi giờ<input id="timeZone" name="time_zone" maxlength="64" value="Asia/Bangkok" required><span class="hint">IANA, ví dụ Asia/Bangkok.</span></label><label>Wake profile ID<input id="wakeProfile" name="wake_profile" maxlength="64" placeholder="Gán sau"></label></div></details>
-<button class="submit" type="submit"><span>Lưu và kết nối</span><b>→</b></button><div class="status" id="status" role="status" aria-live="polite"></div><footer><i></i><span>Kết nối cục bộ được bảo vệ trên thiết bị</span></footer></form></main><script src="/portal-ui.js"></script><script src="/portal.js"></script></body></html>)HTML";
+extern const std::uint8_t kPortalHtmlStart[]
+    asm("_binary_index_html_start");
+extern const std::uint8_t kPortalHtmlEnd[]
+    asm("_binary_index_html_end");
+extern const std::uint8_t kPortalCssStart[]
+    asm("_binary_portal_css_start");
+extern const std::uint8_t kPortalCssEnd[]
+    asm("_binary_portal_css_end");
+extern const std::uint8_t kPortalEnglishScriptStart[]
+    asm("_binary_portal_en_js_start");
+extern const std::uint8_t kPortalEnglishScriptEnd[]
+    asm("_binary_portal_en_js_end");
+extern const std::uint8_t kPortalI18nScriptStart[]
+    asm("_binary_portal_i18n_js_start");
+extern const std::uint8_t kPortalI18nScriptEnd[]
+    asm("_binary_portal_i18n_js_end");
+extern const std::uint8_t kPortalUiScriptStart[]
+    asm("_binary_portal_ui_js_start");
+extern const std::uint8_t kPortalUiScriptEnd[]
+    asm("_binary_portal_ui_js_end");
+extern const std::uint8_t kPortalScriptStart[]
+    asm("_binary_portal_js_start");
+extern const std::uint8_t kPortalScriptEnd[]
+    asm("_binary_portal_js_end");
 
-constexpr char kPortalCss[] = R"CSS(:root{color-scheme:light;--canvas:#f3f3ed;--paper:#fbfbf7;--white:#fff;--ink:#13272c;--ink2:#284047;--muted:#687b7f;--line:#d9ded8;--navy:#102c33;--navy2:#1a424a;--orange:#f2643c;--orange2:#d94b27;--lime:#c8f36b;--blue:#dceeee;--danger:#b9382b;--success:#18745e}
-*{box-sizing:border-box}html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;background:var(--canvas)}body{margin:0;min-width:320px;min-height:100vh;padding:max(16px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));color:var(--ink);background:radial-gradient(circle at 88% 0,#dbe8df,transparent 30%),var(--canvas);font-family:"Be Vietnam Pro","Noto Sans","Segoe UI",sans-serif}button,input{font:inherit}button{-webkit-tap-highlight-color:transparent;cursor:pointer}main{width:min(100%,560px);overflow:hidden;margin:auto;border:1px solid var(--line);border-radius:26px;background:var(--paper);box-shadow:0 22px 70px rgba(16,44,51,.12)}
-.hero{position:relative;overflow:hidden;padding:22px 23px 20px;color:white;background:var(--navy)}.hero:after{position:absolute;inset:0;content:"";pointer-events:none;opacity:.3;background:radial-gradient(circle at 90% 0,rgba(200,243,107,.4),transparent 28%),radial-gradient(circle at 1px 1px,rgba(255,255,255,.15) 1px,transparent 0);background-size:auto,22px 22px}.brand-row,.hero-copy,.hero-meta{position:relative;z-index:1}.brand-row{display:flex;align-items:center;gap:10px}.brand{position:relative;display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;border-radius:12px;background:var(--orange);transform:rotate(-3deg)}.brand i{width:5px;height:5px;margin:0 4px;border-radius:50%;background:white}.brand-row>span:nth-child(2){display:grid;gap:1px}.brand-row b{font-size:13px;letter-spacing:.08em}.brand-row small{color:#78969a;font-size:7px;letter-spacing:.16em}.brand-row em{display:flex;align-items:center;gap:7px;margin-left:auto;border:1px solid rgba(255,255,255,.13);border-radius:999px;padding:5px 9px;color:#a8bbbd;font-size:8px;font-style:normal;font-weight:700;letter-spacing:.08em}.brand-row em i,footer i{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 0 4px rgba(200,243,107,.1)}.hero-copy>span,.section-head small{color:var(--lime);font-size:8px;font-weight:700;letter-spacing:.16em}.hero-copy{margin-top:28px}.hero h1{max-width:470px;margin:6px 0 9px;font-size:clamp(29px,8vw,43px);line-height:1.08;letter-spacing:-.045em}.hero p{max-width:450px;margin:0;color:#a6bbbe;font-size:11px;line-height:1.65}.hero-meta{display:flex;align-items:center;gap:8px;margin-top:22px;color:#7d999d;font-size:8px}.hero-meta span{white-space:nowrap}.hero-meta b{color:white}.hero-meta>i{width:22px;height:1px;background:rgba(255,255,255,.14)}
-form{padding:22px 23px 18px}.section+.section{margin-top:25px;border-top:1px solid var(--line);padding-top:22px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px}.section-head>div{display:grid;gap:3px}.section-head small{color:var(--orange2)}.section-head h2{margin:0;font-size:17px;letter-spacing:-.025em}.section-head button{flex:none;border:1px solid var(--line);border-radius:10px;padding:8px 11px;color:var(--ink2);background:white;font-size:10px;font-weight:700}.scan-status{margin:0 0 9px;color:var(--muted);font-size:10px}.network-list{display:grid;max-height:230px;gap:7px;overflow:auto;overscroll-behavior:contain;padding:1px}.network{display:grid;width:100%;grid-template-columns:37px minmax(0,1fr) auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:13px;padding:10px;background:white;color:var(--ink);text-align:left}.network[aria-pressed="true"]{border-color:var(--navy2);background:#f2f8f5;box-shadow:0 0 0 3px rgba(26,66,74,.1)}.signal{display:grid;width:35px;height:35px;place-items:center;border-radius:11px;color:var(--navy2);background:var(--blue);font-size:10px;font-weight:800}.network b,.network small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.network b{font-size:12px}.network small{margin-top:3px;color:var(--muted);font-size:8px}.lock{border-radius:999px;padding:4px 7px;color:var(--muted);background:#f0f2ee;font-size:7px;font-weight:700;text-transform:uppercase}
-label{display:block;margin-top:14px;color:var(--ink2);font-size:10px;font-weight:700}input{width:100%;min-height:47px;margin-top:7px;border:1px solid var(--line);border-radius:12px;outline:0;padding:11px 13px;color:var(--ink);background:white;font-size:14px;font-weight:500;transition:.15s}input:hover{border-color:#abbab2}input:focus{border-color:var(--navy2);box-shadow:0 0 0 3px rgba(26,66,74,.12)}input::placeholder{color:#9aa6a4;font-weight:400}.hint{display:block;margin-top:5px;color:var(--muted);font-size:9px;font-weight:400;line-height:1.5}.password-wrap{position:relative}.password-wrap input{padding-right:64px}.password-wrap button{position:absolute;right:7px;bottom:7px;border:0;border-radius:8px;padding:8px;color:var(--orange2);background:#ffebe5;font-size:9px;font-weight:700}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}details{margin-top:20px;border-top:1px dashed #c7d0c9;padding-top:15px}summary{display:flex;justify-content:space-between;color:var(--ink2);font-size:10px;font-weight:700;cursor:pointer;list-style:none}.submit{display:flex;width:100%;min-height:51px;align-items:center;justify-content:space-between;margin-top:23px;border:0;border-radius:13px;padding:0 17px;color:white;background:var(--orange);box-shadow:0 10px 25px rgba(242,100,60,.2);font-size:13px;font-weight:700}.submit b{font-size:19px}.submit:disabled{cursor:wait;opacity:.58}.status{min-height:18px;margin-top:10px;color:var(--success);font-size:10px;line-height:1.5}.status.error{color:var(--danger)}footer{display:flex;align-items:center;justify-content:center;gap:8px;border-top:1px solid var(--line);margin-top:12px;padding-top:15px;color:var(--muted);font-size:8px}footer i{background:var(--success);box-shadow:0 0 0 4px rgba(24,116,94,.08)}
-@media(max-width:440px){body{padding:0;background:var(--paper)}main{min-height:100vh;border:0;border-radius:0;box-shadow:none}.hero{padding:20px 18px}.hero-copy{margin-top:24px}.hero h1{font-size:34px}form{padding:20px 18px}.row{grid-template-columns:1fr}.network-list{max-height:212px}})CSS";
+struct EmbeddedText {
+    const std::uint8_t* data;
+    std::size_t length;
+};
 
-constexpr char kPortalUiScript[] = R"JS(const form=document.querySelector('#setup'),statusEl=document.querySelector('#status'),scanStatus=document.querySelector('#scanStatus'),networkList=document.querySelector('#networkList'),ssidInput=document.querySelector('#ssid'),passwordInput=document.querySelector('#password'),submit=form.querySelector('.submit');
-let selected='',scanRetry=0;
-function setStatus(message,error=false){statusEl.textContent=message;statusEl.classList.toggle('error',error)}
-function quality(rssi){return rssi>=-55?'Rất tốt':rssi>=-67?'Tốt':rssi>=-75?'Ổn định':'Yếu'}
-function renderNetworks(items){networkList.replaceChildren();if(!items.length){scanStatus.textContent='Chưa thấy mạng. Bạn vẫn có thể nhập mạng ẩn bên dưới.';return}scanStatus.textContent=`Đã tìm thấy ${items.length} mạng. Chạm để chọn.`;for(const item of items){const button=document.createElement('button');button.type='button';button.className='network';button.setAttribute('aria-pressed',String(item.ssid===selected));const signal=document.createElement('span');signal.className='signal';signal.textContent=item.rssi>=-60?'III':item.rssi>=-72?'II':'I';const copy=document.createElement('span');const name=document.createElement('b');name.textContent=item.ssid;const detail=document.createElement('small');detail.textContent=`${item.saved?'Đã lưu · ':''}${quality(item.rssi)} · ${item.rssi} dBm · Kênh ${item.channel}`;copy.append(name,detail);const lock=document.createElement('span');lock.className='lock';lock.textContent=item.saved?'Đã lưu':item.secure?'Bảo mật':'Mở';button.append(signal,copy,lock);button.addEventListener('click',()=>{selected=item.ssid;ssidInput.value=item.ssid;passwordInput.required=item.secure&&!item.saved;passwordInput.value='';renderNetworks(items);passwordInput.focus()});networkList.append(button)}})JS";
-
-constexpr char kPortalScript[] = R"JS(async function scan(){scanStatus.textContent='Đang quét các mạng gần đây...';networkList.replaceChildren();document.querySelector('#refresh').disabled=true;try{const response=await fetch('/api/scan',{cache:'no-store'});if(!response.ok)throw new Error();const items=await response.json();if(!items.length&&scanRetry<3){scanRetry++;scanStatus.textContent='Đang hoàn tất quét Wi-Fi...';setTimeout(scan,1200);return}scanRetry=0;renderNetworks(items)}catch{scanStatus.textContent='Bộ quét đang bận. Chạm Quét lại để thử tiếp.'}finally{document.querySelector('#refresh').disabled=false}}
-document.querySelector('#refresh').addEventListener('click',()=>{scanRetry=0;scan()});ssidInput.addEventListener('input',()=>{if(ssidInput.value!==selected){selected='';for(const item of networkList.children)item.setAttribute('aria-pressed','false')}});document.querySelector('#togglePassword').addEventListener('click',e=>{const visible=passwordInput.type==='text';passwordInput.type=visible?'password':'text';e.currentTarget.textContent=visible?'Hiện':'Ẩn'});
-fetch('/api/config',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(config=>{if(!config)return;if(config.ssid){selected=config.ssid;ssidInput.value=config.ssid}if(config.bootstrap_url)document.querySelector('#bootstrapUrl').value=config.bootstrap_url;if(config.locale)document.querySelector('#locale').value=config.locale;if(config.time_zone)document.querySelector('#timeZone').value=config.time_zone;if(config.wake_profile)document.querySelector('#wakeProfile').value=config.wake_profile}).catch(()=>{}).finally(scan);
-form.addEventListener('submit',async e=>{e.preventDefault();const bootstrap=document.querySelector('#bootstrapUrl');const missing=!ssidInput.value.trim()?ssidInput:!bootstrap.value.trim()?bootstrap:passwordInput.required&&!passwordInput.value?passwordInput:null;if(missing){setStatus(missing===bootstrap?'Hãy nhập Bootstrap URL để robot tìm thấy Veetee Manager.':missing===ssidInput?'Hãy chọn hoặc nhập tên mạng Wi-Fi.':'Hãy nhập mật khẩu Wi-Fi.',true);missing.focus();missing.scrollIntoView({behavior:'smooth',block:'center'});return}setStatus('Đang lưu cấu hình và kết nối Wi-Fi...');submit.disabled=true;try{const response=await fetch('/api/provision',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(form))});const result=await response.json().catch(()=>({message:'Phản hồi không hợp lệ'}));setStatus(result.message||'Hoàn tất',!response.ok);if(response.ok){submit.querySelector('span').textContent='Đang kết nối...';setStatus('Đã lưu. Điện thoại có thể tự rời mạng Veetee khi robot vào Wi-Fi của bạn.')}else submit.disabled=false}catch{setStatus('Kết nối thiết lập bị gián đoạn. Hãy vào lại mạng Veetee nếu robot chưa kết nối.',true);submit.disabled=false}});)JS";
-
-static_assert(sizeof(kPortalHtml) <= 4096);
-static_assert(sizeof(kPortalCss) <= 8192);
-static_assert(sizeof(kPortalUiScript) <= 4096);
-static_assert(sizeof(kPortalScript) <= 4096);
+EmbeddedText TextResource(const std::uint8_t* start,
+                          const std::uint8_t* end) {
+    std::size_t length = static_cast<std::size_t>(end - start);
+    if (length > 0 && start[length - 1] == 0) --length;
+    return {.data = start, .length = length};
+}
 
 esp_err_t SendStatic(httpd_req_t* request, const char* content_type,
-                     const char* content) {
-    const std::size_t content_length = std::strlen(content);
+                     EmbeddedText content) {
+    const std::size_t content_length = content.length;
     ESP_LOGI(kTag, "HTTP GET %s bytes=%u", request->uri,
              static_cast<unsigned>(content_length));
     httpd_resp_set_type(request, content_type);
@@ -68,7 +75,8 @@ esp_err_t SendStatic(httpd_req_t* request, const char* content_type,
         const std::size_t chunk_length =
             std::min(kStaticResponseChunkBytes, content_length - offset);
         const esp_err_t error = httpd_resp_send_chunk(
-            request, content + offset, static_cast<ssize_t>(chunk_length));
+            request, reinterpret_cast<const char*>(content.data + offset),
+            static_cast<ssize_t>(chunk_length));
         if (error != ESP_OK) {
             ESP_LOGW(kTag, "HTTP send %s failed at %u/%u: %s", request->uri,
                      static_cast<unsigned>(offset),
@@ -90,6 +98,29 @@ int HexValue(char value) {
     value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
     return -1;
+}
+
+bool AttemptIdFromRequest(httpd_req_t* request,
+                          std::uint32_t* attempt_id) {
+    if (request == nullptr || attempt_id == nullptr) return false;
+    const int query_length = httpd_req_get_url_query_len(request);
+    if (query_length <= 0 || query_length >= 64) return false;
+    std::array<char, 64> query{};
+    std::array<char, 16> value{};
+    if (httpd_req_get_url_query_str(request, query.data(), query.size()) !=
+            ESP_OK ||
+        httpd_query_key_value(query.data(), "attempt_id", value.data(),
+                              value.size()) != ESP_OK) {
+        return false;
+    }
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value.data(), &end, 10);
+    if (end == value.data() || *end != '\0' || parsed == 0 ||
+        parsed > std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
+    *attempt_id = static_cast<std::uint32_t>(parsed);
+    return true;
 }
 
 bool UrlDecode(const char* source, char* destination, std::size_t capacity) {
@@ -145,12 +176,18 @@ void JsonEscapeString(const char* source, char* destination, std::size_t capacit
 esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
                                     const settings::DeviceSettings& current,
                                     const settings::WifiProfileRecord& wifi_profiles,
-                                    SaveSink sink, void* context) {
+                                    SaveSink save_sink, StatusSink status_sink,
+                                    SuccessObservedSink observed_sink,
+                                    SaveAllowedSink save_allowed_sink,
+                                    void* context) {
     if (IsRunning()) {
         ap_address_ = ap_address;
         current_ = current;
         wifi_profiles_ = wifi_profiles;
-        save_sink_ = sink;
+        save_sink_ = save_sink;
+        status_sink_ = status_sink;
+        observed_sink_ = observed_sink;
+        save_allowed_sink_ = save_allowed_sink;
         save_context_ = context;
         ESP_LOGI(kTag, "Captive portal already running; refreshed setup context");
         return ESP_OK;
@@ -159,7 +196,10 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     ap_address_ = ap_address;
     current_ = current;
     wifi_profiles_ = wifi_profiles;
-    save_sink_ = sink;
+    save_sink_ = save_sink;
+    status_sink_ = status_sink;
+    observed_sink_ = observed_sink;
+    save_allowed_sink_ = save_allowed_sink;
     save_context_ = context;
     client_network_ready_.store(false);
 
@@ -221,6 +261,11 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     config_uri.method = HTTP_GET;
     config_uri.handler = &ProvisioningPortal::ConfigHandler;
     config_uri.user_ctx = this;
+    httpd_uri_t status = {};
+    status.uri = "/api/status";
+    status.method = HTTP_GET;
+    status.handler = &ProvisioningPortal::StatusHandler;
+    status.user_ctx = this;
     httpd_uri_t save = {};
     save.uri = "/api/provision";
     save.method = HTTP_POST;
@@ -236,6 +281,16 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     style.method = HTTP_GET;
     style.handler = &ProvisioningPortal::StyleHandler;
     style.user_ctx = this;
+    httpd_uri_t english_script = {};
+    english_script.uri = "/portal-en.js";
+    english_script.method = HTTP_GET;
+    english_script.handler = &ProvisioningPortal::EnglishScriptHandler;
+    english_script.user_ctx = this;
+    httpd_uri_t i18n_script = {};
+    i18n_script.uri = "/portal-i18n.js";
+    i18n_script.method = HTTP_GET;
+    i18n_script.handler = &ProvisioningPortal::I18nScriptHandler;
+    i18n_script.user_ctx = this;
     httpd_uri_t ui_script = {};
     ui_script.uri = "/portal-ui.js";
     ui_script.method = HTTP_GET;
@@ -253,9 +308,12 @@ esp_err_t ProvisioningPortal::Start(std::uint32_t ap_address,
     favicon.user_ctx = this;
     if ((error = httpd_register_uri_handler(http_server_, &scan)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &config_uri)) != ESP_OK ||
+        (error = httpd_register_uri_handler(http_server_, &status)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &save)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &portal)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &style)) != ESP_OK ||
+        (error = httpd_register_uri_handler(http_server_, &english_script)) != ESP_OK ||
+        (error = httpd_register_uri_handler(http_server_, &i18n_script)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &ui_script)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &script)) != ESP_OK ||
         (error = httpd_register_uri_handler(http_server_, &favicon)) != ESP_OK) {
@@ -346,7 +404,7 @@ void ProvisioningPortal::NotifyClientNetworkReady() {
     client_network_ready_.store(true);
 }
 
-void ProvisioningPortal::ResetClientSessions() {
+void ProvisioningPortal::PauseScan() {
     client_network_ready_.store(false);
     if (scan_in_progress_.exchange(false)) {
         const esp_err_t error = esp_wifi_scan_stop();
@@ -355,6 +413,10 @@ void ProvisioningPortal::ResetClientSessions() {
                      esp_err_to_name(error));
         }
     }
+}
+
+void ProvisioningPortal::ResetClientSessions() {
+    PauseScan();
     if (http_server_ == nullptr) return;
     std::array<int, 8> client_sockets{};
     std::size_t count = client_sockets.size();
@@ -372,21 +434,35 @@ void ProvisioningPortal::ResetClientSessions() {
 }
 
 esp_err_t ProvisioningPortal::PortalHandler(httpd_req_t* request) {
-    return SendStatic(request, "text/html; charset=utf-8", kPortalHtml);
+    return SendStatic(request, "text/html; charset=utf-8",
+                      TextResource(kPortalHtmlStart, kPortalHtmlEnd));
 }
 
 esp_err_t ProvisioningPortal::StyleHandler(httpd_req_t* request) {
-    return SendStatic(request, "text/css; charset=utf-8", kPortalCss);
+    return SendStatic(request, "text/css; charset=utf-8",
+                      TextResource(kPortalCssStart, kPortalCssEnd));
+}
+
+esp_err_t ProvisioningPortal::EnglishScriptHandler(httpd_req_t* request) {
+    return SendStatic(request, "application/javascript; charset=utf-8",
+                      TextResource(kPortalEnglishScriptStart,
+                                   kPortalEnglishScriptEnd));
+}
+
+esp_err_t ProvisioningPortal::I18nScriptHandler(httpd_req_t* request) {
+    return SendStatic(request, "application/javascript; charset=utf-8",
+                      TextResource(kPortalI18nScriptStart,
+                                   kPortalI18nScriptEnd));
 }
 
 esp_err_t ProvisioningPortal::UiScriptHandler(httpd_req_t* request) {
     return SendStatic(request, "application/javascript; charset=utf-8",
-                      kPortalUiScript);
+                      TextResource(kPortalUiScriptStart, kPortalUiScriptEnd));
 }
 
 esp_err_t ProvisioningPortal::ScriptHandler(httpd_req_t* request) {
     return SendStatic(request, "application/javascript; charset=utf-8",
-                      kPortalScript);
+                      TextResource(kPortalScriptStart, kPortalScriptEnd));
 }
 
 esp_err_t ProvisioningPortal::FaviconHandler(httpd_req_t* request) {
@@ -431,7 +507,11 @@ esp_err_t ProvisioningPortal::ScanHandler(httpd_req_t* request) {
         std::copy_n(portal->scan_records_.begin(), count, records.begin());
         xSemaphoreGive(portal->scan_mutex_);
     }
-    if (count == 0) {
+    const ProvisioningStatusSnapshot status =
+        portal->status_sink_ == nullptr
+            ? ProvisioningStatusSnapshot{}
+            : portal->status_sink_(portal->save_context_);
+    if (count == 0 && status.phase != ProvisioningPhase::kConnecting) {
         const_cast<ProvisioningPortal*>(portal)->StartScan();
     }
     ESP_LOGI(kTag, "HTTP GET %s cached_networks=%u", request->uri,
@@ -471,6 +551,32 @@ esp_err_t ProvisioningPortal::ScanHandler(httpd_req_t* request) {
     }
     httpd_resp_sendstr_chunk(request, "]");
     return httpd_resp_sendstr_chunk(request, nullptr);
+}
+
+esp_err_t ProvisioningPortal::StatusHandler(httpd_req_t* request) {
+    auto* portal = static_cast<ProvisioningPortal*>(request->user_ctx);
+    const ProvisioningStatusSnapshot status =
+        portal->status_sink_ == nullptr
+            ? ProvisioningStatusSnapshot{}
+            : portal->status_sink_(portal->save_context_);
+    char response[kProvisioningStatusJsonBytes] = {};
+    if (!SerializeProvisioningStatus(status, response, sizeof(response))) {
+        httpd_resp_set_status(request, "500 Internal Server Error");
+        return httpd_resp_sendstr(request,
+                                  "{\"code\":\"status_serialize_failed\"}");
+    }
+    httpd_resp_set_type(request, "application/json");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(request, "Connection", "close");
+    const esp_err_t error = httpd_resp_sendstr(request, response);
+    std::uint32_t requested_attempt = 0;
+    if (error == ESP_OK && status.phase == ProvisioningPhase::kConnected &&
+        AttemptIdFromRequest(request, &requested_attempt) &&
+        requested_attempt == status.attempt_id &&
+        portal->observed_sink_ != nullptr) {
+        portal->observed_sink_(status.attempt_id, portal->save_context_);
+    }
+    return error;
 }
 
 esp_err_t ProvisioningPortal::ConfigHandler(httpd_req_t* request) {
@@ -558,7 +664,16 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
     httpd_resp_set_hdr(request, "Connection", "close");
     if (request->content_len <= 0 || request->content_len > kMaxPostBytes) {
         httpd_resp_set_status(request, "413 Payload Too Large");
-        return httpd_resp_sendstr(request, "{\"message\":\"Kích thước biểu mẫu không hợp lệ\"}");
+        return httpd_resp_sendstr(
+            request,
+            "{\"code\":\"form_too_large\",\"message\":\"Kích thước biểu mẫu không hợp lệ\"}");
+    }
+    if (save_allowed_sink_ != nullptr &&
+        !save_allowed_sink_(save_context_)) {
+        httpd_resp_set_status(request, "409 Conflict");
+        return httpd_resp_sendstr(
+            request,
+            "{\"code\":\"setup_busy\",\"message\":\"Veetee đang thử cấu hình Wi-Fi trước đó. Hãy chờ kết quả rồi thử lại.\"}");
     }
 
     std::array<char, kMaxPostBytes + 1> body{};
@@ -568,7 +683,9 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
                                           request->content_len - received);
         if (result <= 0) {
             httpd_resp_set_status(request, "408 Request Timeout");
-            return httpd_resp_sendstr(request, "{\"message\":\"Request timed out\"}");
+            return httpd_resp_sendstr(
+                request,
+                "{\"code\":\"request_timeout\",\"message\":\"Request timed out\"}");
         }
         received += result;
     }
@@ -588,22 +705,30 @@ esp_err_t ProvisioningPortal::HandleSave(httpd_req_t* request) {
         IsHttpEndpointUrl(candidate.bootstrap_url);
     if (!valid || save_sink_ == nullptr) {
         httpd_resp_set_status(request, "400 Bad Request");
-        return httpd_resp_sendstr(request,
-                                  "{\"message\":\"Hãy kiểm tra SSID, ngôn ngữ và Bootstrap URL\"}");
+        return httpd_resp_sendstr(
+            request,
+            "{\"code\":\"invalid_form\",\"message\":\"Hãy kiểm tra SSID, ngôn ngữ và Bootstrap URL\"}");
     }
 
     const esp_err_t error = SaveFromInternalRam(candidate);
     if (error != ESP_OK) {
         ESP_LOGE(kTag, "Unable to persist provisioning: %s", esp_err_to_name(error));
         httpd_resp_set_status(request, "500 Internal Server Error");
-        return httpd_resp_sendstr(request, "{\"message\":\"Không thể lưu cấu hình\"}");
+        return httpd_resp_sendstr(
+            request,
+            "{\"code\":\"save_failed\",\"message\":\"Không thể lưu cấu hình\"}");
     }
     current_ = candidate;
     settings::UpsertWifiProfile(&wifi_profiles_, candidate.ssid,
                                 candidate.password);
-    return httpd_resp_sendstr(
-        request,
-        "{\"message\":\"Đã lưu. Veetee đang kết nối tới mạng đã chọn.\"}");
+    const ProvisioningStatusSnapshot status =
+        status_sink_ == nullptr ? ProvisioningStatusSnapshot{}
+                                : status_sink_(save_context_);
+    char response[192] = {};
+    std::snprintf(response, sizeof(response),
+                  "{\"message\":\"Đã lưu. Veetee đang kết nối tới mạng đã chọn.\",\"attempt_id\":%u}",
+                  static_cast<unsigned>(status.attempt_id));
+    return httpd_resp_sendstr(request, response);
 }
 
 void ProvisioningPortal::ScanEventHandler(void* context,

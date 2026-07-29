@@ -25,6 +25,11 @@
 - Keep provider SDK behind an adapter/capability interface.
 - Redact secrets/transcripts and keep metric labels bounded.
 - Test malformed frames, provider timeout and connection drop.
+- Before host Voice startup, sync env and verify `OPENBLAS_NUM_THREADS=1` exists in the
+  live process; distinguish it from the ONNX TTS thread setting.
+- For long-speech acceptance, test 300--600 seconds of PCM plus at least three normal
+  follow-up turns; report interval CPU, RSS/thread plateau, gaps/errors and the separate
+  physical browser/ESP32 listening gap.
 
 ## Manager API
 

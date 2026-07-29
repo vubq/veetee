@@ -20,6 +20,8 @@ constexpr std::uint32_t kDhcpReadyTimeoutMs = 1000;
 constexpr std::uint32_t kDhcpReadyPollMs = 10;
 constexpr std::uint64_t kRetryScanDelayUs = 2500000ULL;
 constexpr std::uint64_t kProvisioningTransitionDelayUs = 750000ULL;
+constexpr std::uint64_t kProvisioningObservedCleanupDelayUs = 3000000ULL;
+constexpr std::uint64_t kProvisioningFallbackCleanupDelayUs = 15000000ULL;
 
 }  // namespace
 
@@ -76,42 +78,74 @@ esp_err_t WifiManager::Initialize(settings::SettingsStore* store,
     esp_timer_create_args_t provisioning_config = timeout_config;
     provisioning_config.callback = &WifiManager::ProvisioningTransition;
     provisioning_config.name = "wifi_provision";
-    return esp_timer_create(&provisioning_config, &provisioning_timer_);
+    error = esp_timer_create(&provisioning_config, &provisioning_timer_);
+    if (error != ESP_OK) return error;
+
+    esp_timer_create_args_t cleanup_config = timeout_config;
+    cleanup_config.callback = &WifiManager::ProvisioningCleanup;
+    cleanup_config.name = "wifi_ap_cleanup";
+    return esp_timer_create(&cleanup_config, &provisioning_cleanup_timer_);
 }
 
 esp_err_t WifiManager::StartStation() {
     if (settings_ == nullptr || store_ == nullptr || !settings_->HasProvisioning()) {
         return ESP_ERR_INVALID_STATE;
     }
-    provisioning_active_ = false;
-    provisioning_wifi_ready_ = false;
+    const bool keep_portal = provisioning_active_ && portal_.IsRunning() &&
+                             ap_netif_ != nullptr && wifi_started_;
+    provisioning_handoff_ = keep_portal;
+    provisioning_connection_attempt_id_ = 0;
+    if (keep_portal) {
+        const auto snapshot = provisioning_status_.Snapshot();
+        provisioning_connection_attempt_id_ = snapshot.attempt_id;
+        provisioning_status_.MarkConnecting(
+            provisioning_connection_attempt_id_);
+    }
+    const auto fail_handoff = [this, keep_portal](esp_err_t error) {
+        if (keep_portal && provisioning_connection_attempt_id_ != 0) {
+            provisioning_status_.MarkFailed(
+                provisioning_connection_attempt_id_,
+                ProvisioningFailure::kConnectionTimeout);
+        }
+        return error;
+    };
     profiles_ = store_->WifiProfiles();
     if (!settings::IsValidWifiProfileRecord(profiles_) || profiles_.count == 0) {
-        return ESP_ERR_INVALID_STATE;
+        return fail_handoff(ESP_ERR_INVALID_STATE);
     }
-    portal_.Stop();
-    if (wifi_started_) {
-        esp_wifi_disconnect();
-        const esp_err_t stop_error = esp_wifi_stop();
-        if (stop_error != ESP_OK) return stop_error;
-        wifi_started_ = false;
-    }
-    if (ap_netif_ != nullptr) {
-        esp_netif_destroy_default_wifi(ap_netif_);
-        ap_netif_ = nullptr;
+
+    if (keep_portal) {
+        portal_.PauseScan();
+        esp_wifi_scan_stop();
+    } else {
+        provisioning_active_ = false;
+        provisioning_wifi_ready_ = false;
+        portal_.Stop();
+        if (wifi_started_) {
+            esp_wifi_disconnect();
+            const esp_err_t stop_error = esp_wifi_stop();
+            if (stop_error != ESP_OK) return fail_handoff(stop_error);
+            wifi_started_ = false;
+        }
+        if (ap_netif_ != nullptr) {
+            esp_netif_destroy_default_wifi(ap_netif_);
+            ap_netif_ = nullptr;
+        }
     }
     if (station_netif_ == nullptr) {
         station_netif_ = esp_netif_create_default_wifi_sta();
-        if (station_netif_ == nullptr) return ESP_ERR_NO_MEM;
+        if (station_netif_ == nullptr) return fail_handoff(ESP_ERR_NO_MEM);
         const esp_err_t hostname_error =
             esp_netif_set_hostname(station_netif_, ap_ssid_);
-        if (hostname_error != ESP_OK) return hostname_error;
+        if (hostname_error != ESP_OK) return fail_handoff(hostname_error);
     }
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
     esp_timer_stop(provisioning_timer_);
+    esp_timer_stop(provisioning_cleanup_timer_);
     station_connected_ = false;
     station_connecting_ = true;
+    station_associated_ = false;
     candidate_in_flight_ = false;
     scan_pending_ = false;
     ignore_disconnect_until_scan_ = true;
@@ -119,8 +153,8 @@ esp_err_t WifiManager::StartStation() {
     candidate_cursor_ = 0;
     candidate_reconnect_count_ = 0;
     connecting_ssid_[0] = '\0';
-
-    esp_err_t error = esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_err_t error = esp_wifi_set_mode(keep_portal ? WIFI_MODE_APSTA
+                                                    : WIFI_MODE_STA);
     if (error == ESP_OK) error = EnsureWifiStarted();
     if (error == ESP_OK) {
         const esp_err_t disconnect_error = esp_wifi_disconnect();
@@ -135,30 +169,50 @@ esp_err_t WifiManager::StartStation() {
         esp_timer_start_once(connect_timer_,
                              CONFIG_VEETEE_WIFI_CONNECT_TIMEOUT_SECONDS * 1000000ULL);
         ESP_LOGI(kTag,
-                 "Searching for %u saved Wi-Fi profile(s) with %d second fallback timeout",
+                 "Searching for %u saved Wi-Fi profile(s) with %d second fallback timeout%s",
                  static_cast<unsigned>(profiles_.count),
-                 CONFIG_VEETEE_WIFI_CONNECT_TIMEOUT_SECONDS);
+                 CONFIG_VEETEE_WIFI_CONNECT_TIMEOUT_SECONDS,
+                 keep_portal ? " while setup portal remains available" : "");
     }
-    return error;
+    return error == ESP_OK ? ESP_OK : fail_handoff(error);
 }
 
 esp_err_t WifiManager::StartProvisioning() {
+    if (provisioning_status_.Snapshot().phase ==
+        ProvisioningPhase::kConnected) {
+        provisioning_status_.Reset();
+    }
     if (portal_.IsRunning()) {
         provisioning_active_ = true;
+        provisioning_handoff_ = false;
+        provisioning_connection_attempt_id_ = 0;
         station_connecting_ = false;
         station_connected_ = false;
+        station_associated_ = false;
+        esp_timer_stop(provisioning_cleanup_timer_);
+        const auto snapshot = provisioning_status_.Snapshot();
+        if (snapshot.phase == ProvisioningPhase::kSaved ||
+            snapshot.phase == ProvisioningPhase::kConnecting) {
+            provisioning_status_.MarkFailed(
+                snapshot.attempt_id, ProvisioningFailure::kConnectionTimeout);
+        }
+        portal_.NotifyClientNetworkReady();
         ESP_LOGI(kTag, "Provisioning portal is already active; keeping SoftAP stable");
         return ESP_OK;
     }
     provisioning_active_ = false;
     station_connecting_ = false;
     station_connected_ = false;
+    station_associated_ = false;
     candidate_in_flight_ = false;
     scan_pending_ = false;
     ignore_disconnect_until_scan_ = true;
     esp_timer_stop(connect_timer_);
     esp_timer_stop(retry_timer_);
     esp_timer_stop(provisioning_timer_);
+    esp_timer_stop(provisioning_cleanup_timer_);
+    provisioning_handoff_ = false;
+    provisioning_connection_attempt_id_ = 0;
 
     esp_err_t error = ESP_OK;
     if (!provisioning_wifi_ready_) {
@@ -210,7 +264,10 @@ esp_err_t WifiManager::StartProvisioning() {
     }
     if (error == ESP_OK) {
         error = portal_.Start(kApAddress, *settings_, store_->WifiProfiles(),
-                              &WifiManager::SaveProvisioning, this);
+                              &WifiManager::SaveProvisioning,
+                              &WifiManager::ReadProvisioningStatus,
+                              &WifiManager::ObserveProvisioningSuccess,
+                              &WifiManager::CanSaveProvisioning, this);
     }
     if (error == ESP_OK) {
         provisioning_active_ = true;
@@ -267,9 +324,13 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
                      "Last setup client left; captive HTTP sessions reset");
         }
     } else if (event_base == WIFI_EVENT &&
+               event_id == WIFI_EVENT_STA_CONNECTED) {
+        manager->station_associated_ = true;
+    } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
         const bool was_connected = manager->station_connected_;
         manager->station_connected_ = false;
+        manager->station_associated_ = false;
         const auto* disconnected =
             static_cast<const wifi_event_sta_disconnected_t*>(event_data);
         if (was_connected ||
@@ -290,12 +351,40 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
                      : manager->connecting_ssid_,
                  disconnected == nullptr ? 0U
                                          : static_cast<unsigned>(disconnected->reason));
+        if (manager->provisioning_handoff_ && !was_connected &&
+            manager->station_connecting_ && manager->candidate_in_flight_ &&
+            !manager->ignore_disconnect_until_scan_ &&
+            disconnected != nullptr) {
+            const auto reason =
+                static_cast<wifi_err_reason_t>(disconnected->reason);
+            ProvisioningFailure failure = ProvisioningFailure::kNone;
+            if (reason == WIFI_REASON_AUTH_FAIL ||
+                reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
+                failure = ProvisioningFailure::kAuthenticationFailed;
+            } else if (reason == WIFI_REASON_NO_AP_FOUND ||
+                       reason == WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY ||
+                       reason == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD ||
+                       reason == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD) {
+                failure = ProvisioningFailure::kNetworkNotFound;
+            }
+            if (failure != ProvisioningFailure::kNone) {
+                manager->provisioning_status_.RememberFailure(
+                    manager->provisioning_connection_attempt_id_, failure);
+            }
+        }
         if (was_connected) {
             manager->station_connecting_ = false;
             manager->candidate_in_flight_ = false;
             manager->scan_pending_ = false;
             esp_timer_stop(manager->connect_timer_);
             esp_timer_stop(manager->retry_timer_);
+            esp_timer_stop(manager->provisioning_cleanup_timer_);
+            if (manager->provisioning_handoff_) {
+                manager->provisioning_status_.MarkFailed(
+                    manager->provisioning_connection_attempt_id_,
+                    ProvisioningFailure::kUnknown);
+            }
             manager->Emit(WifiManagerEvent::kDisconnected);
         } else if (manager->station_connecting_ &&
                    manager->candidate_in_flight_ &&
@@ -335,6 +424,7 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         manager->station_connecting_ = false;
         manager->station_connected_ = true;
+        manager->station_associated_ = true;
         manager->candidate_in_flight_ = false;
         manager->scan_pending_ = false;
         esp_timer_stop(manager->connect_timer_);
@@ -345,6 +435,18 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
             ESP_LOGW(kTag, "Unable to persist last-successful Wi-Fi profile: %s",
                      esp_err_to_name(save_error));
         }
+        if (manager->provisioning_handoff_ &&
+            manager->provisioning_status_.MarkConnected(
+                manager->provisioning_connection_attempt_id_)) {
+            esp_timer_stop(manager->provisioning_cleanup_timer_);
+            const esp_err_t cleanup_error = esp_timer_start_once(
+                manager->provisioning_cleanup_timer_,
+                kProvisioningFallbackCleanupDelayUs);
+            if (cleanup_error != ESP_OK) {
+                ESP_LOGW(kTag, "Unable to schedule setup AP cleanup: %s",
+                         esp_err_to_name(cleanup_error));
+            }
+        }
         manager->Emit(WifiManagerEvent::kConnected);
     }
 }
@@ -352,7 +454,20 @@ void WifiManager::EventHandler(void* context, esp_event_base_t event_base,
 void WifiManager::ConnectionTimeout(void* context) {
     auto* manager = static_cast<WifiManager*>(context);
     if (!manager->station_connected_) {
+        if (manager->provisioning_handoff_) {
+            const auto snapshot = manager->provisioning_status_.Snapshot();
+            const ProvisioningFailure remembered_failure =
+                snapshot.attempt_id ==
+                            manager->provisioning_connection_attempt_id_
+                    ? snapshot.failure
+                    : ProvisioningFailure::kNone;
+            const ProvisioningFailure failure = ClassifyProvisioningTimeout(
+                manager->station_associated_, remembered_failure);
+            manager->provisioning_status_.MarkFailed(
+                manager->provisioning_connection_attempt_id_, failure);
+        }
         manager->station_connecting_ = false;
+        manager->station_associated_ = false;
         manager->candidate_in_flight_ = false;
         manager->scan_pending_ = false;
         manager->ignore_disconnect_until_scan_ = true;
@@ -378,6 +493,75 @@ void WifiManager::ProvisioningTransition(void* context) {
         WifiManagerEvent::kProvisioningSaved);
 }
 
+void WifiManager::ProvisioningCleanup(void* context) {
+    static_cast<WifiManager*>(context)->Emit(
+        WifiManagerEvent::kProvisioningCleanup);
+}
+
+void WifiManager::RetryProvisioningCleanup() {
+    if (!provisioning_handoff_ || !station_connected_) return;
+    esp_timer_stop(provisioning_cleanup_timer_);
+    const esp_err_t error = esp_timer_start_once(
+        provisioning_cleanup_timer_, kProvisioningObservedCleanupDelayUs);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "Unable to retry setup AP cleanup: %s",
+                 esp_err_to_name(error));
+    }
+}
+
+esp_err_t WifiManager::FinishProvisioningHandoff() {
+    if (!provisioning_handoff_ || !station_connected_) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const esp_err_t error = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "Unable to disable setup AP after DHCP success: %s",
+                 esp_err_to_name(error));
+        RetryProvisioningCleanup();
+        return error;
+    }
+    portal_.Stop();
+    provisioning_active_ = false;
+    provisioning_wifi_ready_ = false;
+    provisioning_handoff_ = false;
+    provisioning_connection_attempt_id_ = 0;
+    provisioning_status_.Reset();
+    if (ap_netif_ != nullptr) {
+        esp_netif_destroy_default_wifi(ap_netif_);
+        ap_netif_ = nullptr;
+    }
+    ESP_LOGI(kTag, "Setup AP closed after station DHCP success");
+    return ESP_OK;
+}
+
+ProvisioningStatusSnapshot WifiManager::ReadProvisioningStatus(void* context) {
+    return static_cast<WifiManager*>(context)->provisioning_status_.Snapshot();
+}
+
+bool WifiManager::CanSaveProvisioning(void* context) {
+    return context != nullptr &&
+           static_cast<const WifiManager*>(context)
+               ->provisioning_status_.CanBeginAttempt();
+}
+
+void WifiManager::ObserveProvisioningSuccess(std::uint32_t attempt_id,
+                                             void* context) {
+    auto* manager = static_cast<WifiManager*>(context);
+    const auto snapshot = manager->provisioning_status_.Snapshot();
+    if (!manager->provisioning_handoff_ || snapshot.attempt_id != attempt_id ||
+        snapshot.phase != ProvisioningPhase::kConnected) {
+        return;
+    }
+    esp_timer_stop(manager->provisioning_cleanup_timer_);
+    const esp_err_t error = esp_timer_start_once(
+        manager->provisioning_cleanup_timer_,
+        kProvisioningObservedCleanupDelayUs);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "Unable to shorten setup AP cleanup delay: %s",
+                 esp_err_to_name(error));
+    }
+}
+
 esp_err_t WifiManager::SaveProvisioning(settings::DeviceSettings* settings,
                                         void* context) {
     auto* manager = static_cast<WifiManager*>(context);
@@ -385,6 +569,9 @@ esp_err_t WifiManager::SaveProvisioning(settings::DeviceSettings* settings,
     const esp_err_t error = manager->store_->SaveProvisioning(settings);
     if (error == ESP_OK) {
         *manager->settings_ = *settings;
+        const std::uint32_t attempt_id =
+            manager->provisioning_status_.BeginAttempt();
+        manager->provisioning_status_.MarkSaved(attempt_id);
         esp_timer_stop(manager->provisioning_timer_);
         const esp_err_t timer_error = esp_timer_start_once(
             manager->provisioning_timer_, kProvisioningTransitionDelayUs);

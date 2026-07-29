@@ -36,10 +36,11 @@ veetee/
 11. `docs/11-ai-first-design-principles.md` - ranh giới giữa AI behavior và runtime deterministic bắt buộc.
 12. `docs/12-dynamic-config-and-artifacts.md` - cấu hình wake/model/assets qua Web/API, signed bundle, apply và rollback.
 13. `docs/13-decision-register.md` - quyết định đã chốt, mặc định đề xuất và checklist phải xác nhận trước khi code.
-14. `docs/14-model-and-provider-baseline.md` - baseline local ASR/VAD/TTS, 9router LLM, fallback và benchmark gate.
+14. `docs/14-model-and-provider-baseline.md` - baseline local ASR/VAD/TTS, CLIProxyAPI LLM, fallback và benchmark gate.
 15. `docs/15-local-ai-runtime.md` - runtime local đã chọn, readiness, model worker và validation.
 16. `docs/16-device-ui-and-ui-packs.md` - contract và hướng triển khai UI Pack data-only.
 17. `docs/21-local-development-runbook.md` - cold-start sau reboot, chạy đủ server stack, health check và prompt cho AI.
+18. `docs/22-veetee-interface-language.md` - visual, copy, accessibility và responsive contract chung cho Manager Web/captive Wi-Fi portal.
 
 ## Tài liệu tham khảo bổ sung
 

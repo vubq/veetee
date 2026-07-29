@@ -11,6 +11,13 @@ const webUrl = `http://127.0.0.1:${webPort}`;
 export default defineConfig({
   testDir: "./tests",
   timeout: 20_000,
+  expect: {
+    toHaveScreenshot: {
+      animations: "disabled",
+      caret: "hide",
+      maxDiffPixelRatio: 0.01,
+    },
+  },
   use: {
     baseURL: webUrl,
     browserName: "chromium",

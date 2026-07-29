@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 
 import { ApiError, managerApi } from "../api/client";
 import { useAuthStore } from "../stores/auth";
-import { VtButton, VtField, VtInput } from "./ui";
+import { VtBrandMark, VtButton, VtField, VtInput, VtThemeSelector } from "./ui";
 
 const auth = useAuthStore();
 const { t } = useI18n();
@@ -30,8 +30,8 @@ async function submit(): Promise<void> {
     <div class="ambient ambient-two"></div>
     <section class="login-story">
       <a class="brand" href="#" aria-label="Veetee Manager">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
-        <span><b>veetee</b><small>robot operations</small></span>
+        <VtBrandMark size="lg" />
+        <span><b>veetee</b><small>{{ t("brand.operations") }}</small></span>
       </a>
       <div>
         <span class="eyebrow">{{ t("login.eyebrow") }}</span>
@@ -40,12 +40,15 @@ async function submit(): Promise<void> {
       </div>
       <div class="login-stack">
         <span><i></i> Manager API <b>{{ managerApi.baseUrl }}</b></span>
-        <span><i></i> Voice loop <b>Silero → Zipformer → 9Router → VieNeu</b></span>
+        <span><i></i> {{ t("login.voiceLoop") }} <b>Silero → Zipformer → CLIProxyAPI → VieNeu</b></span>
       </div>
     </section>
 
     <form class="login-card" @submit.prevent="submit">
-      <span class="modal-kicker">{{ t("login.workspaceAccess") }}</span>
+      <div class="login-card-heading">
+        <span class="modal-kicker">{{ t("login.workspaceAccess") }}</span>
+        <VtThemeSelector />
+      </div>
       <h2>{{ t("login.title") }}</h2>
       <p>{{ t("login.security") }}</p>
       <VtField :label="t('login.email')" required>

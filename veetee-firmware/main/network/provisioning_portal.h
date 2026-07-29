@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "network/provisioning_status.h"
 #include "settings/settings_store.h"
 
 namespace veetee::network {
@@ -20,23 +21,33 @@ namespace veetee::network {
 class ProvisioningPortal {
 public:
     using SaveSink = esp_err_t (*)(settings::DeviceSettings* settings, void* context);
+    using StatusSink = ProvisioningStatusSnapshot (*)(void* context);
+    using SuccessObservedSink = void (*)(std::uint32_t attempt_id,
+                                         void* context);
+    using SaveAllowedSink = bool (*)(void* context);
 
     esp_err_t Start(std::uint32_t ap_address, const settings::DeviceSettings& current,
                     const settings::WifiProfileRecord& wifi_profiles,
-                    SaveSink sink, void* context);
+                    SaveSink save_sink, StatusSink status_sink,
+                    SuccessObservedSink observed_sink,
+                    SaveAllowedSink save_allowed_sink, void* context);
     void Stop();
     void NotifyClientNetworkReady();
+    void PauseScan();
     void ResetClientSessions();
     bool IsRunning() const;
 
 private:
     static esp_err_t PortalHandler(httpd_req_t* request);
     static esp_err_t StyleHandler(httpd_req_t* request);
+    static esp_err_t EnglishScriptHandler(httpd_req_t* request);
+    static esp_err_t I18nScriptHandler(httpd_req_t* request);
     static esp_err_t UiScriptHandler(httpd_req_t* request);
     static esp_err_t ScriptHandler(httpd_req_t* request);
     static esp_err_t FaviconHandler(httpd_req_t* request);
     static esp_err_t ScanHandler(httpd_req_t* request);
     static esp_err_t ConfigHandler(httpd_req_t* request);
+    static esp_err_t StatusHandler(httpd_req_t* request);
     static esp_err_t SaveHandler(httpd_req_t* request);
     static esp_err_t CaptivePortalHandler(httpd_req_t* request);
     static void DnsTaskEntry(void* context);
@@ -69,6 +80,9 @@ private:
     settings::DeviceSettings current_{};
     settings::WifiProfileRecord wifi_profiles_{};
     SaveSink save_sink_ = nullptr;
+    StatusSink status_sink_ = nullptr;
+    SuccessObservedSink observed_sink_ = nullptr;
+    SaveAllowedSink save_allowed_sink_ = nullptr;
     void* save_context_ = nullptr;
     settings::DeviceSettings pending_save_{};
     esp_err_t save_result_ = ESP_ERR_INVALID_STATE;

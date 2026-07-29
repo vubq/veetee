@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultAgentConfig,
   hasAuthoritativeVoiceCatalogDrift,
   hasProviderConfigVersionUpgrade,
   shouldInitializeProviderChains,
@@ -37,5 +38,24 @@ describe("provider seed config", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("uses CLIProxyAPI with Groq fallback for a clean local agent", () => {
+    const config = defaultAgentConfig({
+      vad: "vad-provider",
+      asr: "asr-provider",
+      llm: "cliproxy-provider",
+      llmFallback: "groq-provider",
+      tts: "tts-provider",
+    });
+    const chains = config.providerChains as Array<{
+      kind: string;
+      providerIds: string[];
+    }>;
+
+    expect(chains.find((chain) => chain.kind === "llm")?.providerIds).toEqual([
+      "cliproxy-provider",
+      "groq-provider",
+    ]);
   });
 });

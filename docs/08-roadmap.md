@@ -5,7 +5,7 @@ Thứ tự dưới đây được tối ưu để AI có thể code từng lát 
 Trạng thái implementation ngày 2026-07-22: Phase 0-3 đã có source/build/test và
 hardware bring-up; blank-flash AP -> Wi-Fi -> bind, resource A/B signed rollout và
 reported-state đã chạy trên board. Phase 4 cascade local đã pass host wire E2E cho
-Silero -> Zipformer -> semantic gate/9Router -> VieNeu -> Opus, cancellation,
+Silero -> Zipformer -> semantic gate/CLIProxyAPI -> VieNeu -> Opus, cancellation,
 inactivity và semantic reject. Phase 6 MCP đã pass firmware/voice/Manager end-to-end
 trên host. Phase 5 có auth, pairing, agent/provider config, desired/reported state,
 Manager Web theo prototype với live MCP, Realtime Lab dùng event metadata thật và
@@ -31,9 +31,10 @@ tiếp trên LCD vẫn chờ pairing và nghiệm thu thiết bị.
   Vietnamese 30M INT8, ChunkFormer-CTC-Large-Vie và VieNeu-TTS v3 Turbo.
 - Deployment single-node đã chốt; ghi CPU/RAM/VRAM/GPU, concurrency mục tiêu và
   memory budget riêng cho từng model worker.
-- Probe 9router: base URL/auth, Chat Completions hay Responses, SSE, structured
-  output, tool calling, cancellation, usage và concurrency. Không dùng token phiên
-  Codex trực tiếp làm app credential.
+- Probe OpenAI-compatible gateway hiện hành: CLIProxyAPI base URL/client auth, Chat
+  Completions SSE, structured output, tool calling, cancellation, usage và concurrency.
+  Không dùng token phiên Codex trực tiếp làm app credential; 9Router chỉ là opt-in
+  adapter đang tạm dừng.
 - Chốt canonical `/veetee/...` routes, không ship branded reference alias; freeze resource ABI, ESP-SR model-pack format và partition budget sau size probe.
 - Crypto spike JCS + detached Ed25519 đã pass trên host và ESP-IDF bằng
   Monocypher 4.0.3; giữ signed test vector chạy chung ở Node và firmware.
@@ -121,8 +122,8 @@ Sai password, server down, code hết hạn và bind trùng đều có UX/alert 
   confidence/ổn định thấp và còn deadline.
 - VieNeu-TTS v3 Turbo local adapter; probe true streaming, nếu batch thì dùng
   Vietnamese sentence chunker và khai báo capability đúng.
-- `openai-compatible-9router` LLM adapter cho dev; pass SSE/structured output/tool
-  calling/cancellation conformance, có backup binding.
+- `openai-compatible-cliproxyapi` LLM adapter cho dev; pass SSE/structured output/tool
+  calling/cancellation conformance, có backup binding. 9Router không thuộc startup.
 - Admission gate tổng quát: chỉ input hợp lệ/có chủ đích/hướng tới robot mới tạo AI/MCP turn.
 - ESP-SR activation/interrupt profile, semantic exit và fallback/error response.
 - `first_input_timeout`, `between_turns_timeout`, closing grace và provider deadlines.
@@ -137,7 +138,7 @@ Sai password, server down, code hết hạn và bind trùng đều có UX/alert 
 - Zipformer đạt WER/CER và p95 latency gate; ChunkFormer chỉ được bật nếu re-decode
   cải thiện quality có ý nghĩa mà không phá `total_turn_deadline`.
 - VieNeu đạt first-audio/RTF/pronunciation/cancel/license gate trên server thật.
-- 9router bị hủy thì không còn token/tool/TTS stale; nếu contract fail, cùng flow
+- Active LLM gateway bị hủy thì không còn token/tool/TTS stale; nếu contract fail, cùng flow
   chạy được bằng official API hoặc self-hosted compatible adapter.
 
 ## Phase 5 - Manager web MVP (4-6 ngày)
@@ -239,8 +240,8 @@ Chỉ bật `mode=realtime` khi ERLE/false VAD/latency đạt tiêu chí trong `
 - Board bring-up, AP fallback, activation, WebSocket, Opus, auto conversation và assistant gate.
 - Button wake, activation wake word, local interrupt profile ở standby/thinking, input admission và inactivity timeout. Speaking voice interrupt chỉ best-effort trước AEC gate.
 - Silero VAD + Zipformer Vietnamese INT8 primary, ChunkFormer quality fallback,
-  VieNeu-TTS v3 Turbo local và OpenAI-compatible 9router adapter (sau conformance
-  gate).
+  VieNeu-TTS v3 Turbo local và OpenAI-compatible CLIProxyAPI adapter (sau conformance
+  gate); 9Router giữ optional/paused.
 - Manager pairing/agent/provider config.
 - Dynamic config, ESP-SR model/assets bundle đã ký và desired/reported device state.
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Provider } from "../../api/schemas";
 import type { ProviderUpdateInput } from "../../types/manager";
@@ -12,6 +13,7 @@ const props = defineProps<{
   testProvider: (id: string) => Promise<void>;
   updateProvider: (id: string, input: ProviderUpdateInput) => Promise<void>;
 }>();
+const { t } = useI18n();
 
 const selected = ref<Provider>();
 const testingId = ref("");
@@ -21,32 +23,32 @@ const healthy = computed(() => props.providers.filter((provider) => provider.ena
 const kinds = computed(() => new Set(props.providers.map((provider) => provider.kind)).size);
 const attention = computed(() => props.providers.filter((provider) => provider.enabled && provider.health !== "healthy").length);
 const providerMetrics = computed(() => [
-  { label: "Runtime khỏe", value: healthy.value, detail: "Sẵn sàng tham gia routing", tone: "success" as const },
-  { label: "Cần kiểm tra", value: attention.value, detail: "Chưa đo hoặc đang degraded", tone: attention.value ? "warning" as const : "neutral" as const },
-  { label: "Capabilities", value: kinds.value, detail: "VAD · ASR · LLM · TTS", tone: "info" as const },
+  { label: t("providers.metrics.healthy"), value: healthy.value, detail: t("providers.metrics.healthyDetail"), tone: "success" as const },
+  { label: t("providers.metrics.attention"), value: attention.value, detail: t("providers.metrics.attentionDetail"), tone: attention.value ? "warning" as const : "neutral" as const },
+  { label: t("providers.metrics.capabilities"), value: kinds.value, detail: t("providers.metrics.capabilityKinds"), tone: "info" as const },
 ]);
 
 async function test(id: string): Promise<void> {
   testingId.value = id;
   error.value = "";
   try { await props.testProvider(id); }
-  catch (exception) { error.value = exception instanceof Error ? exception.message : "Provider test thất bại."; }
+  catch (exception) { error.value = exception instanceof Error ? exception.message : t("providers.errors.testFailed"); }
   finally { testingId.value = ""; }
 }
 </script>
 
 <template>
   <section class="vt-page" data-page="providers">
-    <VtPageHeader eyebrow="AI ROUTING / PROVIDER HUB" title="Một pipeline, nhiều lựa chọn" description="Quản lý local model và OpenAI-compatible provider theo capability, locale, priority, health và circuit breaker." />
+    <VtPageHeader :eyebrow="t('pages.providers.eyebrow')" :title="t('pages.providers.title')" :description="t('pages.providers.description')" />
 
-    <div class="provider-dashboard">
+    <div class="provider-dashboard" data-page-section="summary">
       <VtOperationsHero
-        eyebrow="RUNTIME CONTROL"
-        title="Hệ điều phối AI"
-        description="Health probe chỉ đo kết nối endpoint, không phải tốc độ sinh token. Time-to-first-token và audio đầu tiên được đo trong Realtime Lab."
+        :eyebrow="t('providers.hero.eyebrow')"
+        :title="t('providers.hero.title')"
+        :description="t('providers.hero.description')"
         :value="enabled"
-        value-label="Provider đang bật"
-        :value-hint="`${providers.length} cấu hình trong catalog`"
+        :value-label="t('providers.hero.enabled')"
+        :value-hint="t('providers.hero.catalogCount', { count: providers.length })"
         icon="provider"
       />
       <VtMetricStrip :items="providerMetrics" />
@@ -63,7 +65,7 @@ async function test(id: string): Promise<void> {
         @edit="selected = provider"
       />
     </div>
-    <VtEmptyState v-else icon="resource" title="Chưa cấu hình provider" text="Bootstrap provider trong Manager API để tạo routing chain đầu tiên." />
+    <VtEmptyState v-else icon="resource" :title="t('providers.empty.title')" :text="t('providers.empty.body')" />
 
     <ProviderDialog :open="Boolean(selected)" :provider="selected" :save="updateProvider" @close="selected = undefined" />
   </section>

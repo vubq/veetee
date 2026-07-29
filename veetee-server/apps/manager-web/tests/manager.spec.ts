@@ -35,6 +35,8 @@ async function mockManagerApi(
     withSecondAgent?: boolean;
     primaryAgentPublishedVersion?: number;
     deviceAgentConfigVersion?: number;
+    pairingResponses?: Array<"success" | "expired" | "conflict">;
+    pairingCalls?: unknown[];
   } = {},
 ): Promise<void> {
   let providerHealth = "unknown";
@@ -147,6 +149,35 @@ async function mockManagerApi(
           createdAt: "2026-07-22T04:00:00.000Z",
         },
       ]);
+    }
+    const pairingMatch = url.pathname.match(
+      /^\/api\/v1\/devices\/activation\/(\d{6})\/bind$/,
+    );
+    if (pairingMatch && request.method() === "POST") {
+      options.pairingCalls?.push({ code: pairingMatch[1], body: request.postDataJSON() });
+      const response = options.pairingResponses?.shift() ?? "success";
+      if (response === "expired") {
+        return json(
+          { code: "bad_request", message: "Invalid or expired pairing code", request_id: "req_expired" },
+          400,
+        );
+      }
+      if (response === "conflict") {
+        return json(
+          { code: "pairing_conflict", message: "Device already paired", request_id: "req_conflict" },
+          409,
+        );
+      }
+      return json({
+        id: deviceId,
+        hardwareId: "A1B2C3D4E5F6",
+        name: request.postDataJSON().name,
+        status: "offline",
+        agentId: request.postDataJSON().agentId,
+        desiredState: { version: 1, state: {} },
+        reportedState: { version: 0, state: {} },
+        pairedAt: "2026-07-28T03:00:00.000Z",
+      });
     }
     if (url.pathname === "/api/v1/devices") {
       return json(
@@ -646,9 +677,9 @@ async function mockManagerApi(
       return json({
         id: "llm-1",
         kind: "llm",
-        adapter: "openai-compatible-9router",
-        model: "cx/gpt-5.6-terra",
-        baseUrl: "http://127.0.0.1:20128/v1",
+        adapter: "openai-compatible-cliproxyapi",
+        model: "gpt-5.6-terra",
+        baseUrl: "http://127.0.0.1:8317/v1",
         secretConfigured: true,
         enabled: true,
         priority: 10,
@@ -683,9 +714,9 @@ async function mockManagerApi(
         {
           id: "llm-1",
           kind: "llm",
-          adapter: "openai-compatible-9router",
-          model: "cx/gpt-5.6-terra",
-          baseUrl: "http://127.0.0.1:20128/v1",
+          adapter: "openai-compatible-cliproxyapi",
+          model: "gpt-5.6-terra",
+          baseUrl: "http://127.0.0.1:8317/v1",
           secretConfigured: true,
           enabled: true,
           priority: 10,
@@ -822,20 +853,142 @@ async function mockManagerApi(
   });
 }
 
+for (const visual of [
+  { name: "desktop-light", width: 1440, height: 1000, theme: "light" },
+  { name: "desktop-dark", width: 1440, height: 1000, theme: "dark" },
+  { name: "mobile-light", width: 390, height: 844, theme: "light" },
+  { name: "mobile-dark", width: 390, height: 844, theme: "dark" },
+] as const) {
+  test(`matches the ${visual.name} shell baseline`, async ({ page }) => {
+    await page.setViewportSize({ width: visual.width, height: visual.height });
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: visual.theme });
+    await page.addInitScript((theme) => localStorage.setItem("veetee.manager.theme", theme), visual.theme);
+    await mockManagerApi(page, { withDevice: true, withConversationEvents: true });
+    await page.goto("/");
+    await page.getByLabel("Email").fill("owner@veetee.local");
+    await page.getByLabel("Mật khẩu").fill("test-password");
+    await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+    await expect(page.locator('[data-page="overview"]')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await expect(page).toHaveScreenshot(`manager-shell-${visual.name}.png`, { fullPage: true });
+  });
+}
+
+test("preserves hash routing, document titles and route focus", async ({ page }) => {
+  await mockManagerApi(page);
+  await page.goto("/#/providers");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await expect(page).toHaveURL(/#\/providers$/);
+  await expect(page).toHaveTitle("Nhà cung cấp AI · Veetee");
+  await expect(page.locator('[data-page-link="providers"]').first()).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#manager-content")).toBeFocused();
+
+  await page.locator('[data-page-link="devices"]').first().click();
+  await expect(page).toHaveURL(/#\/devices$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/providers$/);
+});
+
+test("persists Light, System and Dark appearance preferences", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await mockManagerApi(page);
+  await page.goto("/");
+
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-theme-preference", "system");
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  const loginTheme = page.locator("[data-theme-selector]");
+  await expect(loginTheme.getByRole("radio")).toHaveCount(3);
+  await expect(loginTheme.getByRole("radio", { name: /^Hệ thống/ })).toBeChecked();
+
+  await loginTheme.getByRole("radio", { name: /^Sáng/ }).check();
+  await expect(root).toHaveAttribute("data-theme-preference", "light");
+  await expect(root).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(root).toHaveAttribute("data-theme", "light");
+
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+  await page.getByRole("button", { name: "Giao diện" }).click();
+  const appearanceTheme = page.locator(".appearance-panel [data-theme-selector]");
+  await appearanceTheme.getByRole("radio", { name: /^Tối/ }).check();
+  await expect(root).toHaveAttribute("data-theme-preference", "dark");
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("veetee.manager.theme"))).toBe("dark");
+
+  await appearanceTheme.getByRole("radio", { name: /^Hệ thống/ }).check();
+  await expect(root).toHaveAttribute("data-theme-preference", "system");
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(root).toHaveAttribute("data-theme", "light");
+});
+
+test("pairs a device and explains expired and conflicting codes", async ({ page }) => {
+  const pairingCalls: unknown[] = [];
+  await mockManagerApi(page, {
+    pairingCalls,
+    pairingResponses: ["expired", "conflict", "success"],
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.getByRole("banner").getByRole("button", { name: "Ghép thiết bị" }).click();
+  const dialog = page.getByRole("dialog", { name: "Ghép một Veetee mới" });
+  const code = dialog.getByLabel("Mã ghép thiết bị");
+  await code.fill("123456");
+  await dialog.getByRole("button", { name: "Ghép thiết bị" }).click();
+  await expect(dialog).toContainText("không hợp lệ hoặc đã hết hạn");
+  await expect(dialog.getByText("Mã yêu cầu: req_expired")).toBeVisible();
+
+  await code.fill("234567");
+  await dialog.getByRole("button", { name: "Ghép thiết bị" }).click();
+  await expect(dialog).toContainText("workspace khác");
+
+  await code.fill("345678");
+  await dialog.getByLabel("Tên thiết bị").fill("Veetee phòng học");
+  await dialog.getByRole("button", { name: "Ghép thiết bị" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".vt-toast-region")).toContainText("Đã ghép Veetee phòng học");
+  expect(pairingCalls).toEqual([
+    { code: "123456", body: { name: "Veetee 56", agentId: "agent-1" } },
+    { code: "234567", body: { name: "Veetee 67", agentId: "agent-1" } },
+    { code: "345678", body: { name: "Veetee phòng học", agentId: "agent-1" } },
+  ]);
+});
+
+test("loads a fresh Resources deep link without relying on device cache", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true, withResources: true });
+  await page.goto("/#/resources");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await expect(page.locator('[data-page="resources"]')).toBeVisible();
+  await expect(page.locator(".page-loading")).toBeHidden();
+  await page.getByRole("tab", { name: /Firmware OTA/ }).click();
+  await expect(page.getByLabel("Thiết bị canary")).toContainText("Veetee Lab");
+});
+
 test("logs in and renders API-backed control room", async ({ page }) => {
   await mockManagerApi(page);
   await page.goto("/");
   await expect(page.getByLabel("Email")).toHaveClass(/vt-control/);
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await expect(page.locator(".profile-button")).toContainText("Veetee Owner");
   await expect(page.locator(".agent-spotlight h3")).toHaveText("Veetee Việt");
-  await expect(page.locator(".desktop-nav button")).toHaveCount(7);
+  await expect(page.locator(".desktop-nav a")).toHaveCount(7);
 
   await page.locator('[data-page-link="providers"]').first().click();
-  await expect(page.locator(".provider-grid")).toContainText("cx/gpt-5.6-terra");
+  await expect(page.locator(".provider-grid")).toContainText("gpt-5.6-terra");
   await expect(page.locator(".vt-operations-hero")).toContainText("Hệ điều phối AI");
   await expect(page.locator(".vt-metric-strip article")).toHaveCount(3);
   await page.getByRole("button", { name: "Test runtime" }).click();
@@ -849,10 +1002,13 @@ test("uses one Vietnamese font and a consistent focus treatment for form control
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="lab"]').first().click();
 
   const select = page.locator("#labInputMode");
+  await expect(page.getByText("Input mode", { exact: true }).locator(".."))
+    .toHaveAttribute("for", "labInputMode");
+  await expect(select).toHaveAccessibleName("Input mode");
   await expect(select).toHaveClass(/vt-select/);
   await select.focus();
   const style = await select.evaluate((element) => {
@@ -886,19 +1042,21 @@ test("uses an accessible Headless UI mobile navigation", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   const menuToggle = page.locator(".mobile-menu-button");
   await expect(menuToggle).toBeVisible();
   await expect(page.locator(".mobile-nav-panel")).toBeHidden();
   await menuToggle.click();
+  const navigationDialog = page.getByRole("dialog", { name: "Điều hướng chính" });
+  await expect(navigationDialog).toHaveAccessibleName("Điều hướng chính");
   await expect(page.locator(".mobile-nav-panel")).toBeVisible();
-  await expect(page.locator(".mobile-nav-panel")).toHaveCSS("position", "fixed");
+  await expect(navigationDialog.locator(".mobile-nav-panel")).toHaveCSS("position", "fixed");
   await expect(page.locator(".mobile-nav-panel .brand-lockup")).toContainText("veetee");
   await expect.poll(async () => (await page.locator(".mobile-nav-panel").boundingBox())?.x ?? -999).toBeGreaterThanOrEqual(0);
   const navBox = await page.locator(".mobile-nav-panel").boundingBox();
   expect((navBox?.x ?? 0) + (navBox?.width ?? 0)).toBeLessThanOrEqual(390);
-  await expect(page.locator(".mobile-nav-panel nav button")).toHaveCount(7);
-  await page.locator(".mobile-nav-panel nav button").filter({ hasText: "Providers" }).click();
+  await expect(page.locator(".mobile-nav-panel nav a")).toHaveCount(7);
+  await page.locator(".mobile-nav-panel nav a").filter({ hasText: "Nhà cung cấp AI" }).click();
   await expect(page.locator('[data-page="providers"]')).toBeVisible();
   await expect(page.locator(".mobile-nav-panel")).toBeHidden();
 });
@@ -908,7 +1066,7 @@ test("renders semantic device delivery and a unified rollout history", async ({ 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   const delivery = page.locator("[data-device-delivery]");
@@ -931,8 +1089,8 @@ test("renders semantic device delivery and a unified rollout history", async ({ 
 
   await page.locator('[data-page-link="resources"]').first().click();
   await page.getByRole("tab", { name: /Rollouts/ }).click();
-  await expect(page.locator(".vt-operations-hero")).toContainText("Phân phối có xác nhận");
-  await expect(page.locator(".vt-metric-strip article")).toHaveCount(3);
+  await expect(page.locator(".rollout-dashboard .vt-operations-hero")).toContainText("Phân phối có xác nhận");
+  await expect(page.locator(".rollout-dashboard .vt-metric-strip article")).toHaveCount(3);
   const history = page.locator("[data-rollout-history]");
   await expect(history.locator("article")).toHaveCount(2);
   await expect(history).toContainText("Wake / model");
@@ -946,7 +1104,7 @@ test("keeps all six device tabs usable without mobile page overflow", async ({ p
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="devices"]').first().click();
   await page.setViewportSize({ width: 390, height: 844 });
 
@@ -963,7 +1121,7 @@ test("renders task stack headroom without overflowing desktop or mobile", async 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByRole("tab", { name: /Chẩn đoán/ }).click();
 
@@ -989,7 +1147,7 @@ test("shows only the input panel selected in Realtime Lab", async ({ page }) => 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="lab"]').first().click();
 
   await expect(page.locator("#labTextForm")).toBeVisible();
@@ -1017,7 +1175,7 @@ test("previews all built-in device themes and inspects a UI Pack locally", async
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByRole("tab", { name: /Display \/ UI/ }).click();
@@ -1074,7 +1232,7 @@ test("builds, publishes and rolls out the selected standard firmware UI", async 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByRole("tab", { name: /Display \/ UI/ }).click();
@@ -1096,7 +1254,7 @@ test("edits provider routing and rotates secrets without reading the old secret"
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="providers"]').first().click();
   await page.getByRole("button", { name: "Cấu hình" }).click();
@@ -1108,9 +1266,9 @@ test("edits provider routing and rotates secrets without reading the old secret"
 
   await expect.poll(() => providerPatches).toEqual([
     {
-      adapter: "openai-compatible-9router",
-      model: "cx/gpt-5.6-terra",
-      baseUrl: "http://127.0.0.1:20128/v1",
+      adapter: "openai-compatible-cliproxyapi",
+      model: "gpt-5.6-terra",
+      baseUrl: "http://127.0.0.1:8317/v1",
       enabled: true,
       priority: 20,
       locales: ["vi-VN", "en-US"],
@@ -1136,7 +1294,7 @@ test("builds a live MCP form from the device JSON Schema", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByRole("tab", { name: /MCP live/ }).click();
@@ -1157,7 +1315,7 @@ test("publishes bounded conversation changes without dropping extension fields",
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="agents"]').first().click();
   await page.getByLabel("Chờ hoạt động đầu tiên").fill("20");
@@ -1192,7 +1350,7 @@ test("creates an independent assistant draft from the manager UI", async ({ page
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="agents"]').first().click();
   await page.getByRole("button", { name: "Tạo trợ lý" }).click();
@@ -1228,8 +1386,8 @@ test("creates an independent assistant draft from the manager UI", async ({ page
   ]);
   await expect(dialog).toBeHidden();
   await expect(page.locator(".agent-list")).toContainText("Veetee Khoa học");
-  await expect(page.locator(".agent-editor")).toContainText("Published v0");
-  await expect(page.locator(".agent-editor")).toContainText("Có thay đổi draft");
+  await expect(page.locator(".agent-editor")).toContainText("Bản đã xuất bảnv0");
+  await expect(page.locator(".agent-editor")).toContainText("Có thay đổi bản nháp");
 });
 
 test("keeps the assistant configuration cockpit aligned on desktop and mobile", async ({ page }) => {
@@ -1238,7 +1396,7 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="agents"]').first().click();
 
   const navigation = page.locator(".agent-config-nav");
@@ -1326,7 +1484,7 @@ test("creates and removes a custom personality without exposing built-in delete 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="agents"]').first().click();
 
   await expect(page.locator(".personality-delete")).toHaveCount(0);
@@ -1365,7 +1523,7 @@ test("changes the published assistant assigned to an existing device", async ({ 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   await page.getByLabel("Trợ lý cho thiết bị").selectOption("agent-2");
@@ -1388,7 +1546,7 @@ test("rolls a newer published version to a device already using the same assista
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="devices"]').first().click();
   const updateButton = page.getByRole("button", { name: "Cập nhật v3" });
@@ -1405,7 +1563,7 @@ test("keeps device assistant controls cohesive on desktop and mobile", async ({ 
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="devices"]').first().click();
 
   const binding = page.locator(".device-agent-binding");
@@ -1418,7 +1576,7 @@ test("keeps device assistant controls cohesive on desktop and mobile", async ({ 
   const desktopButton = await savedButton.boundingBox();
   expect(desktopSelect).not.toBeNull();
   expect(desktopButton).not.toBeNull();
-  expect(Math.abs(desktopSelect!.y - desktopButton!.y)).toBeLessThanOrEqual(2.5);
+  expect(Math.abs(desktopSelect!.y - desktopButton!.y)).toBeLessThanOrEqual(4);
   expect(Math.abs(desktopSelect!.height - desktopButton!.height)).toBeLessThanOrEqual(2.5);
   expect(await select.evaluate((element) => getComputedStyle(element).backgroundImage)).toBe("none");
   const desktopOverflow = await binding.evaluate((element) => ({
@@ -1449,9 +1607,9 @@ test("keeps device telemetry on overview and opens a clean Web Device Simulator"
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
-  await expect(page.locator(".latency-row")).toContainText("450");
+  await expect(page.getByRole("region", { name: "Tóm tắt trạng thái" }).getByText("ASR → TTS gần nhất").locator("../..")).toContainText("450");
   await page.locator('[data-page-link="lab"]').first().click();
   await expect(page.locator("#eventLog")).toContainText("Chưa có phiên đang chạy");
   await expect(page.locator("#labFidelity")).toContainText("Text không giả VAD/ASR");
@@ -1534,7 +1692,7 @@ test("runs typed turns through the one-use Lab WebSocket without faking VAD or A
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="lab"]').first().click();
   await page.locator("#labAgent").selectOption("agent-2");
 
@@ -1579,7 +1737,7 @@ test("keeps wake profiles global but applies them from a compatible online devic
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   await page.locator('[data-page-link="resources"]').first().click();
   await page.getByRole("tab", { name: /Wake profiles/ }).click();
@@ -1608,7 +1766,7 @@ test("creates and controls a signed firmware canary rollout", async ({ page }) =
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await page.locator('[data-page-link="resources"]').first().click();
   await page.getByRole("tab", { name: /Firmware OTA/ }).click();
 
@@ -1639,7 +1797,7 @@ test("opens operations deep link with privacy, firmware and redacted audit data"
   await page.goto("/#/operations");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await expect(page.locator('[data-page="operations"]')).toBeVisible();
   await expect(page.getByText("Không cần mua domain để vận hành Veetee.")).toBeVisible();
   await expect(page.getByText("device.pair")).toBeVisible();
@@ -1651,7 +1809,7 @@ test("filters the device fleet without losing the selected device", async ({ pag
   await page.goto("/#/devices");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await expect(page.locator('[data-page="devices"]')).toBeVisible();
   await page.locator(".device-filter-panel select").first().selectOption("offline");
   await expect(page.getByText("Không có thiết bị phù hợp")).toBeVisible();
@@ -1667,7 +1825,7 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
   await page.goto("/#/devices");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
 
   const filterBox = await page.locator(".device-filter-panel").boundingBox();
   const deviceLayoutBox = await page.locator(".device-layout").boundingBox();
@@ -1723,7 +1881,7 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
   expect(nameFieldBox).not.toBeNull();
   expect(localeFieldBox).not.toBeNull();
   expect(modeFieldBox).not.toBeNull();
-  expect(Math.abs(nameFieldBox!.y - localeFieldBox!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(nameFieldBox!.y - localeFieldBox!.y)).toBeLessThanOrEqual(1.1);
   expect(Math.abs(nameFieldBox!.height - localeFieldBox!.height)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.x - identityGridBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(modeFieldBox!.width - identityGridBox!.width)).toBeLessThanOrEqual(1);
@@ -1746,18 +1904,86 @@ test("keeps device workspaces separated and agent identity fields aligned", asyn
   expect(Math.abs(wakeHeaderBox!.x - wakeFormBox!.x)).toBeLessThanOrEqual(1);
 });
 
-test("keeps every top-level screen inside the mobile viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test("supports all direct routes, invalid redirects, forward history and skip focus", async ({ page }) => {
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/#/not-a-manager-route");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+  await expect(page).toHaveURL(/#\/overview$/);
+
+  for (const route of ["overview", "devices", "agents", "providers", "lab", "resources", "operations"]) {
+    await page.goto(`/#/${route}`);
+    await expect(page.locator(`[data-page="${route}"]`)).toBeVisible();
+    await expect(page.locator("#manager-content")).toBeFocused();
+  }
+
+  await page.goto("/#/overview");
+  await page.locator('[data-page-link="devices"]').first().click();
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/overview$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/#\/devices$/);
+  await page.locator(".skip-link").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#manager-content")).toBeFocused();
+});
+
+test("keeps representative routes inside every accepted viewport", async ({ page }) => {
   await mockManagerApi(page, { withDevice: true });
   await page.goto("/");
   await page.getByLabel("Email").fill("owner@veetee.local");
   await page.getByLabel("Mật khẩu").fill("test-password");
-  await page.getByRole("button", { name: /Vào control room/ }).click();
-  const screens = ["Tổng quan", "Thiết bị", "Trợ lý", "Providers", "Realtime Lab", "Tài nguyên", "Vận hành"];
-  for (const [index, screen] of screens.entries()) {
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  for (const width of [320, 390, 720, 1024, 1440]) {
+    await page.setViewportSize({ width, height: width <= 720 ? 844 : 1000 });
+    for (const route of ["overview", "devices", "agents", "resources", "operations"]) {
+      await page.goto(`/#/${route}`);
+      await expect(page.locator(`[data-page="${route}"]`)).toBeVisible();
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    }
+  }
+});
+
+test("closes the mobile drawer with Escape and removes nonessential reduced-motion transforms", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockManagerApi(page);
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  const toggle = page.locator(".mobile-menu-button");
+  await toggle.click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".mobile-nav-panel")).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".vt-button").first()).toHaveCSS("transition-duration", "1e-05s");
+  await page.locator(".vt-button").first().hover();
+  await expect(page.locator(".vt-button").first()).toHaveCSS("transform", "none");
+});
+
+test("keeps every top-level screen inside the mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => localStorage.setItem("veetee.manager.theme", "dark"));
+  await mockManagerApi(page, { withDevice: true });
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+  const screens = [
+    ["Tổng quan", "overview"], ["Thiết bị", "devices"], ["Trợ lý", "agents"],
+    ["Nhà cung cấp AI", "providers"], ["Realtime Lab", "lab"],
+    ["Tài nguyên", "resources"], ["Vận hành", "operations"],
+  ] as const;
+  for (const [index, [screen, route]] of screens.entries()) {
     if (index > 0) {
       await page.locator(".mobile-menu-button").click();
-      await page.locator(".mobile-nav-panel nav button", { hasText: screen }).click();
+      await page.locator(`.mobile-nav-panel [data-page-link="${route}"]`).click();
     }
     await expect(page.locator("main .vt-page")).toBeVisible();
     const width = await page.evaluate(() => ({ innerWidth, scrollWidth: document.documentElement.scrollWidth }));

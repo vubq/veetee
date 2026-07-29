@@ -58,33 +58,36 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
     },
   });
   const providers = [
-    [ProviderKind.VAD, "silero-local", "silero-vad", null],
-    [ProviderKind.ASR, "sherpa-onnx", "zipformer-vi-30m-int8", null],
+    [ProviderKind.VAD, "silero-local", "silero-vad", null, true],
+    [ProviderKind.ASR, "sherpa-onnx", "zipformer-vi-30m-int8", null, true],
     [
       ProviderKind.LLM,
       "openai-compatible-9router",
       "cx/gpt-5.6-terra",
       "http://127.0.0.1:20128/v1",
+      false,
     ],
-    [ProviderKind.TTS, "vieneu-local", "vieneu-tts-v3-turbo", null],
+    [ProviderKind.TTS, "vieneu-local", "vieneu-tts-v3-turbo", null, true],
     [
       ProviderKind.LLM,
       "groq-cloud",
       "llama-3.3-70b-versatile",
       "https://api.groq.com/openai/v1",
+      true,
     ],
     [
       ProviderKind.LLM,
       "openai-compatible-cliproxyapi",
       "gpt-5.6-terra",
       "http://127.0.0.1:8317/v1",
+      true,
     ],
   ] as const;
-  for (const [kind, adapter, model, baseUrl] of providers) {
+  for (const [kind, adapter, model, baseUrl, enabled] of providers) {
     const defaultConfig = defaultProviderConfig(adapter);
     const persisted = await prisma.providerBinding.upsert({
       where: { tenantId_kind_adapter_model: { tenantId: tenant.id, kind, adapter, model } },
-      update: {},
+      update: adapter === "openai-compatible-9router" ? { enabled: false } : {},
       create: {
         tenantId: tenant.id,
         kind,
@@ -92,7 +95,7 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
         model,
         baseUrl,
         secretConfigured: false,
-        enabled: true,
+        enabled,
         priority: 100,
         locales: ["vi-VN"],
         health: ProviderHealth.UNKNOWN,
@@ -161,10 +164,18 @@ export async function seedControlPlane(prisma: PrismaClient, input: SeedInput): 
     where: { tenantId: tenant.id, enabled: true },
     orderBy: [{ kind: "asc" }, { priority: "asc" }],
   });
+  const defaultAdapters = {
+    vad: "silero-local",
+    asr: "sherpa-onnx",
+    llm: "openai-compatible-cliproxyapi",
+    llmFallback: "groq-cloud",
+    tts: "vieneu-local",
+  } as const;
   const providerIds = Object.fromEntries(
-    persistedProviders
-      .filter((provider) => ["silero-local", "sherpa-onnx", "openai-compatible-9router", "vieneu-local"].includes(provider.adapter))
-      .map((provider) => [provider.kind.toLowerCase(), provider.id]),
+    Object.entries(defaultAdapters).flatMap(([key, adapter]) => {
+      const provider = persistedProviders.find((candidate) => candidate.adapter === adapter);
+      return provider ? [[key, provider.id]] : [];
+    }),
   );
   const persistedDraft =
     agent.draftConfig && typeof agent.draftConfig === "object" && !Array.isArray(agent.draftConfig)
@@ -229,7 +240,10 @@ export function defaultAgentConfig(providerIds: Record<string, string> = {}): Re
           providerChains: ["vad", "asr", "llm", "tts"].map((kind) => ({
             kind,
             locale: "vi-VN",
-            providerIds: [providerIds[kind]],
+            providerIds:
+              kind === "llm"
+                ? [providerIds.llm, providerIds.llmFallback].filter(Boolean)
+                : [providerIds[kind]],
           })),
         }
       : {}),

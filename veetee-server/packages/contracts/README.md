@@ -7,7 +7,7 @@ Device-facing JSON dùng `snake_case`; manager REST có thể dùng `camelCase` 
 `fixtures/config/agent-conversation-policy-v1.json` là baseline cho dual wake, input admission, auto conversation, MCP policy và inactivity timeout. Ngưỡng/model/provider cụ thể vẫn nằm trong versioned agent config, không hard-code vào firmware.
 
 `fixtures/config/provider-baseline-v1.json` là shape canonical `snake_case` cho
-Silero/Zipformer/ChunkFormer/9router/VieNeu baseline. Secret và model URL thật
+Silero/Zipformer/ChunkFormer/CLIProxyAPI/VieNeu baseline. Secret và model URL thật
 không nằm trong fixture; `base_url_env` chỉ là tên biến môi trường cho dev LAN.
 
 `fixtures/artifacts/resource-manifest-v1.json` và `fixtures/artifacts/device-capability-v1.json` mô tả signed resource bundle, runtime ABI, flash/PSRAM budget và desired/reported compatibility.

@@ -170,17 +170,6 @@ def benchmark_iterations() -> int:
 
 async def main() -> None:
     providers: dict[str, NineRouterLlmProvider] = {
-        "9router": NineRouterLlmProvider(
-            base_url=os.getenv(
-                "VEETEE_9ROUTER_BASE_URL",
-                "http://127.0.0.1:20128/v1",
-            ),
-            model=os.getenv("VEETEE_9ROUTER_MODEL", "cx/gpt-5.6-terra"),
-            api_key=os.getenv("VEETEE_9ROUTER_API_KEY", ""),
-            reasoning_effort="none",
-            provider_label="9router",
-            config={"responseFormat": "json_schema"},
-        ),
         "cliproxyapi": CliProxyApiLlmProvider(
             base_url=os.getenv(
                 "VEETEE_CLIPROXY_BASE_URL",
@@ -190,8 +179,24 @@ async def main() -> None:
             api_key=os.getenv("VEETEE_CLIPROXY_API_KEY", ""),
             reasoning_effort="none",
             config={"responseFormat": "json_schema"},
-        ),
+        )
     }
+    if os.getenv("VEETEE_LLM_BENCHMARK_INCLUDE_9ROUTER", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        providers["9router"] = NineRouterLlmProvider(
+            base_url=os.getenv(
+                "VEETEE_9ROUTER_BASE_URL",
+                "http://127.0.0.1:20128/v1",
+            ),
+            model=os.getenv("VEETEE_9ROUTER_MODEL", "cx/gpt-5.6-terra"),
+            api_key=os.getenv("VEETEE_9ROUTER_API_KEY", ""),
+            reasoning_effort="none",
+            provider_label="9router",
+            config={"responseFormat": "json_schema"},
+        )
     results = {name: GatewaySamples() for name in providers}
     try:
         for iteration in range(benchmark_iterations()):

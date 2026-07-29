@@ -43,6 +43,7 @@ enum class AppMessageKind : std::uint8_t {
     kResourceHealthCheck,
     kFirmwareReconcile,
     kFirmwareHealthCheck,
+    kProvisioningCleanup,
 };
 
 struct AppMessage {
@@ -532,6 +533,12 @@ void OnWifiEvent(veetee::network::WifiManagerEvent event, void*) {
         case veetee::network::WifiManagerEvent::kProvisioningSaved:
             PostEvent(veetee::app::Event::kProvisioningSaved);
             break;
+        case veetee::network::WifiManagerEvent::kProvisioningCleanup:
+            if (!PostMessage(AppMessage{
+                    .kind = AppMessageKind::kProvisioningCleanup})) {
+                g_wifi.RetryProvisioningCleanup();
+            }
+            break;
     }
 }
 
@@ -900,6 +907,14 @@ void RunApplication(void*) {
                     ScheduleFirmwareReport(Phase::kFailed, notification,
                                            notification.error_code);
                     break;
+            }
+            continue;
+        }
+        if (message.kind == AppMessageKind::kProvisioningCleanup) {
+            const esp_err_t error = g_wifi.FinishProvisioningHandoff();
+            if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Unable to finish provisioning handoff: %s",
+                         esp_err_to_name(error));
             }
             continue;
         }

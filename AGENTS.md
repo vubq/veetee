@@ -14,6 +14,7 @@ This workspace contains the Veetee blueprint, source scaffolds, contract fixture
 - `docs/11-ai-first-design-principles.md` before adding intent, behavior, routing or hard-coded product rules.
 - `docs/12-dynamic-config-and-artifacts.md` before changing wake profiles, device config, models, assets, OTA resources or artifact rollout.
 - `docs/08-roadmap.md` for milestone order.
+- `docs/21-local-development-runbook.md` before starting, restarting or performance-testing the local Voice stack.
 - `skills/veetee-development/SKILL.md` for AI task workflow.
 
 ## Hard rules
@@ -33,6 +34,7 @@ This workspace contains the Veetee blueprint, source scaffolds, contract fixture
 - Treat the pin map in `docs/03-firmware-spec.md` as provisional until the physical board is measured.
 - Do not require a purchased domain for local development; use configurable LAN URLs and bootstrap discovery.
 - Never commit API keys, activation secrets, transcript/audio dumps or production certificates.
+- Before starting the host Voice Server, run `env:voice:sync` and preserve the checked-in `OPENBLAS_NUM_THREADS=1` process cap unless a same-host A/B benchmark justifies changing it.
 - Add tests and docs with every behavior/contract change.
 - Report hardware validation separately from host/build validation.
 

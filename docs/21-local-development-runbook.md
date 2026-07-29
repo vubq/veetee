@@ -2,8 +2,9 @@
 
 Tài liệu này là cách khởi động Veetee sau khi bật máy, cho cả người phát triển và AI
 đang làm việc trong repository. V1 là single-node: các process app/model chạy trực tiếp
-trên host; PostgreSQL/Redis dùng host-local runtime hoặc Docker; 9Router là dependency
-loopback. Không chạy Manager API trong đường audio từng frame.
+trên host; PostgreSQL/Redis dùng host-local runtime hoặc Docker; CLIProxyAPI là LLM
+gateway local được gọi qua loopback. 9Router đang tạm dừng và không thuộc startup
+profile này. Không chạy Manager API trong đường audio từng frame.
 
 ## 0. Kiểm tra đúng source trước khi chạy
 
@@ -25,7 +26,7 @@ Không dùng worktree/nhánh cũ để khởi động nhầm service.
 Kiểm tra port trước khi mở process mới; không mở hai voice-server cùng port:
 
 ```bash
-ss -lntp | grep -E ':(20128|5432|6379|8000|8001|8081)\\b' || true
+ss -lntp | grep -E ':(8317|5432|6379|8000|8001|8081)([^0-9]|$)' || true
 ```
 
 ## 1. Cài đặt lần đầu (chỉ một lần trên máy)
@@ -67,10 +68,10 @@ npm run models:prepare
 npm run env:voice:sync
 ```
 
-`env:voice:sync` đọc Manager service token và API key active do local 9Router quản lý,
-chỉ ghi `apps/voice-server/.env` ignored mode `0600`, không in secret. Nếu chưa có key
-active hoặc Manager `.env` không hợp lệ, sửa dependency đó trước; không điền key vào
-source/example.
+`env:voice:sync` đọc Manager service token và CLIProxyAPI client key từ trusted local
+config, chỉ ghi `apps/voice-server/.env` ignored mode `0600`, không in secret. Nếu
+CLIProxyAPI config không có key hoặc Manager `.env` không hợp lệ, sửa dependency đó
+trước; không điền key vào source/example hay command line.
 
 Tuỳ chọn, chạy benchmark local sau khi model đã tải:
 
@@ -98,25 +99,28 @@ Có ba lớp cấu hình local, không được nhập nhằng:
    mode `0600`, và từ chối ghi đè.
 3. `apps/voice-server/.env.example` là nguồn mà `env:voice:sync` render thành
    `apps/voice-server/.env`. Script chỉ thay host/reload, Manager service token,
-   origin allowlist và 9Router API key; các baseline còn lại đến từ example.
+   origin allowlist và CLIProxyAPI base URL/model/client key; các baseline còn lại đến
+   từ example. Script không đọc 9Router store.
 
 Chỉ commit tên biến và giá trị development không nhạy cảm. Không commit/in/log giá trị
 của `*_SECRET`, `*_TOKEN`, `*_API_KEY`, `*_PASSWORD`, master/signing key, nội dung
 `local-admin.txt`, Authorization header, transcript hoặc audio. Khi kiểm tra effective
 config, dùng allowlist tên biến không nhạy cảm thay vì `cat .env`.
 
-Baseline portable phải đồng bộ giữa example, docs và runtime: ONNX/2 TTS threads,
-Trúc Ly, `tu_nhien`, speed `1.0`, lead-in 16, watermark bật, 24 kHz, native ref codes
-bật, playback queue 5 giây, ASR 2 threads, VAD 1 thread, LLM prewarm 12 giây và planner
-ceiling 15 giây. Manager agent snapshot có thể override voice/style/rate/volume và
-provider deadlines cho session; nó không đổi process-wide backend/thread count.
+Baseline portable phải đồng bộ giữa example, docs và runtime:
+`OPENBLAS_NUM_THREADS=1`, ONNX/2 TTS threads, Trúc Ly, `tu_nhien`, speed `1.0`, lead-in
+16, watermark bật, 24 kHz, native ref codes bật, playback queue 5 giây, ASR 2 threads,
+VAD 1 thread, LLM prewarm 12 giây và planner ceiling 15 giây. OpenBLAS là process-wide
+cap phải có trước khi Python import NumPy; `VEETEE_TTS_THREADS=2` chỉ giới hạn ONNX
+Runtime. Manager agent snapshot có thể override voice/style/rate/volume và provider
+deadlines cho session; nó không đổi process-wide backend/thread count hoặc BLAS cap.
 
 | Nhóm biến | Owner/source | Secret | Khi có hiệu lực |
 |---|---|---|---|
 | `DATABASE_URL`, `REDIS_URL`, Manager host/port/public URL, CORS, Voice WS URLs | Manager `.env`; sinh bởi `env:local:init` lần đầu rồi chỉnh local có chủ đích | URL có thể chứa credential; không in | restart Manager API |
 | `VEETEE_AUTH_SECRET`, Lab/device token secret, master key, internal service token, bootstrap password | Manager `.env` ignored `0600` | bắt buộc secret | restart/rotate theo runbook; không sync ra Web/firmware |
-| `VEETEE_9ROUTER_API_KEY`, `VEETEE_MANAGER_INTERNAL_TOKEN` | `env:voice:sync` lấy từ trusted local stores | bắt buộc secret | restart Voice Server sau sync |
-| ASR/VAD/TTS backend/thread/model path, prewarm/planner, inactivity, queue | `apps/voice-server/.env.example` -> ignored Voice `.env` | không, trừ provider key | process-wide; restart Voice Server |
+| `VEETEE_CLIPROXY_API_KEY`, `VEETEE_MANAGER_INTERNAL_TOKEN` | `env:voice:sync` lấy từ trusted local stores | bắt buộc secret | restart Voice Server sau sync |
+| `OPENBLAS_NUM_THREADS`, ASR/VAD/TTS backend/thread/model path, prewarm/planner, inactivity, queue | `apps/voice-server/.env.example` -> ignored Voice `.env` | không, trừ provider key | process-wide; phải có trước Python startup, restart Voice Server |
 | agent voice/style/rate/volume, provider/deadline policy | immutable published Manager snapshot | secret chỉ qua reference | session mới/reload snapshot |
 | `VEETEE_WEB_ALLOWED_HOSTS`, `VITE_MANAGER_API_URL` | Manager Web process environment | không | restart Vite/build |
 | Tailscale socket/state/cert/key và Serve/Funnel map | external userspace Tailscale state | state/key/cert private | daemon/Serve config; không nằm trong app `.env` |
@@ -135,24 +139,42 @@ là authoritative; sửa root template cùng commit thay vì “vá” ignored e
 
 ## 2. Khởi động sau mỗi lần reboot
 
-Hạ tầng và 9Router là dependency riêng. Kiểm tra chúng trước:
+Hạ tầng và CLIProxyAPI là dependency riêng. Giữ PostgreSQL/Redis và CLIProxyAPI chạy
+trong suốt các vòng restart app. Kiểm tra process/port trước để không mở gateway thứ hai:
 
 ```bash
 cd /home/vubq/Project/EmYeuKhoaHoc/veetee/veetee-server
 npm run infra:host:up                 # idempotent, nếu dùng host-local
-curl --fail --silent --show-error http://127.0.0.1:20128/api/health
-curl --fail --silent --show-error http://127.0.0.1:20128/v1/models >/dev/null
+systemctl --user --no-pager --type=service --state=running | grep -Ei 'cliproxy' || true
+ss -lntp | grep -E ':8317([^0-9]|$)' || true
 ```
 
-Nếu 9Router được cài bằng user service, kiểm tra service thay vì mở bản thứ hai:
+CLIProxyAPI được quản lý ngoài repository; nếu port `8317` chưa có owner, khởi động nó
+theo cấu hình local đã cài thay vì đoán command hoặc mở process duplicate. Veetee gọi
+`http://127.0.0.1:8317/v1`; gateway phải có client-key authentication. Không in key và
+không proxy port `8317` ra LAN, Tailscale hay public ingress. `env:voice:sync` xác nhận
+trusted config có key; Voice prewarm thực hiện authenticated inference. Voice Server sẽ
+không ready nếu model catalog/inference upstream không hoạt động. Port `20128` phải để
+trống trong profile này.
+
+Trên host baseline, kiểm tra power profile trước khi benchmark hoặc mở Voice Server:
 
 ```bash
-systemctl --user --no-pager --type=service --state=running | grep -Ei '9router|cliproxy' || true
+powerprofilesctl get
+# Khi đang cắm AC và cần nghiệm thu realtime:
+powerprofilesctl set performance
+powerprofilesctl get
 ```
 
-Nếu service không tự lên, khởi động dependency theo hướng dẫn cài đặt local của máy,
-không đưa credential vào lệnh hoặc log. Voice-server sẽ không ready nếu LLM upstream
-không hoạt động.
+Ngày 2026-07-29, `power-saver` giữ CPU quanh 900 MHz và làm cùng VieNeu profile có RTF
+2,695 / estimated starvation 2,746 giây; `performance` cho RTF 0,804 và starvation 0.
+Đây là host-runtime requirement đã đo, không phải lý do tăng TTS thread. Nếu máy đang dùng
+pin hoặc người vận hành không muốn đổi profile, dừng realtime acceptance và ghi rõ giới
+hạn thay vì tuning app để che nó. Có thể trả về `balanced` sau khi không còn chạy local
+AI; task yêu cầu để stack realtime hoạt động thì giữ `performance` trong thời gian đó.
+Power profile chỉ là một precondition: A/B dài cùng ngày còn tìm thấy OpenBLAS
+oversubscription độc lập. Luôn xác minh cap bằng effective env và `/proc/<pid>/environ`;
+không kết luận mọi slow/high-CPU đều do `power-saver`.
 
 Mở ba terminal app riêng, hoặc dùng process supervisor tương đương. Chạy đúng thứ tự
 sau khi các health check dependency trước đã pass:
@@ -168,11 +190,59 @@ Chờ `http://127.0.0.1:8001/health/ready` trả `200` trước khi mở Voice S
 
 **Terminal 2 — Voice Server (hot path, port 8000):**
 
+Sau khi Manager API ready và CLIProxyAPI đang có owner ở `8317`, render lại Voice `.env`.
+Lệnh này lấy Manager internal token và CLIProxyAPI client key từ trusted local stores,
+đồng thời khôi phục các backend/thread mặc định từ
+`apps/voice-server/.env.example`; chỉnh tay trước đó có thể bị thay thế.
+
 ```bash
 cd /home/vubq/Project/EmYeuKhoaHoc/veetee/veetee-server
 npm run env:voice:sync
+stat -c '%a %n' apps/voice-server/.env
+# expected: 600 apps/voice-server/.env
+
+python3 - <<'PY'
+from pathlib import Path
+
+allowed = {
+    "OPENBLAS_NUM_THREADS",
+    "VEETEE_ASR_THREADS",
+    "VEETEE_VAD_THREADS",
+    "VEETEE_TTS_THREADS",
+    "VEETEE_TTS_BACKEND",
+    "VEETEE_TTS_VOICE",
+    "VEETEE_TTS_STYLE",
+    "VEETEE_TTS_SPEED",
+    "VEETEE_TTS_STREAM_LEADIN_FRAMES",
+    "VEETEE_TTS_OUTPUT_SAMPLE_RATE",
+    "VEETEE_TTS_APPLY_WATERMARK",
+    "VEETEE_TTS_PLAYBACK_QUEUE_SECONDS",
+    "VEETEE_CLIPROXY_BASE_URL",
+    "VEETEE_CLIPROXY_MODEL",
+    "VEETEE_LLM_PREWARM",
+    "VEETEE_LLM_PREWARM_SECONDS",
+    "VEETEE_PLANNER_SECONDS",
+}
+values = {}
+for raw_line in Path("apps/voice-server/.env").read_text().splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key in allowed:
+        values[key] = value
+for key in sorted(allowed):
+    print(f"{key}={values.get(key, '<missing>')}")
+PY
+
 npm run dev:voice
 ```
+
+Đoạn kiểm tra chỉ in allowlist không nhạy cảm; không thay bằng `cat`, `env` hoặc grep toàn
+file. `dev:voice` pin cap ở npm command và cũng dùng `uv --env-file`, nên OpenBLAS được
+đặt trước khi Python/NumPy khởi tạo ngay cả khi shell cha có giá trị khác; đặt biến muộn
+bên trong Pydantic settings không có giá trị tương đương. Chờ log
+`vieneu_tts_prewarm_complete` và `/health/ready=200` rồi mới mở phiên audio.
 
 **Terminal 3 — Manager Web (operator console, port 8081):**
 
@@ -195,6 +265,11 @@ curl --fail --silent --show-error http://127.0.0.1:8001/health/ready
 curl --fail --silent --show-error http://127.0.0.1:8000/health/live
 curl --fail --silent --show-error http://127.0.0.1:8000/health/ready
 curl --fail --silent --show-error http://127.0.0.1:8081/ >/dev/null
+
+voice_pid=$(ss -H -lntp 'sport = :8000' | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
+test -n "$voice_pid"
+tr '\0' '\n' < "/proc/$voice_pid/environ" | \
+  grep -E '^(OPENBLAS_NUM_THREADS=1|VEETEE_TTS_THREADS=2)$'
 ```
 
 Kết quả tối thiểu:
@@ -202,15 +277,24 @@ Kết quả tối thiểu:
 - Manager API: `live=200`, `ready=200`, database và Redis `ok`.
 - Voice Server: `live=200`, `ready=200`, ASR/VAD/TTS/LLM/Manager API healthy.
 - Manager Web: HTTP `200` ở port 8081.
-- 9Router: health và model list thành công trước khi kiểm thử hội thoại.
+- CLIProxyAPI: authenticated LLM prewarm thành công qua loopback trước khi kiểm thử hội thoại.
 
-`/health/ready` của Voice Server có prewarm LLM và local model. Lần khởi động lạnh có
-thể mất lâu hơn; không gửi request audio khi chưa ready. Nếu `ready` không pass, đọc
-lỗi component trong terminal Voice Server, không tăng thread hoặc mở process thứ hai.
+`/health/ready` của Voice Server có prewarm LLM và local model. TTS chỉ được coi là đã
+prewarm sau khi một fixed phrase không nhạy cảm chạy hết đường synthesis thật và toàn bộ
+PCM được drain/discard trong provider; warmup này không phát tới Lab, browser, device hay
+loa. Mỗi process thành công có đúng một log `vieneu_tts_prewarm_complete`. CPU cao trước
+log đó là bình thường nếu kết thúc sau prewarm. Log/readiness chứng minh đường chức năng
+sinh được PCM, nhưng không tự bảo đảm realtime: effective process phải có
+`OPENBLAS_NUM_THREADS=1`; với host baseline đang ở `performance`, prewarm/request RTF
+phải gần hoặc dưới `1`, và benchmark phải không có estimated starvation. CPU idle cao kéo
+dài hoặc request đầu sau readiness vẫn có RTF `2--3` / first audio `3--4` giây thì kiểm
+tra cap OpenBLAS, process duplicate và `powerprofilesctl get` trước. Lần khởi động lạnh có
+thể mất lâu hơn; không gửi request audio khi chưa ready. Nếu `ready` không pass, đọc lỗi
+component trong terminal Voice Server, không tăng thread hoặc mở process thứ hai.
 
 Mở trình duyệt bằng `http://127.0.0.1:8081` trên cùng máy. Với LAN/Tailscale, dùng
 địa chỉ host được cấu hình trong Manager/Web, giữ allowlist origin chính xác; không tắt
-host checking hoặc expose port 20128 ra LAN.
+host checking hoặc expose port `8317` ra LAN.
 
 Realtime Lab có hai mức kiểm thử:
 
@@ -226,7 +310,61 @@ console không có playback error. `401 /api/v1/auth/refresh` trước đăng nh
 `admission.final`, `llm.delta`, `tts.start`, `tts.first_audio`, `tts.stop`,
 `listen.start` và không có `turn.error`.
 
-### 3.1 Tailscale HTTPS trên host hiện tại
+### 3.1 Smoke hội thoại và soak kể chuyện 5--10 phút
+
+Chỉ dùng Realtime Lab đã được Manager cấp one-use token hoặc ESP32 đã authenticated;
+không bypass auth và không publish/ghi đè agent version chỉ để chạy soak. Giữ active
+agent có CLIProxyAPI primary; nếu mục tiêu là nghiệm thu primary thì mọi fallback đều phải
+được báo, không được tính chung thành primary pass.
+
+Chạy hai bài riêng trên cùng process đã ready:
+
+1. **Hội thoại thường:** ít nhất ba turn ngắn liên tiếp. Mỗi turn phải có planner + prose,
+   một lifecycle `tts.start` -> binary PCM -> `tts.stop`, rồi `listen.start` để nhận turn
+   tiếp theo. Không chỉ kiểm tra WebSocket connect.
+2. **Kể chuyện dài:** yêu cầu một response bắt đầu kể ngay, dùng câu tự nhiên và hướng tới
+   5--10 phút. Gate theo **thời lượng PCM thật**, không theo số ký tự prompt/response hay
+   wall time. Với PCM mono signed 16-bit ở 24 kHz, thời lượng là
+   `binary_pcm_bytes / (24000 * 2)`; kết quả pass phải nằm trong 300--600 giây.
+
+Trong khi chạy, lấy mẫu theo interval thay vì đọc một snapshot `%CPU`:
+
+```bash
+voice_pid=$(ss -H -lntp 'sport = :8000' | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
+test -n "$voice_pid"
+pidstat -p "$voice_pid" 1
+# Ctrl-C sau khi đã lấy cả synthesis tail; nếu pidstat chưa cài, dùng sampler delta tương đương.
+```
+
+Ghi lại dữ liệu bounded, không lưu transcript/audio:
+
+- provider adapter/model, HTTP status và số request planner/prose; xác nhận port `8317`
+  là CLIProxyAPI owner và `20128` không có listener;
+- request -> first LLM delta, `tts.start`, first binary, last binary, `tts.stop`,
+  `listen.start`, PCM frame/byte/audio-duration và wall/audio;
+- `schedule_gap_count`, tổng/max gap, low-water, turn error, deadline, stale/cancel marker;
+- Voice CPU interval avg/p95/peak, RSS đầu/peak/cuối/tail, thread count, host frequency,
+  temperature/throttle guard và tải nền có thể làm nhiễu phép đo.
+
+Acceptance cho server/Lab:
+
+- ba normal turns và long turn đều kết thúc bằng `tts.stop`; normal turn quay lại
+  `listen.start`, không có stale output hoặc turn error;
+- long turn có 300--600 giây PCM, zero scheduler gap và không có provider deadline;
+- khi đang nghiệm thu CLIProxyAPI primary, planner/prose đều đi local CLIProxyAPI HTTP
+  200 và không fallback; 9Router vẫn dừng;
+- CPU tức thời của Voice trở về gần 0 trong khoảng một giây sau synthesis; RSS tail
+  30--60 giây phẳng hoặc plateau qua các turn tương đương; không có orphan/duplicate;
+- retry, fallback hoặc deadline làm cycle ban đầu fail và phải được báo riêng. Chỉ chạy
+  một controlled retry khi task cho phép, không cherry-pick hoặc giấu lần fail.
+
+Binary cuối có thể tới trước `tts.stop` trong lúc browser/device drain phần audio đã
+buffer. Đây không phải inference còn chạy nếu `vieneu_tts_completed` đã có, interval CPU
+đã idle và queue đang giảm đúng thời lượng. Ngược lại, CPU còn cao mà không có progress
+event là lỗi cần điều tra. `lab_playback_schedule_summary` chỉ là scheduler evidence;
+nghe browser và loa ESP32 5--10 phút vẫn là acceptance vật lý riêng.
+
+### 3.2 Tailscale HTTPS trên host hiện tại
 
 Host đã nghiệm thu dùng userspace `tailscaled`, không phải system service toàn máy:
 
@@ -255,7 +393,8 @@ https://veetee-dev.tail52a635.ts.net:8443  -> http://127.0.0.1:8001  Manager API
 wss://veetee-dev.tail52a635.ts.net:10000   -> http://127.0.0.1:8000  Voice Server
 ```
 
-Không proxy `20128` (9Router). Manager runtime dùng WSS Lab URL cổng `10000`; HTTPS Web
+Không proxy `8317` (CLIProxyAPI); port `20128` của 9Router đang tạm dừng. Manager runtime
+dùng WSS Lab URL cổng `10000`; HTTPS Web
 không đặt `VITE_MANAGER_API_URL` thì dùng same-origin `/api`/`/health` proxy, tránh mixed
 content. Vite vẫn phải khởi động với exact allowlist:
 
@@ -281,14 +420,28 @@ printf 'branch='; git branch --show-current
 printf 'commit='; git rev-parse --short HEAD
 printf 'uptime='; uptime
 ps -eo pid,ppid,etimes,%cpu,%mem,rss,nlwp,stat,comm,args --sort=-%cpu | \
-  grep -E 'python|uvicorn|node|9router|veetee' | head -30
+  grep -E 'python|uvicorn|node|cli-proxy-api|veetee' | head -30
 curl --fail --silent --show-error http://127.0.0.1:8000/health/ready
+
+voice_pid=$(ss -H -lntp 'sport = :8000' | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)
+test -n "$voice_pid"
+tr '\0' '\n' < "/proc/$voice_pid/environ" | \
+  grep -E '^(OPENBLAS_NUM_THREADS=1|VEETEE_TTS_THREADS=2)$'
+pidstat -p "$voice_pid" -u -r -w 1 5
 ```
+
+`ps %CPU` là trung bình tích lũy từ lúc process khởi động nên có thể giảm rất chậm sau
+một burst TTS; không dùng nó để kết luận CPU hiện vẫn bận. `pidstat` ở trên đo interval;
+trên Linux `100%` tương đương một logical CPU, nên `188%` là khoảng 1,88 core. Nếu host
+không có `pidstat`, dùng sampler delta theo `/proc` hoặc công cụ interval tương đương.
+Đo process Voice riêng với global CPU/I/O/thermal; không tự dừng desktop, GPU, RustDesk
+hoặc process ngoài Veetee chỉ vì chúng làm nhiễu phép đo.
 
 Đọc log đang ở terminal Voice Server và tìm các event bounded sau, không paste transcript
 hoặc Authorization header. Nếu app được chạy bằng `nohup` theo local supervisor thủ công,
 log hiện nằm dưới ignored `veetee-server/tmp/runtime/app-logs/`; không commit các file này:
 
+- startup `vieneu_tts_prewarm_complete` (profile, counts, duration, RTF; không có phrase/audio)
 - `conversation_tts_text_chunk_ready`
 - `conversation_tts_request`, `conversation_tts_first_audio`,
   `conversation_tts_batch_first_audio`
@@ -308,26 +461,34 @@ hay ESP32 speaker underrun nếu chưa có playback acknowledgement/firmware cou
 Một request TTS bị ngắt giữa chừng cần phân biệt:
 
 - `abort`/generation đổi: người dùng hoặc firmware barge-in, output cũ bị bỏ đúng thiết kế;
-- `conversation_timeout`/provider deadline: CPU hoặc 9Router/TTS chậm vượt idle deadline;
+- `conversation_timeout`/provider deadline: CPU hoặc CLIProxyAPI/TTS chậm vượt idle deadline;
 - WebSocket disconnect: lỗi transport/reconnect hoặc browser audio lifecycle;
 - nhiều TTS request nhỏ/punctuation-only: đang chạy code cũ hoặc chunk policy sai;
 - process Voice Server có RSS khoảng 1 GiB nhưng CPU cao liên tục khi không có turn: cần
   kiểm tra model prewarm/inference loop và không tăng thread một cách mù quáng.
 
+RSS khoảng 1 GiB không bắt buộc giảm sau turn vì model resident và OpenBLAS/ONNX arena
+giữ high-water. So sánh plateau qua nhiều turn tương đương và tail 30--60 giây; chỉ một
+snapshot RSS cao không chứng minh leak. Tương tự, `tts.stop` có thể tới muộn hơn PCM cuối
+do playback drain; nếu interval CPU đã idle và synthesis complete thì đó không phải TTS
+vẫn inference.
+
 Với baseline ONNX đã nghiệm thu, giữ các giá trị an toàn: backend `onnx`, speed `1.0`,
-TTS threads `2`, ASR threads `2`, VAD threads `1`, sentence batching theo provider,
-playback queue `5` giây và `native_use_ref_codes=true`. WSOLA speed từ `1.2x` trở lên
-có cảnh báo giảm rõ phụ âm/dấu tiếng Việt; volume PCM trên `1.0` có nguy cơ clipping.
+OpenBLAS threads `1`, TTS/ONNX threads `2`, ASR threads `2`, VAD threads `1`, sentence
+batching theo provider, playback queue `5` giây và `native_use_ref_codes=true`. WSOLA
+speed từ `1.2x` trở lên có cảnh báo giảm rõ phụ âm/dấu tiếng Việt; volume PCM trên `1.0`
+có nguy cơ clipping.
 
 Nếu lỗi chỉ xuất hiện sau reboot, ưu tiên kiểm tra theo thứ tự:
 
 1. process có chạy từ đúng `main`/commit hay worktree cũ không;
-2. 9Router đã ready và đúng model chưa;
-3. Manager API/Redis/PostgreSQL đã ready chưa;
-4. `apps/voice-server/.env` có được sync lại sau rotate key không (chỉ so sánh tên biến,
-   không in giá trị);
-5. có process duplicate chiếm port hoặc CPU không;
-6. cuối cùng mới đổi backend/thread/speed. Không đổi nhiều biến cùng lúc.
+2. live process có đúng `OPENBLAS_NUM_THREADS=1` và `VEETEE_TTS_THREADS=2` không;
+3. có process duplicate chiếm port hoặc CPU không;
+4. CLIProxyAPI có owner ở `8317`, authenticated prewarm pass và đúng model chưa;
+5. Manager API/Redis/PostgreSQL đã ready chưa;
+6. `apps/voice-server/.env` có được sync lại sau rotate key không (chỉ so sánh tên biến,
+   không in giá trị), power profile/tải nền/thermal có đúng điều kiện benchmark không;
+7. cuối cùng mới đổi backend/thread/speed/buffer. Không đổi nhiều biến cùng lúc.
 
 ### 4.1 Evidence nghiệm thu hiện tại
 
@@ -344,14 +505,66 @@ first-160/steady-256, nhưng aggregate RTF xấu hơn 0,858 lên 0,870 nên đã
 Baseline ONNX vẫn natural 160 và emergency punctuation-free 256. Không bật lại hybrid,
 đổi sampler hoặc tăng buffer nếu chưa có benchmark mới vượt gate.
 
+Ngày 2026-07-29, real prewarm + ba request fresh-process ở power profile `performance`
+đạt first audio median 1,047 giây, RTF 0,804 và estimated starvation 0. Fixture 2.374 ký
+tự (`sha256[:16]=ff611923af5ccce5`) chạy 22 batch, first audio 1,260 giây, aggregate
+RTF 0,812 và starvation 0. Local Opus E2E cũng pass lifecycle TTS với request RTF 0,817.
+Sau khi route 9Router cũ không còn được chọn, agent version 4 đã publish chain
+`openai-compatible-cliproxyapi:gpt-5.6-terra -> groq-cloud:llama-3.3-70b-versatile`.
+`env:voice:sync` và default readiness cũng dùng CLIProxyAPI trực tiếp; 9Router không còn
+là dependency khởi động. Một `provider_deadline` của CLIProxyAPI vẫn làm cycle fail dù
+TTS cleanup đúng; không tăng TTS thread/deadline để che lỗi upstream.
+
+A/B dài ngày 2026-07-29 cho thấy nếu không cap OpenBLAS, CPU Voice avg/p95/peak là
+584/690/714%, 34 threads và 112 schedule gap (62,4 giây); wall/audio 1,285. Với
+`OPENBLAS_NUM_THREADS=1`, CPU còn 124/174/208%, 27 threads, zero gap và wall/audio
+1,022; CPU work/audio giảm khoảng 83%. Long-story qua CLIProxyAPI sau đó tạo 308,56
+giây PCM/323 frame, zero gap/error; CPU 120,9/174/188,3% và RSS
+1055,5 -> 1058,8 MiB rồi plateau. PCM cuối đến `tts.stop` cách khoảng 61 giây do Lab
+playback drain; CPU đã idle. Ba turn thường chạy trước long soak trong cùng validation
+window dùng sáu CLIProxyAPI POST, tổng 20,16 giây PCM, zero gap/error và mỗi `tts.stop`
+-> `listen.start` khoảng 0,1 ms. Gate “ba turn sau long response” vẫn phải chạy lại khi
+nghiệm thu release theo mục 3.1, không được suy ra từ thứ tự phép đo này.
+
+Ba cold restart cycle cũng pass: startup/readiness khoảng 7,8--9,7 giây, mỗi process có
+đúng một LLM prewarm và một TTS prewarm, shutdown sạch, không orphan, idle CPU
+0,1--0,3%. Đây là dated evidence của host này, không thay thế việc chạy lại gate sau khi
+model, dependency, agent config hoặc phần cứng đổi.
+
 ## 5. Dừng và khởi động lại sạch
 
-Trong từng terminal app, nhấn `Ctrl-C` và chờ process con thoát. Kiểm tra port trước
-khi chạy lại:
+Dùng đúng terminal/process handle đã mở; không dùng `pkill` rộng. Thứ tự dừng app là
+Manager Web -> Voice Server -> Manager API. Giữ CLIProxyAPI, PostgreSQL và Redis chạy
+giữa các cycle. Trong từng terminal nhấn `Ctrl-C`, chờ toàn bộ process con thoát, rồi
+xác nhận ba port app đã rảnh và `8317` vẫn có đúng một owner:
 
 ```bash
-ss -lntp | grep -E ':(8000|8001|8081)\\b' || true
+ss -lntp | grep -E ':(8317|8000|8001|8081)([^0-9]|$)' || true
 ```
+
+Để nghiệm thu cold-start/restart, giữ PostgreSQL/Redis chạy và thực hiện ba cycle độc lập:
+
+1. Xác nhận ba port app đang rảnh, `8317` có đúng một CLIProxyAPI owner và `20128` trống.
+2. Start Manager API, chờ `/health/ready=200`.
+3. Chạy `env:voice:sync`, kiểm tra mode `0600` và allowlist không nhạy cảm, rồi start
+   Voice Server. Xác nhận live process có `OPENBLAS_NUM_THREADS=1`; yêu cầu đúng một
+   `llm_prewarm_complete`, một `vieneu_tts_prewarm_complete` và
+   `/health/ready=200` với ASR/VAD/TTS/LLM/Manager healthy.
+4. Start Manager Web, yêu cầu HTTP `200` ở `8081`, rồi kiểm tra mỗi port chỉ có một owner.
+5. Chạy một Text Lab turn được cấp quyền. Ở cycle cuối, thêm response nhiều TTS batch.
+   Chỉ ghi event name, response character count/hash, first-audio, request RTF,
+   schedule-gap summary, trạng thái `tts.stop`, PID/CPU/RSS/thread và idle CPU; không ghi
+   transcript, audio, token, key hay Authorization header.
+6. Reject cycle nếu có provider deadline, turn error, stale output, thiếu terminal
+   `tts.stop`, duplicate process, cold RTF `2--3` sau readiness hoặc CPU cao kéo dài khi
+   turn đã kết thúc.
+7. Dừng ba app theo thứ tự reverse nêu trên, yêu cầu ba port app rảnh và giữ CLIProxyAPI
+   ở `8317` trước cycle tiếp theo.
+
+Sau cycle thứ ba, nếu mục tiêu của task là để project sẵn sàng sử dụng, khởi động lại một
+lần cuối theo đúng thứ tự và để CLIProxyAPI, Manager API, Voice Server và Manager Web
+chạy ở các port chuẩn. Báo PID/health cuối cùng; không gọi một cycle là pass nếu chỉ có
+`/health/live` mà chưa có readiness và turn thật.
 
 Không xoá `data/`, `tmp/`, model cache, NVS hay database để “sửa” lỗi nếu chưa có backup
 và chưa xác định nguyên nhân. Hạ tầng host-local có lệnh idempotent; chỉ dùng lệnh down
@@ -370,9 +583,12 @@ Khi giao task chạy/điều tra cho AI, dùng prompt này:
 > Đọc `AGENTS.md`, `CLAUDE.md` và `docs/21-local-development-runbook.md`. Làm việc từ
 > `/home/vubq/Project/EmYeuKhoaHoc/veetee`, kiểm tra branch/commit và working tree trước.
 > Dùng đúng thứ tự cold-start, không in hoặc commit `.env`, key, token, transcript/audio.
-> Chỉ bắt đầu Realtime Lab/ESP32 sau khi 9Router, Manager API và Voice Server đều
-> `/health/ready=200`. Khi voice bị ngắt, ghi CPU/RSS/PID/port và event names/timings đã
-> redact; không thay đổi backend/thread/speed nếu chưa có evidence. Không flash/monitor
+> Giữ 9Router tạm dừng; chỉ bắt đầu Realtime Lab/ESP32 sau khi CLIProxyAPI prewarm,
+> Manager API và Voice Server đều healthy/`ready=200`. Khi voice bị ngắt, ghi
+> live `OPENBLAS_NUM_THREADS=1`, interval CPU/RSS/thread/PID/port và event names/timings
+> đã redact; không dùng lifetime `ps %CPU` hoặc thay đổi backend/thread/speed nếu chưa có
+> A/B evidence. Với soak dài, đo 300--600 giây PCM rồi ba follow-up turn, báo mọi
+> retry/fallback/deadline. Không flash/monitor
 > firmware, không push/deploy/commit nếu chưa được yêu cầu rõ.
 
 AI chỉ được báo “chạy được” khi ghi rõ: commit đã chạy, process/port, các health check,
@@ -380,6 +596,6 @@ command đã chạy, test result, và phần nào vẫn cần nghe trực tiếp
 
 ## 7. Tắt máy
 
-Trước khi tắt máy, dừng ba app bằng `Ctrl-C`. PostgreSQL/Redis và 9Router có thể được
-để user service/host runtime quản lý. Sau reboot, quay lại mục 2; không giả định các
-process app thủ công tự khởi động chỉ vì systemd của Tailscale/9Router đang chạy.
+Trước khi tắt máy, dừng ba app bằng `Ctrl-C`. PostgreSQL/Redis và CLIProxyAPI có thể được
+để host runtime quản lý. Sau reboot, quay lại mục 2; không giả định các process app thủ
+công tự khởi động chỉ vì systemd userspace của Tailscale hoặc CLIProxyAPI đang chạy.

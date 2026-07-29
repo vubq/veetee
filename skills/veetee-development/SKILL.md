@@ -43,7 +43,9 @@ Read:
 - `../../docs/05-realtime-conversation.md`
 - `../../docs/06-provider-and-mcp.md`
 - `../../docs/14-model-and-provider-baseline.md` for concrete Vietnamese ASR/VAD/TTS
-  models, 9router contract and benchmark/fallback gates
+  models, CLIProxyAPI contract and benchmark/fallback gates
+- `../../docs/15-local-ai-runtime.md` for the effective OpenBLAS/ONNX budget and measured baseline
+- `../../docs/21-local-development-runbook.md` before starting, restarting or soaking the local stack
 - `../../docs/11-ai-first-design-principles.md`
 - `references/task-checklists.md`, section Voice server
 

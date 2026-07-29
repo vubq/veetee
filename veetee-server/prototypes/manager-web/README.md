@@ -1,6 +1,6 @@
 # Veetee Manager prototype
 
-Prototype HTML/CSS/JS thuần để duyệt product direction trước khi chuyển sang Vue 3.
+Prototype HTML/CSS/JS thuần từng được dùng để duyệt product direction trước khi chuyển sang Vue 3. Từ ngày 2026-07-28, đây chỉ là tài liệu lịch sử về sitemap/interaction; visual authority hiện hành là `../../../docs/22-veetee-interface-language.md`. Không inject HTML/JavaScript của prototype hoặc dùng `v-html` trong runtime Vue.
 
 ## Mở prototype
 

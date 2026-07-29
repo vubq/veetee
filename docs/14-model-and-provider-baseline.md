@@ -11,8 +11,9 @@ Tài liệu này ghi baseline AI được chọn cho Veetee V1. Nó bổ sung ch
 | VAD/endpoint | Silero VAD (`silero-local`) | voice-server cùng máy chạy AI | phát hiện speech/điểm kết thúc, không tự quyết định đó là yêu cầu |
 | ASR nhanh | Sherpa-ONNX Zipformer Vietnamese 30M INT8 | voice-server local | đường chính, streaming/chunk để giảm latency |
 | ASR chất lượng | ChunkFormer-CTC-Large-Vie | voice-server local | re-decode khi Zipformer không đủ tin cậy |
-| LLM | `openai-compatible-9router` | 9router local hoặc endpoint LAN | development/default candidate, có thể thay model/provider bằng Manager |
-| LLM thử nghiệm | `openai-compatible-cliproxyapi` | CLIProxyAPI local | binding độc lập để benchmark/switch theo agent, không phải fallback ngầm |
+| LLM | `openai-compatible-cliproxyapi` | CLIProxyAPI local | development/default hiện hành, model/provider vẫn do Manager publish |
+| LLM fallback | `groq-cloud` | external OpenAI-compatible | fallback retryable đã publish, chỉ trước visible output |
+| LLM paused | `openai-compatible-9router` | 9Router local | adapter tùy chọn/lịch sử; process `20128` đang tạm dừng |
 | TTS tiếng Việt | VieNeu-TTS v3 Turbo | voice-server local | primary `vi-VN`, sentence/stream chunk tùy khả năng runtime |
 
 Manager có binding độc lập `groq-cloud` (Groq OpenAI-compatible Chat Completions).
@@ -31,7 +32,7 @@ ASR, VAD và TTS không chạy trên ESP32-S3. Firmware chỉ thu/phát audio, O
 wake/interrupt local, state machine và transport. Cách chia này phù hợp giới hạn
 RAM/PSRAM/CPU của ESP32-S3 N16R8 và giữ provider có thể thay thế.
 
-## 2. LLM và 9router
+## 2. LLM gateways: CLIProxyAPI hiện hành và lịch sử 9Router
 
 ### 2.1 Phân biệt quyền truy cập
 
@@ -108,8 +109,9 @@ Benchmark voice loop trên host V1 so sánh các model sẵn có qua cùng adapt
 | `cx/gpt-5.6-terra` | khoảng 1.32 s | khoảng 1.85 s | 2.81--2.95 s | khoảng 4.48 s |
 | `cx/gpt-5.6-luna` | khoảng 1.27 s | khoảng 2.44 s | chưa đủ mẫu | chưa đủ mẫu |
 
-`cx/gpt-5.6-terra` được chọn làm default dev/LAN vì planner và câu hỏi trực tiếp
-ổn định hơn trong các lượt đo hiện tại. Đây không phải quyết định production:
+`cx/gpt-5.6-terra` từng được chọn làm default dev/LAN qua 9Router vì planner và câu hỏi
+trực tiếp ổn định hơn trong các lượt đo tại thời điểm đó. Quyết định này đã được thay thế
+ngày 2026-07-29 bởi CLIProxyAPI `gpt-5.6-terra`; đây vẫn không phải quyết định production:
 Manager vẫn lưu model theo provider binding, giữ fallback adapter và phải benchmark
 lại khi phiên bản 9Router, quota hoặc upstream model thay đổi. Structured planner
 được prewarm khi voice-server khởi động.
@@ -132,8 +134,9 @@ Tool name vẫn nằm trong enum catalog, arguments tiếp tục qua schema/poli
 Nếu structured gate hỏng sau local signal admission, server dùng prose response không
 có tool; nếu prose cũng hỏng, phát recovery response đã cấu hình và giữ session sống.
 Forced function call vẫn nằm trong provider conformance suite nhưng không còn là
-transport bắt buộc của gate. Baseline local dùng planner ceiling 15 s và total-turn
-ceiling 45 s; đây là safety bound, không phải latency target.
+transport bắt buộc của gate. Baseline local dùng planner ceiling 15 s. Absolute
+`total_turn` mặc định là `0` (tắt); `llmSeconds`/`ttsSeconds` là idle/progress deadline
+được làm mới, không phải ceiling cho response đang tiếp tục sinh hoặc playback drain.
 
 Live Manager probe ngày 2026-07-22 đã lấy API key active do chính 9Router quản lý,
 rotate vào encrypted provider secret mà không ghi giá trị ra log/repo, rồi gọi đúng
@@ -177,6 +180,9 @@ không dùng ngầm trong hội thoại. Voice-server bỏ qua hoàn toàn
 
 ### 2.2.4 API key và network policy
 
+Phần này giữ policy lịch sử/opt-in cho adapter 9Router; process hiện đang tạm dừng và
+không thuộc startup mặc định. Nếu bật lại rõ ràng, các ràng buộc dưới đây vẫn áp dụng.
+
 Ảnh cấu hình ban đầu cho thấy `Require API key` tắt, nhưng smoke test mới nhất đã
 trả `401 Missing API key` cho Chat Completions trong khi `/v1/models` vẫn public.
 Voice-server đã pass full-loop test khi dùng key active lấy từ secret store local;
@@ -198,16 +204,16 @@ API key. Header chuẩn là `Authorization: Bearer <9router-key>`.
 
 ### 2.2.5 Topology Veetee V1 đã chốt
 
-Tất cả backend, 9Router, VAD, ASR và TTS chạy trên cùng một máy. Vì vậy:
+Tất cả backend, CLIProxyAPI, VAD, ASR và TTS chạy trên cùng một máy. Vì vậy:
 
-- voice-server gọi `http://127.0.0.1:20128/v1`;
+- voice-server gọi `http://127.0.0.1:8317/v1` bằng client key riêng;
 - Silero/Zipformer/ChunkFormer/VieNeu chạy như worker/process hoặc container riêng
   trên Docker private network/loopback;
-- không mở port model worker và port `20128` cho ESP32;
+- không mở port model worker và port `8317` cho ESP32/LAN/Tailscale;
 - ESP32 chỉ gọi Voice WebSocket và Device Edge qua IP LAN;
 - Manager Web/API chỉ mở các port đã định nghĩa cho operator;
-- nếu 9Router bind loopback thật, API key là defense-in-depth; nếu vẫn bind
-  `0.0.0.0`, bắt buộc bật key và firewall dù mọi service hiện ở cùng máy.
+- CLIProxyAPI hiện listen rộng trên host nên client-key authentication và firewall là
+  bắt buộc dù Veetee chỉ gọi loopback. 9Router/`20128` tạm dừng.
 
 Single-node là deployment profile V1, không phải coupling trong code. Provider ports,
 queue và config vẫn giữ boundary để sau này tách GPU/model worker sang máy khác mà
@@ -216,16 +222,14 @@ không đổi firmware hoặc conversation core.
 Veetee dùng port `LlmProvider`, nên topology là:
 
 ```text
-voice-server -> openai-compatible adapter -> 9router (LAN)
-                                         -> official OpenAI API (optional)
-                                         -> self-hosted model (optional)
+voice-server -> openai-compatible adapter -> CLIProxyAPI (local primary)
+                                         -> Groq (published fallback)
+                                         -> official/self-hosted model (optional)
 ```
 
-9router không được là dependency của firmware và không được hard-code vào
-conversation core. Nếu 9router chỉ điều khiển một phiên Codex tương tác, không có
-API contract ổn định hoặc không cho phép tích hợp này, V1 phải chuyển sang một
-OpenAI Platform API key hoặc model self-hosted tương thích; toàn bộ voice loop vẫn
-giữ nguyên.
+CLIProxyAPI không được là dependency của firmware và không được hard-code vào
+conversation core. Nếu gateway không còn contract/quota phù hợp, Manager đổi binding
+sang official API hoặc model self-hosted tương thích; toàn bộ voice loop vẫn giữ nguyên.
 
 ### 2.3 LLM policy realtime
 
@@ -266,9 +270,9 @@ kẽ năm lượt cho cùng model/prompt đạt:
 
 Cả 20 request đều thành công. CLIProxyAPI có structured p95 tốt hơn trong mẫu nhỏ,
 nhưng 9Router đưa first token ra sớm hơn khoảng 0,76 giây ở median và có prose p95
-ổn định hơn khoảng 1,23 giây. Vì trải nghiệm thoại phụ thuộc mạnh vào first token,
-9Router tiếp tục là default dev/LAN; CLIProxyAPI là lựa chọn độc lập để A/B test,
-không tự thay thế hoặc fallback cho 9Router.
+ổn định hơn khoảng 1,23 giây. Đây là bằng chứng lịch sử, không còn quyết định routing.
+Từ 2026-07-29 CLIProxyAPI là default dev/LAN theo quyết định vận hành của người dùng;
+9Router tạm dừng và Groq là fallback được publish rõ trong agent config.
 
 CLIProxyAPI/Codex không nhận `reasoning_effort=none` như 9Router: gateway ánh xạ nó
 thành thinking budget 0 và full strict conversation schema trả HTTP 400. Adapter
@@ -285,6 +289,15 @@ Lệnh benchmark tái lập là `npm run providers:benchmark:gateways`; client k
 CLIProxyAPI phải được truyền qua `VEETEE_CLIPROXY_API_KEY`, không ghi vào repo hoặc
 command log. Script đo structured latency, first-token, prose-total và gom lỗi bounded
 thay vì dừng ở lỗi provider đầu tiên.
+
+Soak Realtime Lab ngày 2026-07-29 xác nhận route hiện hành trên đường đầy đủ chứ không
+chỉ bằng gateway probe. Ba lượt hội thoại thường tạo đúng sáu local POST (planner +
+prose mỗi lượt) tới CLIProxyAPI `gpt-5.6-terra`, đều HTTP 200, không gọi Groq và không
+có gap/turn error. Một lượt kể chuyện dài tạo 308,56 giây PCM, 323 frame, zero schedule
+gap và terminal `tts.stop`; planner/prose đều đi qua CLIProxyAPI, trong khi port `20128`
+không có listener. Lần thử đầu của prose chạm idle deadline ở 4,999 giây và được tính là
+cycle fail; một retry được báo rõ mới pass. Provider deadline không được che bằng cách
+tăng TTS thread, playback buffer hoặc âm thầm loại mẫu lỗi khỏi báo cáo.
 
 CLIProxyAPI hiện listen trên mọi interface của host, dù Veetee chỉ gọi loopback.
 Trước khi dùng ngoài môi trường local phải giữ client-key authentication, giới hạn
@@ -383,6 +396,12 @@ có dấu câu dùng emergency bound theo backend (ONNX 256, native 72 ký tự)
 `realtime_speed_ceiling` với headroom `1.15` và cảnh báo starvation thay vì tự đổi
 tốc độ đã publish. Giao thức PCM/Opus 24 kHz với firmware không đổi.
 
+Host baseline phải có `OPENBLAS_NUM_THREADS=1` trong process environment trước khi
+Python/NumPy khởi tạo. `VEETEE_TTS_THREADS=2` chỉ giới hạn ONNX Runtime; nếu thiếu cap
+OpenBLAS, NumPy có thể mở thêm worker, làm CPU/nhiệt tăng và TTS chậm hơn dù cấu hình
+ONNX vẫn ghi hai threads. Giá trị checked-in, A/B dài và cách xác minh nằm trong
+`docs/15-local-ai-runtime.md` và `docs/21-local-development-runbook.md`.
+
 Voice và style là hai tham số độc lập. Style mặc định `tu_nhien` dành cho hội thoại;
 `doc_truyen` và `tin_tuc` chỉ dùng khi agent chọn rõ. Vì vậy một voice có reference
 gốc kiểu đọc truyện như Ngọc Linh không tự ép mọi hội thoại sang nhịp đọc truyện.
@@ -445,12 +464,12 @@ Tên field có thể map sang `snake_case` ở device contract.
     }
   },
   "llm": {
-    "adapter": "openai-compatible-9router",
-    "base_url": "http://127.0.0.1:20128/v1",
-    "model": "cx/gpt-5.6-terra",
+    "adapter": "openai-compatible-cliproxyapi",
+    "base_url": "http://127.0.0.1:8317/v1",
+    "model": "gpt-5.6-terra",
     "stream": true,
     "tool_calling": true,
-    "reasoning_effort": "none",
+    "reasoning_effort": "omitted_when_none",
     "reasoning_policy": "drop_from_tts"
   },
   "tts": {
@@ -490,7 +509,7 @@ hardware và quantization:
 |---|---|
 | VAD/admission | false accept, false reject, endpoint delay, self-echo reject |
 | ASR | WER/CER, số/tên riêng, first partial, final latency, real-time factor |
-| LLM/9router | first token p50/p95, stream gap, tool-call success, cancel latency |
+| LLM/gateway | first token p50/p95, stream gap, tool-call success, cancel latency |
 | TTS | first audio, real-time factor, MOS/listener score, pronunciation, cancel latency |
 | Hệ thống | p95 wake-to-first-frame, p95 user-stop-to-silence, CPU/RAM/VRAM, crash/timeout |
 
@@ -506,8 +525,9 @@ Freeze policy:
    không phá `total_turn_deadline`.
 3. VieNeu được freeze primary nếu first-audio/RTF/license đạt gate; nếu batch-only,
    ghi rõ sentence-level realtime trong capability.
-4. 9router chỉ là default dev khi contract streaming/tool/cancel pass; production
-   phải có adapter thay thế và health/circuit-breaker.
+4. CLIProxyAPI là default dev khi contract streaming/tool/cancel pass; Groq fallback
+   và production adapter vẫn phải có health/circuit-breaker. 9Router chỉ opt-in khi
+   người vận hành bật lại rõ ràng.
 
 ## 8. UI và vận hành
 
@@ -519,8 +539,6 @@ thật, thêm model benchmark/fallback/health và hiển thị rõ local-only ha
 
 ## 9. Câu hỏi còn cần xác nhận
 
-- 9router đang expose Chat Completions hay Responses, có SSE/tool calling/cancel và
-  auth token riêng cho app không?
 - Máy chạy voice-server có CPU/RAM/VRAM và có GPU nào; dự kiến bao nhiêu session đồng
   thời?
 - Exact repository/commit, runtime format và license của ba model local là gì?

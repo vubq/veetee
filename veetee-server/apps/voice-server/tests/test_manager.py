@@ -76,10 +76,19 @@ def test_session_profile_applies_config_with_runtime_safety_bounds() -> None:
 
 
 def test_session_profile_defaults_to_incremental_prose_streaming() -> None:
-    settings = Settings(environment="test", require_device_auth=False)
+    settings = Settings(
+        environment="test",
+        require_device_auth=False,
+        VEETEE_CLIPROXY_API_KEY="cliproxy-key",  # type: ignore[call-arg]
+    )
 
     profile = SessionProfile.defaults(settings)
 
+    assert profile.llm_chain[0].provider_id == "settings:cliproxyapi"
+    assert profile.llm_chain[0].adapter == "openai-compatible-cliproxyapi"
+    assert profile.llm_chain[0].base_url == "http://127.0.0.1:8317/v1"
+    assert profile.llm_chain[0].model == "gpt-5.6-terra"
+    assert profile.llm_chain[0].api_key == "cliproxy-key"
     assert profile.llm_chain[0].config["streamProseResponse"] is True
 
 
@@ -370,7 +379,7 @@ async def test_manager_authenticates_device_and_caches_immutable_config() -> Non
 
 
 @pytest.mark.asyncio
-async def test_manager_resolves_ordered_provider_chain_without_exposing_it_to_device() -> None:
+async def test_manager_resolves_chain_without_cross_gateway_secret_fallback() -> None:
     resolve_calls = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -444,7 +453,7 @@ async def test_manager_resolves_ordered_provider_chain_without_exposing_it_to_de
         "fallback-model",
     ]
     assert profile.llm_chain[0].api_key == "primary-secret"
-    assert profile.llm_chain[1].api_key == "settings-fallback-key"
+    assert profile.llm_chain[1].api_key == ""
     assert resolve_calls == 1
 
 

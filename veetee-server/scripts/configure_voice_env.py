@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import ast
 import os
-import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -13,7 +13,12 @@ SERVER_ROOT = Path(__file__).resolve().parent.parent
 VOICE_EXAMPLE = SERVER_ROOT / "apps/voice-server/.env.example"
 VOICE_ENV = SERVER_ROOT / "apps/voice-server/.env"
 MANAGER_ENV = SERVER_ROOT / "apps/manager-api/.env"
-NINE_ROUTER_DB = Path.home() / ".9router/db/data.sqlite"
+CLIPROXY_CONFIG = Path(
+    os.environ.get(
+        "VEETEE_CLIPROXY_CONFIG_PATH",
+        Path.home() / "cliproxyapi/config.yaml",
+    )
+)
 
 
 def parse_environment(path: Path) -> dict[str, str]:
@@ -30,18 +35,39 @@ def parse_environment(path: Path) -> dict[str, str]:
     return values
 
 
-def active_nine_router_key() -> str:
-    connection = sqlite3.connect(f"file:{NINE_ROUTER_DB}?mode=ro", uri=True)
-    try:
-        row = connection.execute(
-            'SELECT "key" FROM "apiKeys" WHERE "isActive" = 1 '
-            'ORDER BY "createdAt" DESC LIMIT 1'
-        ).fetchone()
-    finally:
-        connection.close()
-    if not row or not isinstance(row[0], str) or not row[0]:
-        raise RuntimeError("9Router does not have an active local API key")
-    return row[0]
+def first_yaml_list_item(path: Path, key: str) -> str:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    section_indent: int | None = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip())
+        if section_indent is None:
+            if stripped == f"{key}:":
+                section_indent = indent
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if indent <= section_indent:
+            break
+        if not stripped.startswith("-"):
+            continue
+        scalar = stripped[1:].strip()
+        if not scalar:
+            continue
+        if scalar[0] in {'"', "'"}:
+            try:
+                value = ast.literal_eval(scalar)
+            except (SyntaxError, ValueError) as error:
+                raise RuntimeError(f"{key} contains an invalid quoted value") from error
+        else:
+            value = scalar.split(" #", 1)[0].strip()
+        if isinstance(value, str) and value:
+            return value
+    raise RuntimeError(f"{key} does not contain a usable value")
+
+
+def active_cliproxy_key() -> str:
+    return first_yaml_list_item(CLIPROXY_CONFIG, "api-keys")
 
 
 def render_environment(replacements: dict[str, str]) -> str:
@@ -85,6 +111,7 @@ def main() -> None:
     if len(manager_token) < 24:
         raise RuntimeError("Manager internal service token is missing or invalid")
     replacements = {
+        "OPENBLAS_NUM_THREADS": "1",
         "VEETEE_HOST": "0.0.0.0",
         "VEETEE_RELOAD": "false",
         "VEETEE_MANAGER_API_URL": "http://127.0.0.1:8001",
@@ -93,7 +120,9 @@ def main() -> None:
             "VEETEE_MANAGER_CORS_ORIGIN",
             "http://127.0.0.1:8081,http://localhost:8081",
         ),
-        "VEETEE_9ROUTER_API_KEY": active_nine_router_key(),
+        "VEETEE_CLIPROXY_BASE_URL": "http://127.0.0.1:8317/v1",
+        "VEETEE_CLIPROXY_API_KEY": active_cliproxy_key(),
+        "VEETEE_CLIPROXY_MODEL": "gpt-5.6-terra",
     }
     atomic_write_private(VOICE_ENV, render_environment(replacements))
     print(f"Configured ignored voice environment at {VOICE_ENV} (secrets redacted)")

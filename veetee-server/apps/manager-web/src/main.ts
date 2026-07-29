@@ -8,6 +8,7 @@ import { createApp } from "vue";
 
 import App from "./App.vue";
 import { i18n } from "./i18n";
+import { router } from "./router";
 import "./app.css";
 
-createApp(App).use(createPinia()).use(VueQueryPlugin).use(i18n).mount("#app");
+createApp(App).use(createPinia()).use(VueQueryPlugin).use(i18n).use(router).mount("#app");

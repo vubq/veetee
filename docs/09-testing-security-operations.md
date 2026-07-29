@@ -44,10 +44,12 @@ thay Wi-Fi đang dùng và không được tự xóa NVS:
    HTML/CSS/JS, scan SSID, lưu cấu hình, chuyển AP -> station rồi reconnect.
 3. Bấm nút ngắn, nói tiếng Việt và xác nhận WebSocket/ASR/LLM/TTS cùng loa thật;
    không cần bấm lần hai để gửi câu.
-4. Kiểm tra wake word và button interrupt khi robot đang thinking/speaking.
-5. Kiểm tra trực quan hướng/độ sáng LCD, trạng thái activation/idle và nghe loa
+4. Nghe một lượt kể liên tục 5--10 phút trên loa thật, rồi nói thêm ít nhất ba turn;
+   xác nhận không hụt/đứt, pop/chirp, kẹt speaking hoặc mất `listen.start`.
+5. Kiểm tra wake word và button interrupt khi robot đang thinking/speaking.
+6. Kiểm tra trực quan hướng/độ sáng LCD, trạng thái activation/idle và nghe loa
    xem có pop/chirp lặp trong 10 phút.
-6. Chạy conversation/heap soak dài hơn và ma trận mất điện, payload hỏng,
+7. Chạy conversation/heap soak dài hơn và ma trận mất điện, payload hỏng,
    rollback resource/UI trên board.
 
 ### Server tests
@@ -55,7 +57,8 @@ thay Wi-Fi đang dùng và không được tự xóa NVS:
 - Contract fixture tests với firmware messages.
 - Provider adapter conformance suite dùng fake server.
 - Local model benchmark: Silero endpoint/admission, Zipformer primary, ChunkFormer
-  conditional re-decode, VieNeu first-audio/RTF và 9router stream/tool/cancel.
+  conditional re-decode, VieNeu first-audio/RTF/OpenBLAS budget và CLIProxyAPI
+  stream/tool/cancel; 9Router chỉ chạy conformance khi operator bật adapter opt-in.
 - Turn cancellation/race tests.
 - Input admission conformance: accepted/rejected/unclear/interrupt/end, reason bounded; dialogue-act tests riêng cho follow-up/confirmation/correction.
 - Inactivity timeout, closing grace and wake-during-goodbye race tests.
@@ -89,7 +92,7 @@ E2E-14 power loss during resource download/apply -> recover active slot or rollb
 E2E-15 Zipformer low-confidence -> ChunkFormer re-decode -> accepted transcript, cùng turn deadline
 E2E-16 Zipformer stable -> không khởi chạy ChunkFormer
 E2E-17 VieNeu batch/stream capability được phản ánh đúng, abort không phát audio stale
-E2E-18 9router abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
+E2E-18 active LLM gateway abort -> không còn token/tool/TTS stale; backup adapter chạy được khi health fail
 E2E-19 "Hey VeeTee" corpus -> FAR/FRR/latency gate; `Hi ESP` bring-up không được tính là product pass
 E2E-20 reported-state equal retry -> no mutation; lower sequence -> 409; canonical Veetee route only
 E2E-21 provider secret rotate/clear -> admin response và audit không chứa raw secret
@@ -99,7 +102,14 @@ E2E-24 10 phút speaker idle/reconnect/bootstrap retry -> không startup chime l
 E2E-25 UI Pack upload -> publish -> desired `state.ui` -> inactive `ui_*` slot -> render health -> complete
 E2E-26 corrupt/incompatible UI Pack -> rollback UI journal hoặc built-in Mobile (`signal`), wake resource không đổi
 E2E-27 goodbye TTS slow/fail -> vẫn đóng assistant gate; button trong goodbye -> cancel và quay lại listening
+E2E-28 CLIProxyAPI -> VieNeu long response -> 300--600 giây PCM, zero schedule gap/error -> tts.stop
+E2E-29 sau long response -> ba turn thường liên tiếp -> mỗi turn trở lại listen.start, không tăng RSS/thread plateau
 ```
+
+E2E-28/29 phải ghi effective `OPENBLAS_NUM_THREADS=1`, ONNX thread count, provider
+planner/prose/fallback, interval CPU, RSS/thread tail và PCM duration. `%CPU` lifetime từ
+`ps` không thay thế interval sampler. Browser/Lab chỉ chứng minh server PCM/scheduler;
+nghe liên tục qua Opus/I2S/MAX98357A/loa là hardware acceptance riêng.
 
 E2E-09 phải kiểm tra riêng mất Wi-Fi khi `evaluating/thinking/speaking`: transport
 dùng abortive close, station reconnect, assistant trở về `idle`, rồi một lần bấm

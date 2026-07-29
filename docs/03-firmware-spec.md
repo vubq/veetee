@@ -216,7 +216,13 @@ HTML, CSS và JavaScript phải được phục vụ thành resource riêng và 
 đa 1 KiB. Hardware trace trên ESP32-S3/ESP-IDF 6 đã xác nhận response liền 9.976 byte
 dừng ở 4.320 byte rồi `send` trả `EAGAIN`, đúng với triệu chứng webview trắng.
 Sau khi persist form thành công, state transition sang station phải chậm tối thiểu
-750 ms để JSON response rời socket trước khi HTTP server và SoftAP bị dừng.
+750 ms để JSON response rời socket. Trong flow provisioning tương tác, firmware giữ
+SoftAP/DHCP/DNS/HTTP tạm thời ở `APSTA`, cung cấp `GET /api/status` chỉ đọc và chỉ báo
+`connected` sau `IP_EVENT_STA_GOT_IP`. Portal đóng sau khi browser quan sát success
+với grace 3 giây hoặc hard fallback 15 giây; cleanup được post về application task,
+không đổi netif trong Wi-Fi/HTTP/timer callback. Status không chứa password, SSID,
+IP, bootstrap URL, token, challenge hoặc activation code. Boot/reconnect bình thường
+vẫn dùng station-only lifecycle.
 
 Không lưu password plain text vào log. Profile record có version, bound cố định,
 CRC, reject duplicate SSID và eviction profile ít gần đây nhất khi đủ 5 mạng. NVS

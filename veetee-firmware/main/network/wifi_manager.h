@@ -9,6 +9,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "network/provisioning_portal.h"
+#include "network/provisioning_status.h"
 #include "network/wifi_candidate_order.h"
 #include "settings/settings_store.h"
 
@@ -19,6 +20,7 @@ enum class WifiManagerEvent : std::uint8_t {
     kConnectionTimeout,
     kDisconnected,
     kProvisioningSaved,
+    kProvisioningCleanup,
 };
 
 struct WifiHealth {
@@ -39,6 +41,8 @@ public:
                          EventSink sink, void* context);
     esp_err_t StartStation();
     esp_err_t StartProvisioning();
+    esp_err_t FinishProvisioningHandoff();
+    void RetryProvisioningCleanup();
     esp_err_t ResetProvisioning();
     WifiHealth Health() const;
 
@@ -51,8 +55,13 @@ private:
     static void ConnectionTimeout(void* context);
     static void RetryScan(void* context);
     static void ProvisioningTransition(void* context);
+    static void ProvisioningCleanup(void* context);
     static esp_err_t SaveProvisioning(settings::DeviceSettings* settings,
                                       void* context);
+    static ProvisioningStatusSnapshot ReadProvisioningStatus(void* context);
+    static void ObserveProvisioningSuccess(std::uint32_t attempt_id,
+                                           void* context);
+    static bool CanSaveProvisioning(void* context);
 
     void Emit(WifiManagerEvent event) const;
     esp_err_t EnsureWifiStarted();
@@ -79,7 +88,9 @@ private:
     esp_timer_handle_t connect_timer_ = nullptr;
     esp_timer_handle_t retry_timer_ = nullptr;
     esp_timer_handle_t provisioning_timer_ = nullptr;
+    esp_timer_handle_t provisioning_cleanup_timer_ = nullptr;
     ProvisioningPortal portal_;
+    ProvisioningStatus provisioning_status_;
     settings::WifiProfileRecord profiles_{};
     std::array<wifi_ap_record_t, kMaxStationScanResults> station_scan_records_{};
     std::array<VisibleWifiNetwork, kMaxStationScanResults> visible_networks_{};
@@ -90,11 +101,14 @@ private:
     bool wifi_started_ = false;
     bool station_connecting_ = false;
     bool station_connected_ = false;
+    bool station_associated_ = false;
     bool candidate_in_flight_ = false;
     bool scan_pending_ = false;
     bool ignore_disconnect_until_scan_ = false;
     bool provisioning_active_ = false;
     bool provisioning_wifi_ready_ = false;
+    bool provisioning_handoff_ = false;
+    std::uint32_t provisioning_connection_attempt_id_ = 0;
     std::atomic<std::uint64_t> disconnect_count_{0};
     std::atomic<std::uint64_t> reconnect_attempt_count_{0};
     std::atomic<std::uint32_t> last_disconnect_reason_{0};

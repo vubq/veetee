@@ -8,11 +8,14 @@ export interface VtMetricItem {
 </script>
 
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
+
 defineProps<{ items: VtMetricItem[] }>();
+const { t } = useI18n();
 </script>
 
 <template>
-  <section class="vt-metric-strip" aria-label="Tóm tắt trạng thái">
+  <section class="vt-metric-strip" :aria-label="t('common.statusSummary')">
     <article v-for="item in items" :key="item.label" :class="`is-${item.tone ?? 'neutral'}`">
       <i aria-hidden="true"></i>
       <div>

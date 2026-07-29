@@ -9,7 +9,7 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Repository | Hai source: `veetee-firmware` và `veetee-server`; reference Xiaozhi chỉ đọc. |
 | License | Code mới của Veetee dùng MIT; code/notice bên thứ ba được giữ theo license nguồn tương ứng. |
 | Firmware | ESP32-S3 N16R8, ST7789, INMP441, MAX98357A; pin map chỉ là provisional tới khi đo board thật. |
-| Manager Web visual | Giữ nguyên visual/interaction của `veetee-server/prototypes/manager-web/index.html`; khi chuyển Vue chỉ thay data layer và bổ sung màn hình vận hành đã ghi trong spec. |
+| Manager Web visual | Dùng Veetee Interface Language trong `docs/22-veetee-interface-language.md`: ấm áp, thông minh, responsive và ưu tiên tiếng Việt. Giao diện có `Sáng | Hệ thống | Tối`, lưu preference trong trình duyệt và mặc định theo hệ thống. Giữ dấu hai chấm/logo hiện tại; prototype HTML là tài liệu lịch sử về interaction, không còn là visual authority. Runtime vẫn là Vue component và được migrate theo từng lát cắt. |
 | Conversation | `mode=auto` là mặc định: wake/button mở assistant gate, VAD tự finalize, AI tự trả lời; không cần bấm nút lần hai. |
 | Wake | Button và activation wake word mở cùng một flow; activation/interrupt detector profile tách lifecycle. |
 | Product wake phrase | `Hey VeeTee`, cách đọc mục tiêu `hây vi ti` (`heɪ viː tiː`). Phrase/pronunciation là metadata train/benchmark của profile, không phải nhánh so chuỗi trong firmware. |
@@ -27,13 +27,13 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 | Dynamic code | Resource bundle chỉ chứa data/model/assets; không chứa native executable/operator tùy ý. |
 | Pairing | Code 6 số là one-time handle, có TTL/attempt limit/CSPRNG/atomic consume; challenge là random nonce, không dùng MAC. |
 | Domain | Không yêu cầu mua domain; dev chạy bằng LAN IP, release có thể dùng local CA/SPKI pinning hoặc tunnel/domain sau. |
-| Deployment V1 | Single-node chạy trực tiếp trên host: voice-server, manager-api/web, 9Router và Silero/ASR/TTS workers dùng process/venv riêng. PostgreSQL/Redis có thể cài native hoặc chạy Docker Compose tùy máy; object storage dùng local filesystem trong dev và MinIO chỉ bật khi cần. Provider/model traffic dùng loopback; chỉ Voice WS, Manager và Device Edge mở ra LAN. |
+| Deployment V1 | Single-node chạy trực tiếp trên host: voice-server, manager-api/web, CLIProxyAPI và Silero/ASR/TTS workers dùng process/venv riêng. PostgreSQL/Redis có thể cài native hoặc chạy Docker Compose tùy máy; object storage dùng local filesystem trong dev và MinIO chỉ bật khi cần. Provider/model traffic dùng loopback; chỉ Voice WS, Manager và Device Edge mở ra LAN. 9Router tạm dừng. |
 | Privacy | Raw audio không lưu mặc định; transcript/voiceprint có retention/consent riêng. |
 | Speech AI placement | ASR, Silero VAD và VieNeu-TTS chạy local trên voice-server; ESP32 chỉ capture/playback/Opus/wake/interrupt. |
 | ASR baseline | Sherpa-ONNX Zipformer Vietnamese 30M INT8 là primary; ChunkFormer-CTC-Large-Vie chỉ re-decode khi confidence/ổn định thấp hoặc policy yêu cầu chất lượng cao. Không chạy cả hai trên mọi utterance. |
-| TTS baseline | VieNeu-TTS v3 Turbo ONNX INT8 CPU 2 threads là primary `vi-VN` portable và trên host hiện tại; natural sentence cap 160, emergency punctuation-free 256, Trúc Ly/`tu_nhien`/1.0x/lead-in 16. Native CPU là profile batch-only tùy chọn 72/72 sau benchmark, không tự fallback. Tempo chính xác theo agent config, playback bounded và generation cancellation. Cloud TTS không tự bật trong privacy profile local-only. |
+| TTS baseline | VieNeu-TTS v3 Turbo ONNX INT8 CPU là primary `vi-VN`; process pin `OPENBLAS_NUM_THREADS=1` trước Python và ONNX dùng `VEETEE_TTS_THREADS=2`. Natural sentence cap 160, emergency punctuation-free 256, Trúc Ly/`tu_nhien`/1.0x/lead-in 16. Native CPU là profile batch-only tùy chọn 72/72 sau benchmark, không tự fallback. Tempo chính xác theo agent config, playback bounded và generation cancellation. Cloud TTS không tự bật trong privacy profile local-only. |
 | VAD baseline | Silero VAD (`silero-local`) chạy server để speech/endpoint; không coi VAD là noise classifier hay semantic admission. |
-| LLM baseline | 9Router `v0.5.40` local, endpoint `/v1`, model dev/LAN `cx/gpt-5.6-terra` sau benchmark trên host; production vẫn phải giữ adapter thay thế (official API/self-hosted). ChatGPT Plus/Codex OAuth không được coi là OpenAI Platform API key. |
+| LLM baseline | CLIProxyAPI `7.2.97` local ở `127.0.0.1:8317/v1`, model dev/LAN `gpt-5.6-terra`; agent publish Groq làm fallback retryable trước visible output. Veetee chỉ giữ client key gateway, không sao chép OAuth upstream. 9Router là adapter tùy chọn đang tạm dừng. |
 
 ## 2. Mặc định đề xuất để bắt đầu code
 
@@ -41,15 +41,15 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 |---|---|---|
 | Voice server | Python 3.12 + Starlette/FastAPI + Uvicorn trong một ASGI process. | Chỉ tách standalone WebSocket nếu benchmark connection/frame path yêu cầu. |
 | Manager API | NestJS + Fastify + PostgreSQL + Redis. | Đổi nếu team đã có nền tảng Java/Spring bắt buộc. |
-| Manager Web | Vue 3 + TypeScript + Vite + TanStack Vue Query + Zod. | Giữ visual prototype hiện tại, bổ sung artifact/security/privacy screens. |
+| Manager Web | Vue 3 + TypeScript + Vite + TanStack Vue Query + Zod. | Theo `docs/22-veetee-interface-language.md`; đổi shell/primitives trước rồi migrate từng nhóm màn hình, không đổi API/query/payload trong visual slice. |
 | Device UI | Giữ Mobile (`signal`), Companion (`monolith`) và Robot Face (`quiet`); Mobile là built-in default/failsafe. UI Pack data-only được preview/upload từ Manager và phân phối qua signed `ui_0/ui_1`. | UI ABI 1/resource ABI 2 đã triển khai cho palette/composition; font/icon/background/string rendering mở rộng phải giữ cùng data-only policy. |
 | Device edge | Dev single-node gộp admin + device routes trong manager-api port 8001; production có thể tách Caddy/Nginx listener 8003. | Không tạo business data source hoặc branded alias thứ hai. |
 | Object storage | Local filesystem adapter cho dev; MinIO cho rollout/Range/multi-node. | Không để manager-api buffer artifact lớn trong RAM. |
 | Resource layout | Executable A/B 3.625 MiB; wake `resource_0/1` 2 MiB; UI `ui_0/1` 2 MiB; journal/rollback độc lập. | Mở ADR nếu app hoặc artifact vượt slot đã freeze. |
 | VAD/admission | ESP AFE cho capture/wake; `silero-local` trên voice-server cho VAD/endpoint; admission là gate tổng quát sau ASR. | Chọn thêm denoise/AEC/target-speaker theo board và benchmark. |
 | ASR | Zipformer Vietnamese 30M INT8 primary; ChunkFormer-CTC-Large-Vie fallback có điều kiện. | Có thể tạm Zipformer-only trong bring-up nếu server chưa đủ tài nguyên. |
-| LLM | `openai-compatible-9router` cho dev/LAN; adapter giữ tương thích Chat Completions/Responses, SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu 9router không đạt contract hoặc không phù hợp quyền sử dụng. |
-| TTS | VieNeu-TTS v3 Turbo ONNX INT8 CPU 2 threads local primary `vi-VN`; native CPU chỉ là profile benchmark tùy chọn và fail readiness nếu artifact thiếu. | Đổi backend hoặc thêm local/cloud fallback chỉ sau license, privacy, latency, cancellation và live quality benchmark. |
+| LLM | `openai-compatible-cliproxyapi` cho dev/LAN; Groq là fallback đã publish. Adapter giữ Chat Completions SSE, structured output, tool calling và cancellation. | Chuyển official API/self-hosted nếu CLIProxyAPI không đạt contract hoặc không phù hợp quyền sử dụng. |
+| TTS | VieNeu-TTS v3 Turbo ONNX INT8 CPU local primary `vi-VN`; OpenBLAS 1 thread + ONNX 2 threads; native CPU chỉ là profile benchmark tùy chọn và fail readiness nếu artifact thiếu. | Đổi backend/thread budget hoặc thêm local/cloud fallback chỉ sau same-host A/B, license, privacy, latency, cancellation và live quality benchmark. |
 | Tenant | Schema tenant-aware, UI V1 một workspace/owner. | Mở full tenant/RBAC sau khi voice loop ổn định. |
 | LAN security | HTTP/WS chỉ cho dev LAN; release LAN dùng HTTPS/WSS với local CA/SPKI pinning. | Public cần tunnel/domain/TLS. |
 | Config apply | Sensitivity/cooldown ở standby; model pack stage inactive slot và restart subsystem; firmware/apply ở safe boundary. | Chỉ hot reload nếu capability/health test chứng minh an toàn. |
@@ -76,17 +76,20 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 ### AI/provider
 
 1. Xác nhận máy chạy voice-server có CPU/RAM/VRAM/GPU và số session đồng thời mục tiêu.
-2. 9Router đã pass local smoke cho Chat Completions/Responses, SSE và forced tool call; còn xác nhận cancellation/soak/quota và auth policy trước khi freeze.
+2. CLIProxyAPI đã pass local smoke cho authenticated model list, Chat Completions SSE,
+   structured output, forced tool call và cancellation; tiếp tục theo dõi quota/soak.
 3. Ghi exact repository/commit/runtime format/license của Zipformer, ChunkFormer, Silero và VieNeu.
 4. Xác nhận VieNeu streaming hay batch, voice/profile `vi-VN`, sample rate và output format.
 5. Chấp thuận bật ChunkFormer fallback ngay V1 hay chỉ sau benchmark Zipformer.
-6. Model dev/LAN `cx/gpt-5.6-terra` dùng `reasoning_effort=none`; còn xác nhận context/chi phí/quota và model fallback trước production. Không dùng credential phiên Codex trực tiếp.
+6. Model dev/LAN `gpt-5.6-terra` qua CLIProxyAPI bỏ field reasoning khi policy là
+   `none`; còn xác nhận context/chi phí/quota trước production. Không đưa OAuth upstream
+   vào Veetee.
 7. Có cần voiceprint/target-speaker ngay V1 không; mặc định là không.
 8. Transcript có lưu không, retention bao lâu, có consent/opt-out thế nào.
 
 ### Conversation UX
 
-1. Default timeouts: 15 s first input, 30 s between turns, 5 s closing grace, 20 s max utterance, 10 phút max session.
+1. Development baseline hiện dùng 180 s first input, 180 s between turns và 5 s closing grace; `max_utterance`, `max_session` và absolute `total_turn` mặc định tắt (`0`). LLM/TTS dùng idle/progress deadline được làm mới. Xác nhận lại production UX trước khi đổi các giá trị này; không copy ceiling lịch sử làm cắt response dài.
 2. Khi input unclear: hỏi lại một lần hay bỏ qua im lặng.
 3. Khi user nói “dừng lại” lúc TTS: chấp nhận best-effort V1 hay chờ AEC trước khi quảng bá.
 4. Tool nào AI được tự gọi, tool nào cần confirmation.
@@ -97,14 +100,15 @@ Tài liệu này là nơi phân biệt quyết định đã chốt, mặc địn
 1. Có chấp thuận NestJS + Python dual-stack không.
 2. Đã chốt dev dùng manager-api trực tiếp ở port 8001; port 8003 chỉ là production ingress tùy chọn.
 3. Dev dùng local filesystem hay MinIO ngay từ đầu.
-4. Single-node V1 đã chốt; model/provider gọi qua loopback và 9Router phải bind `127.0.0.1` hoặc firewall chặn port `20128` khỏi LAN.
+4. Single-node V1 đã chốt; Voice gọi CLIProxyAPI qua `127.0.0.1:8317` có client key và
+   không proxy port này ra LAN/Tailscale. 9Router/`20128` tạm dừng.
 5. V1 single workspace hay cần UI multi-tenant/RBAC hoàn chỉnh.
 6. Dev LAN HTTP/WS và release LAN pinned HTTPS/WSS có chấp thuận không.
 
 ### UI/UX
 
-1. Visual/interaction prototype đã được duyệt, không cần xác nhận lại; chỉ còn xác nhận phạm vi màn hình bổ sung.
-2. Có cần mobile manager ngay V1 không.
+1. Veetee Interface Language trong `docs/22-veetee-interface-language.md` đã được duyệt; giữ logo hiện tại và triển khai theo từng lát cắt.
+2. Manager Web và captive Wi-Fi portal phải mobile-first/responsive ngay V1; compact data view vẫn giữ touch target tối thiểu 44 px.
 3. Màn hình bắt buộc V1: Overview, Devices, Pairing, Agent, Providers, Realtime Lab, MCP, OTA, Wake/Resources, Audit/Privacy.
 4. Có hiển thị raw transcript/audio trong Realtime Lab không; mặc định chỉ hiển thị redacted events.
 5. Có cần live device animation/camera trong Manager Web không; mặc định để phase sau.

@@ -119,6 +119,59 @@ async def test_vieneu_provider_streams_resampled_pcm() -> None:
     assert len(b"".join(chunk.data for chunk in chunks)) > 4_000
 
 
+async def test_vieneu_prewarm_executes_and_drains_fixed_synthesis() -> None:
+    class PrewarmEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.completed = 0
+            self.text = ""
+
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            self.calls += 1
+            self.text = text
+            assert kwargs["voice"] == "Trúc Ly"
+            assert kwargs["style"] == "tu_nhien"
+            yield np.full(4_800, 0.25, dtype=np.float32)
+            yield np.full(2_400, 0.25, dtype=np.float32)
+            self.completed += 1
+
+    engine = PrewarmEngine()
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        output_sample_rate=24_000,
+        engine=engine,
+    )
+
+    await provider.prewarm()
+    await provider.prewarm()
+
+    assert engine.calls == 1
+    assert engine.completed == 1
+    assert 0 < len(engine.text) <= 72
+    assert any(character.isalpha() for character in engine.text)
+
+
+async def test_vieneu_prewarm_rejects_empty_audio() -> None:
+    class EmptyPrewarmEngine:
+        def infer_stream(
+            self, text: str, **kwargs: Any
+        ) -> Iterator[np.ndarray[Any, Any]]:
+            del text, kwargs
+            return iter(())
+
+    provider = VieNeuTtsProvider(
+        Path("unused"),
+        voice="Trúc Ly",
+        engine=EmptyPrewarmEngine(),
+    )
+
+    with pytest.raises(RuntimeError, match="prewarm produced no audio"):
+        await provider.prewarm()
+
+
 async def test_vieneu_resets_normalized_metrics_before_a_new_request() -> None:
     class FailingNormalizedEngine:
         normalized_chunk_count = 3

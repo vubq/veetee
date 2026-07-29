@@ -79,17 +79,17 @@ registry phải khai báo `streaming=false` để planner không hứa first-res
 
 ### LLM
 
-- `openai-compatible-9router`: baseline local/dev; instance hiện tại `v0.5.40`,
+- `openai-compatible-cliproxyapi`: baseline local/dev hiện hành, endpoint
+  `http://127.0.0.1:8317/v1`, model `gpt-5.6-terra`. Agent chọn binding này tường
+  minh; OAuth/upstream credential do CLIProxyAPI quản lý, còn Veetee chỉ giữ client
+  key của gateway trong trusted local config/encrypted provider secret.
+- `openai-compatible-9router`: adapter local/dev tùy chọn đang tạm dừng; instance
+  lịch sử `v0.5.40`,
   endpoint `http://127.0.0.1:20128/v1`, default đã benchmark `cx/gpt-5.6-terra`.
   Endpoint/model/secret reference cấu hình trong Manager. Chỉ enable production sau
   conformance test cho streaming, structured output, tool calling, cancellation,
   concurrency và usage metadata. Voice profile mặc định dùng
   `reasoning_effort=none`; không đưa reasoning content vào TTS.
-- `openai-compatible-cliproxyapi`: binding local/dev độc lập cho CLIProxyAPI,
-  endpoint mặc định `http://127.0.0.1:8317/v1`. Agent phải chọn binding này tường
-  minh; registry không tự đổi từ 9Router sang CLIProxyAPI. OAuth/upstream credential
-  tiếp tục do CLIProxyAPI quản lý, còn Veetee chỉ giữ client key của gateway trong
-  encrypted provider secret.
 - `openai-compatible`: adapter chung cho OpenAI Platform, DeepSeek, Qwen, GLM,
   OpenRouter và self-hosted gateway.
 - `gemini`: adapter native khi cần multimodal/live.
@@ -142,7 +142,7 @@ Fallback policy V1:
 ```text
 VAD vi-VN: silero-local -> provider-native-vad (chỉ nếu cùng session contract)
 ASR vi-VN: sherpa-onnx-zipformer-vi -> chunkformer-ctc-vie (low confidence) -> ask_again
-LLM: openai-compatible-9router -> openai-compatible-backup/self-hosted -> error
+LLM: openai-compatible-cliproxyapi -> groq-cloud -> error
 TTS vi-VN: vieneu-local -> cached_system_audio/text-only error
 ```
 

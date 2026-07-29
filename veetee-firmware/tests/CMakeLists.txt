@@ -91,6 +91,22 @@ target_compile_options(captive_portal_routes_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME captive_portal_routes_test COMMAND captive_portal_routes_test)
 
 add_executable(
+    provisioning_status_test
+    provisioning_status_test.cpp
+    ../main/network/provisioning_status.cpp
+)
+target_include_directories(provisioning_status_test PRIVATE ../main)
+target_compile_features(provisioning_status_test PRIVATE cxx_std_17)
+target_compile_options(provisioning_status_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME provisioning_status_test COMMAND provisioning_status_test)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(
+    NAME portal_assets_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_assets_test.py
+)
+
+add_executable(
     activation_record_test
     activation_record_test.cpp
     ../main/settings/activation_record.cpp

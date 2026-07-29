@@ -23,6 +23,22 @@ from veetee_voice_server.readiness import ComponentHealth
 pytestmark = pytest.mark.asyncio
 
 
+async def test_frame_duration_environment_values_are_parsed_as_bounded_integers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEETEE_INPUT_FRAME_DURATION_MS", "60")
+    monkeypatch.setenv("VEETEE_WIRE_FRAME_DURATION_MS", "40")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.input_frame_duration_ms == 60
+    assert settings.wire_frame_duration_ms == 40
+
+    monkeypatch.setenv("VEETEE_INPUT_FRAME_DURATION_MS", "30")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+
 async def test_liveness_and_request_id() -> None:
     app = create_app(Settings(environment="test"))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

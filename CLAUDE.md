@@ -42,6 +42,12 @@ npm run dev --workspace @veetee/manager-api
 npm run dev --workspace @veetee/manager-web
 ```
 
+`env:voice:sync` installs the required process-wide `OPENBLAS_NUM_THREADS=1` baseline,
+and the bare Voice/E2E/benchmark npm commands pin it before `uv` starts Python.
+`VEETEE_TTS_THREADS=2` limits ONNX Runtime only; do not remove the OpenBLAS cap or
+compensate by increasing TTS threads. Follow
+`docs/21-local-development-runbook.md` for the secret-safe effective-env check.
+
 `infra:up` requires an operational Docker daemon. If Docker is unavailable, use the documented host-local infrastructure scripts rather than changing application code.
 
 ## Validation commands

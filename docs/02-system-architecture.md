@@ -52,7 +52,8 @@ manager-web ──REST──> manager-api ──Postgres/Redis/MinIO
 - Provider secret chỉ đi qua secret resolver/service credential, không nằm trong agent snapshot và không gửi xuống firmware.
 - Baseline local `vi-VN`: Silero VAD -> Sherpa-ONNX Zipformer 30M INT8 ->
   ChunkFormer-CTC-Large-Vie re-decode có điều kiện -> LLM qua
-  `openai-compatible-9router` -> VieNeu-TTS v3 Turbo.
+  `openai-compatible-cliproxyapi` (Groq fallback đã publish) -> VieNeu-TTS v3 Turbo.
+  9Router là adapter tùy chọn đang tạm dừng, không phải dependency khởi động.
 - Local speech model là process/worker của server, không nhúng vào ESP32. Worker có
   concurrency limit, health, warmup, cancellation và memory budget riêng.
 - Chi tiết capability/gate nằm trong `docs/14-model-and-provider-baseline.md`.
@@ -81,7 +82,7 @@ manager-web ──REST──> manager-api ──Postgres/Redis/MinIO
 - Development ưu tiên chạy trực tiếp trên host bằng `uv`, Node và ESP-IDF để giảm
   overhead khi debug model/audio. PostgreSQL và Redis có thể chạy native hoặc bằng
   `veetee-server/compose.infra.yaml`; MinIO là profile tùy chọn, không tự khởi động.
-- V1 deploy single-node: 9Router, Silero VAD, Zipformer, ChunkFormer và VieNeu-TTS
+- V1 deploy single-node: CLIProxyAPI, Silero VAD, Zipformer, ChunkFormer và VieNeu-TTS
   chạy cùng máy với backend dưới process/venv riêng. Internal traffic dùng
   `127.0.0.1`; không publish model worker port ra LAN.
 - Caddy/Nginx terminate TLS; WebSocket timeout và max frame phải cấu hình rõ.
@@ -155,8 +156,8 @@ single-node hiện tại không chạy reverse proxy và dùng một Manager pro
 8000  voice-server WebSocket
 8001  manager-api: admin + bootstrap/config/artifact/reported-state
 8081  manager-web
-20128  9Router loopback-only, không expose trực tiếp cho ESP32/LAN
-8317  CLIProxyAPI optional, Voice Server chỉ gọi qua loopback
+8317  CLIProxyAPI active local, Voice Server chỉ gọi qua loopback có client key
+20128  9Router paused/optional, không thuộc startup profile hiện tại
 ```
 
 Khi production cần tách ingress, Caddy/Nginx có thể expose admin ở `8002` và
