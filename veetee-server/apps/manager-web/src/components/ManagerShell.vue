@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n";
 
 import { managerApi } from "../api/client";
 import type { Artifact } from "../api/schemas";
+import { canUseMemory as roleCanUseMemory } from "../auth/role-capabilities";
 import { managerRoutes } from "../router";
 import { useAuthStore } from "../stores/auth";
 import type { AgentDraftInput, ManagerPage, ProviderUpdateInput, ToastItem } from "../types/manager";
@@ -19,6 +20,8 @@ const DevicesPage = defineAsyncComponent(() => import("./pages/DevicesPage.vue")
 const OperationsPage = defineAsyncComponent(() => import("./pages/OperationsPage.vue"));
 const OverviewPage = defineAsyncComponent(() => import("./pages/OverviewPage.vue"));
 const ProvidersPage = defineAsyncComponent(() => import("./pages/ProvidersPage.vue"));
+const RemoteMcpPage = defineAsyncComponent(() => import("./pages/RemoteMcpPage.vue"));
+const MemoryPage = defineAsyncComponent(() => import("./pages/MemoryPage.vue"));
 const RealtimeLabPage = defineAsyncComponent(() => import("./pages/RealtimeLabPage.vue"));
 const ResourcesPage = defineAsyncComponent(() => import("./pages/ResourcesPage.vue"));
 
@@ -29,6 +32,10 @@ const router = useRouter();
 const { t } = useI18n();
 const activePage = computed(() => (route.name ?? "overview") as ManagerPage);
 const activeRoute = computed(() => managerRoutes.find((item) => item.page === activePage.value) ?? managerRoutes[0]!);
+const memoryAccessAllowed = computed(() => roleCanUseMemory(auth.principal?.role));
+const visibleManagerRoutes = computed(() => managerRoutes.filter(
+  (item) => item.page !== "memory" || memoryAccessAllowed.value,
+));
 const mobileMenuOpen = ref(false);
 const mobileMenuButton = ref<HTMLButtonElement>();
 const pairOpen = ref(false);
@@ -39,8 +46,8 @@ let toastId = 0;
 
 const onPage = (...pages: ManagerPage[]) => computed(() => pages.includes(activePage.value));
 const health = useQuery({ queryKey: ["health"], queryFn: managerApi.health, retry: 1, refetchInterval: 15_000 });
-const devices = useQuery({ queryKey: ["devices"], queryFn: managerApi.devices, enabled: onPage("overview", "devices", "lab", "resources", "operations"), refetchInterval: 15_000 });
-const agents = useQuery({ queryKey: ["agents"], queryFn: managerApi.agents, enabled: computed(() => onPage("overview", "devices", "agents", "lab").value || pairOpen.value) });
+const devices = useQuery({ queryKey: ["devices"], queryFn: managerApi.devices, enabled: computed(() => onPage("overview", "devices", "lab", "resources", "operations").value || (activePage.value === "memory" && memoryAccessAllowed.value)), refetchInterval: 15_000 });
+const agents = useQuery({ queryKey: ["agents"], queryFn: managerApi.agents, enabled: computed(() => onPage("overview", "devices", "agents", "mcp", "lab").value || (activePage.value === "memory" && memoryAccessAllowed.value) || pairOpen.value) });
 const agentPromptCatalog = useQuery({ queryKey: ["agent-prompt-catalog"], queryFn: managerApi.agentPromptCatalog, enabled: onPage("agents") });
 const providers = useQuery({ queryKey: ["providers"], queryFn: managerApi.providers, enabled: onPage("overview", "agents", "providers") });
 const baselineTools = useQuery({ queryKey: ["mcp-tools"], queryFn: managerApi.mcpTools, enabled: onPage("devices") });
@@ -65,6 +72,8 @@ const pageQueries = computed(() => {
     case "devices": return [devices, agents, baselineTools, artifacts, wakeProfiles, resourceRollouts, uiPackRollouts];
     case "agents": return [agents, providers, agentPromptCatalog];
     case "providers": return [providers];
+    case "mcp": return [agents];
+    case "memory": return memoryAccessAllowed.value ? [agents, devices] : [];
     case "lab": return [agents, devices];
     case "resources": return [artifacts, wakeProfiles, resourceRollouts, uiPackRollouts, firmwareReleases, firmwareRollouts, devices];
     case "operations": return [devices, operationsProfile, auditEvents];
@@ -98,6 +107,16 @@ function toast(message: string, tone: ToastItem["tone"] = "success"): void {
   toasts.value.push(item);
   window.setTimeout(() => dismissToast(item.id), 5_000);
 }
+
+watch(
+  [activePage, memoryAccessAllowed],
+  ([page, allowed]) => {
+    if (page !== "memory" || allowed) return;
+    toast(t("access.memoryRequiresOperator"), "danger");
+    void router.replace({ name: "overview" });
+  },
+  { immediate: true },
+);
 function dismissToast(id: number): void { toasts.value = toasts.value.filter((item) => item.id !== id); }
 function closeMobileMenu(): void {
   mobileMenuOpen.value = false;
@@ -171,7 +190,7 @@ async function runDeviceSelfTest(deviceId: string) { const result = await manage
     <aside class="app-sidebar">
       <RouterLink class="brand-lockup" to="/overview" aria-label="Veetee Manager"><VtBrandMark /><span><b>veetee</b><small>{{ t("brand.operations") }}</small></span></RouterLink>
       <nav class="desktop-nav" :aria-label="t('nav.label')">
-        <RouterLink v-for="item in managerRoutes" :key="item.page" :to="{ name: item.page }" :data-page-link="item.page"><span><VtIcon :name="item.icon" :size="19" /></span><span><b>{{ t(item.labelKey) }}</b><small>{{ t(item.shortKey) }}</small></span><i></i></RouterLink>
+        <RouterLink v-for="item in visibleManagerRoutes" :key="item.page" :to="{ name: item.page }" :data-page-link="item.page"><span><VtIcon :name="item.icon" :size="19" /></span><span><b>{{ t(item.labelKey) }}</b><small>{{ t(item.shortKey) }}</small></span><i></i></RouterLink>
       </nav>
       <div class="sidebar-status"><span><i :class="{ ready }"></i><b>{{ ready ? t("shell.ready") : t("shell.degraded") }}</b></span><small>API · {{ apiHost }}</small></div>
     </aside>
@@ -196,6 +215,8 @@ async function runDeviceSelfTest(deviceId: string) { const result = await manage
           <DevicesPage v-else-if="viewRoute.name === 'devices'" :devices="devices.data.value ?? []" :agents="agents.data.value ?? []" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :resource-rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :tools="tools" :tools-live="Boolean(deviceTools.data.value)" :events="deviceConversationEvents.data.value ?? []" :selected-device-id="selectedDeviceId" :assign-device-agent="assignDeviceAgent" :stage-ui-pack="stageUiPack" :stage-standard-ui-pack="stageStandardUiPack" :publish-artifact="publishArtifact" :rollout-ui-pack="rolloutUiPack" :rollout-wake-profile="rolloutWakeProfile" :call-tool="callTool" :get-diagnostics-health="getDiagnosticsHealth" :start-audio-diagnostic="startAudioDiagnostic" :run-device-self-test="runDeviceSelfTest" @select="selectedDeviceId = $event" @open-pair="pairOpen = true" />
           <AgentsPage v-else-if="viewRoute.name === 'agents'" :agents="agents.data.value ?? []" :providers="providers.data.value ?? []" :prompt-catalog="agentPromptCatalog.data.value" :publish-agent="publishAgent" :create-agent="createAgent" :create-personality-preset="createPersonalityPreset" :delete-personality-preset="deletePersonalityPreset" />
           <ProvidersPage v-else-if="viewRoute.name === 'providers'" :providers="providers.data.value ?? []" :test-provider="testProvider" :update-provider="updateProvider" />
+          <RemoteMcpPage v-else-if="viewRoute.name === 'mcp'" :agents="agents.data.value ?? []" :role="auth.principal?.role ?? 'VIEWER'" />
+          <MemoryPage v-else-if="viewRoute.name === 'memory' && memoryAccessAllowed" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" />
           <RealtimeLabPage v-else-if="viewRoute.name === 'lab'" :agents="agents.data.value ?? []" :devices="devices.data.value ?? []" :create-session="managerApi.createLabSession" :toast="toast" />
           <ResourcesPage v-else-if="viewRoute.name === 'resources'" :artifacts="artifacts.data.value ?? []" :wake-profiles="wakeProfiles.data.value ?? []" :rollouts="resourceRollouts.data.value ?? []" :ui-pack-rollouts="uiPackRollouts.data.value ?? []" :firmware-releases="firmwareReleases.data.value ?? []" :firmware-rollouts="firmwareRollouts.data.value ?? []" :devices="devices.data.value ?? []" :register-artifact="registerArtifact" :publish-artifact="publishArtifact" :create-wake-profile="createWakeProfile" :publish-wake-profile="publishWakeProfile" :publish-firmware-release="publishFirmwareRelease" :create-firmware-rollout="createFirmwareRollout" :pause-firmware-rollout="pauseFirmwareRollout" :resume-firmware-rollout="resumeFirmwareRollout" :rollback-firmware-rollout="rollbackFirmwareRollout" />
           <OperationsPage v-else-if="viewRoute.name === 'operations'" :devices="devices.data.value ?? []" :audit-events="auditEvents.data.value ?? []" :profile="operationsProfile.data.value" :ready="ready" />
@@ -203,7 +224,7 @@ async function runDeviceSelfTest(deviceId: string) { const result = await manage
       </main>
     </div>
 
-    <TransitionRoot :show="mobileMenuOpen" as="template"><Dialog class="mobile-nav-layer" @close="closeMobileMenu"><TransitionChild as="template" enter="dialog-backdrop-enter" enter-from="dialog-backdrop-from" enter-to="dialog-backdrop-to" leave="dialog-backdrop-leave" leave-from="dialog-backdrop-to" leave-to="dialog-backdrop-from"><div class="mobile-nav-backdrop"></div></TransitionChild><TransitionChild as="template" enter="drawer-enter" enter-from="drawer-from" enter-to="drawer-to" leave="drawer-leave" leave-from="drawer-to" leave-to="drawer-from" @after-leave="closeMobileMenu"><DialogPanel id="mobile-navigation" class="mobile-nav-panel"><DialogTitle class="sr-only">{{ t("nav.label") }}</DialogTitle><header><RouterLink class="brand-lockup" to="/overview" @click="closeMobileMenu"><VtBrandMark /><span><b>veetee</b><small>{{ t("brand.operations") }}</small></span></RouterLink><button class="vt-icon-button" type="button" :aria-label="t('nav.close')" @click="closeMobileMenu"><VtIcon name="close" :size="20" /></button></header><nav :aria-label="t('nav.label')"><RouterLink v-for="item in managerRoutes" :key="item.page" :to="{ name: item.page }" :data-page-link="item.page" @click="closeMobileMenu"><span><VtIcon :name="item.icon" :size="19" /></span><div><b>{{ t(item.labelKey) }}</b><small>{{ t(item.shortKey) }}</small></div></RouterLink></nav><footer><VtBadge :tone="ready ? 'success' : 'danger'" dot>{{ ready ? t("shell.ready") : t("shell.degraded") }}</VtBadge><small>{{ apiHost }}</small></footer></DialogPanel></TransitionChild></Dialog></TransitionRoot>
+    <TransitionRoot :show="mobileMenuOpen" as="template"><Dialog class="mobile-nav-layer" @close="closeMobileMenu"><TransitionChild as="template" enter="dialog-backdrop-enter" enter-from="dialog-backdrop-from" enter-to="dialog-backdrop-to" leave="dialog-backdrop-leave" leave-from="dialog-backdrop-to" leave-to="dialog-backdrop-from"><div class="mobile-nav-backdrop"></div></TransitionChild><TransitionChild as="template" enter="drawer-enter" enter-from="drawer-from" enter-to="drawer-to" leave="drawer-leave" leave-from="drawer-to" leave-to="drawer-from" @after-leave="closeMobileMenu"><DialogPanel id="mobile-navigation" class="mobile-nav-panel"><DialogTitle class="sr-only">{{ t("nav.label") }}</DialogTitle><header><RouterLink class="brand-lockup" to="/overview" @click="closeMobileMenu"><VtBrandMark /><span><b>veetee</b><small>{{ t("brand.operations") }}</small></span></RouterLink><button class="vt-icon-button" type="button" :aria-label="t('nav.close')" @click="closeMobileMenu"><VtIcon name="close" :size="20" /></button></header><nav :aria-label="t('nav.label')"><RouterLink v-for="item in visibleManagerRoutes" :key="item.page" :to="{ name: item.page }" :data-page-link="item.page" @click="closeMobileMenu"><span><VtIcon :name="item.icon" :size="19" /></span><div><b>{{ t(item.labelKey) }}</b><small>{{ t(item.shortKey) }}</small></div></RouterLink></nav><footer><VtBadge :tone="ready ? 'success' : 'danger'" dot>{{ ready ? t("shell.ready") : t("shell.degraded") }}</VtBadge><small>{{ apiHost }}</small></footer></DialogPanel></TransitionChild></Dialog></TransitionRoot>
 
     <PairDeviceDialog :open="pairOpen" :agents="agents.data.value ?? []" :pair-device="pairDevice" @close="pairOpen = false" />
     <VtToastRegion :items="toasts" @dismiss="dismissToast" />

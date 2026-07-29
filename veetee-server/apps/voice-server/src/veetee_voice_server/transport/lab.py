@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from time import monotonic
 from typing import Any
 
@@ -25,6 +26,7 @@ from veetee_voice_server.conversation.evidence import (
     input_evidence_payload,
 )
 from veetee_voice_server.conversation.inactivity import InactivityController
+from veetee_voice_server.conversation.memory import MemoryPolicy
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationOutput,
@@ -39,6 +41,10 @@ from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
 from veetee_voice_server.tools.context import with_session_context_tools
+from veetee_voice_server.tools.remote_mcp import (
+    RemoteAugmentedToolBroker,
+    SessionRemoteMcpBroker,
+)
 from veetee_voice_server.transport.protocol import MAX_CONTROL_FRAME_BYTES, ProtocolViolationError
 from veetee_voice_server.transport.session_registry import DeviceSessionRegistry
 
@@ -508,7 +514,12 @@ class LabSession:
         tts: TtsProvider,
         tool_broker: ToolBroker,
         engine_factory: EngineFactory,
+        remote_mcp: SessionRemoteMcpBroker | None = None,
     ) -> None:
+        # Lab sessions are operator tests, not authenticated physical-user sessions.
+        # Enforce opt-out at this boundary even if a caller forgets to sanitize the
+        # selected agent snapshot.
+        profile = replace(profile, memory_policy=MemoryPolicy())
         self.websocket = websocket
         self.settings = settings
         self.context = context
@@ -520,6 +531,9 @@ class LabSession:
             session_id=self.session_id,
             output_sample_rate=settings.wire_sample_rate,
         )
+        self.remote_mcp = remote_mcp
+        if remote_mcp is not None:
+            tool_broker = RemoteAugmentedToolBroker(tool_broker, remote_mcp)
         session_tools = with_session_context_tools(profile, tool_broker)
         self.tools = InstrumentedLabToolBroker(session_tools, self.sink)
         self.engine = engine_factory(self.arbiter, self.sink, profile, self.tools)
@@ -562,6 +576,8 @@ class LabSession:
 
     async def run(self) -> None:
         try:
+            if self.remote_mcp is not None:
+                self.remote_mcp.start()
             await self.sink.send_hello(self.context, self.profile, self.tools)
             await self.inactivity.assistant_opened(WakeSource.BUTTON)
             await self.sink.send_event("session.opened", {"source": "web_lab"}, generation=1)
@@ -587,6 +603,8 @@ class LabSession:
             return
         self._closed = True
         await self._cancel_processing("lab_socket_closed")
+        if self.remote_mcp is not None:
+            await self.remote_mcp.close()
         await self.inactivity.close()
         await self.arbiter.abort("lab_socket_closed")
 

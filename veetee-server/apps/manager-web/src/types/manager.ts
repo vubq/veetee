@@ -3,6 +3,8 @@ export type ManagerPage =
   | "devices"
   | "agents"
   | "providers"
+  | "mcp"
+  | "memory"
   | "lab"
   | "resources"
   | "operations";

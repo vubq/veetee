@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, Literal
 
@@ -22,6 +23,7 @@ from veetee_voice_server.conversation.cancellation import (
     await_operation,
     iterate_operation,
 )
+from veetee_voice_server.conversation.memory import CompletedMemoryTurn, MemorySnapshot
 from veetee_voice_server.conversation.sentence_chunker import (
     SentenceChunker,
     TextChunk,
@@ -59,6 +61,12 @@ class _SpeechLifecycle:
     batch_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _AssistantCompletion:
+    context_text: str
+    durable_text: str
+
+
 class _SemanticProviderUnavailableError(RuntimeError):
     pass
 
@@ -92,16 +100,43 @@ class ConversationEngine:
         self._context: deque[ConversationMessage] = deque(
             maxlen=max(2, min(self._policy.context_message_limit, 32))
         )
+        self._cross_session_memory = MemorySnapshot()
+        self._completed_turn_sink: Callable[[CompletedMemoryTurn], bool] | None = None
+        self._durable_message_characters = max(
+            1, self._policy.context_message_characters
+        )
 
     @property
     def context(self) -> tuple[ConversationMessage, ...]:
         return tuple(self._context)
 
+    def configure_cross_session_memory(
+        self,
+        snapshot: MemorySnapshot,
+        completed_turn_sink: Callable[[CompletedMemoryTurn], bool],
+        *,
+        max_message_characters: int | None = None,
+    ) -> None:
+        """Attach one preloaded snapshot and a non-blocking completion queue."""
+
+        self._cross_session_memory = snapshot
+        self._completed_turn_sink = completed_turn_sink
+        if max_message_characters is not None:
+            self._durable_message_characters = max(
+                1, min(int(max_message_characters), 4_000)
+            )
+
     async def handle_transcript(self, transcript: Transcript) -> AdmissionDisposition | None:
         context = await self._arbiter.begin_turn(self._policy.total_turn_seconds)
         admitted_disposition: AdmissionDisposition | None = None
         try:
-            contextual_transcript = replace(transcript, context=tuple(self._context))
+            contextual_transcript = replace(
+                transcript,
+                context=tuple(self._context),
+                cross_session_memory=(
+                    None if self._cross_session_memory.empty else self._cross_session_memory
+                ),
+            )
             admission_seconds = (
                 self._policy.planner_seconds
                 if self._fused_semantic_gate
@@ -156,7 +191,6 @@ class ConversationEngine:
                 return decision.disposition
 
             admitted_disposition = decision.disposition
-            self._remember("user", contextual_transcript.text)
             planner_started_at = monotonic()
             plan = await await_operation(
                 self._planner.plan(
@@ -197,7 +231,21 @@ class ConversationEngine:
                     },
                 ),
             )
-            await self._execute_plan(contextual_transcript, decision, plan, context)
+            assistant = await self._execute_plan(
+                contextual_transcript, decision, plan, context
+            )
+            if assistant is not None and assistant.durable_text:
+                context.checkpoint()
+                self._remember("user", contextual_transcript.text)
+                self._remember("assistant", assistant.context_text)
+                self._record_completed_turn(
+                    context,
+                    contextual_transcript.text,
+                    assistant.durable_text,
+                    plan,
+                )
+            if plan.action is PlanAction.END_SESSION:
+                await self._arbiter.close_assistant("semantic_end")
             return decision.disposition
         except (TurnCancelledError, StaleTurnError):
             return None
@@ -246,23 +294,23 @@ class ConversationEngine:
         admission: AdmissionDecision,
         plan: ConversationPlan,
         context: OperationContext,
-    ) -> None:
+    ) -> _AssistantCompletion | None:
         if plan.action in {PlanAction.NOOP, PlanAction.CANCEL_PENDING_TOOL}:
-            return
+            return None
         if plan.action is PlanAction.END_SESSION:
             if plan.response_text:
                 await self._speak_planned_text(plan.response_text, plan.locale, context)
-                self._remember("assistant", plan.response_text)
-            await self._arbiter.close_assistant("semantic_end")
-            return
+            return (
+                _AssistantCompletion(plan.response_text, plan.response_text)
+                if plan.response_text
+                else None
+            )
         if plan.action is PlanAction.ASK_CLARIFICATION and plan.response_text:
             await self._speak_planned_text(plan.response_text, plan.locale, context)
-            self._remember("assistant", plan.response_text)
-            return
+            return _AssistantCompletion(plan.response_text, plan.response_text)
         if plan.action is PlanAction.RESPOND and plan.response_text:
             await self._speak_planned_text(plan.response_text, plan.locale, context)
-            self._remember("assistant", plan.response_text)
-            return
+            return _AssistantCompletion(plan.response_text, plan.response_text)
 
         tool_result: Any | None = None
         if plan.action in {
@@ -282,7 +330,7 @@ class ConversationEngine:
             )
 
         if plan.response_required:
-            response_text = await self._stream_response(
+            return await self._stream_response(
                 LlmRequest(
                     transcript=transcript,
                     plan=plan,
@@ -292,10 +340,11 @@ class ConversationEngine:
                 ),
                 context,
             )
-            if response_text:
-                self._remember("assistant", response_text)
+        return None
 
-    async def _stream_response(self, request: LlmRequest, context: OperationContext) -> str:
+    async def _stream_response(
+        self, request: LlmRequest, context: OperationContext
+    ) -> _AssistantCompletion:
         speech = _SpeechLifecycle()
         speech_queue: asyncio.Queue[TextChunk | None] = asyncio.Queue(
             maxsize=self._policy.speech_queue_capacity
@@ -305,6 +354,7 @@ class ConversationEngine:
             name=f"speech-stream:{context.session_id}:{context.turn_id}",
         )
         response_tail = ""
+        response_prefix = ""
         response_characters = 0
         stream_started_at = monotonic()
         first_delta_at: float | None = None
@@ -337,8 +387,16 @@ class ConversationEngine:
                 if len(event.text) > self._policy.llm_delta_max_characters:
                     raise ValueError("LLM delta exceeds the bounded streaming contract")
                 response_characters += len(event.text)
+                if len(response_prefix) < self._durable_message_characters:
+                    response_prefix = (response_prefix + event.text)[
+                        : self._durable_message_characters
+                    ]
                 response_tail = (response_tail + event.text)[
-                    -max(1, self._policy.context_message_characters) :
+                    -max(
+                        1,
+                        self._policy.context_message_characters,
+                        self._durable_message_characters,
+                    ) :
                 ]
                 await self._emit(
                     context,
@@ -387,7 +445,28 @@ class ConversationEngine:
                 speech_task.cancel()
             await asyncio.gather(speech_task, return_exceptions=True)
             await self._finish_speech(context, speech, cancelled=not completed)
-        return response_tail.strip()
+        context_text = response_tail[
+            -max(1, self._policy.context_message_characters) :
+        ].strip()
+        if response_characters <= self._durable_message_characters:
+            durable_text = response_prefix.strip()
+        else:
+            separator = " … "
+            head_characters = max(
+                1, (self._durable_message_characters - len(separator)) // 2
+            )
+            tail_characters = max(
+                1,
+                self._durable_message_characters
+                - head_characters
+                - len(separator),
+            )
+            durable_text = (
+                response_prefix[:head_characters].rstrip()
+                + separator
+                + response_tail[-tail_characters:].lstrip()
+            )[: self._durable_message_characters].strip()
+        return _AssistantCompletion(context_text, durable_text)
 
     async def _drain_speech_queue(
         self,
@@ -750,3 +829,39 @@ class ConversationEngine:
         if not bounded:
             return
         self._context.append(ConversationMessage(role, bounded))
+
+    def _record_completed_turn(
+        self,
+        context: OperationContext,
+        user_text: str,
+        assistant_text: str,
+        plan: ConversationPlan,
+    ) -> None:
+        sink = self._completed_turn_sink
+        if sink is None:
+            return
+        try:
+            queued = sink(
+                CompletedMemoryTurn(
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    user_text=user_text,
+                    assistant_text=assistant_text,
+                    fact_candidates=plan.memory_facts,
+                    occurred_at=datetime.now(UTC).isoformat(),
+                )
+            )
+        except Exception as error:
+            logger.warning(
+                "conversation_memory_enqueue_degraded",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                error_type=type(error).__name__,
+            )
+            return
+        if not queued:
+            logger.warning(
+                "conversation_memory_enqueue_skipped",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+            )

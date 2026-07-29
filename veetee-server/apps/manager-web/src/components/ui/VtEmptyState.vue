@@ -2,7 +2,7 @@
 import VtIcon from "./VtIcon.vue";
 
 withDefaults(
-  defineProps<{ icon?: "device" | "agent" | "resource" | "telemetry" | "tool" | "display" | "mic"; title: string; text: string }>(),
+  defineProps<{ icon?: "device" | "agent" | "resource" | "telemetry" | "tool" | "display" | "mic" | "memory"; title: string; text: string }>(),
   { icon: "resource" },
 );
 </script>

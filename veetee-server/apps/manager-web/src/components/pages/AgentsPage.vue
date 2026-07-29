@@ -86,6 +86,12 @@ const form = reactive({
   vad: "", asr: "", llm: "", tts: "",
   voiceId: "", voiceGender: "female", voiceStyle: "tu_nhien",
   voiceRate: 1, voicePitch: 0, voiceVolume: 1,
+  memoryEnabled: false, memoryConsent: false,
+  memoryStoreMessages: false, memoryStoreFacts: false,
+  memoryRetentionDays: 7, memoryMaxMessages: 12,
+  memoryMaxMessageCharacters: 2_000, memoryMaxContextCharacters: 8_000,
+  memoryFactRetentionDays: 90, memoryMaxFacts: 50,
+  memoryMaxFactCharacters: 1_000,
 });
 
 const selected = computed(() => props.agents.find((agent) => agent.id === selectedId.value) ?? props.agents[0]);
@@ -298,6 +304,18 @@ watch(
     form.voiceRate = Number(voice.rate ?? selectedTts?.config?.rate ?? 1);
     form.voicePitch = Number(voice.pitchHz ?? selectedTts?.config?.pitchHz ?? 0);
     form.voiceVolume = Number(voice.volume ?? selectedTts?.config?.volume ?? 1);
+    const memory = objectValue(agent.draftConfig.memoryPolicy);
+    form.memoryEnabled = memory.enabled === true;
+    form.memoryConsent = memory.consent === true;
+    form.memoryStoreMessages = memory.storeMessages === true;
+    form.memoryStoreFacts = memory.storeFacts === true;
+    form.memoryRetentionDays = Number(memory.retentionDays ?? 7);
+    form.memoryMaxMessages = Number(memory.maxMessages ?? 12);
+    form.memoryMaxMessageCharacters = Number(memory.maxMessageCharacters ?? 2_000);
+    form.memoryMaxContextCharacters = Number(memory.maxContextCharacters ?? 8_000);
+    form.memoryFactRetentionDays = Number(memory.factRetentionDays ?? 90);
+    form.memoryMaxFacts = Number(memory.maxFacts ?? 50);
+    form.memoryMaxFactCharacters = Number(memory.maxFactCharacters ?? 1_000);
     error.value = "";
   },
   { immediate: true },
@@ -305,6 +323,21 @@ watch(
 
 async function publish(): Promise<void> {
   if (!selected.value) return;
+  if (form.memoryEnabled && !form.memoryConsent) {
+    error.value = t("agents.errors.memoryConsentRequired");
+    scrollToSection("agent-memory");
+    return;
+  }
+  if (form.memoryEnabled && !form.memoryStoreMessages && !form.memoryStoreFacts) {
+    error.value = t("agents.errors.memoryStorageRequired");
+    scrollToSection("agent-memory");
+    return;
+  }
+  if (Number(form.memoryMaxContextCharacters) < Number(form.memoryMaxMessageCharacters)) {
+    error.value = t("agents.errors.memoryContextTooSmall");
+    scrollToSection("agent-memory");
+    return;
+  }
   busy.value = true;
   error.value = "";
   try {
@@ -351,6 +384,19 @@ async function publish(): Promise<void> {
               volume: Number(form.voiceVolume),
             }
           : undefined,
+        memoryPolicy: {
+          enabled: form.memoryEnabled,
+          consent: form.memoryConsent,
+          storeMessages: form.memoryStoreMessages,
+          storeFacts: form.memoryStoreFacts,
+          retentionDays: Number(form.memoryRetentionDays),
+          maxMessages: Number(form.memoryMaxMessages),
+          maxMessageCharacters: Number(form.memoryMaxMessageCharacters),
+          maxContextCharacters: Number(form.memoryMaxContextCharacters),
+          factRetentionDays: Number(form.memoryFactRetentionDays),
+          maxFacts: Number(form.memoryMaxFacts),
+          maxFactCharacters: Number(form.memoryMaxFactCharacters),
+        },
       },
     });
   } catch (exception) {
@@ -605,6 +651,7 @@ const promptPreview = computed(() => {
           <a href="#agent-personality" @click.prevent="scrollToSection('agent-personality')"><span>02</span><div><b>{{ t("agents.nav.personality") }}</b><small>{{ t("agents.nav.personalityShort") }}</small></div></a>
           <a href="#agent-prompt" @click.prevent="scrollToSection('agent-prompt')"><span>03</span><div><b>{{ t("agents.nav.prompt") }}</b><small>{{ t("agents.nav.promptShort") }}</small></div></a>
           <a href="#agent-runtime" @click.prevent="scrollToSection('agent-runtime')"><span>04</span><div><b>{{ t("agents.nav.runtime") }}</b><small>{{ t("agents.nav.runtimeShort") }}</small></div></a>
+          <a href="#agent-memory" @click.prevent="scrollToSection('agent-memory')"><span>05</span><div><b>{{ t("agents.nav.memory") }}</b><small>{{ t("agents.nav.memoryShort") }}</small></div></a>
         </nav>
 
         <article id="agent-identity" class="vt-panel form-section agent-config-section">
@@ -793,7 +840,60 @@ const promptPreview = computed(() => {
           </div>
         </article>
 
-        <div class="sticky-publish"><span class="publish-mark"><VtIcon name="upload" :size="18" /></span><div><b>{{ t("agents.publish.title") }}</b><small>{{ t("agents.publish.description") }}</small></div><p v-if="error" class="inline-error">{{ error }}</p><span class="publish-target"><small>VERSION</small><b>v{{ selected.version + 1 }}</b></span><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> {{ t("agents.publish.action", { version: selected.version + 1 }) }}</VtButton></div>
+        <article id="agent-memory" class="vt-panel form-section agent-config-section">
+          <header class="agent-section-header">
+            <span class="agent-section-index">05</span>
+            <div><span class="vt-kicker">{{ t("agents.memory.kicker") }}</span><h2>{{ t("agents.memory.title") }}</h2><p>{{ t("agents.memory.description") }}</p></div>
+            <VtBadge :tone="form.memoryEnabled && form.memoryConsent ? 'success' : 'neutral'">{{ t(form.memoryEnabled && form.memoryConsent ? "agents.memory.active" : "agents.memory.off") }}</VtBadge>
+          </header>
+          <div class="agent-section-content agent-memory-layout">
+            <section class="agent-memory-consent" :class="{ active: form.memoryEnabled }">
+              <label class="switch-control">
+                <input v-model="form.memoryEnabled" type="checkbox" />
+                <span></span>
+                <b>{{ t("agents.memory.enable") }}</b>
+              </label>
+              <p>{{ t("agents.memory.enableHint") }}</p>
+              <label class="confirmation-box memory-consent-box">
+                <input v-model="form.memoryConsent" type="checkbox" :disabled="!form.memoryEnabled" />
+                <span><VtIcon name="check" :size="19" /></span>
+                <div><b>{{ t("agents.memory.consent") }}</b><small>{{ t("agents.memory.consentHint") }}</small></div>
+              </label>
+            </section>
+
+            <section class="agent-runtime-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="agent" :size="17" /></span><div><b>{{ t("agents.memory.storageTitle") }}</b><small>{{ t("agents.memory.storageHint") }}</small></div></header>
+              <div class="memory-storage-options">
+                <label class="switch-control"><input v-model="form.memoryStoreMessages" type="checkbox" :disabled="!form.memoryEnabled" /><span></span><b>{{ t("agents.memory.messages") }}</b></label>
+                <label class="switch-control"><input v-model="form.memoryStoreFacts" type="checkbox" :disabled="!form.memoryEnabled" /><span></span><b>{{ t("agents.memory.facts") }}</b></label>
+              </div>
+              <p class="agent-runtime-hint">{{ t("agents.memory.storageBoundary") }}</p>
+            </section>
+
+            <section class="agent-runtime-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="telemetry" :size="17" /></span><div><b>{{ t("agents.memory.historyBounds") }}</b><small>{{ t("agents.memory.historyBoundsHint") }}</small></div></header>
+              <div class="form-grid two">
+                <VtField :label="t('agents.memory.retentionDays')"><VtInput v-model="form.memoryRetentionDays" type="number" min="1" max="30" /></VtField>
+                <VtField :label="t('agents.memory.maxMessages')"><VtInput v-model="form.memoryMaxMessages" type="number" min="2" max="40" /></VtField>
+                <VtField :label="t('agents.memory.maxMessageCharacters')"><VtInput v-model="form.memoryMaxMessageCharacters" type="number" min="128" max="4000" step="1" /></VtField>
+                <VtField :label="t('agents.memory.maxContextCharacters')"><VtInput v-model="form.memoryMaxContextCharacters" type="number" min="512" max="12000" step="1" /></VtField>
+              </div>
+            </section>
+
+            <section class="agent-runtime-card">
+              <header><span class="agent-runtime-icon"><VtIcon name="resource" :size="17" /></span><div><b>{{ t("agents.memory.factBounds") }}</b><small>{{ t("agents.memory.factBoundsHint") }}</small></div></header>
+              <div class="form-grid two">
+                <VtField :label="t('agents.memory.factRetentionDays')"><VtInput v-model="form.memoryFactRetentionDays" type="number" min="1" max="365" /></VtField>
+                <VtField :label="t('agents.memory.maxFacts')"><VtInput v-model="form.memoryMaxFacts" type="number" min="1" max="100" /></VtField>
+                <VtField class="span-two" :label="t('agents.memory.maxFactCharacters')"><VtInput v-model="form.memoryMaxFactCharacters" type="number" min="64" max="2000" step="1" /></VtField>
+              </div>
+            </section>
+
+            <div class="agent-mode-note span-two"><VtIcon name="warning" :size="18" /><p><b>{{ t("agents.memory.labBoundaryTitle") }}</b><span>{{ t("agents.memory.labBoundaryBody") }}</span></p></div>
+          </div>
+        </article>
+
+        <div class="sticky-publish"><span class="publish-mark"><VtIcon name="upload" :size="18" /></span><div><b>{{ t("agents.publish.title") }}</b><small>{{ t("agents.publish.description") }}</small></div><p v-if="error" class="inline-error" role="alert">{{ error }}</p><span class="publish-target"><small>VERSION</small><b>v{{ selected.version + 1 }}</b></span><VtButton type="submit" :busy="busy"><VtIcon name="upload" :size="17" /> {{ t("agents.publish.action", { version: selected.version + 1 }) }}</VtButton></div>
       </form>
     </div>
     <VtEmptyState v-else icon="agent" :title="t('agents.empty.title')" :text="t('agents.empty.body')" />
@@ -883,7 +983,7 @@ const promptPreview = computed(() => {
 
 .agent-config-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1239,6 +1339,77 @@ const promptPreview = computed(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.agent-memory-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-memory-consent {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(240px, .8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 10px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--color-surface-inset);
+}
+
+.agent-memory-consent.active {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: color-mix(in srgb, var(--success) 7%, var(--paper));
+}
+
+.agent-memory-consent > p {
+  grid-column: 1;
+  margin: -7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-consent-box {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  margin: 0;
+}
+
+.memory-consent-box:has(input:disabled),
+.memory-storage-options:has(input:disabled) {
+  opacity: .58;
+}
+
+.memory-storage-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.memory-storage-options .switch-control {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 0 11px;
+  background: var(--paper-strong);
+}
+
+.agent-memory-layout .switch-control b,
+.agent-memory-layout .agent-runtime-card > header b,
+.memory-consent-box b {
+  font-size: 14px;
+}
+
+.agent-memory-layout .agent-runtime-card > header small,
+.memory-consent-box small,
+.agent-memory-layout .agent-runtime-hint {
+  font-size: 12px;
+}
+
+.agent-memory-layout :deep(.vt-field) {
+  font-size: 14px;
 }
 
 .agent-runtime-card {
@@ -1804,8 +1975,18 @@ const promptPreview = computed(() => {
 }
 
 @media (max-width: 960px) {
-  .agent-runtime-grid {
+  .agent-runtime-grid,
+  .agent-memory-layout {
     grid-template-columns: 1fr;
+  }
+
+  .agent-memory-consent {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-consent-box {
+    grid-row: auto;
+    grid-column: 1;
   }
 }
 
@@ -1835,6 +2016,15 @@ const promptPreview = computed(() => {
     grid-column: 2;
     justify-self: start;
     margin-top: 5px;
+  }
+
+  .agent-section-header > :deep(.vt-badge) {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .memory-storage-options {
+    grid-template-columns: 1fr;
   }
 
   .agent-section-content {

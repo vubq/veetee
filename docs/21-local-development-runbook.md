@@ -531,6 +531,21 @@ Ba cold restart cycle cũng pass: startup/readiness khoảng 7,8--9,7 giây, m�
 0,1--0,3%. Đây là dated evidence của host này, không thay thế việc chạy lại gate sau khi
 model, dependency, agent config hoặc phần cứng đổi.
 
+Gate release cuối ngày 2026-07-29 đã chạy lại sau một full-stack restart với
+`OPENBLAS_NUM_THREADS=1`, `VEETEE_TTS_THREADS=2` và CLIProxyAPI
+`maxCompletionTokens=2048` (fixture kể chuyện dài này cần ít nhất `2048`; mức `1024`
+cắt câu trả lời quá sớm). Lượt dài sinh 8.407 ký tự, 428 PCM frame tương đương
+481,44 giây audio, zero schedule gap/error, rồi ba lượt thường liên tiếp đều hoàn tất
+`tts.stop -> listen.start`. Trong lúc sinh audio, CPU Voice avg/p95/peak là
+154,80/167/174%; toàn cửa sổ soak là 78,12/166/174%. Sau synthesis, 300 mẫu idle dưới
+2% có trung bình 0,140% và 10 mẫu cuối đều 0,000%. Process giữ 27 thread; RSS tăng từ
+853.672 KiB tới 1.057.424 KiB do model/arena resident nhưng 300 giây cuối chỉ đổi
+1.120 KiB, tức plateau thay vì leak. PCM cuối tới `tts.stop` chậm khoảng 204,87 giây
+do Realtime Lab drain audio đã buffer theo thời lượng phát; CPU đã về idle nên không
+phải VieNeu còn inference. Có một cycle trước đó chạm đúng CLIProxyAPI deadline 15 giây
+khi proxy đồng thời phục vụ nhiều request Codex dài; cycle đó bị tính fail và được báo
+riêng, không tăng deadline hay che bằng fallback.
+
 ## 5. Dừng và khởi động lại sạch
 
 Dùng đúng terminal/process handle đã mở; không dùng `pkill` rộng. Thứ tự dừng app là

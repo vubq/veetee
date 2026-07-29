@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
+from veetee_voice_server.conversation.memory import MemoryFactCandidate, MemorySnapshot
+
 
 class WakeSource(StrEnum):
     BUTTON = "button"
@@ -88,6 +90,7 @@ class Transcript:
     confidence: float | None = None
     stability: float | None = None
     context: tuple[ConversationMessage, ...] = ()
+    cross_session_memory: MemorySnapshot | None = None
     input_evidence: InputEvidence | None = None
 
 
@@ -114,6 +117,7 @@ class ConversationPlan:
     response_required: bool
     response_text: str | None = None
     tool_call: ToolCall | None = None
+    memory_facts: tuple[MemoryFactCandidate, ...] = ()
     runtime_error_code: str | None = None
 
 

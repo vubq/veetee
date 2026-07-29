@@ -22,6 +22,8 @@ import { AuditService } from "../audit/audit.service.js";
 import type { Principal } from "../auth/auth.types.js";
 import {
   expandProviderChains,
+  normalizeMemoryPolicy,
+  type MemoryPolicy,
   validateAgentVoiceConfig,
   validateAgentDraftConfig,
   validateProviderConfig,
@@ -36,6 +38,7 @@ import {
 } from "../config/agent-prompt.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
+import { reconcileMemoryPolicy } from "../memory/memory-retention.js";
 import { PairingService } from "../pairing/pairing.service.js";
 import {
   probeVoiceRuntimeComponent,
@@ -65,6 +68,7 @@ export interface AgentRecord {
   draftConfig: Record<string, unknown>;
   version: number;
   publishedVersion: number;
+  publishedMemoryPolicy?: MemoryPolicy;
 }
 
 export interface PersonalityPresetInput {
@@ -943,9 +947,22 @@ export class ControlPlaneStore {
   async listAgents(tenantId: string): Promise<AgentRecord[]> {
     const agents = await this.prisma.agent.findMany({
       where: { tenantId },
+      include: {
+        configVersions: {
+          orderBy: { version: "desc" },
+          take: 1,
+          select: { snapshot: true },
+        },
+      },
       orderBy: { updatedAt: "desc" },
     });
-    return agents.map((agent) => this.toAgentRecord(agent));
+    return agents.map((agent) => this.toAgentRecord(
+      agent,
+      normalizeMemoryPolicy(
+        (agent.configVersions[0]?.snapshot as Record<string, unknown> | undefined)
+          ?.memoryPolicy,
+      ),
+    ));
   }
 
   async getAgentPromptCatalog(tenantId: string): Promise<AgentPromptCatalog> {
@@ -1122,6 +1139,13 @@ export class ControlPlaneStore {
 
   async publishAgent(id: string, context: MutationContext): Promise<AgentRecord> {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(
+        Prisma.sql`
+          SELECT "id" FROM "Agent"
+          WHERE "id" = ${id} AND "tenantId" = ${context.principal.tenantId}
+          FOR UPDATE
+        `,
+      );
       const agent = await transaction.agent.findFirst({
         where: { id, tenantId: context.principal.tenantId },
       });
@@ -1155,10 +1179,21 @@ export class ControlPlaneStore {
         providerChains.flatMap((chain) => chain.providers.map((provider) => provider.id)),
       );
       const version = agent.version + 1;
+      const remoteMcpAssignments = await transaction.agentRemoteMcpAssignment.findMany({
+        where: {
+          agentId: agent.id,
+          tenantId: context.principal.tenantId,
+          endpoint: { is: { tenantId: context.principal.tenantId } },
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
       const prompt = normalizePublishedAgentPrompt(
         (agent.draftConfig as Record<string, unknown>).prompt,
         { locale: agent.defaultLocale },
         personalityPresets,
+      );
+      const memoryPolicy = normalizeMemoryPolicy(
+        (agent.draftConfig as Record<string, unknown>).memoryPolicy,
       );
       const snapshot = {
         ...(agent.draftConfig as Record<string, unknown>),
@@ -1170,6 +1205,12 @@ export class ControlPlaneStore {
         interactionMode: agent.interactionMode.toLowerCase(),
         persona: agent.persona,
         prompt,
+        memoryPolicy,
+        remoteMcpEndpoints: remoteMcpAssignments.map((assignment) => ({
+          endpointId: assignment.endpointId,
+          toolNames: assignment.toolNames,
+          timeoutSeconds: assignment.timeoutMs / 1_000,
+        })),
         providerChains,
         ...(voice ? { voice } : {}),
         providers: providers
@@ -1187,6 +1228,11 @@ export class ControlPlaneStore {
           snapshot: snapshot as unknown as Prisma.InputJsonValue,
         },
       });
+      await reconcileMemoryPolicy(
+        transaction,
+        { tenantId: context.principal.tenantId, agentId: agent.id },
+        memoryPolicy,
+      );
       await this.audit.record(
         {
           tenantId: context.principal.tenantId,
@@ -1200,7 +1246,10 @@ export class ControlPlaneStore {
         },
         transaction,
       );
-      return this.toAgentRecord(updated);
+      return this.toAgentRecord(
+        updated,
+        normalizeMemoryPolicy(snapshot.memoryPolicy),
+      );
     });
   }
 
@@ -1446,7 +1495,7 @@ export class ControlPlaneStore {
     draftConfig: Prisma.JsonValue;
     version: number;
     publishedVersion: number;
-  }): AgentRecord {
+  }, publishedMemoryPolicy?: MemoryPolicy): AgentRecord {
     return {
       id: agent.id,
       name: agent.name,
@@ -1456,6 +1505,7 @@ export class ControlPlaneStore {
       draftConfig: agent.draftConfig as Record<string, unknown>,
       version: agent.version,
       publishedVersion: agent.publishedVersion,
+      ...(publishedMemoryPolicy ? { publishedMemoryPolicy } : {}),
     };
   }
 

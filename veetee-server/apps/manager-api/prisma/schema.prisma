@@ -84,6 +84,52 @@ enum FirmwareRolloutStatus {
   ROLLED_BACK
 }
 
+enum MemoryMessageRole {
+  USER
+  ASSISTANT
+}
+
+enum MemoryWriteKind {
+  MESSAGE
+  FACT
+}
+
+enum RemoteMcpTransport {
+  STREAMABLE_HTTP
+  SSE
+}
+
+enum RemoteMcpAuthType {
+  NONE
+  BEARER
+  HEADER
+}
+
+enum RemoteMcpNetworkPolicy {
+  PUBLIC_ONLY
+  PRIVATE_ALLOWLIST
+}
+
+enum RemoteMcpHealth {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+}
+
+enum RemoteMcpCallStatus {
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  STALE
+  COMPLETED_AFTER_ABORT
+}
+
+enum RemoteMcpCallActor {
+  MODEL
+  USER
+  SYSTEM
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -91,19 +137,25 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships        Membership[]
-  agents             Agent[]
-  devices            Device[]
-  providers          ProviderBinding[]
-  auditEvents        AuditEvent[]
-  artifacts          Artifact[]
-  conversationEvents ConversationEvent[]
-  refreshSessions    RefreshSession[]
-  resourceRollouts   ResourceRollout[]
-  uiPackRollouts     UiPackRollout[]
-  firmwareRollouts   FirmwareRollout[]
-  wakeProfiles       WakeProfile[]
-  personalityPresets PersonalityPreset[]
+  memberships          Membership[]
+  agents               Agent[]
+  devices              Device[]
+  providers            ProviderBinding[]
+  auditEvents          AuditEvent[]
+  artifacts            Artifact[]
+  conversationEvents   ConversationEvent[]
+  refreshSessions      RefreshSession[]
+  resourceRollouts     ResourceRollout[]
+  uiPackRollouts       UiPackRollout[]
+  firmwareRollouts     FirmwareRollout[]
+  wakeProfiles         WakeProfile[]
+  personalityPresets   PersonalityPreset[]
+  memoryMessages       ConversationMemoryMessage[]
+  memoryFacts          ConversationMemoryFact[]
+  remoteMcpEndpoints   RemoteMcpEndpoint[]
+  remoteMcpAssignments AgentRemoteMcpAssignment[]
+  remoteMcpInvocations RemoteMcpInvocation[]
+  memoryWriteReceipts  MemoryWriteReceipt[]
 }
 
 model User {
@@ -146,11 +198,17 @@ model Agent {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  configVersions AgentConfigVersion[]
-  devices        Device[]
+  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  configVersions       AgentConfigVersion[]
+  devices              Device[]
+  memoryMessages       ConversationMemoryMessage[]
+  memoryFacts          ConversationMemoryFact[]
+  remoteMcpAssignments AgentRemoteMcpAssignment[]
+  remoteMcpInvocations RemoteMcpInvocation[]
+  memoryWriteReceipts  MemoryWriteReceipt[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, id])
   @@index([tenantId, updatedAt])
 }
 
@@ -161,7 +219,8 @@ model AgentConfigVersion {
   snapshot    Json
   publishedAt DateTime @default(now())
 
-  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent                Agent                 @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  remoteMcpInvocations RemoteMcpInvocation[]
 
   @@unique([agentId, version])
   @@index([agentId, publishedAt])
@@ -198,14 +257,19 @@ model Device {
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
 
-  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  agent              Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  desiredState       DeviceDesiredState?
-  reportedState      DeviceReportedState?
-  conversationEvents ConversationEvent[]
-  resourceRollouts   ResourceRollout[]
-  uiPackRollouts     UiPackRollout[]
+  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  agent                Agent?                      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  desiredState         DeviceDesiredState?
+  reportedState        DeviceReportedState?
+  conversationEvents   ConversationEvent[]
+  resourceRollouts     ResourceRollout[]
+  uiPackRollouts       UiPackRollout[]
+  memoryMessages       ConversationMemoryMessage[]
+  memoryFacts          ConversationMemoryFact[]
+  remoteMcpInvocations RemoteMcpInvocation[]
+  memoryWriteReceipts  MemoryWriteReceipt[]
 
+  @@unique([tenantId, id])
   @@index([tenantId, status])
   @@index([tenantId, agentId])
 }
@@ -230,27 +294,27 @@ model DeviceReportedState {
 }
 
 model ProviderBinding {
-  id               String         @id @default(uuid())
+  id               String               @id @default(uuid())
   tenantId         String
   kind             ProviderKind
   adapter          String
   model            String
   baseUrl          String?
   secretCiphertext String?
-  secretConfigured Boolean        @default(false)
-  enabled          Boolean        @default(true)
-  priority         Int            @default(100)
-  locales          String[]       @default(["*"])
-  config           Json           @default("{}")
-  health           ProviderHealth @default(UNKNOWN)
+  secretConfigured Boolean              @default(false)
+  enabled          Boolean              @default(true)
+  priority         Int                  @default(100)
+  locales          String[]             @default(["*"])
+  config           Json                 @default("{}")
+  health           ProviderHealth       @default(UNKNOWN)
   healthLatencyMs  Int?
   healthErrorCode  String?
   healthCheckedAt  DateTime?
   circuitState     ProviderCircuitState @default(CLOSED)
-  failureCount     Int            @default(0)
+  failureCount     Int                  @default(0)
   circuitOpenedAt  DateTime?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -317,6 +381,154 @@ model ConversationEvent {
   @@index([retentionUntil])
 }
 
+model ConversationMemoryMessage {
+  id             String            @id @default(uuid())
+  idempotencyKey String
+  tenantId       String
+  agentId        String
+  deviceId       String
+  sessionId      String
+  turnId         String
+  role           MemoryMessageRole
+  content        String            @db.Text
+  redacted       Boolean           @default(false)
+  occurredAt     DateTime
+  retentionUntil DateTime
+  createdAt      DateTime          @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+  device Device @relation(fields: [tenantId, deviceId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, agentId, deviceId, idempotencyKey])
+  @@index([tenantId, agentId, deviceId, occurredAt])
+  @@index([retentionUntil])
+}
+
+model ConversationMemoryFact {
+  id                 String   @id @default(uuid())
+  lastIdempotencyKey String
+  tenantId           String
+  agentId            String
+  deviceId           String
+  category           String
+  key                String
+  value              String   @db.Text
+  confidence         Float
+  sourceSessionId    String
+  sourceTurnId       String
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+  device Device @relation(fields: [tenantId, deviceId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, agentId, deviceId, category, key])
+  @@index([tenantId, agentId, deviceId, lastIdempotencyKey])
+  @@index([tenantId, agentId, deviceId, updatedAt])
+  @@index([expiresAt])
+}
+
+model MemoryWriteReceipt {
+  id             String          @id @default(uuid())
+  tenantId       String
+  agentId        String
+  deviceId       String
+  idempotencyKey String
+  kind           MemoryWriteKind
+  expiresAt      DateTime
+  createdAt      DateTime        @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+  device Device @relation(fields: [tenantId, deviceId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, agentId, deviceId, idempotencyKey])
+  @@index([tenantId, agentId, deviceId, expiresAt])
+  @@index([expiresAt])
+}
+
+model RemoteMcpEndpoint {
+  id               String                 @id @default(uuid())
+  tenantId         String
+  name             String
+  url              String
+  transport        RemoteMcpTransport
+  enabled          Boolean                @default(true)
+  authType         RemoteMcpAuthType      @default(NONE)
+  authHeaderName   String?
+  secretCiphertext String?
+  secretConfigured Boolean                @default(false)
+  timeoutMs        Int                    @default(10000)
+  resultMaxBytes   Int                    @default(65536)
+  networkPolicy    RemoteMcpNetworkPolicy @default(PUBLIC_ONLY)
+  allowedHosts     String[]               @default([])
+  tools            Json
+  health           RemoteMcpHealth        @default(UNKNOWN)
+  healthLatencyMs  Int?
+  healthErrorCode  String?
+  healthCheckedAt  DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  tenant      Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments AgentRemoteMcpAssignment[]
+  invocations RemoteMcpInvocation[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@index([tenantId, enabled, updatedAt])
+}
+
+model AgentRemoteMcpAssignment {
+  id         String   @id @default(uuid())
+  tenantId   String
+  agentId    String
+  endpointId String
+  toolNames  String[]
+  timeoutMs  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent    Agent             @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+  endpoint RemoteMcpEndpoint @relation(fields: [tenantId, endpointId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([agentId, endpointId])
+  @@index([tenantId, agentId])
+  @@index([endpointId])
+}
+
+model RemoteMcpInvocation {
+  id            String              @id
+  tenantId      String
+  endpointId    String
+  agentId       String
+  deviceId      String
+  configVersion Int
+  sessionId     String
+  turnId        String
+  toolName      String
+  argumentsHash String
+  status        RemoteMcpCallStatus
+  durationMs    Int
+  actor         RemoteMcpCallActor
+  occurredAt    DateTime
+  createdAt     DateTime            @default(now())
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  endpoint RemoteMcpEndpoint  @relation(fields: [tenantId, endpointId], references: [tenantId, id], onDelete: Cascade)
+  agent    Agent              @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+  device   Device             @relation(fields: [tenantId, deviceId], references: [tenantId, id], onDelete: Cascade)
+  config   AgentConfigVersion @relation(fields: [agentId, configVersion], references: [agentId, version], onDelete: Cascade)
+
+  @@index([tenantId, occurredAt])
+  @@index([endpointId, occurredAt])
+  @@index([deviceId, sessionId, turnId])
+}
+
 model Artifact {
   id              String                  @id
   tenantId        String
@@ -341,13 +553,13 @@ model Artifact {
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  wakeProfiles        WakeProfile[]
-  wakeProfileVersions WakeProfileVersion[]
-  resourceRollouts    ResourceRollout[]
-  uiPackRollouts      UiPackRollout[]
-  firmwareRollouts    FirmwareRollout[] @relation("FirmwareRolloutArtifact")
-  previousFirmwareRollouts FirmwareRollout[] @relation("FirmwareRolloutPreviousArtifact")
+  tenant                   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  wakeProfiles             WakeProfile[]
+  wakeProfileVersions      WakeProfileVersion[]
+  resourceRollouts         ResourceRollout[]
+  uiPackRollouts           UiPackRollout[]
+  firmwareRollouts         FirmwareRollout[]    @relation("FirmwareRolloutArtifact")
+  previousFirmwareRollouts FirmwareRollout[]    @relation("FirmwareRolloutPreviousArtifact")
 
   @@index([tenantId, status, createdAt])
 }
@@ -430,20 +642,20 @@ model UiPackRollout {
 }
 
 model FirmwareRollout {
-  id               String                @id @default(uuid())
-  tenantId         String
-  artifactId       String
+  id                 String                @id @default(uuid())
+  tenantId           String
+  artifactId         String
   previousArtifactId String?
-  channel          String
-  percentage       Int                   @default(0)
-  canaryDeviceIds  String[]              @default([])
-  selectedDeviceIds String[]             @default([])
-  status           FirmwareRolloutStatus @default(DRAFT)
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
+  channel            String
+  percentage         Int                   @default(0)
+  canaryDeviceIds    String[]              @default([])
+  selectedDeviceIds  String[]              @default([])
+  status             FirmwareRolloutStatus @default(DRAFT)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
-  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  artifact         Artifact @relation("FirmwareRolloutArtifact", fields: [artifactId], references: [id], onDelete: Restrict)
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  artifact         Artifact  @relation("FirmwareRolloutArtifact", fields: [artifactId], references: [id], onDelete: Restrict)
   previousArtifact Artifact? @relation("FirmwareRolloutPreviousArtifact", fields: [previousArtifactId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])

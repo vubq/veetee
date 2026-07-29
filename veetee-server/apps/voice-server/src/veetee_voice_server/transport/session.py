@@ -25,6 +25,7 @@ from veetee_voice_server.conversation.evidence import (
     input_evidence_payload,
 )
 from veetee_voice_server.conversation.inactivity import InactivityController
+from veetee_voice_server.conversation.memory import DeviceMemorySession
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationOutput,
@@ -39,6 +40,10 @@ from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
 from veetee_voice_server.telemetry import ConversationTelemetry, NullConversationTelemetry
+from veetee_voice_server.tools.remote_mcp import (
+    RemoteAugmentedToolBroker,
+    SessionRemoteMcpBroker,
+)
 from veetee_voice_server.transport.mcp import DeviceMcpClient, DeviceMcpError
 from veetee_voice_server.transport.opus import OpusDecoder, OpusEncoder, OpusError
 from veetee_voice_server.transport.protocol import (
@@ -515,6 +520,8 @@ class VoiceSession:
             ConversationEngine,
         ],
         telemetry: ConversationTelemetry | None = None,
+        remote_mcp: SessionRemoteMcpBroker | None = None,
+        memory_session: DeviceMemorySession | None = None,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
@@ -546,7 +553,19 @@ class VoiceSession:
             max_speech_seconds=settings.max_utterance_seconds,
         )
         self.mcp = DeviceMcpClient(self.sink.send_mcp, session_id=self.session_id)
-        self.engine = engine_factory(self.arbiter, self.sink, profile, self.mcp)
+        self.remote_mcp = remote_mcp
+        tool_broker: ToolBroker = self.mcp
+        if remote_mcp is not None:
+            tool_broker = RemoteAugmentedToolBroker(tool_broker, remote_mcp)
+        self.engine = engine_factory(self.arbiter, self.sink, profile, tool_broker)
+        if memory_session is not None:
+            self.engine.configure_cross_session_memory(
+                memory_session.snapshot,
+                memory_session.record_completed_turn,
+                max_message_characters=(
+                    memory_session.scope.policy.max_message_characters
+                ),
+            )
         self.inactivity = InactivityController(
             arbiter=self.arbiter,
             first_input_seconds=profile.policy.first_input_seconds,
@@ -588,6 +607,8 @@ class VoiceSession:
                 expected_frame_duration=self.settings.input_frame_duration_ms,
             )
             await self.sink.send_hello()
+            if self.remote_mcp is not None:
+                self.remote_mcp.start()
             if hello.features.mcp:
                 self._mcp_bootstrap_task = asyncio.create_task(self._initialize_mcp())
 
@@ -618,6 +639,8 @@ class VoiceSession:
             await asyncio.gather(self._mcp_bootstrap_task, return_exceptions=True)
             self._mcp_bootstrap_task = None
         await self.mcp.close()
+        if self.remote_mcp is not None:
+            await self.remote_mcp.close()
         await self._cancel_asr()
         await self.inactivity.close()
         await self.arbiter.abort("socket_closed")

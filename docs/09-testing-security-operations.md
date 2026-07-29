@@ -63,9 +63,21 @@ thay Wi-Fi đang dùng và không được tự xóa NVS:
 - Input admission conformance: accepted/rejected/unclear/interrupt/end, reason bounded; dialogue-act tests riêng cho follow-up/confirmation/correction.
 - Inactivity timeout, closing grace and wake-during-goodbye race tests.
 - MCP cancellation/stale-result tests, including side effect completed after abort.
+- Cross-session memory: default-off/consent, device-agent isolation, load timeout,
+  message/fact/context bounds, idempotent completed-turn write, abort/partial-output reject,
+  retention/expiry và Manager failure degradation; Lab không dùng durable memory mặc định.
 - WebSocket reconnect/timeout/malformed/flood.
 - MCP authorization/SSRF/schema.
+- Remote MCP fake-server conformance: initialize, JSON/SSE Streamable HTTP response,
+  pagination, explicit tool assignment, confirmation/safety hiding, collision, DNS
+  pinning + rebinding/private/metadata block, timeout/abort, malformed/oversize result,
+  prompt-injection metadata/result boundary, restricted-schema DoS, per-call
+  disable/clear/rotate reauthorization, credential rotation tạo MCP session mới không
+  list lại catalog, Manager timeout/unavailable fail-closed và audit redaction.
 - Manager API tenant isolation/idempotency/migration.
+- DB tenant-integrity test phải thử direct/import row chéo tenant cho memory, assignment
+  và invocation; composite FK phải reject, invocation phải tham chiếu đúng immutable
+  `(agentId, configVersion)` đã publish.
 - Manager integration suite phải dùng `VEETEE_INTEGRATION_DATABASE_URL` trỏ tới
   database riêng có hậu tố `_test`; runner từ chối chạy nếu trùng database dev.
 - Playwright pairing/provider/publish/OTA flows.

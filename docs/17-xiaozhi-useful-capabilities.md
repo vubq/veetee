@@ -373,7 +373,7 @@ memory-pressure metrics. Không thêm GC thủ công nếu chưa có số liệu
 Veetee đã giữ bounded context theo số message và số ký tự; đây là nền tảng cho
 follow-up như “Gke vậy sao?”.
 
-### 9.2. Short-term memory qua nhiều phiên — ❌ P1
+### 9.2. Short-term memory qua nhiều phiên — ✅ P1
 
 Bắt đầu nhỏ và có consent:
 
@@ -383,6 +383,11 @@ Bắt đầu nhỏ và có consent:
 - bounded size và retention;
 - không lưu raw audio;
 - không tự gửi dữ liệu nhạy cảm ra cloud.
+
+Baseline hiện dùng immutable `memoryPolicy` mặc định off, scope authenticated
+device/agent, recent messages riêng với structured facts, load một lần mỗi session và
+async idempotent write chỉ sau completed turn. Fact extraction đi qua structured semantic
+planner; Realtime Lab không dùng durable memory mặc định.
 
 Không copy nguyên prompt/scoring cứng của reference.
 
@@ -432,7 +437,7 @@ Chỉ opt-in, có consent, encryption, delete/re-enroll và benchmark nhiều no
 Veetee hiện có device status, volume, system info, JSON-RPC, pagination, schema
 validation, confirmation, safety class và audit.
 
-### 10.2. Remote MCP endpoint registry — ❌ P1
+### 10.2. Remote MCP endpoint registry — ✅ P1
 
 Nên có registry trong Manager:
 
@@ -445,11 +450,17 @@ Nên có registry trong Manager:
 - audit và result size cap;
 - không arbitrary executable code.
 
+Baseline hiện quản lý endpoint/secret/health/agent assignment trong Manager, resolve
+discovery tại Voice session boundary và reauthorize bằng fresh secret trước từng tool call.
+Voice hỗ trợ Streamable HTTP, paginated catalog,
+explicit AI allowlist, schema/result bounds, 5--30 giây deadline, turn cancellation, SSRF +
+DNS-rebinding guard và async metadata-only audit. SSE legacy transport vẫn chưa bật runtime.
+
 ### 10.3. Server MCP registry — 🟡 P1
 
 Veetee đã có registry native cho server tools với namespace, JSON Schema
 validation, audience/safety metadata, cancellation/deadline và bounded
-structured result. Các remote endpoint/egress policy vẫn chưa bật.
+structured result. Remote endpoint được merge fail-closed theo assignment và egress policy.
 
 ### 10.4. Time/weather/web search — ❌ P1
 
@@ -500,7 +511,7 @@ plugin vào resource bundle.
 | Rollout Control | ✅/🧪 | P0/P1 | Percentage, pause/resume, auto-pause, operator rollback; health gate cần hardware soak. |
 | Device Diagnostics | ✅/🧪 | P0 | Self-test, metrics, health bundle, failure reason; hardware acceptance còn lại. |
 | Knowledge Base | ❌ | P1 | Upload, indexing, assistant assignment, citation test. |
-| Remote MCP Registry | ❌ | P1 | Endpoint, auth, allowlist, health, audit. |
+| Remote MCP Registry | ✅ | P1 | Endpoint, auth, allowlist, health, audit; SSE legacy deferred. |
 | Assistant Template | ❌ | P1 | Tạo assistant từ template/version đã duyệt. |
 | Voice Catalog | ❌ | P1 | Preview, locale, provider, speed/sample-rate capability. |
 | Correction Dictionary | ❌ | P1 | Lexicon version theo assistant/locale. |

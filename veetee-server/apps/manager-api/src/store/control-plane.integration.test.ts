@@ -1,5 +1,10 @@
 import { Algorithm, hash } from "@node-rs/argon2";
-import { TenantRole } from "@prisma/client";
+import {
+  MemoryMessageRole,
+  RemoteMcpCallActor,
+  RemoteMcpCallStatus,
+  TenantRole,
+} from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AuditService } from "../audit/audit.service.js";
@@ -11,6 +16,8 @@ import type { Principal } from "../auth/auth.types.js";
 import { DEFAULT_AGENT_BASE_PROMPT } from "../config/agent-prompt.policy.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { RedisService } from "../database/redis.service.js";
+import { RemoteMcpService } from "../mcp/remote-mcp.service.js";
+import { MemoryService } from "../memory/memory.service.js";
 import { PairingService } from "../pairing/pairing.service.js";
 import { SecretCryptoService } from "../security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./control-plane.store.js";
@@ -62,6 +69,8 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     audit,
     new ResourceManifestService(new ArtifactFilesService()),
   );
+  const memory = new MemoryService(prisma, audit);
+  const remoteMcp = new RemoteMcpService(prisma, audit, new SecretCryptoService());
   let principal: Principal;
 
   beforeAll(async () => {
@@ -71,6 +80,12 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await redis.client.connect();
     await redis.client.flushdb();
     await prisma.auditEvent.deleteMany();
+    await prisma.remoteMcpInvocation.deleteMany();
+    await prisma.agentRemoteMcpAssignment.deleteMany();
+    await prisma.remoteMcpEndpoint.deleteMany();
+    await prisma.conversationMemoryFact.deleteMany();
+    await prisma.conversationMemoryMessage.deleteMany();
+    await prisma.memoryWriteReceipt.deleteMany();
     await prisma.conversationEvent.deleteMany();
     await prisma.resourceRollout.deleteMany();
     await prisma.wakeProfileVersion.deleteMany();
@@ -410,6 +425,608 @@ describe.runIf(process.env.VEETEE_INTEGRATION === "1")("persistent ControlPlaneS
     await expect(resourceCatalog.listRollouts(principal.tenantId)).resolves.toEqual([
       expect.objectContaining({ id: rollouts[0]?.id, status: "complete" }),
     ]);
+  });
+
+  it("persists bounded cross-session memory and immutable Remote MCP assignments", async () => {
+    const [agent] = await store.listAgents(principal.tenantId);
+    const [device] = await store.listDevices(principal.tenantId);
+    if (!agent || !device) throw new Error("Integration agent/device is missing");
+    const updated = await store.updateAgent(
+      agent.id,
+      {
+        draftConfig: {
+          ...agent.draftConfig,
+          memoryPolicy: {
+            enabled: true,
+            consent: true,
+            storeMessages: true,
+            storeFacts: true,
+            retentionDays: 7,
+            maxMessages: 2,
+            maxMessageCharacters: 2_000,
+            maxContextCharacters: 8_000,
+            factRetentionDays: 90,
+            maxFacts: 50,
+            maxFactCharacters: 1_000,
+          },
+        },
+      },
+      { principal, requestId: "integration-memory-policy" },
+    );
+    const endpoint = await remoteMcp.createEndpoint(
+      {
+        name: "Integration Weather",
+        url: "https://93.184.216.34/mcp",
+        transport: "streamable_http",
+        authType: "bearer",
+        secret: "integration-remote-mcp-secret",
+        timeoutSeconds: 10,
+        resultMaxBytes: 16_384,
+        networkPolicy: "public_only",
+        allowedHosts: ["93.184.216.34"],
+        tools: [{
+          name: "weather.current",
+          safetyClass: "read_only",
+          requiresConfirmation: false,
+        }],
+      },
+      { principal, requestId: "integration-remote-mcp-create" },
+    );
+    expect(JSON.stringify(endpoint)).not.toContain("integration-remote-mcp-secret");
+    const calendarEndpoint = await remoteMcp.createEndpoint(
+      {
+        name: "Integration Calendar",
+        url: "https://93.184.216.35/mcp",
+        transport: "streamable_http",
+        authType: "none",
+        timeoutSeconds: 10,
+        resultMaxBytes: 16_384,
+        networkPolicy: "public_only",
+        allowedHosts: ["93.184.216.35"],
+        tools: [{
+          name: "calendar.next",
+          safetyClass: "read_only",
+          requiresConfirmation: false,
+        }],
+      },
+      { principal, requestId: "integration-remote-mcp-calendar-create" },
+    );
+    await Promise.all([
+      remoteMcp.replaceAssignments(
+        agent.id,
+        [{ endpointId: endpoint.id, toolNames: ["weather.current"], timeoutSeconds: 8 }],
+        { principal, requestId: "integration-remote-mcp-race-weather" },
+      ),
+      remoteMcp.replaceAssignments(
+        agent.id,
+        [{ endpointId: calendarEndpoint.id, toolNames: ["calendar.next"], timeoutSeconds: 8 }],
+        { principal, requestId: "integration-remote-mcp-race-calendar" },
+      ),
+    ]);
+    const racedAssignments = await remoteMcp.listAssignments(principal.tenantId, agent.id);
+    expect(racedAssignments.items).toHaveLength(1);
+    expect([endpoint.id, calendarEndpoint.id]).toContain(racedAssignments.items[0]?.endpointId);
+    await remoteMcp.replaceAssignments(
+      agent.id,
+      [{ endpointId: endpoint.id, toolNames: ["weather.current"], timeoutSeconds: 8 }],
+      { principal, requestId: "integration-remote-mcp-assign" },
+    );
+    const credentialRaceEndpoint = await remoteMcp.createEndpoint(
+      {
+        name: "Integration Credential Race",
+        url: "https://93.184.216.36/mcp",
+        transport: "streamable_http",
+        authType: "bearer",
+        secret: "integration-race-secret",
+        timeoutSeconds: 10,
+        resultMaxBytes: 16_384,
+        networkPolicy: "public_only",
+        allowedHosts: ["93.184.216.36"],
+        tools: [{
+          name: "race.read",
+          safetyClass: "read_only",
+          requiresConfirmation: false,
+        }],
+      },
+      { principal, requestId: "integration-remote-mcp-race-create" },
+    );
+    await Promise.allSettled([
+      remoteMcp.updateEndpoint(
+        credentialRaceEndpoint.id,
+        { secretAction: "clear" },
+        { principal, requestId: "integration-remote-mcp-race-clear" },
+      ),
+      remoteMcp.updateEndpoint(
+        credentialRaceEndpoint.id,
+        { enabled: true, secretAction: "keep" },
+        { principal, requestId: "integration-remote-mcp-race-enable" },
+      ),
+    ]);
+    await expect(
+      remoteMcp.endpoint(principal.tenantId, credentialRaceEndpoint.id),
+    ).resolves.toMatchObject({ enabled: false, secretConfigured: false });
+    const published = await store.publishAgent(agent.id, {
+      principal,
+      requestId: "integration-memory-mcp-publish",
+    });
+    await store.assignDeviceAgent(device.id, agent.id, {
+      principal,
+      requestId: "integration-memory-device-agent",
+    });
+    await expect(store.getAgentConfig(agent.id, published.publishedVersion)).resolves.toMatchObject({
+      memoryPolicy: { enabled: true, consent: true, storeMessages: true, storeFacts: true },
+      remoteMcpEndpoints: [{
+        endpointId: endpoint.id,
+        toolNames: ["weather.current"],
+        timeoutSeconds: 8,
+      }],
+    });
+
+    const sessionId = "session_integration_memory_01";
+    const turnId = "turn_integration_memory_01";
+    await expect(memory.appendMessages(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [
+        {
+          idempotencyKey: `${sessionId}:${turnId}:user`,
+          sessionId,
+          turnId,
+          role: "user",
+          content: "Tôi thích trà sen.",
+          occurredAt: "2026-07-29T04:00:00.000Z",
+        },
+        {
+          idempotencyKey: `${sessionId}:${turnId}:assistant`,
+          sessionId,
+          turnId,
+          role: "assistant",
+          content: "Mình sẽ ghi nhớ sở thích đó.",
+          occurredAt: "2026-07-29T04:00:01.000Z",
+        },
+      ],
+    )).resolves.toEqual({ accepted: 2, duplicates: 0 });
+    await expect(memory.appendMessages(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:${turnId}:user`,
+        sessionId,
+        turnId,
+        role: "user",
+        content: "Tôi thích trà sen.",
+        occurredAt: "2026-07-29T04:00:00.000Z",
+      }],
+    )).resolves.toEqual({ accepted: 0, duplicates: 1 });
+    const nextTurnId = "turn_integration_memory_02";
+    await expect(memory.appendMessages(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [
+        {
+          idempotencyKey: `${sessionId}:${nextTurnId}:user`,
+          sessionId,
+          turnId: nextTurnId,
+          role: "user",
+          content: "Tôi thường uống vào buổi sáng.",
+          occurredAt: "2026-07-29T04:01:00.000Z",
+        },
+        {
+          idempotencyKey: `${sessionId}:${nextTurnId}:assistant`,
+          sessionId,
+          turnId: nextTurnId,
+          role: "assistant",
+          content: "Mình hiểu rồi.",
+          occurredAt: "2026-07-29T04:01:01.000Z",
+        },
+      ],
+    )).resolves.toEqual({ accepted: 2, duplicates: 0 });
+    await expect(memory.appendMessages(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:${turnId}:user`,
+        sessionId,
+        turnId,
+        role: "user",
+        content: "Tôi thích trà sen.",
+        occurredAt: "2026-07-29T04:00:00.000Z",
+      }],
+    )).resolves.toEqual({ accepted: 0, duplicates: 1 });
+    await expect(memory.upsertFacts(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:${turnId}:fact:favorite_drink`,
+        category: "preference",
+        key: "favorite_drink",
+        value: "Trà sen",
+        confidence: 0.94,
+        sourceSessionId: sessionId,
+        sourceTurnId: turnId,
+        expiresInDays: 90,
+      }],
+    )).resolves.toEqual({ accepted: 1, duplicates: 0, rejected: 0 });
+    await expect(memory.upsertFacts(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:${nextTurnId}:fact:favorite_drink`,
+        category: "preference",
+        key: "favorite_drink",
+        value: "Cà phê",
+        confidence: 0.8,
+        sourceSessionId: sessionId,
+        sourceTurnId: nextTurnId,
+        expiresInDays: 90,
+      }],
+    )).resolves.toEqual({ accepted: 1, duplicates: 0, rejected: 0 });
+    await expect(memory.upsertFacts(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:${turnId}:fact:favorite_drink`,
+        category: "preference",
+        key: "favorite_drink",
+        value: "Trà sen",
+        confidence: 0.94,
+        sourceSessionId: sessionId,
+        sourceTurnId: turnId,
+        expiresInDays: 90,
+      }],
+    )).resolves.toEqual({ accepted: 0, duplicates: 1, rejected: 0 });
+    await expect(memory.getContext(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+    )).resolves.toMatchObject({
+      messages: [
+        { role: "user", content: "Tôi thường uống vào buổi sáng." },
+        { role: "assistant", content: "Mình hiểu rồi." },
+      ],
+      memoryFacts: [{ category: "preference", key: "favorite_drink", value: "Cà phê" }],
+    });
+    await expect(memory.listMessages(
+      "other-tenant",
+      agent.id,
+      device.id,
+      50,
+    )).rejects.toThrow(/agent not found/i);
+    const exported = await memory.exportMemory(agent.id, device.id, {
+      principal,
+      requestId: "integration-memory-export",
+    });
+    expect(exported).toMatchObject({
+      version: 1,
+      agentId: agent.id,
+      deviceId: device.id,
+      messages: [
+        { role: "user", content: "Tôi thường uống vào buổi sáng." },
+        { role: "assistant", content: "Mình hiểu rồi." },
+      ],
+      facts: [{ category: "preference", key: "favorite_drink", value: "Cà phê" }],
+    });
+    const exportAudit = await prisma.auditEvent.findFirst({
+      where: { tenantId: principal.tenantId, requestId: "integration-memory-export" },
+    });
+    expect(exportAudit).toMatchObject({ action: "memory.export.create", targetId: device.id });
+    expect(JSON.stringify(exportAudit?.details)).not.toContain("Cà phê");
+
+    const resolved = await remoteMcp.resolve(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+    );
+    expect(resolved).toMatchObject({
+      configVersion: published.publishedVersion,
+      endpoints: [{
+        id: endpoint.id,
+        timeoutSeconds: 8,
+        allowedTools: [{ name: "weather.current" }],
+      }],
+    });
+    expect(resolved.endpoints[0]?.headers).toEqual({
+      Authorization: "Bearer integration-remote-mcp-secret",
+    });
+    await expect(remoteMcp.recordInvocation({
+      eventId: "750dcf83-4f54-4c02-85dd-76ef31dc0823",
+      endpointId: endpoint.id,
+      agentId: agent.id,
+      deviceId: device.id,
+      configVersion: published.publishedVersion,
+      sessionId,
+      turnId,
+      toolName: "weather.current",
+      argumentsHash: "a".repeat(64),
+      status: "succeeded",
+      durationMs: 120,
+      actor: "model",
+      occurredAt: "2026-07-29T04:00:02.000Z",
+    })).resolves.toEqual({ recorded: true, duplicate: false });
+    await expect(remoteMcp.recordInvocation({
+      eventId: "750dcf83-4f54-4c02-85dd-76ef31dc0823",
+      endpointId: endpoint.id,
+      agentId: agent.id,
+      deviceId: device.id,
+      configVersion: published.publishedVersion,
+      sessionId,
+      turnId,
+      toolName: "weather.current",
+      argumentsHash: "a".repeat(64),
+      status: "succeeded",
+      durationMs: 120,
+      actor: "model",
+      occurredAt: "2026-07-29T04:00:02.000Z",
+    })).resolves.toEqual({ recorded: false, duplicate: true });
+    await remoteMcp.updateEndpoint(
+      endpoint.id,
+      { secretAction: "rotate", secret: "integration-remote-mcp-secret-rotated" },
+      { principal, requestId: "integration-remote-mcp-rotate" },
+    );
+    await expect(remoteMcp.resolve(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+    )).resolves.toMatchObject({
+      endpoints: [{ headers: { Authorization: "Bearer integration-remote-mcp-secret-rotated" } }],
+    });
+    await remoteMcp.updateEndpoint(
+      endpoint.id,
+      { enabled: false },
+      { principal, requestId: "integration-remote-mcp-disable" },
+    );
+    await expect(remoteMcp.resolve(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+    )).resolves.toMatchObject({ endpoints: [] });
+    const cascadeInvocationId = "2aa9c84b-9dd0-4092-92cb-876294807179";
+    await prisma.remoteMcpInvocation.create({
+      data: {
+        id: cascadeInvocationId,
+        tenantId: principal.tenantId,
+        endpointId: credentialRaceEndpoint.id,
+        agentId: agent.id,
+        deviceId: device.id,
+        configVersion: published.publishedVersion,
+        sessionId,
+        turnId,
+        toolName: "race.read",
+        argumentsHash: "b".repeat(64),
+        status: RemoteMcpCallStatus.SUCCEEDED,
+        durationMs: 1,
+        actor: RemoteMcpCallActor.SYSTEM,
+        occurredAt: new Date("2026-07-29T04:00:03.000Z"),
+      },
+    });
+    await prisma.remoteMcpEndpoint.delete({ where: { id: credentialRaceEndpoint.id } });
+    await expect(
+      prisma.remoteMcpInvocation.findUnique({ where: { id: cascadeInvocationId } }),
+    ).resolves.toBeNull();
+    const importedAt = new Date();
+    const oldImportedAt = new Date(importedAt.getTime() - 3 * 86_400_000);
+    const futureImportedAt = new Date(importedAt.getTime() + 30 * 86_400_000);
+    await prisma.conversationMemoryMessage.createMany({
+      data: [
+        {
+          idempotencyKey: `${sessionId}:old-import:user`,
+          tenantId: principal.tenantId,
+          agentId: agent.id,
+          deviceId: device.id,
+          sessionId,
+          turnId: "old-import",
+          role: MemoryMessageRole.USER,
+          content: "Bản ghi cũ phải hết hạn theo thời điểm xảy ra.",
+          occurredAt: oldImportedAt,
+          retentionUntil: futureImportedAt,
+          createdAt: oldImportedAt,
+        },
+        {
+          idempotencyKey: `${sessionId}:future-import:user`,
+          tenantId: principal.tenantId,
+          agentId: agent.id,
+          deviceId: device.id,
+          sessionId,
+          turnId: "future-import",
+          role: MemoryMessageRole.USER,
+          content: "Timestamp tương lai không được chiếm lịch sử mãi mãi.",
+          occurredAt: futureImportedAt,
+          retentionUntil: futureImportedAt,
+          createdAt: importedAt,
+        },
+      ],
+    });
+    await memory.upsertFacts(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [
+        {
+          idempotencyKey: `${sessionId}:fact:city`,
+          category: "profile",
+          key: "city",
+          value: "Hà Nội",
+          confidence: 0.9,
+          sourceSessionId: sessionId,
+          sourceTurnId: nextTurnId,
+          expiresInDays: 90,
+        },
+        {
+          idempotencyKey: `${sessionId}:fact:color`,
+          category: "preference",
+          key: "favorite_color",
+          value: "Xanh dương",
+          confidence: 0.85,
+          sourceSessionId: sessionId,
+          sourceTurnId: nextTurnId,
+          expiresInDays: 90,
+        },
+      ],
+    );
+    const currentAgent = (await store.listAgents(principal.tenantId)).find(
+      ({ id }) => id === agent.id,
+    );
+    if (!currentAgent) throw new Error("Integration memory agent disappeared");
+    await store.updateAgent(
+      agent.id,
+      {
+        draftConfig: {
+          ...currentAgent.draftConfig,
+          memoryPolicy: {
+            ...currentAgent.draftConfig.memoryPolicy as Record<string, unknown>,
+            enabled: false,
+            consent: false,
+            retentionDays: 1,
+            maxMessages: 2,
+            factRetentionDays: 1,
+            maxFacts: 1,
+          },
+        },
+      },
+      { principal, requestId: "integration-memory-revoke" },
+    );
+    await store.publishAgent(agent.id, {
+      principal,
+      requestId: "integration-memory-revoke-publish",
+    });
+    await expect(memory.appendMessages(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+      [{
+        idempotencyKey: `${sessionId}:turn_after_revoke:user`,
+        sessionId,
+        turnId: "turn_after_revoke",
+        role: "user",
+        content: "Không lưu sau khi thu hồi consent.",
+        occurredAt: "2026-07-29T04:02:00.000Z",
+      }],
+    )).rejects.toThrow(/storage is disabled/i);
+    await expect(memory.getContext(
+      agent.id,
+      device.id,
+      published.publishedVersion,
+    )).resolves.toMatchObject({
+      policy: { enabled: false, consent: false },
+      messages: [],
+      memoryFacts: [],
+    });
+    const retainedMessages = await prisma.conversationMemoryMessage.findMany({
+      where: { tenantId: principal.tenantId, agentId: agent.id, deviceId: device.id },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    });
+    const retainedFacts = await prisma.conversationMemoryFact.findMany({
+      where: { tenantId: principal.tenantId, agentId: agent.id, deviceId: device.id },
+    });
+    expect(retainedMessages).toHaveLength(2);
+    expect(retainedFacts).toHaveLength(1);
+    expect(retainedMessages.every((message) => (
+      message.occurredAt.getTime() <= message.createdAt.getTime() &&
+      message.retentionUntil.getTime() <= message.occurredAt.getTime() + 86_400_000
+    ))).toBe(true);
+    expect(retainedFacts[0]!.expiresAt.getTime()).toBeLessThanOrEqual(
+      retainedFacts[0]!.updatedAt.getTime() + 86_400_000,
+    );
+    await expect(prisma.memoryWriteReceipt.findFirst({
+      where: {
+        tenantId: principal.tenantId,
+        agentId: agent.id,
+        deviceId: device.id,
+        idempotencyKey: `${sessionId}:${turnId}:user`,
+      },
+    })).resolves.not.toBeNull();
+    await store.assignDeviceAgent(device.id, undefined, {
+      principal,
+      requestId: "integration-memory-public-unassign",
+    });
+    await expect(memory.exportMemory(agent.id, device.id, {
+      principal,
+      requestId: "integration-memory-export-after-unassign",
+    })).resolves.toMatchObject({
+      messages: [expect.any(Object), expect.any(Object)],
+      facts: [expect.any(Object)],
+    });
+    await expect(memory.purgeMessages(agent.id, device.id, {
+      principal,
+      requestId: "integration-memory-purge",
+    })).resolves.toEqual({ deleted: 2 });
+    await store.assignDeviceAgent(device.id, agent.id, {
+      principal,
+      requestId: "integration-memory-public-reassign",
+    });
+    expect(updated.draftConfig.memoryPolicy).toMatchObject({ enabled: true });
+  });
+
+  it("rejects direct cross-tenant memory/MCP rows and invocation config drift", async () => {
+    const [agent] = await store.listAgents(principal.tenantId);
+    const [device] = await store.listDevices(principal.tenantId);
+    const endpoint = await prisma.remoteMcpEndpoint.findFirst({
+      where: { tenantId: principal.tenantId },
+    });
+    if (!agent || !device || !endpoint) throw new Error("Integration integrity scope missing");
+    const otherTenant = await prisma.tenant.create({
+      data: { slug: `integrity-${Date.now()}`, name: "Integrity tenant" },
+    });
+    try {
+      const otherAgent = await prisma.agent.create({
+        data: {
+          tenantId: otherTenant.id,
+          name: "Other tenant agent",
+          persona: "",
+          draftConfig: {},
+        },
+      });
+      await expect(prisma.conversationMemoryMessage.create({
+        data: {
+          tenantId: otherTenant.id,
+          agentId: agent.id,
+          deviceId: device.id,
+          idempotencyKey: "cross-tenant-memory-message",
+          sessionId: "cross_tenant_session_01",
+          turnId: "cross_tenant_turn_01",
+          role: MemoryMessageRole.USER,
+          content: "must reject",
+          occurredAt: new Date(),
+          retentionUntil: new Date(Date.now() + 86_400_000),
+        },
+      })).rejects.toThrow();
+      await expect(prisma.agentRemoteMcpAssignment.create({
+        data: {
+          tenantId: otherTenant.id,
+          agentId: otherAgent.id,
+          endpointId: endpoint.id,
+          toolNames: ["weather.current"],
+          timeoutMs: 5_000,
+        },
+      })).rejects.toThrow();
+      await expect(prisma.remoteMcpInvocation.create({
+        data: {
+          id: "8e3f29d2-fbdd-4e83-b987-25a8af1c0f14",
+          tenantId: principal.tenantId,
+          endpointId: endpoint.id,
+          agentId: agent.id,
+          deviceId: device.id,
+          configVersion: 2_147_483_647,
+          sessionId: "integrity_session_01",
+          turnId: "integrity_turn_01",
+          toolName: "weather.current",
+          argumentsHash: "c".repeat(64),
+          status: RemoteMcpCallStatus.FAILED,
+          durationMs: 1,
+          actor: RemoteMcpCallActor.SYSTEM,
+          occurredAt: new Date(),
+        },
+      })).rejects.toThrow();
+    } finally {
+      await prisma.tenant.delete({ where: { id: otherTenant.id } });
+    }
   });
 
   it("atomically rotates a refresh token", async () => {

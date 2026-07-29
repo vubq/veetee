@@ -1,6 +1,6 @@
 <script lang="ts">
 export type VtIconName =
-  | "overview" | "device" | "display" | "agent" | "provider" | "lab" | "tool" | "resource"
+  | "overview" | "device" | "display" | "agent" | "provider" | "lab" | "tool" | "resource" | "memory"
   | "telemetry" | "plus" | "arrow" | "menu" | "close" | "check" | "warning" | "refresh" | "trash"
   | "logout" | "upload" | "play" | "stop" | "mic" | "edit" | "search" | "chevron";
 </script>
@@ -48,6 +48,10 @@ defineProps<{
     </template>
     <template v-else-if="name === 'resource'">
       <path d="M12 3 4 7l8 4 8-4-8-4Z" /><path d="m4 12 8 4 8-4M4 17l8 4 8-4" />
+    </template>
+    <template v-else-if="name === 'memory'">
+      <path d="M8 4.5a3 3 0 0 0-3 3v1.2A3.3 3.3 0 0 0 3.5 14 3.5 3.5 0 0 0 7 17.5h1" />
+      <path d="M16 4.5a3 3 0 0 1 3 3v1.2a3.3 3.3 0 0 1 1.5 5.3 3.5 3.5 0 0 1-3.5 3.5h-1M12 3v18M8 9h4M12 15h4" />
     </template>
     <template v-else-if="name === 'telemetry'">
       <path d="M3 12h4l2.5-6 4.2 12 2.5-6H21" />

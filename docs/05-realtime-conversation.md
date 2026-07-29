@@ -204,6 +204,23 @@ hiện tại. Khi assistant vừa nói xong, một câu đáp ngắn, phản ứ
 ngôn ngữ và có thể liên hệ với context. Không yêu cầu câu đó phải tự đứng độc lập như một
 command hoặc question.
 
+Cross-session memory là lớp riêng và mặc định tắt. Với thiết bị đã xác thực, Voice chỉ
+load một snapshot bounded đúng một lần khi mở session nếu immutable `memoryPolicy` bật
+đồng thời `consent`; không truy vấn Manager theo audio frame hoặc theo turn. Snapshot gồm
+lịch sử gần đây và structured facts có source/timestamp/expiry, được đưa vào model trong
+khối `untrusted_cross_session_memory` ở data/user context, không bao giờ là system
+authority. Runtime chỉ enqueue cặp user/assistant sau khi admission hợp lệ và toàn bộ câu
+trả lời/TTS hoàn tất; turn reject, abort, partial output hoặc provider error không được lưu.
+Queue ghi có giới hạn, deadline và idempotency key nên lỗi Manager không làm hỏng realtime.
+Realtime Lab không đọc/ghi durable memory nếu chưa có một opt-in riêng để tránh dữ liệu
+operator test làm bẩn memory của thiết bị thật.
+
+Consent có kill-switch ở current published policy: publish `consent=false`,
+`enabled=false` hoặc tắt từng store flag chặn ngay mọi Manager load/write mới, kể cả
+request còn mang `configVersion` cũ. Session đã load context vào RAM không bị Manager
+đẩy dữ liệu ngược vào hot path, nhưng không được append thêm sau khi revoke; session mới
+nhận context rỗng. Thay đổi publish không liên quan vẫn giữ memory nếu policy không đổi.
+
 Một lượt chắc chắn hướng tới assistant nhưng còn thiếu tham số, có đại từ chưa rõ hoặc
 có nhiều cách hiểu vẫn là `accepted`; planner chọn `ask_clarification`. `unclear` chỉ là
 trạng thái không chắc ở ranh giới admission, không phải nhãn cho mọi câu AI chưa hiểu.

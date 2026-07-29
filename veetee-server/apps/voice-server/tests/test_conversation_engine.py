@@ -10,6 +10,11 @@ import pytest
 from veetee_voice_server.conversation.arbiter import ConversationState, TurnArbiter
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.engine import ConversationEngine
+from veetee_voice_server.conversation.memory import (
+    CompletedMemoryTurn,
+    MemoryFactCandidate,
+    MemorySnapshot,
+)
 from veetee_voice_server.conversation.sentence_chunker import TtsTextChunkingPolicy
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
@@ -325,6 +330,77 @@ async def test_contextual_follow_up_keeps_recent_user_and_assistant_turns() -> N
     ]
 
 
+async def test_completed_turn_is_the_only_memory_commit_boundary() -> None:
+    fact = MemoryFactCandidate("preference", "drink", "cà phê", 0.95, 30)
+    engine, arbiter, _, _, _, _, _ = create_engine(
+        plan=ConversationPlan(
+            action=PlanAction.RESPOND,
+            dialogue_act=DialogueAct.ANSWER,
+            locale="vi-VN",
+            intent="preference.acknowledge",
+            response_required=True,
+            response_text="Tôi sẽ ghi nhớ sở thích đó.",
+            memory_facts=(fact,),
+        )
+    )
+    recorded: list[CompletedMemoryTurn] = []
+
+    def record(turn: CompletedMemoryTurn) -> bool:
+        recorded.append(turn)
+        return True
+
+    engine.configure_cross_session_memory(MemorySnapshot(), record)
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Tôi thích cà phê", "vi-VN"))
+
+    assert len(recorded) == 1
+    assert recorded[0].user_text == "Tôi thích cà phê"
+    assert recorded[0].assistant_text == "Tôi sẽ ghi nhớ sở thích đó."
+    assert recorded[0].fact_candidates == (fact,)
+
+
+async def test_completed_end_session_commits_memory_before_closing_assistant() -> None:
+    engine, arbiter, _, _, _, _, _ = create_engine(
+        plan=ConversationPlan(
+            action=PlanAction.END_SESSION,
+            dialogue_act=DialogueAct.END,
+            locale="vi-VN",
+            intent="conversation.end",
+            response_required=True,
+            response_text="Hẹn gặp lại nhé.",
+        )
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    result = await engine.handle_transcript(Transcript("Tạm biệt", "vi-VN"))
+
+    assert result is AdmissionDisposition.ACCEPTED
+    assert len(recorded) == 1
+    assert recorded[0].assistant_text == "Hẹn gặp lại nhé."
+    assert arbiter.snapshot.state is ConversationState.STANDBY
+    assert not arbiter.snapshot.assistant_gate_open
+
+
+async def test_rejected_admission_does_not_commit_memory() -> None:
+    engine, arbiter, _, _, _, _, _ = create_engine(
+        disposition=AdmissionDisposition.NON_ACTIONABLE
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("...", "vi-VN"))
+
+    assert recorded == []
+
+
 @pytest.mark.parametrize(
     "disposition",
     [
@@ -379,6 +455,10 @@ async def test_fused_semantic_gate_uses_planner_deadline() -> None:
 
 async def test_button_abort_drops_late_llm_and_audio_output() -> None:
     engine, arbiter, _, _, llm, tts, sink = create_engine()
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
     llm.release = asyncio.Event()
     await arbiter.open_assistant(WakeSource.BUTTON)
     task = asyncio.create_task(
@@ -397,6 +477,58 @@ async def test_button_abort_drops_late_llm_and_audio_output() -> None:
         output.kind in {OutputKind.TTS_START, OutputKind.TTS_STOP} for output in sink.outputs
     )
     assert arbiter.snapshot.state is ConversationState.LISTENING
+    assert recorded == []
+
+
+async def test_abort_after_partial_tts_output_does_not_commit_memory() -> None:
+    class PartialTts:
+        def __init__(self) -> None:
+            self.first_chunk = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def synthesize(
+            self, text: str, locale: str, context: OperationContext
+        ) -> AsyncIterator[AudioChunk]:
+            del locale, context
+            self.first_chunk.set()
+            yield AudioChunk(0, 24_000, "pcm_s16le", text.encode())
+            await self.release.wait()
+            yield AudioChunk(1, 24_000, "pcm_s16le", b"late", final=True)
+
+    arbiter = TurnArbiter("session-partial-memory")
+    sink = MemoryConversationSink()
+    tts = PartialTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan("Một câu trả lời chưa hoàn tất.")),
+        llm=FakeLlm(),
+        tts=tts,
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    task = asyncio.create_task(
+        engine.handle_transcript(Transcript("Kể tiếp đi", "vi-VN"))
+    )
+    await tts.first_chunk.wait()
+    for _ in range(20):
+        if any(output.kind is OutputKind.AUDIO for output in sink.outputs):
+            break
+        await asyncio.sleep(0)
+
+    receipt = await arbiter.abort("button_interrupt")
+    await arbiter.finish_cancellation(receipt)
+    tts.release.set()
+    await task
+
+    assert any(output.kind is OutputKind.AUDIO for output in sink.outputs)
+    assert recorded == []
 
 
 async def test_sentence_bounded_tts_keeps_phrase_in_one_request() -> None:
@@ -535,6 +667,12 @@ async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail
             speech_queue_capacity=1,
         ),
     )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(),
+        lambda turn: not recorded.append(turn),
+        max_message_characters=160,
+    )
     await arbiter.open_assistant(WakeSource.BUTTON)
 
     await asyncio.wait_for(
@@ -545,6 +683,10 @@ async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail
     assert len([output for output in sink.outputs if output.kind is OutputKind.TEXT_DELTA]) == 60
     assert len(engine.context[-1].text) <= 96
     assert engine.context[-1].text.endswith("Đây là phần trả lời số 59.")
+    assert len(recorded) == 1
+    assert len(recorded[0].assistant_text) <= 160
+    assert recorded[0].assistant_text.startswith("Đây là phần trả lời số 0.")
+    assert recorded[0].assistant_text.endswith("Đây là phần trả lời số 59.")
     assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
 
 

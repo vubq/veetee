@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +13,7 @@ import pytest
 from veetee_voice_server.config import Settings
 from veetee_voice_server.conversation.arbiter import TurnArbiter
 from veetee_voice_server.conversation.engine import ConversationEngine
+from veetee_voice_server.conversation.memory import MemoryPolicy
 from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     AudioChunk,
@@ -188,6 +190,56 @@ def make_session(websocket: FakeWebSocket) -> LabSession:
         tool_broker=SimulatedLabToolBroker(),
         engine_factory=engine_factory,
     )
+
+
+async def test_lab_forces_durable_memory_off_even_for_an_opted_in_agent() -> None:
+    websocket = FakeWebSocket()
+    settings = Settings(environment="test", _env_file=None)  # type: ignore[call-arg]
+    context = LabSessionContext(
+        session_id="11111111-1111-4111-8111-111111111111",
+        tenant_id="22222222-2222-4222-8222-222222222222",
+        user_id="33333333-3333-4333-8333-333333333333",
+        agent_id="44444444-4444-4444-8444-444444444444",
+        config_version=3,
+        input_mode="text",
+        mcp_mode="simulated",
+        device_id=None,
+    )
+    profile = replace(
+        SessionProfile.defaults(settings),
+        memory_policy=MemoryPolicy(
+            enabled=True,
+            consent=True,
+            store_messages=True,
+            store_facts=True,
+        ),
+    )
+    received_profiles: list[SessionProfile] = []
+
+    def engine_factory(
+        arbiter: TurnArbiter,
+        sink: LabConversationSink,
+        resolved_profile: SessionProfile,
+        _: ToolBroker,
+    ) -> ConversationEngine:
+        received_profiles.append(resolved_profile)
+        return EchoEngine(arbiter, sink)  # type: ignore[return-value]
+
+    session = LabSession(
+        websocket,  # type: ignore[arg-type]
+        settings=settings,
+        context=context,
+        profile=profile,
+        asr=FakeAsr(),  # type: ignore[arg-type]
+        vad_model=FakeVadModel(),  # type: ignore[arg-type]
+        tts=FakeTts(),  # type: ignore[arg-type]
+        tool_broker=SimulatedLabToolBroker(),
+        engine_factory=engine_factory,
+    )
+
+    assert session.profile.memory_policy.active is False
+    assert received_profiles[0].memory_policy.active is False
+    await asyncio.sleep(0)
 
 
 async def test_cancelled_tts_stop_tells_lab_to_clear_scheduled_audio() -> None:

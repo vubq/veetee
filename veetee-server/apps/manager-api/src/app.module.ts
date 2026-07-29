@@ -22,6 +22,7 @@ import { PrismaService } from "./database/prisma.service.js";
 import { RedisService } from "./database/redis.service.js";
 import { DeviceDiagnosticsService } from "./diagnostics/device-diagnostics.service.js";
 import { LabSessionService } from "./lab/lab-session.service.js";
+import { MemoryService } from "./memory/memory.service.js";
 import {
   InternalLabSessionsController,
   LabSessionsController,
@@ -34,12 +35,19 @@ import { DevicesController } from "./modules/devices.controller.js";
 import { HealthController } from "./modules/health.controller.js";
 import { InternalController } from "./modules/internal.controller.js";
 import { McpController } from "./modules/mcp.controller.js";
+import { InternalMemoryController, MemoryController } from "./modules/memory.controller.js";
 import { OtaController } from "./modules/ota.controller.js";
 import { OperationsController } from "./modules/operations.controller.js";
 import { PairingController } from "./modules/pairing.controller.js";
 import { ProvidersController } from "./modules/providers.controller.js";
+import {
+  AgentRemoteMcpController,
+  InternalRemoteMcpController,
+  RemoteMcpController,
+} from "./modules/remote-mcp.controller.js";
 import { PairingService } from "./pairing/pairing.service.js";
 import { VoiceMcpService } from "./mcp/voice-mcp.service.js";
+import { RemoteMcpService } from "./mcp/remote-mcp.service.js";
 import { SecretCryptoService } from "./security/secret-crypto.service.js";
 import { ControlPlaneStore } from "./store/control-plane.store.js";
 import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
@@ -62,6 +70,11 @@ import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
     ProvidersController,
     LabSessionsController,
     McpController,
+    MemoryController,
+    InternalMemoryController,
+    RemoteMcpController,
+    AgentRemoteMcpController,
+    InternalRemoteMcpController,
     InternalController,
     InternalLabSessionsController,
     OperationsController,
@@ -79,6 +92,8 @@ import { FirmwareRolloutService } from "./ota/firmware-rollout.service.js";
     LoginRateLimitService,
     PairingService,
     VoiceMcpService,
+    RemoteMcpService,
+    MemoryService,
     DeviceDiagnosticsService,
     SecretCryptoService,
     LabSessionService,

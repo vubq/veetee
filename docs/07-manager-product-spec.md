@@ -142,6 +142,76 @@ POST   /internal/v1/device-heartbeats
 POST   /internal/v1/conversation-events/batch
 ```
 
+### Cross-session memory và history
+
+Memory mặc định tắt. Immutable agent snapshot luôn normalize `memoryPolicy`; chỉ khi
+`enabled=true`, `consent=true` và `storeMessages` hoặc `storeFacts` được bật thì Voice
+mới được lưu text. History giữ 1--30 ngày, structured facts có expiry 1--365 ngày;
+mọi dữ liệu scope theo tenant + agent + device, có giới hạn số record/ký tự và không
+nhận raw audio.
+
+Current published policy là privacy kill-switch trên immutable snapshot: revoke consent,
+disable memory hoặc tắt store flag phải chặn ngay internal load/write dùng version cũ.
+Manager clamp limit theo giá trị chặt hơn giữa requested snapshot và current publish;
+publish không đổi memory policy không làm session cũ mất quyền ghi.
+Khi retention hoặc record cap giảm, publish phải rút ngắn expiry và trim dữ liệu đã tồn
+tại theo từng device; timestamp tương lai không được kéo dài retention hoặc chiếm cửa sổ
+history. Idempotency receipt sống đủ lâu để retry cũ không hồi sinh nội dung đã expiry/trim.
+
+```text
+GET/DELETE /api/v1/agents/:agentId/memory/messages
+DELETE     /api/v1/agents/:agentId/memory/messages/:messageId
+GET        /api/v1/agents/:agentId/memory/facts
+PATCH/DELETE /api/v1/agents/:agentId/memory/facts/:factId
+POST       /api/v1/agents/:agentId/memory/exports
+
+GET  /internal/v1/memory/context
+POST /internal/v1/memory/messages/batch
+POST /internal/v1/memory/facts/batch
+```
+
+Public list dùng cursor và bắt buộc `deviceId`; purge/delete/edit đều tenant-guarded và
+audit metadata đã redact. Internal API derive tenant từ immutable agent version cùng
+device assignment, ghi idempotent và cleanup expiry; không tin `tenantId` từ Voice.
+Export nhận `deviceId` trong body, trả tối đa 40 message + 100 fact còn hiệu lực và ghi
+audit số record/ký tự nhưng không ghi content; Web không tự ghép một export không được audit.
+Public list/export/purge kiểm Agent và Device độc lập trong cùng tenant để operator vẫn
+quản lý/xóa dữ liệu cũ sau khi device bị unassign hoặc chuyển agent; internal Voice
+load/write vẫn bắt buộc device đang gán đúng agent.
+
+### Remote MCP registry
+
+Endpoint config URL/transport/network/tool policy là immutable; operator tạo endpoint
+thay thế nếu muốn đổi. `PATCH` chỉ cho emergency enable/disable và rotate/clear secret.
+Secret mã hóa at rest, không bao giờ xuất hiện trong public response/audit; endpoint chỉ
+được đưa vào agent snapshot sau explicit assignment/publish.
+
+```text
+GET/POST  /api/v1/mcp/endpoints
+GET/PATCH /api/v1/mcp/endpoints/:id
+POST      /api/v1/mcp/endpoints/:id/test
+GET/PUT   /api/v1/agents/:agentId/mcp-endpoints
+
+POST /internal/v1/remote-mcp/resolve
+POST /internal/v1/remote-mcp/audit
+```
+
+V1 chỉ cho tạo endpoint `streamable_http`; enum `sse` được dành cho migration tương lai
+nhưng API fail-closed tới khi adapter Voice pass conformance. Tool discovery không tự cấp quyền: chỉ tool nằm trong endpoint allowlist và
+agent assignment mới được resolve. Egress `public_only` bắt buộc HTTPS/global IP;
+`private_allowlist` cần exact host và vẫn chặn loopback, link-local, multicast, unspecified
+cùng cloud metadata. Tool timeout 5--30 giây, result có byte cap, call audit chỉ lưu args
+hash/status/duration, không lưu raw arguments/result/secret.
+IPv6 literal được canonicalize không dấu ngoặc cho classification/pinning nhưng giữ đúng
+bracket trong URL/Host. Custom auth header không được trùng protocol, content, forwarding
+hoặc hop-by-hop headers (`MCP-Session-Id`, `MCP-Protocol-Version`, `Content-Type`, ...).
+
+Trước từng Remote MCP `tools/call`, Voice reauthorize qua internal resolver và dùng
+credential mới trả về. Endpoint disable/clear đã commit bị loại ở call kế tiếp; rotate
+secret cũng có hiệu lực ở call kế tiếp. Request đã authorize rồi dispatch được phép hoàn
+tất hoặc đi theo cancellation/audit hiện hành, nên UI phải nói rõ đây không phải kill
+in-flight tức thì. Reauthorization nằm ở tool-call boundary, không ở audio-frame path.
+
 Device-facing artifact/config endpoints không nằm trên voice hot path:
 
 ```text

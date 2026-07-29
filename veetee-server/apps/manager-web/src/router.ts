@@ -18,6 +18,8 @@ const routeMeta: ManagerRouteMeta[] = [
   { page: "devices", titleKey: "routes.devices.title", labelKey: "nav.devices.label", shortKey: "nav.devices.short", icon: "device", density: "compact" },
   { page: "agents", titleKey: "routes.agents.title", labelKey: "nav.agents.label", shortKey: "nav.agents.short", icon: "agent", density: "comfortable" },
   { page: "providers", titleKey: "routes.providers.title", labelKey: "nav.providers.label", shortKey: "nav.providers.short", icon: "provider", density: "comfortable" },
+  { page: "mcp", titleKey: "routes.mcp.title", labelKey: "nav.mcp.label", shortKey: "nav.mcp.short", icon: "tool", density: "comfortable" },
+  { page: "memory", titleKey: "routes.memory.title", labelKey: "nav.memory.label", shortKey: "nav.memory.short", icon: "memory", density: "compact" },
   { page: "lab", titleKey: "routes.lab.title", labelKey: "nav.lab.label", shortKey: "nav.lab.short", icon: "lab", density: "comfortable" },
   { page: "resources", titleKey: "routes.resources.title", labelKey: "nav.resources.label", shortKey: "nav.resources.short", icon: "resource", density: "compact" },
   { page: "operations", titleKey: "routes.operations.title", labelKey: "nav.operations.label", shortKey: "nav.operations.short", icon: "telemetry", density: "compact" },

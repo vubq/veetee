@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from veetee_voice_server.config import Settings
+from veetee_voice_server.conversation.memory import MemoryPolicy, MemoryScope
 from veetee_voice_server.manager import (
     DeviceContext,
     LabSessionContext,
@@ -90,6 +91,41 @@ def test_session_profile_defaults_to_incremental_prose_streaming() -> None:
     assert profile.llm_chain[0].model == "gpt-5.6-terra"
     assert profile.llm_chain[0].api_key == "cliproxy-key"
     assert profile.llm_chain[0].config["streamProseResponse"] is True
+
+
+def test_session_profile_memory_is_default_off_and_bounded_from_snapshot() -> None:
+    settings = Settings(environment="test", require_device_auth=False)
+
+    defaults = SessionProfile.defaults(settings)
+    profile = SessionProfile.from_payload(
+        {
+            "memoryPolicy": {
+                "enabled": True,
+                "consent": True,
+                "storeMessages": True,
+                "storeFacts": True,
+                "retentionDays": 999,
+                "maxMessages": 999,
+                "maxMessageCharacters": 99999,
+                "maxContextCharacters": 99999,
+                "factRetentionDays": 999,
+                "maxFacts": 999,
+                "maxFactCharacters": 99999,
+            }
+        },
+        settings,
+    )
+
+    assert defaults.memory_policy == MemoryPolicy()
+    assert defaults.memory_policy.active is False
+    assert profile.memory_policy.active is True
+    assert profile.memory_policy.retention_days == 30
+    assert profile.memory_policy.max_messages == 40
+    assert profile.memory_policy.max_message_characters == 4_000
+    assert profile.memory_policy.max_context_characters == 12_000
+    assert profile.memory_policy.fact_retention_days == 365
+    assert profile.memory_policy.max_facts == 100
+    assert profile.memory_policy.max_fact_characters == 2_000
 
 
 def test_session_profile_enables_incremental_prose_for_legacy_provider_config() -> None:
@@ -493,6 +529,61 @@ async def test_manager_publishes_redacted_conversation_event_batch() -> None:
     assert accepted == 1
     assert captured["authorization"] == "Bearer internal-test-token"
     assert '"deviceId":"4b6fbf00-4072-4ab5-b06e-a2884749d206"' in str(captured["body"])
+
+
+@pytest.mark.asyncio
+async def test_manager_memory_contract_uses_scoped_internal_routes() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer internal-test-token"
+        if request.url.path.endswith("/memory/context"):
+            assert request.url.params["agentId"] == "agent-1"
+            assert request.url.params["deviceId"] == "device-1"
+            assert request.url.params["configVersion"] == "7"
+            return httpx.Response(200, json={"policy": {}, "messages": [], "memoryFacts": []})
+        if request.url.path.endswith("/memory/messages/batch"):
+            return httpx.Response(201, json={"accepted": 2, "duplicates": 0})
+        if request.url.path.endswith("/memory/facts/batch"):
+            return httpx.Response(
+                201, json={"accepted": 1, "duplicates": 0, "rejected": 0}
+            )
+        return httpx.Response(404)
+
+    settings = Settings(
+        environment="test",
+        manager_api_url="http://manager.test",
+        manager_internal_token="internal-test-token",
+    )
+    client = httpx.AsyncClient(
+        base_url="http://manager.test", transport=httpx.MockTransport(handler)
+    )
+    manager = ManagerClient(settings, client=client)
+    scope = MemoryScope("device-1", "agent-1", 7, MemoryPolicy())
+
+    context = await manager.load_memory_context(scope)
+    message_result = await manager.append_memory_messages(
+        scope,
+        [
+            {"idempotencyKey": "u", "role": "user"},
+            {"idempotencyKey": "a", "role": "assistant"},
+        ],
+    )
+    fact_result = await manager.append_memory_facts(
+        scope,
+        [{"idempotencyKey": "f", "category": "preference"}],
+    )
+    await client.aclose()
+
+    assert context["messages"] == []
+    assert message_result == (2, 0)
+    assert fact_result == (1, 0, 0)
+    assert [request.url.path for request in requests] == [
+        "/internal/v1/memory/context",
+        "/internal/v1/memory/messages/batch",
+        "/internal/v1/memory/facts/batch",
+    ]
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     telemetry_batch_size: int = Field(default=32, ge=1, le=64)
     telemetry_flush_seconds: float = Field(default=0.25, ge=0.05, le=5.0)
     telemetry_shutdown_seconds: float = Field(default=1.0, ge=0.1, le=5.0)
+    memory_queue_capacity: int = Field(default=128, ge=8, le=2_048)
+    memory_shutdown_seconds: float = Field(default=1.0, ge=0.1, le=5.0)
     require_device_auth: bool = True
 
     nine_router_base_url: HttpUrl = Field(

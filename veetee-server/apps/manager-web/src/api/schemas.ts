@@ -60,6 +60,20 @@ export const deviceSchema = z.object({
   lastSeenAt: z.string().optional(),
 });
 
+export const memoryPolicySchema = z.object({
+  enabled: z.boolean(),
+  consent: z.boolean(),
+  storeMessages: z.boolean(),
+  storeFacts: z.boolean(),
+  retentionDays: z.number().int().min(1).max(30),
+  maxMessages: z.number().int().min(2).max(40),
+  maxMessageCharacters: z.number().int().min(128).max(4_000),
+  maxContextCharacters: z.number().int().min(512).max(12_000),
+  factRetentionDays: z.number().int().min(1).max(365),
+  maxFacts: z.number().int().min(1).max(100),
+  maxFactCharacters: z.number().int().min(64).max(2_000),
+});
+
 export const agentSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -69,6 +83,7 @@ export const agentSchema = z.object({
   draftConfig: jsonObject,
   version: z.number().int().positive(),
   publishedVersion: z.number().int().nonnegative(),
+  publishedMemoryPolicy: memoryPolicySchema.optional(),
 });
 
 export const personalityPresetSchema = z.object({
@@ -124,6 +139,90 @@ export const mcpToolSchema = z.object({
     .default("read_only"),
   requiresConfirmation: z.boolean().default(false),
 });
+
+export const remoteMcpToolPolicySchema = z.object({
+  name: z.string().min(1).max(160),
+  safetyClass: z.enum(["read_only", "reversible", "disruptive", "destructive"]),
+  requiresConfirmation: z.boolean(),
+});
+
+export const remoteMcpEndpointSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(80),
+  url: z.string().url(),
+  transport: z.enum(["streamable_http", "sse"]),
+  enabled: z.boolean(),
+  authType: z.enum(["none", "bearer", "header"]),
+  authHeaderName: z.string().optional(),
+  secretConfigured: z.boolean(),
+  timeoutSeconds: z.number().min(5).max(30),
+  resultMaxBytes: z.number().int().min(1024).max(65_536),
+  networkPolicy: z.enum(["public_only", "private_allowlist"]),
+  allowedHosts: z.array(z.string()).length(1),
+  tools: z.array(remoteMcpToolPolicySchema),
+  health: z.enum(["unknown", "healthy", "degraded"]),
+  healthLatencyMs: z.number().int().nonnegative().optional(),
+  healthErrorCode: z.string().optional(),
+  healthCheckedAt: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const remoteMcpAssignmentSchema = z.object({
+  endpointId: z.string().uuid(),
+  endpointName: z.string(),
+  enabled: z.boolean(),
+  toolNames: z.array(z.string()),
+  timeoutSeconds: z.number().min(5).max(30),
+  health: z.enum(["unknown", "healthy", "degraded"]),
+});
+
+export const remoteMcpAssignmentsSchema = z.object({
+  items: z.array(remoteMcpAssignmentSchema),
+});
+
+export const memoryMessageSchema = z.object({
+  id: z.string().uuid(),
+  sessionId: z.string(),
+  turnId: z.string(),
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+  occurredAt: z.string(),
+  retentionUntil: z.string(),
+});
+
+export const memoryFactSchema = z.object({
+  id: z.string().uuid(),
+  category: z.string(),
+  key: z.string(),
+  value: z.string(),
+  confidence: z.number().min(0).max(1),
+  sourceSessionId: z.string(),
+  sourceTurnId: z.string(),
+  expiresAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const memoryMessagesPageSchema = z.object({
+  items: z.array(memoryMessageSchema),
+  nextCursor: z.string().optional(),
+});
+
+export const memoryFactsPageSchema = z.object({
+  items: z.array(memoryFactSchema),
+  nextCursor: z.string().optional(),
+});
+
+export const memoryExportSchema = z.object({
+  version: z.literal(1),
+  exportedAt: z.string(),
+  agentId: z.string(),
+  deviceId: z.string(),
+  messages: z.array(memoryMessageSchema).max(40),
+  facts: z.array(memoryFactSchema).max(100),
+});
+
+export const deletedCountSchema = z.object({ deleted: z.number().int().nonnegative() });
 
 const audioCountersSchema = z.object({
   micFrames: z.number().int().nonnegative(),
@@ -414,6 +513,11 @@ export type PersonalityPreset = z.infer<typeof personalityPresetSchema>;
 export type AgentPromptCatalog = z.infer<typeof agentPromptCatalogSchema>;
 export type Provider = z.infer<typeof providerSchema>;
 export type McpTool = z.infer<typeof mcpToolSchema>;
+export type RemoteMcpToolPolicy = z.infer<typeof remoteMcpToolPolicySchema>;
+export type RemoteMcpEndpoint = z.infer<typeof remoteMcpEndpointSchema>;
+export type RemoteMcpAssignment = z.infer<typeof remoteMcpAssignmentSchema>;
+export type MemoryMessage = z.infer<typeof memoryMessageSchema>;
+export type MemoryFact = z.infer<typeof memoryFactSchema>;
 export type AudioDiagnosticSession = z.infer<typeof audioDiagnosticSessionSchema>;
 export type DeviceHealth = z.infer<typeof deviceHealthSchema>;
 export type DeviceSelfTest = z.infer<typeof deviceSelfTestSchema>;

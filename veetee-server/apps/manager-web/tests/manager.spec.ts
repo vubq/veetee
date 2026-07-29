@@ -10,6 +10,27 @@ const principal = {
 };
 
 const deviceId = "b72559f9-8a1c-47fa-b2af-7c2a85098b2f";
+const remoteMcpEndpoint = {
+  id: "4bf15340-3120-4ca3-8368-9a282b60b33e",
+  name: "Home tools",
+  url: "https://mcp.example.test/mcp",
+  transport: "streamable_http",
+  enabled: true,
+  authType: "bearer",
+  secretConfigured: true,
+  timeoutSeconds: 10,
+  resultMaxBytes: 65536,
+  networkPolicy: "public_only",
+  allowedHosts: ["mcp.example.test"],
+  tools: [
+    { name: "weather.current", safetyClass: "read_only", requiresConfirmation: false },
+  ],
+  health: "healthy",
+  healthLatencyMs: 42,
+  healthCheckedAt: "2026-07-29T08:00:00.000Z",
+  createdAt: "2026-07-29T07:00:00.000Z",
+  updatedAt: "2026-07-29T08:00:00.000Z",
+};
 
 async function mockManagerApi(
   page: Page,
@@ -35,8 +56,13 @@ async function mockManagerApi(
     withSecondAgent?: boolean;
     withTtsCatalog?: boolean;
     withTtsWithoutCatalog?: boolean;
+    failRemoteMcpQueries?: boolean;
+    failMemoryQueries?: boolean;
+    draftMemoryPolicyEnabled?: boolean;
+    memoryExportCalls?: unknown[];
     primaryAgentPublishedVersion?: number;
     deviceAgentConfigVersion?: number;
+    role?: "OWNER" | "ADMIN" | "OPERATOR" | "VIEWER";
     pairingResponses?: Array<"success" | "expired" | "conflict">;
     pairingCalls?: unknown[];
   } = {},
@@ -59,7 +85,7 @@ async function mockManagerApi(
         accessToken: "test-access-token",
         tokenType: "Bearer",
         expiresIn: 900,
-        principal,
+        principal: { ...principal, role: options.role ?? principal.role },
       });
     }
     if (url.pathname === "/health/ready") {
@@ -137,6 +163,51 @@ async function mockManagerApi(
         security: { deviceScopedTokens: true, signedArtifacts: true, publicTlsRequired: false },
         firmware: { configuredVersion: "0.3.0", releaseConfigured: false, otaRoute: "/veetee/ota/" },
       });
+    }
+    if (url.pathname === "/api/v1/mcp/endpoints" && request.method() === "GET") {
+      if (options.failRemoteMcpQueries) {
+        return json({ code: "remote_mcp_unavailable", message: "Remote MCP registry tạm thời không khả dụng." }, 503);
+      }
+      return json([remoteMcpEndpoint]);
+    }
+    if (/^\/api\/v1\/agents\/[^/]+\/mcp-endpoints$/.test(url.pathname)) {
+      return json({
+        items: [
+          {
+            endpointId: remoteMcpEndpoint.id,
+            endpointName: "Home tools",
+            enabled: true,
+            toolNames: ["weather.current"],
+            timeoutSeconds: 10,
+            health: "healthy",
+          },
+        ],
+      });
+    }
+    if (/^\/api\/v1\/agents\/[^/]+\/memory\/messages$/.test(url.pathname)) {
+      if (options.failMemoryQueries) {
+        return json({ code: "memory_unavailable", message: "Kho memory tạm thời không khả dụng." }, 503);
+      }
+      return json({ items: [], nextCursor: undefined });
+    }
+    const memoryExportMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/memory\/exports$/);
+    if (memoryExportMatch && request.method() === "POST") {
+      const input = request.postDataJSON() as { deviceId: string };
+      options.memoryExportCalls?.push(input);
+      return json({
+        version: 1,
+        exportedAt: "2026-07-29T11:00:00.000Z",
+        agentId: decodeURIComponent(memoryExportMatch[1]!),
+        deviceId: input.deviceId,
+        messages: [],
+        facts: [],
+      });
+    }
+    if (/^\/api\/v1\/agents\/[^/]+\/memory\/facts$/.test(url.pathname)) {
+      if (options.failMemoryQueries) {
+        return json({ code: "memory_unavailable", message: "Kho memory tạm thời không khả dụng." }, 503);
+      }
+      return json({ items: [], nextCursor: undefined });
     }
     if (url.pathname === "/api/v1/audit-events") {
       return json([
@@ -607,6 +678,23 @@ async function mockManagerApi(
           draftConfig: {
             conversation: { betweenTurnsSeconds: 30, plannerSeconds: 8 },
             futureExtension: { enabled: true },
+            ...(options.draftMemoryPolicyEnabled
+              ? {
+                  memoryPolicy: {
+                    enabled: true,
+                    consent: true,
+                    storeMessages: true,
+                    storeFacts: false,
+                    retentionDays: 14,
+                    maxMessages: 12,
+                    maxMessageCharacters: 2_000,
+                    maxContextCharacters: 8_000,
+                    factRetentionDays: 90,
+                    maxFacts: 50,
+                    maxFactCharacters: 1_000,
+                  },
+                }
+              : {}),
             providerChains: [
               { kind: "llm", locale: "en-US", providerIds: ["llm-en-fallback"] },
               ...(options.withTtsCatalog
@@ -629,6 +717,19 @@ async function mockManagerApi(
           },
           version: options.primaryAgentPublishedVersion ?? 1,
           publishedVersion: options.primaryAgentPublishedVersion ?? 1,
+          publishedMemoryPolicy: {
+            enabled: false,
+            consent: false,
+            storeMessages: false,
+            storeFacts: false,
+            retentionDays: 7,
+            maxMessages: 12,
+            maxMessageCharacters: 2_000,
+            maxContextCharacters: 8_000,
+            factRetentionDays: 90,
+            maxFacts: 50,
+            maxFactCharacters: 1_000,
+          },
         },
       ];
       if (options.withSecondAgent) {
@@ -1063,7 +1164,7 @@ test("logs in and renders API-backed control room", async ({ page }) => {
 
   await expect(page.locator(".profile-button")).toContainText("Veetee Owner");
   await expect(page.locator(".agent-spotlight h3")).toHaveText("Veetee Việt");
-  await expect(page.locator(".desktop-nav a")).toHaveCount(7);
+  await expect(page.locator(".desktop-nav a")).toHaveCount(9);
 
   await page.locator('[data-page-link="providers"]').first().click();
   await expect(page.locator(".provider-grid")).toContainText("gpt-5.6-terra");
@@ -1133,7 +1234,7 @@ test("uses an accessible Headless UI mobile navigation", async ({ page }) => {
   await expect.poll(async () => (await page.locator(".mobile-nav-panel").boundingBox())?.x ?? -999).toBeGreaterThanOrEqual(0);
   const navBox = await page.locator(".mobile-nav-panel").boundingBox();
   expect((navBox?.x ?? 0) + (navBox?.width ?? 0)).toBeLessThanOrEqual(390);
-  await expect(page.locator(".mobile-nav-panel nav a")).toHaveCount(7);
+  await expect(page.locator(".mobile-nav-panel nav a")).toHaveCount(9);
   await page.locator(".mobile-nav-panel nav a").filter({ hasText: "Nhà cung cấp AI" }).click();
   await expect(page.locator('[data-page="providers"]')).toBeVisible();
   await expect(page.locator(".mobile-nav-panel")).toBeHidden();
@@ -1498,6 +1599,356 @@ test("publishes bounded conversation changes without dropping extension fields",
   );
 });
 
+test("requires consent and publishes bounded cross-session memory policy", async ({ page }) => {
+  const agentPatches: unknown[] = [];
+  await mockManagerApi(page, { agentPatches });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="agents"]').first().click();
+  await page.locator(".agent-config-nav").getByRole("link", { name: /Bộ nhớ/ }).click();
+  await page.getByLabel("Bật bộ nhớ bền vững cho trợ lý này").check();
+  await page.getByLabel("Lịch sử message đã hoàn tất").check();
+  await page.getByRole("button", { name: /Publish version/ }).click();
+  await expect(page.getByText("Cần xác nhận consent trước khi bật bộ nhớ.")).toBeVisible();
+
+  await page.getByLabel("Đã có sự đồng ý lưu dữ liệu hội thoại").check();
+  await page.getByLabel("Fact có cấu trúc do planner đề xuất").check();
+  await page.getByLabel("Retention message (ngày)").fill("14");
+  await page.getByRole("button", { name: /Publish version/ }).click();
+
+  await expect.poll(() => agentPatches).toHaveLength(1);
+  expect(agentPatches[0]).toMatchObject({
+    draftConfig: {
+      memoryPolicy: {
+        enabled: true,
+        consent: true,
+        storeMessages: true,
+        storeFacts: true,
+        retentionDays: 14,
+        maxMessages: 12,
+        maxMessageCharacters: 2_000,
+        maxContextCharacters: 8_000,
+        factRetentionDays: 90,
+        maxFacts: 50,
+        maxFactCharacters: 1_000,
+      },
+    },
+  });
+});
+
+test("shows Remote MCP health and explicit agent tool assignments", async ({ page }) => {
+  await mockManagerApi(page);
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="mcp"]').first().click();
+  await expect(page.locator('[data-page="mcp"]')).toContainText("Home tools");
+  await expect(page.locator('[data-page="mcp"]')).toContainText("weather.current");
+  await expect(page.locator(".remote-mcp-detail")).toContainText("Khỏe");
+  await expect(page.locator(".remote-mcp-assignment")).toContainText("Lưu assignment");
+
+  const timeout = page.locator("[data-assignment-timeout]");
+  await expect(timeout).toHaveValue("10");
+  const desktopBox = await timeout.boundingBox();
+  expect(desktopBox).not.toBeNull();
+  expect(desktopBox!.width).toBeGreaterThan(80);
+  expect(desktopBox!.height).toBeGreaterThanOrEqual(44);
+  expect(await timeout.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(14);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileBox = await timeout.boundingBox();
+  expect(mobileBox).not.toBeNull();
+  expect(mobileBox!.width).toBeGreaterThan(80);
+  expect(mobileBox!.height).toBeGreaterThanOrEqual(44);
+  await page.getByRole("button", { name: "Thêm endpoint" }).click();
+  const dialog = page.locator(".vt-dialog");
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.width).toBeLessThanOrEqual(390);
+  for (const locator of [
+    dialog.locator(".vt-field-label").first(),
+    dialog.locator("[data-remote-mcp-url]"),
+    dialog.getByRole("button", { name: "Tạo endpoint" }),
+  ]) {
+    expect(await locator.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(14);
+  }
+  await page.keyboard.press("Escape");
+});
+
+test("opens published bounded memory without exposing draft policy or raw audio", async ({ page }) => {
+  const memoryExportCalls: unknown[] = [];
+  await mockManagerApi(page, {
+    withDevice: true,
+    draftMemoryPolicyEnabled: true,
+    memoryExportCalls,
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="memory"]').first().click();
+  await expect(page.locator('[data-page="memory"]')).toContainText("Policy đang tắt");
+  await expect(page.locator('[data-page="memory"]')).toContainText("Chưa có message được lưu");
+  await expect(page.locator('[data-page="memory"]')).not.toContainText("raw audio payload");
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Xuất dữ liệu trong phạm vi" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("veetee-memory-agent-1-2026-07-29.json");
+  expect(memoryExportCalls).toEqual([{ deviceId }]);
+});
+
+test("does not misreport failed Remote MCP and memory queries as empty data", async ({ page }) => {
+  await mockManagerApi(page, {
+    withDevice: true,
+    failRemoteMcpQueries: true,
+    failMemoryQueries: true,
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.locator('[data-page-link="mcp"]').first().click();
+  await expect(page.getByText("Remote MCP registry tạm thời không khả dụng.")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByText("Chưa có Remote MCP endpoint")).toHaveCount(0);
+
+  await page.locator('[data-page-link="memory"]').first().click();
+  await expect(page.getByText("Kho memory tạm thời không khả dụng.").first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByText("Chưa có message được lưu")).toHaveCount(0);
+});
+
+for (const role of ["VIEWER", "OPERATOR", "ADMIN", "OWNER"] as const) {
+  test(`matches Remote MCP and memory controls to the ${role} API role`, async ({ page }) => {
+    await mockManagerApi(page, { role, withDevice: true });
+    await page.goto("/#/mcp");
+    await page.getByLabel("Email").fill("owner@veetee.local");
+    await page.getByLabel("Mật khẩu").fill("test-password");
+    await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+    await expect(page.locator('[data-page="mcp"]')).toBeVisible();
+
+    const canOperate = role !== "VIEWER";
+    const canManage = role === "ADMIN" || role === "OWNER";
+    await expect(page.locator("[data-remote-mcp-test]")).toHaveCount(canOperate ? 1 : 0);
+    await expect(page.locator("[data-remote-mcp-create]")).toHaveCount(canManage ? 1 : 0);
+    await expect(page.locator("[data-remote-mcp-secret]")).toHaveCount(canManage ? 1 : 0);
+    await expect(page.locator("[data-remote-mcp-toggle]")).toHaveCount(canManage ? 1 : 0);
+    await expect(page.locator("[data-remote-mcp-assignment-save]")).toHaveCount(canManage ? 1 : 0);
+    if (canManage) await expect(page.locator("[data-assignment-timeout]")).toBeEnabled();
+    else await expect(page.locator("[data-assignment-timeout]")).toBeDisabled();
+
+    const memoryLink = page.locator('.desktop-nav [data-page-link="memory"]');
+    await expect(memoryLink).toHaveCount(canOperate ? 1 : 0);
+    await page.goto("/#/memory");
+    if (canOperate) {
+      await expect(page.locator('[data-page="memory"]')).toBeVisible();
+      await expect(page).toHaveURL(/#\/memory$/);
+    } else {
+      await expect(page).toHaveURL(/#\/overview$/);
+      await expect(page.getByText("Bộ nhớ hội thoại yêu cầu vai trò Operator trở lên.")).toBeVisible();
+    }
+  });
+}
+
+test("clears Remote MCP secrets after Escape, cancel and successful requests", async ({ page }) => {
+  const createBodies: Record<string, unknown>[] = [];
+  const patchBodies: Record<string, unknown>[] = [];
+  await mockManagerApi(page);
+  await page.route(/\/api\/v1\/mcp\/endpoints(?:\/[^/]+)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      createBodies.push(body);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...remoteMcpEndpoint,
+          ...body,
+          id: "7bf15340-3120-4ca3-8368-9a282b60b33e",
+          secretConfigured: true,
+          health: "unknown",
+          updatedAt: "2026-07-29T09:00:00.000Z",
+        }),
+      });
+    }
+    if (request.method() === "PATCH") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      patchBodies.push(body);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...remoteMcpEndpoint,
+          secretConfigured: body.secretAction === "clear" ? false : true,
+          enabled: body.secretAction === "clear" ? false : remoteMcpEndpoint.enabled,
+          updatedAt: "2026-07-29T09:00:00.000Z",
+        }),
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.goto("/#/mcp");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  await page.getByRole("button", { name: "Xoay secret" }).click();
+  await page.locator("[data-remote-mcp-rotate-secret]").fill("escape-secret");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".vt-dialog")).toBeHidden();
+  await page.getByRole("button", { name: "Xoay secret" }).click();
+  await expect(page.locator("[data-remote-mcp-rotate-secret]")).toHaveValue("");
+  await page.locator("[data-remote-mcp-rotate-secret]").fill("cancel-secret");
+  await page.locator(".vt-dialog").getByRole("button", { name: "Hủy" }).click();
+  await page.getByRole("button", { name: "Xoay secret" }).click();
+  await expect(page.locator("[data-remote-mcp-rotate-secret]")).toHaveValue("");
+  await page.locator("[data-remote-mcp-rotate-secret]").fill("saved-secret");
+  await page.locator(".vt-dialog").getByRole("button", { name: "Áp dụng" }).click();
+  await expect.poll(() => patchBodies).toContainEqual({ secretAction: "rotate", secret: "saved-secret" });
+  await page.getByRole("button", { name: "Xoay secret" }).click();
+  await expect(page.locator("[data-remote-mcp-rotate-secret]")).toHaveValue("");
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Thêm endpoint" }).click();
+  let dialog = page.locator(".vt-dialog");
+  await dialog.getByLabel("Loại xác thực").selectOption("bearer");
+  await dialog.locator("[data-remote-mcp-create-secret]").fill("create-escape-secret");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Thêm endpoint" }).click();
+  dialog = page.locator(".vt-dialog");
+  await dialog.getByLabel("Loại xác thực").selectOption("bearer");
+  await expect(dialog.locator("[data-remote-mcp-create-secret]")).toHaveValue("");
+  await dialog.getByLabel("Tên endpoint").fill("Weather tools");
+  await dialog.locator("[data-remote-mcp-url]").fill("https://weather.example.test/mcp");
+  await dialog.locator("[data-remote-mcp-create-secret]").fill("saved-create-secret");
+  await dialog.getByLabel("Tên tool").fill("weather.current");
+  await dialog.getByRole("button", { name: "Tạo endpoint" }).click();
+  await expect.poll(() => createBodies).toHaveLength(1);
+  expect(createBodies[0]).toMatchObject({ secret: "saved-create-secret" });
+  await page.getByRole("button", { name: "Thêm endpoint" }).click();
+  dialog = page.locator(".vt-dialog");
+  await dialog.getByLabel("Loại xác thực").selectOption("bearer");
+  await expect(dialog.locator("[data-remote-mcp-create-secret]")).toHaveValue("");
+});
+
+test("recovers failed Remote MCP loading through the visible retry action", async ({ page }) => {
+  let attempts = 0;
+  await mockManagerApi(page);
+  await page.route("http://127.0.0.1:8001/api/v1/mcp/endpoints", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    attempts += 1;
+    if (attempts <= 2) {
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "remote_mcp_unavailable", message: "Remote MCP đang gián đoạn." }),
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.goto("/#/mcp");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+  await expect(page.getByText("Remote MCP đang gián đoạn.")).toBeVisible();
+  await page.locator(".remote-mcp-query-error").getByRole("button", { name: "Thử lại" }).click();
+  await expect(page.getByText("Home tools").first()).toBeVisible();
+  expect(attempts).toBe(3);
+});
+
+test("surfaces and retries a failed memory pagination request", async ({ page }) => {
+  let cursorAttempts = 0;
+  await mockManagerApi(page, { withDevice: true });
+  await page.route(/\/api\/v1\/agents\/agent-1\/memory\/messages(?:\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.searchParams.has("cursor")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [{ id: "44444444-4444-4444-8444-444444444444", sessionId: "session-1", turnId: "turn-1", role: "user", content: "Trang đầu", occurredAt: "2026-07-29T09:00:00.000Z", retentionUntil: "2026-08-05T09:00:00.000Z" }],
+          nextCursor: "next-page",
+        }),
+      });
+    }
+    cursorAttempts += 1;
+    if (cursorAttempts === 1) {
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "memory_page_unavailable", message: "Trang bộ nhớ tiếp theo đang gián đoạn." }),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [{ id: "55555555-5555-4555-8555-555555555555", sessionId: "session-1", turnId: "turn-2", role: "assistant", content: "Trang thứ hai", occurredAt: "2026-07-29T09:00:01.000Z", retentionUntil: "2026-08-05T09:00:01.000Z" }],
+      }),
+    });
+  });
+
+  await page.goto("/#/memory");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+  await page.getByRole("button", { name: "Tải thêm" }).click();
+  await expect(page.getByText("Trang bộ nhớ tiếp theo đang gián đoạn.")).toBeVisible();
+  await page.getByRole("button", { name: "Thử tải lại" }).click();
+  await expect(page.getByText("Trang thứ hai")).toBeVisible();
+  expect(cursorAttempts).toBe(2);
+});
+
+test("connects Remote MCP picker and memory tabs to accessible state and keyboard controls", async ({ page }) => {
+  let releaseEndpoints!: () => void;
+  const endpointGate = new Promise<void>((resolve) => { releaseEndpoints = resolve; });
+  await mockManagerApi(page, { withDevice: true });
+  await page.route("http://127.0.0.1:8001/api/v1/mcp/endpoints", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await endpointGate;
+    return route.fallback();
+  });
+  await page.goto("/#/mcp");
+  await page.getByLabel("Email").fill("owner@veetee.local");
+  await page.getByLabel("Mật khẩu").fill("test-password");
+  await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
+
+  const loading = page.locator('[data-page="mcp"] .vt-empty-state[role="status"]');
+  await expect(loading.first()).toHaveAttribute("aria-live", "polite");
+  releaseEndpoints();
+
+  const endpoint = page.locator(".remote-mcp-list button").first();
+  await expect(endpoint).toHaveAttribute("aria-pressed", "true");
+  await expect(endpoint.getByText("Khỏe")).toHaveClass(/sr-only/);
+
+  await page.goto("/#/memory");
+  const messagesTab = page.getByRole("tab", { name: "Lịch sử message" });
+  const factsTab = page.getByRole("tab", { name: "Structured facts" });
+  await expect(messagesTab).toHaveAttribute("aria-controls", "memory-panel-messages");
+  await expect(factsTab).toHaveAttribute("tabindex", "-1");
+  await messagesTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(factsTab).toBeFocused();
+  await expect(factsTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#memory-panel-facts")).toHaveAttribute("aria-labelledby", "memory-tab-facts");
+  await page.keyboard.press("Home");
+  await expect(messagesTab).toBeFocused();
+  await expect(messagesTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-page="memory"]')).toContainText("7 ngày");
+});
+
 test("derives gender and source style from the selected catalog voice", async ({ page }) => {
   const agentPatches: unknown[] = [];
   await mockManagerApi(page, { agentPatches, withTtsCatalog: true });
@@ -1624,8 +2075,8 @@ test("keeps the assistant configuration cockpit aligned on desktop and mobile", 
   await page.locator('[data-page-link="agents"]').first().click();
 
   const navigation = page.locator(".agent-config-nav");
-  await expect(navigation.getByRole("link")).toHaveCount(4);
-  await expect(page.locator(".agent-config-section")).toHaveCount(4);
+  await expect(navigation.getByRole("link")).toHaveCount(5);
+  await expect(page.locator(".agent-config-section")).toHaveCount(5);
   await expect(page.locator(".personality-feature")).toContainText("ĐANG CHỌN");
   await page.getByRole("radio", { name: /Không dùng preset/ }).click();
   await expect(page.getByRole("radio", { name: /Không dùng preset/ })).toHaveAttribute("aria-checked", "true");
@@ -2161,7 +2612,7 @@ test("supports all direct routes, invalid redirects, forward history and skip fo
   await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   await expect(page).toHaveURL(/#\/overview$/);
 
-  for (const route of ["overview", "devices", "agents", "providers", "lab", "resources", "operations"]) {
+  for (const route of ["overview", "devices", "agents", "providers", "mcp", "memory", "lab", "resources", "operations"]) {
     await page.goto(`/#/${route}`);
     await expect(page.locator(`[data-page="${route}"]`)).toBeVisible();
     await expect(page.locator("#manager-content")).toBeFocused();
@@ -2187,7 +2638,7 @@ test("keeps representative routes inside every accepted viewport", async ({ page
 
   for (const width of [320, 390, 720, 1024, 1440]) {
     await page.setViewportSize({ width, height: width <= 720 ? 844 : 1000 });
-    for (const route of ["overview", "devices", "agents", "resources", "operations"]) {
+    for (const route of ["overview", "devices", "agents", "mcp", "memory", "resources", "operations"]) {
       await page.goto(`/#/${route}`);
       await expect(page.locator(`[data-page="${route}"]`)).toBeVisible();
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
@@ -2226,7 +2677,7 @@ test("keeps every top-level screen inside the mobile viewport", async ({ page })
   await page.getByRole("button", { name: /Vào trang vận hành/ }).click();
   const screens = [
     ["Tổng quan", "overview"], ["Thiết bị", "devices"], ["Trợ lý", "agents"],
-    ["Nhà cung cấp AI", "providers"], ["Realtime Lab", "lab"],
+    ["Nhà cung cấp AI", "providers"], ["Remote MCP", "mcp"], ["Bộ nhớ", "memory"], ["Realtime Lab", "lab"],
     ["Tài nguyên", "resources"], ["Vận hành", "operations"],
   ] as const;
   for (const [index, [screen, route]] of screens.entries()) {

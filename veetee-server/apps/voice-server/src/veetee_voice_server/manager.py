@@ -7,8 +7,13 @@ from typing import Any, Literal
 import httpx
 
 from veetee_voice_server.config import Settings
+from veetee_voice_server.conversation.memory import MemoryPolicy, MemoryScope
 from veetee_voice_server.conversation.types import ConversationPolicy
 from veetee_voice_server.prompting import PromptConfiguration
+from veetee_voice_server.tools.remote_mcp import (
+    RemoteMcpEndpoint,
+    parse_remote_mcp_endpoints,
+)
 
 
 class ManagerAuthenticationError(RuntimeError):
@@ -88,6 +93,7 @@ class SessionProfile:
     goodbye_text: str
     conversation_error_text: str
     policy: ConversationPolicy
+    memory_policy: MemoryPolicy
     llm_chain: tuple[LlmEndpoint, ...]
     tts_endpoint: TtsEndpoint | None
     voice: VoiceProfile | None
@@ -152,6 +158,7 @@ class SessionProfile:
                 tts_total_seconds=0.0,
                 mcp_seconds=10.0,
             ),
+            memory_policy=MemoryPolicy(),
             llm_chain=(
                 LlmEndpoint(
                     provider_id="settings:cliproxyapi",
@@ -333,6 +340,7 @@ class SessionProfile:
                     4_000,
                 ),
             ),
+            memory_policy=MemoryPolicy.from_payload(payload.get("memoryPolicy")),
             llm_chain=_llm_chain(payload, runtime, locale, defaults, settings),
             tts_endpoint=tts_endpoint,
             voice=voice,
@@ -488,6 +496,101 @@ class ManagerClient:
         response.raise_for_status()
         payload = response.json()
         return _bounded_int(payload.get("accepted"), 0, 0, len(events))
+
+    async def load_memory_context(self, scope: MemoryScope) -> dict[str, Any]:
+        response = await self._client.get(
+            "/internal/v1/memory/context",
+            headers=self._service_headers(),
+            params={
+                "agentId": scope.agent_id,
+                "deviceId": scope.device_id,
+                "configVersion": scope.config_version,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Manager memory context returned an invalid payload")
+        return payload
+
+    async def append_memory_messages(
+        self, scope: MemoryScope, messages: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        response = await self._client.post(
+            "/internal/v1/memory/messages/batch",
+            headers=self._service_headers(),
+            json={
+                "agentId": scope.agent_id,
+                "deviceId": scope.device_id,
+                "configVersion": scope.config_version,
+                "messages": messages,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Manager memory message writer returned an invalid payload")
+        return (
+            _bounded_int(payload.get("accepted"), 0, 0, len(messages)),
+            _bounded_int(payload.get("duplicates"), 0, 0, len(messages)),
+        )
+
+    async def append_memory_facts(
+        self, scope: MemoryScope, facts: list[dict[str, Any]]
+    ) -> tuple[int, int, int]:
+        response = await self._client.post(
+            "/internal/v1/memory/facts/batch",
+            headers=self._service_headers(),
+            json={
+                "agentId": scope.agent_id,
+                "deviceId": scope.device_id,
+                "configVersion": scope.config_version,
+                "facts": facts,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Manager memory fact writer returned an invalid payload")
+        return (
+            _bounded_int(payload.get("accepted"), 0, 0, len(facts)),
+            _bounded_int(payload.get("duplicates"), 0, 0, len(facts)),
+            _bounded_int(payload.get("rejected"), 0, 0, len(facts)),
+        )
+
+    async def resolve_remote_mcp(
+        self, device: DeviceContext
+    ) -> tuple[RemoteMcpEndpoint, ...]:
+        if not device.agent_id or device.config_version <= 0:
+            return ()
+        response = await self._client.post(
+            "/internal/v1/remote-mcp/resolve",
+            headers=self._service_headers(),
+            json={
+                "agentId": device.agent_id,
+                "configVersion": device.config_version,
+                "deviceId": device.device_id,
+            },
+        )
+        response.raise_for_status()
+        return parse_remote_mcp_endpoints(
+            response.json(), expected_config_version=device.config_version
+        )
+
+    async def publish_remote_mcp_audit(self, event: dict[str, Any]) -> None:
+        response = await self._client.post(
+            "/internal/v1/remote-mcp/audit",
+            headers=self._service_headers(),
+            json=event,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("recorded"), bool)
+            or not isinstance(payload.get("duplicate"), bool)
+        ):
+            raise ValueError("Manager remote MCP audit returned an invalid payload")
 
     def _service_headers(self) -> dict[str, str]:
         token = self._settings.manager_internal_token

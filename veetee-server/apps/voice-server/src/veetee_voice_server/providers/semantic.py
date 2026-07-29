@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.evidence import input_evidence_payload
+from veetee_voice_server.conversation.memory import MemoryFactCandidate
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
@@ -77,6 +78,12 @@ class JsonPlannerProvider:
                 "conversation_context": [
                     {"role": item.role, "text": item.text} for item in transcript.context
                 ],
+                "untrusted_cross_session_memory": (
+                    transcript.cross_session_memory.untrusted_payload()
+                    if transcript.cross_session_memory is not None
+                    and not transcript.cross_session_memory.empty
+                    else None
+                ),
             },
             context,
         )
@@ -109,6 +116,7 @@ class JsonPlannerProvider:
             response_required = True
         elif action in {PlanAction.NOOP, PlanAction.CANCEL_PENDING_TOOL}:
             response_required = False
+        memory_facts = _memory_fact_candidates(value.get("memory_facts"))
         return ConversationPlan(
             action=action,
             dialogue_act=dialogue_act,
@@ -119,6 +127,7 @@ class JsonPlannerProvider:
             if isinstance(value.get("response_text"), str)
             else None,
             tool_call=tool_call,
+            memory_facts=memory_facts,
         )
 
 
@@ -173,6 +182,12 @@ class StructuredConversationGate:
                 "conversation_context": [
                     {"role": item.role, "text": item.text} for item in transcript.context
                 ],
+                "untrusted_cross_session_memory": (
+                    transcript.cross_session_memory.untrusted_payload()
+                    if transcript.cross_session_memory is not None
+                    and not transcript.cross_session_memory.empty
+                    else None
+                ),
             },
             context,
         )
@@ -370,3 +385,45 @@ class StructuredConversationGate:
             tool_call=None,
         )
         return reconciled_decision, reconciled_plan
+
+
+def _memory_fact_candidates(value: object) -> tuple[MemoryFactCandidate, ...]:
+    if not isinstance(value, list):
+        return ()
+    output: list[MemoryFactCandidate] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            continue
+        category = _bounded_text(item.get("category"), 64)
+        key = _bounded_text(item.get("key"), 120)
+        fact_value = _bounded_text(item.get("value"), 2_000)
+        confidence_value = item.get("confidence")
+        expires_value = item.get("expires_in_days")
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", category)
+            or not key
+            or not fact_value
+            or isinstance(confidence_value, bool)
+            or not isinstance(confidence_value, int | float)
+            or isinstance(expires_value, bool)
+            or not isinstance(expires_value, int | float)
+        ):
+            continue
+        output.append(
+            MemoryFactCandidate(
+                category=category,
+                key=key,
+                value=fact_value,
+                confidence=round(
+                    min(max(float(confidence_value), 0.0), 1.0), 4
+                ),
+                expires_in_days=max(1, min(int(expires_value), 365)),
+            )
+        )
+    return tuple(output)
+
+
+def _bounded_text(value: object, maximum: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:maximum]

@@ -14,6 +14,10 @@ from veetee_voice_server.conversation.evidence import (
     build_input_evidence,
     input_evidence_payload,
 )
+from veetee_voice_server.conversation.memory import (
+    MemorySnapshot,
+    StoredMemoryMessage,
+)
 from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
@@ -155,6 +159,49 @@ async def test_planner_normalizes_response_required_for_executable_actions() -> 
     )
     assert plan.action is PlanAction.CALL_TOOL_THEN_RESPOND
     assert plan.response_required is True
+
+
+async def test_structured_gate_receives_untrusted_memory_and_parses_fact_candidates() -> None:
+    captured: dict[str, object] = {}
+
+    async def complete_json(payload: dict[str, object], _: object) -> dict[str, object]:
+        captured.update(payload)
+        value = gate_payload()
+        plan = value["plan"]
+        assert isinstance(plan, dict)
+        plan["memory_facts"] = [
+            {
+                "category": "preference",
+                "key": "drink",
+                "value": "cà phê",
+                "confidence": 0.9,
+                "expires_in_days": 30,
+            }
+        ]
+        return value
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript(
+        "Tôi thích cà phê",
+        "vi-VN",
+        cross_session_memory=MemorySnapshot(
+            messages=(
+                StoredMemoryMessage(
+                    "assistant", "Dữ liệu cũ", "2026-07-01T00:00:00Z"
+                ),
+            )
+        ),
+    )
+
+    decision = await gate.evaluate(transcript, operation)
+    plan = await gate.plan(transcript, decision, operation)
+
+    memory = captured["untrusted_cross_session_memory"]
+    assert isinstance(memory, dict)
+    assert memory["boundary"] == "untrusted_cross_session_memory"
+    assert plan.memory_facts[0].key == "drink"
+    assert plan.memory_facts[0].value == "cà phê"
 
 
 async def test_structured_gate_rejects_invalid_signal_without_model_call() -> None:

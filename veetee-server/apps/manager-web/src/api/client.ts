@@ -14,6 +14,13 @@ import {
   healthSchema,
   labSessionSchema,
   mcpToolSchema,
+  remoteMcpEndpointSchema,
+  remoteMcpAssignmentsSchema,
+  memoryMessagesPageSchema,
+  memoryFactsPageSchema,
+  memoryFactSchema,
+  memoryExportSchema,
+  deletedCountSchema,
   principalSchema,
   providerSchema,
   operationsProfileSchema,
@@ -164,6 +171,106 @@ export const managerApi = {
     ),
   providers: () => request("/api/v1/providers", z.array(providerSchema)),
   mcpTools: () => request("/api/v1/mcp/tools", z.array(mcpToolSchema)),
+  remoteMcpEndpoints: () =>
+    request("/api/v1/mcp/endpoints", z.array(remoteMcpEndpointSchema)),
+  createRemoteMcpEndpoint: (input: {
+    name: string;
+    url: string;
+    transport: "streamable_http" | "sse";
+    authType: "none" | "bearer" | "header";
+    authHeaderName?: string;
+    secret?: string;
+    timeoutSeconds: number;
+    resultMaxBytes: number;
+    networkPolicy: "public_only" | "private_allowlist";
+    allowedHosts: string[];
+    tools: Array<{
+      name: string;
+      safetyClass: "read_only" | "reversible" | "disruptive" | "destructive";
+      requiresConfirmation: boolean;
+    }>;
+  }) => request("/api/v1/mcp/endpoints", remoteMcpEndpointSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  }),
+  updateRemoteMcpEndpoint: (
+    id: string,
+    input: {
+      enabled?: boolean;
+      secretAction: "keep" | "rotate" | "clear";
+      secret?: string;
+    },
+  ) => request(`/api/v1/mcp/endpoints/${encodeURIComponent(id)}`, remoteMcpEndpointSchema, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  }),
+  testRemoteMcpEndpoint: (id: string) =>
+    request(
+      `/api/v1/mcp/endpoints/${encodeURIComponent(id)}/test`,
+      remoteMcpEndpointSchema,
+      { method: "POST" },
+    ),
+  agentRemoteMcpAssignments: (agentId: string) =>
+    request(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/mcp-endpoints`,
+      remoteMcpAssignmentsSchema,
+    ),
+  updateAgentRemoteMcpAssignments: (
+    agentId: string,
+    assignments: Array<{ endpointId: string; toolNames: string[]; timeoutSeconds: number }>,
+  ) => request(
+    `/api/v1/agents/${encodeURIComponent(agentId)}/mcp-endpoints`,
+    remoteMcpAssignmentsSchema,
+    { method: "PUT", body: JSON.stringify({ assignments }) },
+  ),
+  memoryMessages: (agentId: string, input: { deviceId: string; limit?: number; cursor?: string }) => {
+    const params = new URLSearchParams({ deviceId: input.deviceId, limit: String(input.limit ?? 100) });
+    if (input.cursor) params.set("cursor", input.cursor);
+    return request(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/memory/messages?${params}`,
+      memoryMessagesPageSchema,
+    );
+  },
+  deleteMemoryMessage: (agentId: string, messageId: string) => request(
+    `/api/v1/agents/${encodeURIComponent(agentId)}/memory/messages/${encodeURIComponent(messageId)}`,
+    deletedCountSchema,
+    { method: "DELETE" },
+  ),
+  purgeMemoryMessages: (agentId: string, deviceId: string) => {
+    const query = `?deviceId=${encodeURIComponent(deviceId)}`;
+    return request(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/memory/messages${query}`,
+      deletedCountSchema,
+      { method: "DELETE" },
+    );
+  },
+  exportMemory: (agentId: string, deviceId: string) => request(
+    `/api/v1/agents/${encodeURIComponent(agentId)}/memory/exports`,
+    memoryExportSchema,
+    { method: "POST", body: JSON.stringify({ deviceId }) },
+  ),
+  memoryFacts: (agentId: string, input: { deviceId: string; limit?: number; cursor?: string }) => {
+    const params = new URLSearchParams({ deviceId: input.deviceId, limit: String(input.limit ?? 100) });
+    if (input.cursor) params.set("cursor", input.cursor);
+    return request(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/memory/facts?${params}`,
+      memoryFactsPageSchema,
+    );
+  },
+  updateMemoryFact: (
+    agentId: string,
+    factId: string,
+    input: { value?: string; confidence?: number; expiresAt?: string },
+  ) => request(
+    `/api/v1/agents/${encodeURIComponent(agentId)}/memory/facts/${encodeURIComponent(factId)}`,
+    memoryFactSchema,
+    { method: "PATCH", body: JSON.stringify(input) },
+  ),
+  deleteMemoryFact: (agentId: string, factId: string) => request(
+    `/api/v1/agents/${encodeURIComponent(agentId)}/memory/facts/${encodeURIComponent(factId)}`,
+    deletedCountSchema,
+    { method: "DELETE" },
+  ),
   deviceMcpTools: (deviceId: string) =>
     request(
       `/api/v1/devices/${encodeURIComponent(deviceId)}/mcp/tools`,

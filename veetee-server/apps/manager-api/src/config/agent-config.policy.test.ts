@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   expandProviderChains,
+  normalizeMemoryPolicy,
   validateAgentDraftConfig,
   validateAgentVoiceConfig,
   validateProviderConfig,
@@ -62,6 +63,72 @@ describe("validateAgentDraftConfig", () => {
   it("rejects empty timeout goodbye text", () => {
     expect(() =>
       validateAgentDraftConfig({ conversation: { timeoutGoodbye: "   " } }),
+    ).toThrow(BadRequestException);
+  });
+
+  it("publishes bounded cross-session memory as explicit opt-in policy", () => {
+    expect(normalizeMemoryPolicy(undefined)).toEqual({
+      enabled: false,
+      consent: false,
+      storeMessages: false,
+      storeFacts: false,
+      retentionDays: 7,
+      maxMessages: 12,
+      maxMessageCharacters: 2_000,
+      maxContextCharacters: 8_000,
+      factRetentionDays: 90,
+      maxFacts: 50,
+      maxFactCharacters: 1_000,
+    });
+    expect(() =>
+      validateAgentDraftConfig({
+        memoryPolicy: {
+          enabled: true,
+          consent: true,
+          storeMessages: true,
+          storeFacts: true,
+          retentionDays: 14,
+          maxMessages: 20,
+          maxMessageCharacters: 1_500,
+          maxContextCharacters: 9_000,
+          factRetentionDays: 120,
+          maxFacts: 80,
+          maxFactCharacters: 1_200,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("keeps memory off without consent and rejects unsafe bounds", () => {
+    expect(() =>
+      validateAgentDraftConfig({
+        memoryPolicy: {
+          enabled: true,
+          consent: false,
+          storeMessages: true,
+        },
+      }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      validateAgentDraftConfig({
+        memoryPolicy: {
+          enabled: true,
+          consent: true,
+          storeFacts: true,
+          retentionDays: 31,
+        },
+      }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      validateAgentDraftConfig({
+        memoryPolicy: {
+          enabled: true,
+          consent: true,
+          storeFacts: true,
+          maxMessageCharacters: 2_000,
+          maxContextCharacters: 1_000,
+        },
+      }),
     ).toThrow(BadRequestException);
   });
 

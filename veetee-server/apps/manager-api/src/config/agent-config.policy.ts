@@ -51,6 +51,51 @@ const conversationNumberBounds = {
   contextMessageCharacters: [128, 4_000],
 } as const;
 
+export interface MemoryPolicy {
+  enabled: boolean;
+  consent: boolean;
+  storeMessages: boolean;
+  storeFacts: boolean;
+  retentionDays: number;
+  maxMessages: number;
+  maxMessageCharacters: number;
+  maxContextCharacters: number;
+  factRetentionDays: number;
+  maxFacts: number;
+  maxFactCharacters: number;
+}
+
+export const DEFAULT_MEMORY_POLICY: Readonly<MemoryPolicy> = Object.freeze({
+  enabled: false,
+  consent: false,
+  storeMessages: false,
+  storeFacts: false,
+  retentionDays: 7,
+  maxMessages: 12,
+  maxMessageCharacters: 2_000,
+  maxContextCharacters: 8_000,
+  factRetentionDays: 90,
+  maxFacts: 50,
+  maxFactCharacters: 1_000,
+});
+
+const memoryIntegerBounds = {
+  retentionDays: [1, 30],
+  maxMessages: [2, 40],
+  maxMessageCharacters: [128, 4_000],
+  maxContextCharacters: [512, 12_000],
+  factRetentionDays: [1, 365],
+  maxFacts: [1, 100],
+  maxFactCharacters: [64, 2_000],
+} as const;
+
+const memoryBooleanFields = [
+  "enabled",
+  "consent",
+  "storeMessages",
+  "storeFacts",
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -353,40 +398,97 @@ export function validateAgentDraftConfig(
   personalityPresets: readonly PersonalityPreset[] = PERSONALITY_PRESETS,
 ): void {
   validateAgentPromptDraft(config.prompt, personalityPresets);
+  normalizeMemoryPolicy(config.memoryPolicy);
   const conversation = config.conversation;
-  if (conversation === undefined) return;
-  if (!isRecord(conversation)) {
-    throw new BadRequestException("Agent conversation config must be an object");
-  }
-  for (const [field, [minimum, maximum]] of Object.entries(conversationNumberBounds)) {
-    const value = conversation[field];
-    if (value === undefined) continue;
+  if (conversation !== undefined) {
+    if (!isRecord(conversation)) {
+      throw new BadRequestException("Agent conversation config must be an object");
+    }
+    for (const [field, [minimum, maximum]] of Object.entries(conversationNumberBounds)) {
+      const value = conversation[field];
+      if (value === undefined) continue;
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value < minimum ||
+        value > maximum
+      ) {
+        throw new BadRequestException(
+          `Agent conversation ${field} must be between ${minimum} and ${maximum}`,
+        );
+      }
+      if (
+        (field === "contextMessageLimit" || field === "contextMessageCharacters") &&
+        !Number.isInteger(value)
+      ) {
+        throw new BadRequestException(`Agent conversation ${field} must be an integer`);
+      }
+    }
+    const goodbye = conversation.timeoutGoodbye;
     if (
-      typeof value !== "number" ||
-      !Number.isFinite(value) ||
-      value < minimum ||
-      value > maximum
+      goodbye !== undefined &&
+      (typeof goodbye !== "string" || !goodbye.trim() || goodbye.length > 240)
     ) {
       throw new BadRequestException(
-        `Agent conversation ${field} must be between ${minimum} and ${maximum}`,
+        "Agent conversation timeoutGoodbye must contain 1 to 240 characters",
       );
     }
-    if (
-      (field === "contextMessageLimit" || field === "contextMessageCharacters") &&
-      !Number.isInteger(value)
-    ) {
-      throw new BadRequestException(`Agent conversation ${field} must be an integer`);
-    }
   }
-  const goodbye = conversation.timeoutGoodbye;
-  if (
-    goodbye !== undefined &&
-    (typeof goodbye !== "string" || !goodbye.trim() || goodbye.length > 240)
-  ) {
+}
+
+export function normalizeMemoryPolicy(value: unknown): MemoryPolicy {
+  if (value === undefined) return { ...DEFAULT_MEMORY_POLICY };
+  if (!isRecord(value)) {
+    throw new BadRequestException("Agent memoryPolicy must be an object");
+  }
+  const allowed = new Set([
+    ...memoryBooleanFields,
+    ...Object.keys(memoryIntegerBounds),
+  ]);
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown) {
+    throw new BadRequestException(`Agent memoryPolicy.${unknown} is not supported`);
+  }
+  const policy: MemoryPolicy = { ...DEFAULT_MEMORY_POLICY };
+  for (const field of memoryBooleanFields) {
+    const candidate = value[field];
+    if (candidate === undefined) continue;
+    if (typeof candidate !== "boolean") {
+      throw new BadRequestException(`Agent memoryPolicy.${field} must be boolean`);
+    }
+    policy[field] = candidate;
+  }
+  for (const [field, [minimum, maximum]] of Object.entries(memoryIntegerBounds)) {
+    const candidate = value[field];
+    if (candidate === undefined) continue;
+    if (
+      typeof candidate !== "number" ||
+      !Number.isInteger(candidate) ||
+      candidate < minimum ||
+      candidate > maximum
+    ) {
+      throw new BadRequestException(
+        `Agent memoryPolicy.${field} must be an integer from ${minimum} to ${maximum}`,
+      );
+    }
+    policy[field as keyof typeof memoryIntegerBounds] = candidate;
+  }
+  if (policy.maxContextCharacters < policy.maxMessageCharacters) {
     throw new BadRequestException(
-      "Agent conversation timeoutGoodbye must contain 1 to 240 characters",
+      "Agent memoryPolicy.maxContextCharacters must be at least maxMessageCharacters",
     );
   }
+  if (policy.enabled && !policy.consent) {
+    throw new BadRequestException(
+      "Agent memoryPolicy.consent must be true before memory can be enabled",
+    );
+  }
+  if (policy.enabled && !policy.storeMessages && !policy.storeFacts) {
+    throw new BadRequestException(
+      "Agent memoryPolicy must enable storeMessages or storeFacts",
+    );
+  }
+  return policy;
 }
 
 export function expandProviderChains(

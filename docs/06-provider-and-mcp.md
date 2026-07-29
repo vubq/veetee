@@ -122,8 +122,15 @@ runtime mặc định và không được tự động chèn vào fallback chain
 ### Memory
 
 - `none`: mặc định cho thiết bị mới.
-- `short-local`: SQLite/Postgres summary với retention rõ.
+- `short-local`: Manager-backed recent messages và structured facts bounded; bắt buộc
+  consent, retention/expiry, delete/edit API và scope theo authenticated device + agent.
 - `vector`: chỉ bật khi có use case và consent; không đẩy transcript riêng tư vô hạn.
+
+Voice load `short-local` một lần ở session boundary và ghi completed turn qua bounded
+async queue. Fact candidate do structured planner đề xuất bằng `category/key/value/
+confidence/expires_in_days`, nhưng runtime chỉ persist sau completed assistant output và
+Manager vẫn áp policy/idempotency. Memory luôn là untrusted data context, không được chèn
+vào system prompt hoặc dùng làm quyền gọi tool.
 
 ## 3. Registry và health
 
@@ -263,6 +270,41 @@ Hai tool này bổ sung dữ liệu realtime khi model cần truy vấn chính x
 date/time trong agent prompt vẫn được render theo từng turn. Chúng không gọi mạng,
 không đi qua Manager API trong hot path và không mở remote MCP/HTTP context source.
 
+Remote MCP discovery snapshot được resolve từ Manager tại session/config boundary bằng
+service token. Ngay trước mỗi `tools/call`, Voice resolve lại cùng agent/device/config
+trong turn deadline để áp dụng disable/secret clear/rotation như kill-switch; không poll
+theo audio frame và không re-discover metadata remote. Endpoint URL, auth header và secret
+chỉ sống trong Voice process, không đi vào catalog/prompt/log. Voice V1 hỗ trợ MCP
+Streamable HTTP với JSON hoặc SSE response
+cho `initialize`, paginated `tools/list` và `tools/call`; enum SSE legacy độc lập chỉ dành
+cho migration tương lai, còn Manager create và Voice đều fail-closed cho tới khi có
+adapter conformance riêng.
+
+Một tool chỉ trở thành AI-callable khi đồng thời nằm trong endpoint allowlist và immutable
+agent assignment. Tool `disruptive`/`destructive` hoặc cần confirmation vẫn bị ẩn khỏi
+planner hiện tại. Catalog merge ưu tiên native/device tool, loại remote name collision và
+giữ tối đa 128 tool. Mọi arguments/output chạy Draft 2020-12 validation, result có byte
+cap, timeout 5--30 giây và dùng cùng cancellation/generation của turn.
+
+Metadata remote không có authority trong prompt: Voice bỏ description/title/example từ
+server, chỉ giữ description deterministic và một JSON Schema structural subset có giới
+hạn depth/node/property/enum. `anyOf` chỉ được dùng không lồng nhau, tối đa 4 nhánh tại
+mỗi vị trí và 8 nhánh trong toàn schema; `$ref`, `oneOf`/`allOf`, `pattern`/regex và keyword
+không support bị reject trước validator. Remote result được đặt trong
+`untrusted_remote_tool_result`, escape delimiter và chỉ được dùng như dữ liệu, không phải
+instruction.
+
+Egress chỉ cho exact host đã publish, không follow redirect/proxy môi trường và resolve DNS
+trước request. HTTP client kết nối thẳng tới IP đã validate trong khi giữ original
+Host/TLS SNI; DNS không được resolve lại sau lúc gắn auth/body. Peer IP và DNS sau response
+vẫn được kiểm tra defense-in-depth để phát hiện rebinding. `public_only` chỉ nhận global IP;
+`private_allowlist` cho RFC1918/ULA/CGNAT đúng host nhưng loopback, link-local, multicast,
+unspecified, reserved và cloud metadata luôn bị chặn. Voice và Manager cùng block explicit
+IPv6 transition/documentation ranges (`::/96`, mapped, NAT64, `2001::/23`, `2002::/16`,
+`3fff::/20`, `5f00::/16`, `100::/64`, `fec0::/10`) để không phụ thuộc khác biệt classifier
+giữa runtime. Call audit chỉ gửi args SHA-256 cùng
+scope/status/duration qua async bounded delivery, không gửi raw arguments/result/secret.
+
 Tool call record phải có `tenant_id`, `agent_id`, `device_id`, `session_id`, `turn_id`, `tool_name`, args hash, result status, duration và actor (`model`, `user`, `system`). Raw secret trong args phải redact.
 
 Tool call thuộc cùng cancellation scope với turn. Khi button hoặc interrupt profile phát `abort`, broker phải:
@@ -275,9 +317,22 @@ Tool call thuộc cùng cancellation scope với turn. Khi button hoặc interru
 
 ## 6. MCP security
 
-- Allowlist remote endpoint và URL scheme; cấm SSRF vào metadata/private network.
+- Allowlist exact remote endpoint host và URL scheme; private LAN cần policy explicit;
+  loopback/link-local/metadata luôn bị chặn.
 - JSON schema validate cả request và response.
 - Timeout mặc định 5-30 giây theo tool; cancellation propagate.
 - User-only tool cần explicit user action hoặc role.
 - Device tool catalog cache theo firmware version; invalidate khi `initialize`/reconnect.
 - Không cho model tự tạo tool name hoặc URL tùy ý.
+- Voice gọi lại internal resolver ngay trước mỗi Remote MCP `tools/call`; resolver chỉ
+  trả endpoint đang enabled và credential vừa giải mã. Vì vậy disable/clear/rotate đã
+  commit áp dụng ở call kế tiếp mà không đặt Manager vào audio-frame path. Call đã
+  authorize và dispatch trước mutation có thể hoàn tất hoặc bị cancellation, sau đó vẫn
+  phải audit đúng trạng thái; UI không mô tả thao tác này là hủy tức thì request in-flight.
+- Fresh resolve phải khớp cached URL/transport/network/host/tool policy; chỉ secret value
+  được phép rotate. Manager unavailable, resolver timeout, endpoint/tool missing hoặc
+  immutable drift đều fail-closed trước khi auth/body được gửi tới remote.
+- Khi auth header value đổi, Voice xóa remote MCP session id cũ và chạy lại
+  `initialize` + `notifications/initialized` bằng fresh credential trong cùng turn
+  deadline; catalog schema đã cache không bị discovery lại. Nhờ vậy session bind với
+  credential cũ không được tái sử dụng sau rotation.

@@ -19,6 +19,7 @@ from veetee_voice_server.app import (
 )
 from veetee_voice_server.config import Settings
 from veetee_voice_server.conversation.arbiter import ConversationState
+from veetee_voice_server.conversation.memory import MemoryPolicy
 from veetee_voice_server.conversation.types import (
     AudioChunk,
     ConversationOutput,
@@ -994,3 +995,52 @@ async def test_semantic_schema_can_force_regular_response_through_prose_stream()
 
     assert output["plan"]["response_text"] is None
     assert output["plan"]["response_required"] is True
+
+
+async def test_semantic_schema_bounds_model_proposed_memory_facts_when_opted_in() -> None:
+    memory_policy = MemoryPolicy(
+        enabled=True,
+        consent=True,
+        store_facts=True,
+        max_fact_characters=64,
+        fact_retention_days=10,
+    )
+    schema = _planner_output_schema(
+        SimulatedLabToolBroker(), memory_policy=memory_policy
+    )
+    output = _validated_planner_output(
+        {
+            "admission": {
+                "decision": "accepted",
+                "confidence": 0.95,
+                "addressed_to_robot": 0.95,
+                "reason_code": "speech_relevant",
+            },
+            "dialogue_act": "answer",
+            "plan": {
+                "action": "respond",
+                "locale": "vi-VN",
+                "intent": "preference.remember",
+                "response_required": True,
+                "response_text": None,
+                "tool_call": None,
+                "memory_facts": [
+                    {
+                        "category": "preference",
+                        "key": "drink",
+                        "value": "cà phê " * 30,
+                        "confidence": 2,
+                        "expires_in_days": 999,
+                    }
+                ],
+            },
+        },
+        schema,
+        "vi-VN",
+        memory_policy=memory_policy,
+    )
+
+    fact = output["plan"]["memory_facts"][0]
+    assert len(fact["value"]) == 64
+    assert fact["confidence"] == 1.0
+    assert fact["expires_in_days"] == 10
