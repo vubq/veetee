@@ -136,6 +136,8 @@ private:
     void HandleData(const esp_websocket_event_data_t& data,
                     std::uint32_t generation);
     bool SendOpeningSequence(std::uint32_t generation);
+    bool AcquireIoTaskReserve();
+    void ReleaseIoTaskReserve();
     void Teardown(bool clean, int close_code = 1000, const char* reason = nullptr);
     bool SendText(const char* text, std::size_t length);
     bool SendMcpPayloadNow(const char* payload, std::size_t length);
@@ -162,6 +164,8 @@ private:
     QueueHandle_t urgent_command_queue_ = nullptr;
     QueueHandle_t outbound_audio_queue_ = nullptr;
     TaskHandle_t task_ = nullptr;
+    void* io_task_reserve_ = nullptr;
+    std::size_t io_task_reserve_bytes_ = 0;
     esp_websocket_client_handle_t client_ = nullptr;
     std::atomic<esp_websocket_client_handle_t> callback_client_{nullptr};
     std::atomic<std::uint32_t> requested_generation_{0};

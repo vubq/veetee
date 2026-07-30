@@ -45,6 +45,7 @@ from veetee_voice_server.providers.contracts import (
     LlmEvent,
     LlmProvider,
     LlmRequest,
+    LlmStreamDone,
     LlmTextDelta,
     PlannerProvider,
     ToolBroker,
@@ -65,6 +66,8 @@ class _SpeechLifecycle:
 class _AssistantCompletion:
     context_text: str
     durable_text: str
+    incomplete: bool = False
+    finish_reason: str | None = None
 
 
 class _SemanticProviderUnavailableError(RuntimeError):
@@ -234,7 +237,11 @@ class ConversationEngine:
             assistant = await self._execute_plan(
                 contextual_transcript, decision, plan, context
             )
-            if assistant is not None and assistant.durable_text:
+            if (
+                assistant is not None
+                and assistant.durable_text
+                and not assistant.incomplete
+            ):
                 context.checkpoint()
                 self._remember("user", contextual_transcript.text)
                 self._remember("assistant", assistant.context_text)
@@ -243,6 +250,21 @@ class ConversationEngine:
                     contextual_transcript.text,
                     assistant.durable_text,
                     plan,
+                )
+            if assistant is not None and assistant.incomplete:
+                logger.warning(
+                    "conversation_llm_output_truncated",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    finish_reason=assistant.finish_reason,
+                )
+                # Partial speech was already user-visible. Report the bounded
+                # truncation truthfully without appending a generic recovery
+                # sentence or persisting the partial pair as completed memory.
+                await self._emit_if_current_error(
+                    context,
+                    "llm_output_truncated",
+                    "llm",
                 )
             if plan.action is PlanAction.END_SESSION:
                 await self._arbiter.close_assistant("semantic_end")
@@ -361,6 +383,7 @@ class ConversationEngine:
         response_characters = 0
         stream_started_at = monotonic()
         first_delta_at: float | None = None
+        finish_reason: str | None = None
         chunker = self._new_sentence_chunker()
         completed = False
         try:
@@ -369,13 +392,26 @@ class ConversationEngine:
                 if self._policy.llm_total_seconds > 0
                 else context
             )
+            llm_stream = self._llm.stream(request, llm_context)
             async for event in iterate_operation(
-                self._llm.stream(request, llm_context),
+                llm_stream,
                 llm_context,
                 first_item_timeout_seconds=self._policy.llm_first_token_seconds,
                 idle_timeout_seconds=self._policy.llm_stream_idle_seconds,
                 is_progress=self._is_spoken_llm_progress,
             ):
+                if isinstance(event, LlmStreamDone):
+                    finish_reason = event.finish_reason
+                    # The terminal event is authoritative.  Some compatible
+                    # gateways send the finish chunk before closing the SSE
+                    # body (or leave a keep-alive open), so waiting for a
+                    # subsequent iterator EOF would incorrectly consume the
+                    # stream-idle deadline and turn a truncation into a
+                    # provider timeout.
+                    close_stream = getattr(llm_stream, "aclose", None)
+                    if close_stream is not None:
+                        await close_stream()
+                    break
                 if not isinstance(event, LlmTextDelta):
                     # Planner-owned tool calls are handled before this prose stream in MVP.
                     continue
@@ -422,12 +458,15 @@ class ConversationEngine:
                         speech_queue, sentence, speech_task, context
                     )
 
+            incomplete = finish_reason in {"length", "max_tokens"}
             logger.info(
                 "conversation_llm_stream_complete",
                 session_id=context.session_id,
                 turn_id=context.turn_id,
                 duration_ms=round((monotonic() - stream_started_at) * 1_000, 1),
                 response_characters=response_characters,
+                finish_reason=finish_reason or "unknown",
+                incomplete=incomplete,
             )
             for remainder in chunker.flush_chunks():
                 logger.info(
@@ -469,7 +508,12 @@ class ConversationEngine:
                 + separator
                 + response_tail[-tail_characters:].lstrip()
             )[: self._durable_message_characters].strip()
-        return _AssistantCompletion(context_text, durable_text)
+        return _AssistantCompletion(
+            context_text,
+            durable_text,
+            incomplete=incomplete,
+            finish_reason=finish_reason,
+        )
 
     async def _drain_speech_queue(
         self,

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +7,8 @@
 #include "esp_err.h"
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "maintenance/maintenance_executor.h"
 #include "settings/settings_store.h"
 
 namespace veetee::ota {
@@ -44,6 +44,7 @@ public:
 
     esp_err_t Initialize(settings::SettingsStore* store,
                          settings::DeviceSettings* settings,
+                         maintenance::MaintenanceExecutor* executor,
                          EventSink sink, void* context);
     void Start();
     void Cancel();
@@ -79,11 +80,24 @@ private:
         std::uint32_t config_version = 0;
     };
 
-    static void TaskEntry(void* context);
+    struct Attempt {
+        std::uint32_t generation = 0;
+        std::uint32_t retry_ms = 0;
+        std::uint32_t activation_elapsed_ms = 0;
+        bool refresh_activation_ticket = false;
+        bool announce_pending_activation = false;
+    };
+
+    struct PendingNotification {
+        std::uint32_t generation = 0;
+        BootstrapNotification notification{};
+    };
+
+    static void MaintenanceEntry(void* context);
     static esp_err_t HttpEventHandler(esp_http_client_event_t* event);
 
-    void TaskLoop();
-    void Run(std::uint32_t generation);
+    void ProcessPending();
+    void ProcessAttempt(Attempt attempt);
     esp_err_t RequestBootstrap(const settings::DeviceSettings& snapshot,
                                bool authenticated,
                                BootstrapPayload* payload,
@@ -96,25 +110,29 @@ private:
                           const char* bearer_token, int* status_code);
     esp_err_t ParseBootstrap(BootstrapPayload* payload) const;
     esp_err_t ParseActivation(ActivationPayload* payload) const;
-    bool Emit(BootstrapEvent event, const char* activation_code,
-              const BootstrapPayload* payload,
-              std::uint32_t generation) const;
-    bool EmitWithRetry(BootstrapEvent event, const char* activation_code,
-                       const BootstrapPayload* payload,
-                       std::uint32_t generation) const;
-    bool Delay(std::uint32_t generation, std::uint32_t milliseconds) const;
+    bool QueueNotification(BootstrapEvent event, const char* activation_code,
+                           const BootstrapPayload* payload,
+                           std::uint32_t generation);
+    bool QueueBootstrapComplete(const BootstrapPayload& payload,
+                                std::uint32_t generation);
+    bool DeliverPendingNotification();
+    bool Reschedule(const Attempt& attempt, std::uint32_t delay_ms);
+    void Retry(Attempt attempt, esp_err_t error);
+    void RequestIfPending();
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;
 
     settings::SettingsStore* store_ = nullptr;
     settings::DeviceSettings* settings_ = nullptr;
+    maintenance::MaintenanceExecutor* executor_ = nullptr;
     EventSink sink_ = nullptr;
     void* sink_context_ = nullptr;
-    TaskHandle_t task_ = nullptr;
+    QueueHandle_t attempt_queue_ = nullptr;
+    QueueHandle_t notification_queue_ = nullptr;
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<bool> active_{false};
     std::atomic<bool> firmware_updates_deferred_{false};
     char hardware_id_[18] = {};
-    std::array<char, 8193> response_{};
+    char* response_ = nullptr;
     std::size_t response_size_ = 0;
     bool response_overflow_ = false;
 };

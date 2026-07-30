@@ -19,6 +19,7 @@ namespace veetee::audio {
 namespace {
 
 constexpr char kTag[] = "veetee_audio";
+constexpr std::size_t kRealtimeAudioTaskStackBytes = 13 * 1024;
 constexpr double kPi = 3.14159265358979323846;
 constexpr UBaseType_t kPlaybackQueueDepth = 12;
 constexpr TickType_t kPlaybackControlTimeout = pdMS_TO_TICKS(20);
@@ -165,12 +166,14 @@ esp_err_t I2sAudio::Start(bool play_boot_chime) {
     // Opus codec calls need an internal task stack on this ESP32-S3 profile.
     const UBaseType_t audio_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     if (xTaskCreateWithCaps(&I2sAudio::CaptureTaskEntry, "veetee_capture",
-                            12 * 1024, this, 6, &capture_task_,
+                            kRealtimeAudioTaskStackBytes, this, 6,
+                            &capture_task_,
                             audio_stack_caps) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreateWithCaps(&I2sAudio::PlaybackTaskEntry, "veetee_playback",
-                            12 * 1024, this, 6, &playback_task_,
+                            kRealtimeAudioTaskStackBytes, this, 6,
+                            &playback_task_,
                             audio_stack_caps) != pdPASS) {
         vTaskDeleteWithCaps(capture_task_);
         capture_task_ = nullptr;

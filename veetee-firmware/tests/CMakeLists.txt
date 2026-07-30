@@ -24,6 +24,15 @@ target_compile_options(application_queue_policy_test PRIVATE -Wall -Wextra -Werr
 add_test(NAME application_queue_policy_test COMMAND application_queue_policy_test)
 
 add_executable(
+    maintenance_policy_test
+    maintenance_policy_test.cpp
+)
+target_include_directories(maintenance_policy_test PRIVATE ../main)
+target_compile_features(maintenance_policy_test PRIVATE cxx_std_17)
+target_compile_options(maintenance_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME maintenance_policy_test COMMAND maintenance_policy_test)
+
+add_executable(
     websocket_task_policy_test
     websocket_task_policy_test.cpp
 )

@@ -11,7 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
+#include "maintenance/maintenance_executor.h"
 #include "ota/firmware_manifest.h"
 #include "ota/firmware_ota_recovery_policy.h"
 #include "settings/firmware_ota_attempt_record.h"
@@ -55,8 +55,9 @@ public:
                                void* context);
     ~FirmwareUpdater();
 
-    esp_err_t Initialize(settings::SettingsStore* settings_store, EventSink sink,
-                         void* context);
+    esp_err_t Initialize(settings::SettingsStore* settings_store,
+                         maintenance::MaintenanceExecutor* executor,
+                         EventSink sink, void* context);
     FirmwareScheduleResult Schedule(const char* desired_version,
                                     const char* manifest_url);
     void Cancel();
@@ -92,9 +93,16 @@ private:
         bool boot_committed = false;
     };
 
-    static void TaskEntry(void* context);
+    struct PendingNotification {
+        std::uint32_t generation = 0;
+        FirmwareOtaNotification notification{};
+    };
+
+    static void MaintenanceEntry(void* context);
     static esp_err_t HttpEventHandler(esp_http_client_event_t* event);
-    void TaskLoop();
+    void ProcessPending();
+    bool DeliverPendingNotification();
+    void RequestIfPending();
     void Reconcile(const Target& target);
     esp_err_t FetchManifest(const Target& target);
     esp_err_t Download(const Target& target, const VerifiedFirmwareManifest& manifest);
@@ -108,15 +116,20 @@ private:
         const esp_partition_t* update);
     esp_err_t RestoreRunningBootLocked();
     bool IsCurrent(std::uint32_t generation) const;
+    FirmwareOtaNotification MakeNotification(
+        FirmwareOtaEvent event, const Target& target,
+        const VerifiedFirmwareManifest* manifest, const char* error,
+        std::uint32_t downloaded_bytes) const;
     bool Emit(FirmwareOtaEvent event, const Target& target,
               const VerifiedFirmwareManifest* manifest, const char* error,
-              std::uint32_t downloaded_bytes = 0) const;
+              std::uint32_t downloaded_bytes = 0);
 
     settings::SettingsStore* settings_store_ = nullptr;
+    maintenance::MaintenanceExecutor* executor_ = nullptr;
     EventSink sink_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t queue_ = nullptr;
-    TaskHandle_t task_ = nullptr;
+    QueueHandle_t notification_queue_ = nullptr;
     mutable SemaphoreHandle_t state_mutex_ = nullptr;
     std::atomic<std::uint32_t> generation_{0};
     char hardware_id_[18] = {};

@@ -27,9 +27,16 @@
 - Test malformed frames, provider timeout and connection drop.
 - Before host Voice startup, sync env and verify `OPENBLAS_NUM_THREADS=1` exists in the
   live process; distinguish it from the ONNX TTS thread setting.
-- For long-speech acceptance, test 300--600 seconds of PCM plus at least three normal
-  follow-up turns; report interval CPU, RSS/thread plateau, gaps/errors and the separate
-  physical browser/ESP32 listening gap.
+- For long-speech acceptance, test at least 300 seconds of representative PCM plus at
+  least three normal follow-up turns; 300--600 seconds is a soak window, not a product
+  cap, so output over 600 seconds must not be truncated while progress continues. Also
+  run a synthetic progressive stream equivalent to over 10 minutes with bounded
+  queue/context, and report interval CPU, RSS/thread plateau, gaps/errors and the
+  separate physical browser/ESP32 listening gap.
+- Preserve the LLM terminal `finish_reason`: `length`/`max_tokens` is incomplete,
+  must be reported after partial TTS drains, and must not commit partial context/memory.
+  Use resumable segments for generated output beyond one provider request and stream
+  source text through the chunker/TTS for arbitrarily long files.
 
 ## Manager API
 

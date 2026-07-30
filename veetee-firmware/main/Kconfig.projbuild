@@ -104,6 +104,16 @@ menu "Veetee hardware bring-up"
             physical ERLE, false-wake and interrupt-latency measurements on
             the exact INMP441 + MAX98357A assembly.
 
+    config VEETEE_BENCHMARK_RUNTIME_STATS
+        bool "Enable benchmark-only per-task CPU runtime statistics"
+        default n
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        help
+            Samples per-task interval CPU, core affinity, stack high-water and
+            internal/PSRAM heap every five seconds using the ESP timer runtime
+            counter. This adds FreeRTOS trace/TCB overhead and must be disabled
+            for the final release memory gate.
+
     config VEETEE_DEFAULT_VOLUME_PERCENT
         int "Default software speaker volume (percent)"
         range 0 100

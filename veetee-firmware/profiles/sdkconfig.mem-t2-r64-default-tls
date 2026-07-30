@@ -1,0 +1,9 @@
+# REJECTED derivative of mem-t2-r64: reproduction only, never production/release.
+# Let mbedTLS use the default heap so large dynamic allocations can follow the
+# 2 KiB PSRAM threshold. External-only TLS remains excluded until
+# secure-boot/flash-encryption policy is finalized.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
+# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set

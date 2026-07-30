@@ -1,0 +1,8 @@
+# REJECTED on board 2026-07-30 after entering listening: reproduction only,
+# never production/release. Direct general allocations >=2 KiB to PSRAM while
+# retaining a larger internal pool for DMA, Wi-Fi, HTTP/TLS and realtime stacks.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y
+# CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC is not set
+# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set

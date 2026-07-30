@@ -336,22 +336,52 @@ console không có playback error. `401 /api/v1/auth/refresh` trước đăng nh
 `admission.final`, `llm.delta`, `tts.start`, `tts.first_audio`, `tts.stop`,
 `listen.start` và không có `turn.error`.
 
-### 3.1 Smoke hội thoại và soak kể chuyện 5--10 phút
+### 3.1 Smoke hội thoại và soak output dài representative
 
 Chỉ dùng Realtime Lab đã được Manager cấp one-use token hoặc ESP32 đã authenticated;
 không bypass auth và không publish/ghi đè agent version chỉ để chạy soak. Giữ active
 agent có CLIProxyAPI primary; nếu mục tiêu là nghiệm thu primary thì mọi fallback đều phải
 được báo, không được tính chung thành primary pass.
 
-Chạy hai bài riêng trên cùng process đã ready:
+Mặc định không giới hạn response, truyện hoặc nội dung đọc từ file ở 5 hay 10 phút:
+`max_session_seconds=0`, `total_turn_seconds=0`, `llm_total_seconds=0` và
+`tts_total_seconds=0`. First-token/first-audio deadline chỉ chặn startup treo;
+stream-idle deadline được refresh theo mỗi token/audio chunk. Speech queue và playback
+queue bounded áp backpressure để RAM không tăng theo độ dài output; queue 5 giây là
+buffer, không phải giới hạn thời lượng nói.
+
+`maxCompletionTokens` là giới hạn tài nguyên cho một request CLIProxyAPI, không phải
+giới hạn số phút. Nếu `conversation_llm_stream_complete` có
+`finish_reason=length|max_tokens`, cycle chưa hoàn tất dù phần TTS partial nghe được:
+runtime phải drain phần đó, báo `llm_output_truncated` và không ghi partial context/
+memory. Nội dung generated tùy ý dài cần segment/cursor resume explicit; đọc file dài
+phải stream source text theo offset qua sentence chunker -> TTS, không nhét cả file vào
+prompt/RAM hoặc tăng token ceiling vô hạn.
+
+Chạy ba bài riêng trên cùng process đã ready:
 
 1. **Hội thoại thường:** ít nhất ba turn ngắn liên tiếp. Mỗi turn phải có planner + prose,
    một lifecycle `tts.start` -> binary PCM -> `tts.stop`, rồi `listen.start` để nhận turn
    tiếp theo. Không chỉ kiểm tra WebSocket connect.
-2. **Kể chuyện dài:** yêu cầu một response bắt đầu kể ngay, dùng câu tự nhiên và hướng tới
-   5--10 phút. Gate theo **thời lượng PCM thật**, không theo số ký tự prompt/response hay
-   wall time. Với PCM mono signed 16-bit ở 24 kHz, thời lượng là
-   `binary_pcm_bytes / (24000 * 2)`; kết quả pass phải nằm trong 300--600 giây.
+2. **Kể chuyện dài representative:** yêu cầu một response bắt đầu kể ngay, dùng câu tự
+   nhiên và tạo ít nhất 5 phút audio; 5--10 phút chỉ là cửa sổ soak thuận tiện. Gate
+   theo **thời lượng PCM thật**, không theo số ký tự prompt/response hay wall time. Với
+   PCM mono signed 16-bit ở 24 kHz, thời lượng là
+   `binary_pcm_bytes / (24000 * 2)`. `>=300` giây là pass về độ dài; output trên 600
+   giây vẫn hợp lệ và phải tiếp tục nếu stream còn progress.
+3. **Synthetic dài hơn 10 phút:** dùng progressive fake LLM/TTS để test nhanh output
+   khoảng 4.200 từ với queue/context rất nhỏ và idle deadline ngắn. Bài này chứng minh
+   không có absolute cutoff và memory tail vẫn bounded; nó không thay thế nghe PCM/loa
+   thật.
+
+Chạy fixture synthetic mà không gọi provider hoặc lưu transcript/audio:
+
+```bash
+cd /home/vubq/Project/EmYeuKhoaHoc/veetee/veetee-server
+OPENBLAS_NUM_THREADS=1 uv run --project apps/voice-server \
+  pytest apps/voice-server/tests/test_conversation_engine.py -q \
+  -k 'long_but_active_stream_is_unbounded_and_retains_only_context_tail or truncated_llm_stream_is_reported_and_not_committed_as_memory or llm_idle_deadline_does_not_limit_long_tts_backpressure or tts_idle_deadline_refreshes_while_audio_keeps_progressing'
+```
 
 Trong khi chạy, lấy mẫu theo interval thay vì đọc một snapshot `%CPU`:
 
@@ -368,6 +398,8 @@ Ghi lại dữ liệu bounded, không lưu transcript/audio:
   là CLIProxyAPI owner và `20128` không có listener;
 - request -> first LLM delta, `tts.start`, first binary, last binary, `tts.stop`,
   `listen.start`, PCM frame/byte/audio-duration và wall/audio;
+- `conversation_llm_stream_complete.finish_reason`; `length|max_tokens` phải được ghi
+  là incomplete/`llm_output_truncated`, không được tính thành long-turn pass;
 - `schedule_gap_count`, tổng/max gap, low-water, turn error, deadline, stale/cancel marker;
 - Voice CPU interval avg/p95/peak, RSS đầu/peak/cuối/tail, thread count, host frequency,
   temperature/throttle guard và tải nền có thể làm nhiễu phép đo.
@@ -376,11 +408,13 @@ Acceptance cho server/Lab:
 
 - ba normal turns và long turn đều kết thúc bằng `tts.stop`; normal turn quay lại
   `listen.start`, không có stale output hoặc turn error;
-- long turn có 300--600 giây PCM, zero scheduler gap và không có provider deadline;
+- long turn có ít nhất 300 giây PCM, zero scheduler gap và không có provider deadline;
+  không fail/truncate chỉ vì vượt 600 giây;
 - khi đang nghiệm thu CLIProxyAPI primary, planner/prose đều đi local CLIProxyAPI HTTP
   200 và không fallback; 9Router vẫn dừng;
-- CPU tức thời của Voice trở về gần 0 trong khoảng một giây sau synthesis; RSS tail
-  30--60 giây phẳng hoặc plateau qua các turn tương đương; không có orphan/duplicate;
+- sau event `vieneu_tts_completed` cuối cùng của turn, CPU interval của Voice phải về
+  gần idle ở sample kế tiếp và muộn nhất trong cửa sổ 2 giây; RSS tail 30--60 giây
+  phẳng hoặc plateau qua các turn tương đương; không có orphan/duplicate;
 - retry, fallback hoặc deadline làm cycle ban đầu fail và phải được báo riêng. Chỉ chạy
   một controlled retry khi task cho phép, không cherry-pick hoặc giấu lần fail.
 
@@ -388,7 +422,16 @@ Binary cuối có thể tới trước `tts.stop` trong lúc browser/device drai
 buffer. Đây không phải inference còn chạy nếu `vieneu_tts_completed` đã có, interval CPU
 đã idle và queue đang giảm đúng thời lượng. Ngược lại, CPU còn cao mà không có progress
 event là lỗi cần điều tra. `lab_playback_schedule_summary` chỉ là scheduler evidence;
-nghe browser và loa ESP32 5--10 phút vẫn là acceptance vật lý riêng.
+nghe browser và loa ESP32 ít nhất 5 phút vẫn là acceptance vật lý riêng.
+
+Với Device WebSocket sink 60 ms và `VEETEE_TTS_PLAYBACK_QUEUE_SECONDS=5`, nếu queue đầy
+ở lúc inference cuối hoàn tất thì paced sender thường cần khoảng 5,1 giây để drain rồi
+mới phát JSON `tts.stop` ra wire (5 giây queue cộng frame/scheduling overhead nhỏ).
+Telemetry engine `tts.stop` được ghi khi yêu cầu stop đi vào sink, trước drain;
+`tts.paced_sender_summary`/`listen.start` mới đánh dấu sink đã drain. CPU phải idle
+trong drain này. Delay dài hơn đáng kể ở Device sink cần kiểm queue/progress;
+Realtime Lab có thể giữ toàn bộ browser playback timeline nên khoảng last-PCM tới
+`tts.stop` của Lab có thể dài hơn nhiều và không dùng gate 5,1 giây này.
 
 ### 3.2 Tailscale HTTPS trên host hiện tại
 
@@ -471,6 +514,8 @@ log hiện nằm dưới ignored `veetee-server/tmp/runtime/app-logs/`; không c
 - `conversation_tts_text_chunk_ready`
 - `conversation_tts_request`, `conversation_tts_first_audio`,
   `conversation_tts_batch_first_audio`
+- `conversation_llm_stream_complete` (`finish_reason`, `incomplete`) và
+  `conversation_llm_output_truncated`; không log prose payload
 - `vieneu_tts_completed` (`request_wall_rtf`, audio duration, normalized/internal starts,
   clipping; không có text/audio payload)
 - `lab_playback_schedule_summary` (browser timeline estimate)
@@ -562,7 +607,9 @@ model, dependency, agent config hoặc phần cứng đổi.
 Gate release cuối ngày 2026-07-29 đã chạy lại sau một full-stack restart với
 `OPENBLAS_NUM_THREADS=1`, `VEETEE_TTS_THREADS=2` và CLIProxyAPI
 `maxCompletionTokens=2048` (fixture kể chuyện dài này cần ít nhất `2048`; mức `1024`
-cắt câu trả lời quá sớm). Lượt dài sinh 8.407 ký tự, 428 PCM frame tương đương
+cắt câu trả lời quá sớm). Đây chỉ là per-request budget của fixture lịch sử, không phải
+duration cap; terminal `length|max_tokens` hiện phải bị ghi incomplete như mục 3.1.
+Lượt dài sinh 8.407 ký tự, 428 PCM frame tương đương
 481,44 giây audio, zero schedule gap/error, rồi ba lượt thường liên tiếp đều hoàn tất
 `tts.stop -> listen.start`. Trong lúc sinh audio, CPU Voice avg/p95/peak là
 154,80/167/174%; toàn cửa sổ soak là 78,12/166/174%. Sau synthesis, 300 mẫu idle dưới
@@ -589,6 +636,16 @@ CPU Voice ở riêng long-generation avg/p95/peak là 151,184/169/178%, còn to�
 0%; quãng 202,512 giây từ PCM cuối tới `tts.stop` chỉ avg 0,274%, p95 1%, nên đó là
 playback drain. RSS toàn sampler 834,29 MiB -> peak 1.044,54 MiB -> tail 1.020,93 MiB;
 61 mẫu cuối không đổi một KiB, và thread count giữ 27 từ đầu tới cuối.
+
+Device-session recheck ngày 2026-07-30 với cùng cap process ghi 30 mẫu 1 giây trong
+generation TTS active: CPU avg/p95/peak `119,633/157/165%`, 27 thread, RSS mẫu
+`1.133.320--1.157.964 KiB` và high-water `1.158.036 KiB`. Từ telemetry engine
+`tts.stop` tới `tts.paced_sender_summary`/`listen.start` là `5,115 s`, đúng với queue
+5 giây; starvation bằng 0, scheduler lateness 2 lần/tổng 44 ms/max 27 ms. Tail 20 giây
+sau drain có CPU trung bình `2,75%`. Sampler bị thiếu khoảng giữa synthesis và drain,
+nên lần đo này **không** chứng minh exact first post-inference sample hoặc gate <=2 giây;
+gate đó phải được lấy lại ở lần release kế tiếp. `5,115 s` là server paced-queue drain,
+không phải acknowledgement rằng loa ESP32 đã phát xong.
 
 ## 5. Dừng và khởi động lại sạch
 
@@ -660,6 +717,83 @@ boot log cùng state transition đã redact. Không chữa reboot loop bằng fu
 khi xác nhận record nào lỗi; host test migration chỉ chứng minh policy, không thay thế
 hai boot trên ESP32-S3 thật.
 
+### 5.2 Firmware RAM/CPU A/B và wake từ loa host
+
+Chạy host regression trước khi flash. Mỗi build A/B dùng directory/sdkconfig riêng;
+chi tiết profile và command đầy đủ nằm ở `veetee-firmware/profiles/README.md`:
+
+```bash
+cd /home/vubq/Project/EmYeuKhoaHoc/veetee/veetee-firmware
+cmake -S tests -B build/host-tests
+cmake --build build/host-tests -j2
+ctest --test-dir build/host-tests --output-on-failure
+
+source /home/vubq/.espressif/v6.0.2/esp-idf/export.sh
+idf.py -DIDF_TARGET=esp32s3 build
+```
+
+Thứ tự A/B bắt buộc:
+
+1. `mem-control` + 160 MHz, stats off.
+2. Chỉ khi cần điều tra một incident đã tái hiện, chạy `mem-t2-r64` + 160 MHz
+   stats off như reproduction; **không** coi đây là candidate release. Board A/B
+   ngày 2026-07-30 đã loại profile này sau WebSocket hello/`listening` rồi
+   `LoadProhibited` trong `esp_transport_read`/`ws_read_header`.
+3. Chỉ khi cần bằng chứng CPU, thêm `benchmark-runtime-stats` cho control;
+   sampler log mỗi 5 giây theo state với CPU per-core/per-task, core id, stack
+   watermark, internal heap/largest block và PSRAM.
+4. Chỉ khi allocator gate 160 MHz pass và DSP/AEC có workload cụ thể, so lại
+   `mem-control` ở 240 MHz. Không tăng clock để che fragmentation/drop.
+5. Rebuild `mem-control` với stats off; chỉ build này được dùng cho final heap gate.
+
+Runtime-stats bật FreeRTOS trace/TCB overhead và làm thay đổi heap, vì vậy không lấy
+largest/minimum heap của build này làm quyết định release. Nó chỉ trả lời task/core nào
+đang dùng CPU và còn bao nhiêu stack.
+
+Flash application partition, tuyệt đối không erase NVS/resource/UI:
+
+```bash
+idf.py -B build/ab-<variant> -p /dev/ttyACM0 app-flash
+idf.py -B build/ab-<variant> -p /dev/ttyACM0 monitor
+```
+
+Không dùng `erase-flash`, `flash` toàn partition table hoặc ghi `resource_0/1` giữa hai
+candidate; nếu làm vậy A/B không còn cùng Wi-Fi, identity và wake model. Sau mỗi
+`app-flash`, chờ state `idle` và xác nhận không panic/watchdog/reset loop.
+
+Khi board dùng ESP-SR bring-up `Hi ESP`, loa host có thể đánh thức nó dù không có người
+ở cạnh. Đây là automation kỹ thuật, không phải acceptance cho custom `Hey VeeTee` hay
+chất lượng mic/loa:
+
+```bash
+command -v spd-say
+spd-say -w -l en -t female1 -r -15 -i 75 "Hi E S P"
+```
+
+Chờ serial chuyển sang `listening`, sau đó có thể phát một câu tiếng Việt ngắn từ cùng
+loa để chạy full ASR -> LLM -> TTS. Không phát query trước `listening`; capture chỉ mở ở
+state đó. Mỗi candidate chạy nhiều lần open/close độc lập và ít nhất một full turn;
+kiểm log `WebSocket I/O preflight passed`, hello ready,
+`listening -> evaluating -> thinking -> speaking -> listening`, rồi đóng session và
+kiểm `WebSocket I/O stack minimum free`.
+
+Gate stats-off sau warm-up:
+
+- largest internal block luôn ít nhất 16 KiB, mục tiêu 20 KiB; WebSocket floor 10 KiB
+  chỉ là recovery/admission;
+- capture, playback, wake, WebSocket control và WebSocket I/O còn ít nhất 2 KiB stack;
+- current/minimum heap đạt plateau, không giảm thêm sau mỗi turn tương đương;
+- delta mic/detector/uplink/playback drop, Opus decode và speaker-write failure bằng 0;
+- không watchdog, panic, unexpected reset; button/wake không bị mất;
+- maintenance HTTP đang chạy phải quiesce trong 150 ms trước voice TLS; nếu quá budget,
+  lần mở đó fail bounded qua `transport_lost`, không overlap TLS, và desired/report vẫn
+  resume ở idle. Đọc log elapsed đo từ trước socket close qua handler cleanup; board soak
+  phải xác nhận application/button path không bị giữ quá budget bởi close handshake.
+
+Ghi host/build/serial evidence riêng với nghiệm thu vật lý. Host speaker có thể chứng
+minh wake event và full wire flow; nó không chứng minh âm thanh loa nghe hay, LCD đúng,
+AEC, FAR/FRR tiếng Việt hoặc soak nghe liên tục.
+
 ## 6. Hướng dẫn ngắn cho AI
 
 Khi giao task chạy/điều tra cho AI, dùng prompt này:
@@ -671,8 +805,11 @@ Khi giao task chạy/điều tra cho AI, dùng prompt này:
 > Manager API và Voice Server đều healthy/`ready=200`. Khi voice bị ngắt, ghi
 > live `OPENBLAS_NUM_THREADS=1`, interval CPU/RSS/thread/PID/port và event names/timings
 > đã redact; không dùng lifetime `ps %CPU` hoặc thay đổi backend/thread/speed nếu chưa có
-> A/B evidence. Với soak dài, đo 300--600 giây PCM rồi ba follow-up turn, báo mọi
-> retry/fallback/deadline. Không flash/monitor
+> A/B evidence. Với soak dài, đo ít nhất 300 giây PCM representative rồi ba follow-up
+> turn; không truncate/fail chỉ vì vượt 600 giây, và chạy synthetic progressive stream
+> tương đương hơn 10 phút để kiểm total caps off + bounded queue/context. Báo mọi
+> retry/fallback/deadline/`finish_reason=length|max_tokens`; không coi partial output là
+> complete. Không flash/monitor
 > firmware, không push/deploy/commit nếu chưa được yêu cầu rõ.
 
 AI chỉ được báo “chạy được” khi ghi rõ: commit đã chạy, process/port, các health check,

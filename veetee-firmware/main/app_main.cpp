@@ -13,6 +13,7 @@
 #include "config/device_config_health_policy.h"
 #include "config/device_config_reconciler.h"
 #include "config/device_config_resource_policy.h"
+#include "diagnostics/runtime_stats_sampler.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -23,6 +24,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "input/button.h"
+#include "maintenance/maintenance_executor.h"
 #include "mcp/device_mcp.h"
 #include "network/wifi_manager.h"
 #include "ota/bootstrap_client.h"
@@ -33,6 +35,7 @@
 #include "settings/device_config_store.h"
 #include "telemetry/reported_state_reporter.h"
 #include "transport/websocket_transport.h"
+#include "sdkconfig.h"
 
 namespace {
 
@@ -58,6 +61,7 @@ enum class AppMessageKind : std::uint8_t {
     kFirmwareReconcile,
     kFirmwareHealthCheck,
     kProvisioningCleanup,
+    kRuntimeStats,
 };
 
 struct AppMessage {
@@ -98,6 +102,8 @@ veetee::board::VeeteeBoard g_board;
 veetee::settings::SettingsStore g_settings_store;
 veetee::settings::DeviceSettings g_settings;
 veetee::settings::DeviceConfigStore g_device_config_store;
+veetee::maintenance::MaintenanceExecutor g_maintenance;
+veetee::diagnostics::RuntimeStatsSampler g_runtime_stats;
 veetee::config::DeviceConfigReconciler g_device_config_reconciler;
 veetee::config::DeviceConfig g_applied_device_config;
 bool g_wake_audio_privacy_revoked = true;
@@ -123,6 +129,9 @@ esp_timer_handle_t g_ui_health_timer = nullptr;
 esp_timer_handle_t g_firmware_health_timer = nullptr;
 esp_timer_handle_t g_device_config_poll_timer = nullptr;
 esp_timer_handle_t g_device_config_health_timer = nullptr;
+#if CONFIG_VEETEE_BENCHMARK_RUNTIME_STATS
+esp_timer_handle_t g_runtime_stats_timer = nullptr;
+#endif
 std::atomic<bool> g_firmware_health_check_due{false};
 std::atomic<bool> g_resource_health_check_due{false};
 std::atomic<bool> g_ui_health_check_due{false};
@@ -147,6 +156,22 @@ bool g_device_config_invalidation_pending = false;
 std::uint32_t g_invalidated_device_config_version = 0;
 
 void ScheduleResourceApply();
+
+bool IsRealtimeConversationState(veetee::app::State state) {
+    using State = veetee::app::State;
+    switch (state) {
+        case State::kConnecting:
+        case State::kListening:
+        case State::kEvaluating:
+        case State::kThinking:
+        case State::kSpeaking:
+        case State::kAborting:
+        case State::kClosing:
+            return true;
+        default:
+            return false;
+    }
+}
 
 bool PostMessage(const AppMessage& message) {
     const veetee::app::ApplicationQueueLane lane =
@@ -272,6 +297,12 @@ void OnDeviceConfigHealthTimer(void*) {
         }
     }
 }
+
+#if CONFIG_VEETEE_BENCHMARK_RUNTIME_STATS
+void OnRuntimeStatsTimer(void*) {
+    PostMessage(AppMessage{.kind = AppMessageKind::kRuntimeStats});
+}
+#endif
 
 bool SamePartition(const char* left, const char* right) {
     return left != nullptr && right != nullptr && std::strcmp(left, right) == 0;
@@ -2157,6 +2188,11 @@ void RunApplication(void*) {
                    pdTRUE) {
             continue;
         }
+        if (message.kind == AppMessageKind::kRuntimeStats) {
+            g_runtime_stats.Sample(
+                veetee::app::ToString(g_state_machine.state()));
+            continue;
+        }
         if (message.kind == AppMessageKind::kMcpEnvelope) {
             if (!veetee::app::ShouldHandleMcpEnvelope(
                     message.conversation_generation,
@@ -2693,6 +2729,48 @@ void RunApplication(void*) {
             continue;
         }
 
+        const bool realtime_was_active =
+            IsRealtimeConversationState(result.from);
+        const bool realtime_is_active =
+            IsRealtimeConversationState(result.to);
+        bool maintenance_quiesced = true;
+        if (realtime_is_active && !realtime_was_active) {
+            // Close any active deferrable HTTP socket, then wait only for the
+            // bounded handler cleanup. Desired targets and durable reports stay
+            // queued and resume at the next idle/session boundary.
+            const std::int64_t barrier_started_us = esp_timer_get_time();
+            g_maintenance.SetRealtimeActive(true);
+            const std::int64_t elapsed_us =
+                std::max<std::int64_t>(
+                    0, esp_timer_get_time() - barrier_started_us);
+            const std::uint32_t elapsed_ms = static_cast<std::uint32_t>(
+                (elapsed_us + 999) / 1000);
+            const std::uint32_t remaining_ms =
+                veetee::maintenance::RemainingRealtimeMaintenanceBarrierMs(
+                    elapsed_ms);
+            maintenance_quiesced =
+                veetee::maintenance::IsRealtimeMaintenanceBarrierWithinBudget(
+                    elapsed_ms) &&
+                g_maintenance.WaitForQuiescence(remaining_ms);
+            if (!maintenance_quiesced) {
+                ESP_LOGE(kTag,
+                         "Maintenance preemption exceeded %" PRIu32
+                         " ms (elapsed=%" PRIu32
+                         "); refusing overlapping voice TLS",
+                         veetee::maintenance::kRealtimeMaintenanceBarrierMs,
+                         elapsed_ms);
+            } else {
+                ESP_LOGI(kTag,
+                         "Maintenance quiesced before voice TLS elapsed=%" PRIu32
+                         " ms",
+                         elapsed_ms);
+            }
+        } else if (!realtime_is_active && realtime_was_active) {
+            g_maintenance.SetRealtimeActive(false);
+        }
+        g_maintenance.SetFirmwareExclusive(
+            result.to == veetee::app::State::kUpgrading);
+
         ESP_LOGI(kTag, "State %s -> %s event=%s gate=%s generation=%" PRIu32,
                  veetee::app::ToString(result.from), veetee::app::ToString(result.to),
                  veetee::app::ToString(event),
@@ -2875,6 +2953,10 @@ void RunApplication(void*) {
         } else if (result.to == veetee::app::State::kConnecting &&
                    event !=
                        veetee::app::Event::kTransportReconnectScheduled) {
+            if (!maintenance_quiesced) {
+                PostEvent(veetee::app::Event::kTransportLost);
+                continue;
+            }
             const veetee::transport::WakeSource source =
                 event == veetee::app::Event::kActivationWakeDetected
                     ? veetee::transport::WakeSource::kWakeWord
@@ -3038,6 +3120,15 @@ extern "C" void app_main() {
         .name = "config_health",
         .skip_unhandled_events = false,
     };
+#if CONFIG_VEETEE_BENCHMARK_RUNTIME_STATS
+    const esp_timer_create_args_t runtime_stats_timer_args = {
+        .callback = &OnRuntimeStatsTimer,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "runtime_stats",
+        .skip_unhandled_events = true,
+    };
+#endif
     ESP_ERROR_CHECK(
         esp_timer_create(&apply_timer_args, &g_resource_apply_timer));
     ESP_ERROR_CHECK(
@@ -3050,6 +3141,10 @@ extern "C" void app_main() {
                                      &g_device_config_poll_timer));
     ESP_ERROR_CHECK(esp_timer_create(&device_config_health_timer_args,
                                      &g_device_config_health_timer));
+#if CONFIG_VEETEE_BENCHMARK_RUNTIME_STATS
+    ESP_ERROR_CHECK(esp_timer_create(&runtime_stats_timer_args,
+                                     &g_runtime_stats_timer));
+#endif
 
     ESP_ERROR_CHECK(g_settings_store.Initialize(&g_settings));
     ESP_ERROR_CHECK(g_device_config_store.Initialize(
@@ -3059,25 +3154,30 @@ extern "C" void app_main() {
         abort();
     }
     ConfirmAppliedWakeAudioConfig(g_applied_device_config);
+    // Reserve the contiguous internal block before any maintenance/application
+    // task stacks are created. WebSocket control queues/task remain in PSRAM.
+    ESP_ERROR_CHECK(g_transport.Initialize(&g_settings_store, &OnTransportEvent,
+                                           &OnDownlinkAudio, &OnMcpEnvelope,
+                                           &g_board, nullptr));
+    ESP_ERROR_CHECK(g_maintenance.Initialize());
+    ESP_ERROR_CHECK(g_runtime_stats.Initialize());
     ESP_ERROR_CHECK(g_wifi.Initialize(&g_settings_store, &g_settings, &OnWifiEvent, nullptr));
-    ESP_ERROR_CHECK(g_resources.Initialize(&g_settings_store,
+    ESP_ERROR_CHECK(g_resources.Initialize(&g_settings_store, &g_maintenance,
                                            &OnResourceReconcileEvent, nullptr));
     ESP_ERROR_CHECK(g_ui_resources.Initialize(
-        &g_settings_store, &OnResourceReconcileEvent, nullptr,
+        &g_settings_store, &g_maintenance, &OnResourceReconcileEvent, nullptr,
         veetee::ota::ResourceClass::kUiPack));
-    ESP_ERROR_CHECK(g_reporter.Initialize(&g_settings_store));
+    ESP_ERROR_CHECK(g_reporter.Initialize(&g_settings_store, &g_maintenance));
     ESP_ERROR_CHECK(g_device_config_reconciler.Initialize(
         &g_settings_store, &g_device_config_store,
-        &OnDeviceConfigReconcileEvent, nullptr));
-    ESP_ERROR_CHECK(g_firmware.Initialize(&g_settings_store,
+        &g_maintenance, &OnDeviceConfigReconcileEvent, nullptr));
+    ESP_ERROR_CHECK(g_firmware.Initialize(&g_settings_store, &g_maintenance,
                                           &OnFirmwareOtaEvent, nullptr));
     g_bootstrap.SetFirmwareUpdatesDeferred(
         g_firmware.PendingBootVerification() || g_firmware.HasAttempt());
     ESP_ERROR_CHECK(g_bootstrap.Initialize(&g_settings_store, &g_settings,
+                                           &g_maintenance,
                                            &OnBootstrapEvent, nullptr));
-    ESP_ERROR_CHECK(g_transport.Initialize(&g_settings_store, &OnTransportEvent,
-                                           &OnDownlinkAudio, &OnMcpEnvelope,
-                                           &g_board, nullptr));
     const BootWakeRuntimePlan boot_wake = PrepareBootWakeRuntime();
     ESP_ERROR_CHECK(g_board.Initialize(
         &OnButtonEvent, &OnDetectorEvent, &OnEncodedAudio,
@@ -3215,6 +3315,10 @@ extern "C" void app_main() {
     }
     ESP_ERROR_CHECK(esp_timer_start_once(g_device_config_poll_timer,
                                          kDeviceConfigPollIntervalUs));
+#if CONFIG_VEETEE_BENCHMARK_RUNTIME_STATS
+    ESP_ERROR_CHECK(
+        esp_timer_start_periodic(g_runtime_stats_timer, 5'000'000));
+#endif
     PostEvent(g_settings_store.Snapshot().HasProvisioning()
                   ? veetee::app::Event::kBootWithCredentials
                   : veetee::app::Event::kBootNeedsProvisioning);

@@ -87,11 +87,14 @@ std::uint32_t PartitionBytes(const char* first_label, const char* second_label) 
 }  // namespace
 
 esp_err_t ReportedStateReporter::Initialize(
-    settings::SettingsStore* settings_store) {
-    if (settings_store == nullptr || settings_store_ != nullptr) {
+    settings::SettingsStore* settings_store,
+    maintenance::MaintenanceExecutor* executor) {
+    if (settings_store == nullptr || executor == nullptr ||
+        settings_store_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     settings_store_ = settings_store;
+    executor_ = executor;
     GenerateBootId(&boot_id_);
 
     std::uint8_t mac[6] = {};
@@ -112,13 +115,17 @@ esp_err_t ReportedStateReporter::Initialize(
         state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&ReportedStateReporter::TaskEntry, "veetee_report", 7168,
-                    this, 3, &task_) != pdPASS) {
+    if (!executor_->Register(maintenance::MaintenanceJobKind::kReporter,
+                             &ReportedStateReporter::MaintenanceEntry, this)) {
         vSemaphoreDelete(outbox_mutex_);
         vSemaphoreDelete(state_mutex_);
         outbox_mutex_ = nullptr;
         state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
+    }
+    if (state_store_.record().has_pending != 0 &&
+        !executor_->Request(maintenance::MaintenanceJobKind::kReporter)) {
+        return ESP_FAIL;
     }
     ESP_LOGI(kTag, "Reporter ready boot_id=%s", boot_id_.data());
     return ESP_OK;
@@ -126,7 +133,8 @@ esp_err_t ReportedStateReporter::Initialize(
 
 bool ReportedStateReporter::Schedule(
     const settings::ReportedResourceState& state) {
-    if (task_ == nullptr || !settings::IsValidReportedResourceState(state)) {
+    if (executor_ == nullptr ||
+        !settings::IsValidReportedResourceState(state)) {
         return false;
     }
     xSemaphoreTake(outbox_mutex_, portMAX_DELAY);
@@ -137,13 +145,12 @@ bool ReportedStateReporter::Schedule(
                  settings::ReportedResourcePhaseName(state.phase));
         return false;
     }
-    xTaskNotifyGive(task_);
-    return true;
+    return executor_->Request(maintenance::MaintenanceJobKind::kReporter);
 }
 
 bool ReportedStateReporter::PersistForReplay(
     const settings::ReportedResourceState& state, bool supersede_pending) {
-    if (task_ == nullptr || state_mutex_ == nullptr ||
+    if (executor_ == nullptr || state_mutex_ == nullptr ||
         !settings::IsTerminalReportedResourcePhase(state.phase) ||
         !settings::IsValidReportedResourceState(state)) {
         return false;
@@ -161,28 +168,20 @@ bool ReportedStateReporter::PersistForReplay(
                                    : ESP_ERR_INVALID_STATE;
     xSemaphoreGive(state_mutex_);
     if (error != ESP_OK) return false;
-    xTaskNotifyGive(task_);
-    return true;
+    return executor_->Request(maintenance::MaintenanceJobKind::kReporter);
 }
 
-void ReportedStateReporter::TaskEntry(void* context) {
-    static_cast<ReportedStateReporter*>(context)->TaskLoop();
+void ReportedStateReporter::MaintenanceEntry(void* context) {
+    static_cast<ReportedStateReporter*>(context)->ProcessPending();
 }
 
-void ReportedStateReporter::TaskLoop() {
-    settings::ReportedResourceState current{};
-    settings::ReportedResourceState deferred_terminal{};
-    std::uint32_t current_version = 0;
-    bool have_current = false;
-    bool have_deferred_terminal = false;
-    bool terminal = false;
-    std::uint32_t retry_ms = kInitialRetryMs;
-
-    while (true) {
+void ReportedStateReporter::ProcessPending() {
+    while (executor_ != nullptr) {
         xSemaphoreTake(state_mutex_, portMAX_DELAY);
         const settings::ReportedStateRecord persisted = state_store_.record();
         xSemaphoreGive(state_mutex_);
-        if (have_current && !terminal && persisted.has_pending != 0) {
+        if (have_current_ && !current_terminal_ &&
+            persisted.has_pending != 0) {
             // A durable boot/terminal boundary always wins over coalescable
             // progress.  The intermediate may already own a lower unused
             // sequence; dropping it is safe, while sending or assigning it
@@ -190,106 +189,110 @@ void ReportedStateReporter::TaskLoop() {
             ESP_LOGI(kTag,
                      "Dropping intermediate phase=%s version=%" PRIu32
                      " for pending terminal version=%" PRIu32,
-                     settings::ReportedResourcePhaseName(current.phase),
-                     current_version, persisted.pending_version);
-            have_current = false;
-            current_version = 0;
-            retry_ms = kInitialRetryMs;
+                     settings::ReportedResourcePhaseName(current_.phase),
+                     current_version_, persisted.pending_version);
+            have_current_ = false;
+            current_version_ = 0;
+            retry_ms_ = kInitialRetryMs;
             continue;
         }
-        if (!have_current && persisted.has_pending != 0) {
-            current = persisted.pending;
-            current_version = persisted.pending_version;
-            have_current = true;
-            terminal = true;
+        if (!have_current_ && persisted.has_pending != 0) {
+            current_ = persisted.pending;
+            current_version_ = persisted.pending_version;
+            have_current_ = true;
+            current_terminal_ = true;
         }
-        if (!have_current && have_deferred_terminal) {
-            current = deferred_terminal;
-            current_version = 0;
-            have_current = true;
-            have_deferred_terminal = false;
-            terminal = true;
+        if (!have_current_ && have_deferred_terminal_) {
+            current_ = deferred_terminal_;
+            current_version_ = 0;
+            have_current_ = true;
+            have_deferred_terminal_ = false;
+            current_terminal_ = true;
         }
-        if (!have_current) {
+        if (!have_current_) {
             xSemaphoreTake(outbox_mutex_, portMAX_DELAY);
-            have_current = outbox_.Pop(&current, &terminal);
+            have_current_ = outbox_.Pop(&current_, &current_terminal_);
             xSemaphoreGive(outbox_mutex_);
-            if (have_current) current_version = 0;
+            if (have_current_) current_version_ = 0;
         }
-        if (!have_current) {
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            continue;
-        }
+        if (!have_current_) return;
 
         esp_err_t error = ESP_OK;
-        if (current_version == 0) {
-            error = PersistVersion(current, terminal, &current_version);
+        if (current_version_ == 0) {
+            error = PersistVersion(current_, current_terminal_,
+                                   &current_version_);
         }
-        if (error == ESP_OK) error = Send(current, current_version);
-        if (error == ESP_OK && terminal) {
-            error = ClearDeliveredTerminal(current_version);
+        if (error == ESP_OK) error = Send(current_, current_version_);
+        if (error == ESP_OK && current_terminal_) {
+            error = ClearDeliveredTerminal(current_version_);
         }
-        if (error == ESP_ERR_INVALID_STATE && terminal) {
+        if (error == ESP_ERR_INVALID_STATE && current_terminal_) {
             xSemaphoreTake(state_mutex_, portMAX_DELAY);
             const settings::ReportedStateRecord latest = state_store_.record();
             xSemaphoreGive(state_mutex_);
-            if (current_version == 0 && latest.has_pending != 0) {
+            if (current_version_ == 0 && latest.has_pending != 0) {
                 // PersistForReplay won the race after this FIFO terminal was
                 // popped.  Keep FIFO ownership in RAM, replay the durable
                 // boundary first, then assign this terminal a later version.
-                deferred_terminal = current;
-                have_deferred_terminal = true;
-                have_current = false;
-                retry_ms = kInitialRetryMs;
+                deferred_terminal_ = current_;
+                have_deferred_terminal_ = true;
+                have_current_ = false;
+                retry_ms_ = kInitialRetryMs;
                 continue;
             }
             const bool superseded =
                 latest.has_pending == 0 ||
-                latest.pending_version != current_version;
+                latest.pending_version != current_version_;
             if (superseded) {
-                have_current = false;
-                current_version = 0;
-                retry_ms = kInitialRetryMs;
+                have_current_ = false;
+                current_version_ = 0;
+                retry_ms_ = kInitialRetryMs;
                 continue;
             }
         }
-        if (error == ESP_ERR_INVALID_STATE && !terminal) {
+        if (error == ESP_ERR_INVALID_STATE && !current_terminal_) {
             xSemaphoreTake(state_mutex_, portMAX_DELAY);
             const bool pending_terminal =
                 state_store_.record().has_pending != 0;
             xSemaphoreGive(state_mutex_);
             if (pending_terminal) {
-                have_current = false;
-                current_version = 0;
-                retry_ms = kInitialRetryMs;
+                have_current_ = false;
+                current_version_ = 0;
+                retry_ms_ = kInitialRetryMs;
                 continue;
             }
         }
         if (error == ESP_OK) {
             ESP_LOGI(kTag, "Reported resource phase=%s version=%" PRIu32,
-                     settings::ReportedResourcePhaseName(current.phase),
-                     current_version);
-            have_current = false;
-            current_version = 0;
-            retry_ms = kInitialRetryMs;
-            continue;
+                     settings::ReportedResourcePhaseName(current_.phase),
+                     current_version_);
+            have_current_ = false;
+            current_version_ = 0;
+            retry_ms_ = kInitialRetryMs;
+            executor_->Request(maintenance::MaintenanceJobKind::kReporter);
+            return;
         }
 
         ESP_LOGW(kTag,
                  "Reported-state delivery failed phase=%s version=%" PRIu32
                  " error=%s retry_ms=%" PRIu32,
-                 settings::ReportedResourcePhaseName(current.phase),
-                 current_version, esp_err_to_name(error), retry_ms);
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(retry_ms));
-        retry_ms = std::min(kMaximumRetryMs, retry_ms * 2U);
+                 settings::ReportedResourcePhaseName(current_.phase),
+                 current_version_, esp_err_to_name(error), retry_ms_);
+        const std::uint32_t delay_ms = retry_ms_;
+        retry_ms_ = std::min(kMaximumRetryMs, retry_ms_ * 2U);
         xSemaphoreTake(outbox_mutex_, portMAX_DELAY);
         const bool has_replacement = outbox_.HasTerminal() || outbox_.HasLatest();
         xSemaphoreGive(outbox_mutex_);
-        if (!terminal && has_replacement) {
-            have_current = false;
-            current_version = 0;
-            retry_ms = kInitialRetryMs;
+        if (!current_terminal_ && has_replacement) {
+            have_current_ = false;
+            current_version_ = 0;
+            retry_ms_ = kInitialRetryMs;
+            executor_->Request(maintenance::MaintenanceJobKind::kReporter);
+        } else {
+            executor_->Request(maintenance::MaintenanceJobKind::kReporter,
+                               delay_ms);
         }
+        return;
     }
 }
 
@@ -385,7 +388,16 @@ esp_err_t ReportedStateReporter::Send(
         error = esp_http_client_set_post_field(client, body.data(),
                                                std::strlen(body.data()));
     }
+    const bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(maintenance::MaintenanceJobKind::kReporter,
+                                   client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) error = esp_http_client_perform(client);
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kReporter, client);
+    }
     const int status =
         error == ESP_OK ? esp_http_client_get_status_code(client) : 0;
     esp_http_client_cleanup(client);

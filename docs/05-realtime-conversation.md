@@ -136,6 +136,30 @@ hay điều kiện tự đóng phiên. Provider deadline của LLM/TTS vẫn đ�
 `max_utterance_duration`, `max_session_duration` và `total_turn_deadline` mặc định
 đều tắt.
 
+Không có product cap 5 hay 10 phút cho truyện, response hoặc nội dung đọc từ file.
+Mặc định runtime dùng `max_session_seconds=0`, `total_turn_seconds=0`,
+`llm_total_seconds=0` và `tts_total_seconds=0`; LLM/TTS không có total-duration
+deadline ngầm. First-token/first-audio và stream-idle deadline chỉ bắt provider bị
+treo và được refresh khi token/audio chunk tiếp tục tới. Speech queue và playback
+queue vẫn bounded, nên producer chịu backpressure thay vì giữ toàn bộ response trong
+RAM. Soak 300--600 giây chỉ là cửa sổ representative thuận tiện cho release; output
+trên 600 giây vẫn hợp lệ và không được truncate chỉ vì vượt bài test đó.
+
+`maxCompletionTokens`/`max_tokens` là resource bound của **một request LLM**, không phải
+duration cap của sản phẩm. Adapter phải bảo toàn terminal `finish_reason`. Nếu prose
+stream kết thúc bằng `length` hoặc `max_tokens`, engine drain phần TTS đã phát, emit lỗi
+bounded `llm_output_truncated` và không commit cặp user/assistant partial vào context hay
+cross-session memory; tuyệt đối không báo response đã hoàn tất im lặng.
+
+Workflow sinh nội dung dài hơn giới hạn một request phải chia thành segment có
+continuation/cursor bền vững, generation/cancel chung và điều kiện hoàn tất explicit;
+mỗi segment vẫn có token bound riêng. Workflow đọc file/source text không dùng LLM để
+tạo lại toàn bộ nội dung: nó stream source theo chunk bounded vào sentence chunker ->
+TTS, giữ offset/checkpoint để resume. Hai workflow này là contract bắt buộc cho output
+tùy ý dài; prose turn một request hiện bị coi incomplete khi terminal reason là
+`length|max_tokens`; các terminal reason/EOF khác tiếp tục theo conformance contract
+của adapter, không được tự suy ra từ độ dài audio.
+
 ### Realtime engine (P1)
 
 ```text
@@ -431,8 +455,10 @@ chạy inactivity timer:
 | `planner_deadline` | 15 s ceiling | structured plan/intent; mục tiêu LAN <6 s |
 | `llm_first_token_deadline` (`llmFirstTokenSeconds`) | 5 s | fallback nếu model không bắt đầu stream |
 | `llm_stream_idle_deadline` (`llmSeconds`) | 20 s safety default | làm mới theo mỗi event, không giới hạn tổng câu trả lời |
+| `llm_total_deadline` (`llm_total_seconds`) | `0` | disabled; chỉ bật như parent ceiling explicit |
 | `tts_first_audio_deadline` (`ttsFirstAudioSeconds`) | 5 s | fallback nếu provider chưa sinh audio đầu tiên |
 | `tts_stream_idle_deadline` (`ttsSeconds`) | 10 s safety default | làm mới theo mỗi audio chunk sau khi worker đã được cấp |
+| `tts_total_deadline` (`tts_total_seconds`) | `0` | disabled; playback/backpressure không tiêu thụ total cap ngầm |
 | `mcp_deadline` | 10 s mặc định | override theo tool trong safe range |
 | `total_turn_deadline` | `0` | disabled parent ceiling; provider deadlines bên dưới vẫn độc lập |
 
@@ -610,9 +636,14 @@ nằm tại `veetee-server/packages/contracts/fixtures/lab/`.
 17. Hai phiên dùng chung VieNeu không xen kẽ sentence chunk; chờ TTS worker lâu hơn
     `ttsSeconds` không làm hỏng turn, còn worker đã nhận lượt nhưng ngừng phát audio
     quá `ttsSeconds` phải hủy và dọn playback.
-18. Một response kể chuyện tạo 300--600 giây PCM vẫn giữ một lifecycle
+18. Một response kể chuyện representative tạo ít nhất 300 giây PCM (300--600 giây là
+    cửa sổ soak chuẩn, không phải giới hạn sản phẩm) vẫn giữ một lifecycle
     `tts.start` -> binary audio -> `tts.stop`, không provider deadline, schedule gap,
     stale output hoặc absolute-turn cutoff; playback drain không tiêu thụ LLM/TTS idle
     deadline khi stream vẫn có progress.
 19. Sau long response, ít nhất ba turn hội thoại thường vẫn hoàn tất và mỗi turn quay
     lại `listen.start`; Lab/browser evidence phải tách khỏi nghe Opus/I2S/loa ESP32 thật.
+20. Synthetic progressive stream tương đương hơn 10 phút nói phải hoàn tất nhanh trong
+    test với speech queue nhỏ, context/memory tail bounded và idle deadline rất ngắn
+    nhưng luôn có progress; test này chứng minh không có total cap mà không phải tạo/lưu
+    audio hoặc transcript thật.

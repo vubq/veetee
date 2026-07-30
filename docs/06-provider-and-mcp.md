@@ -167,6 +167,12 @@ Conversation timeout và provider deadline là config độc lập. Registry kha
 tối đa cho admission, ASR, planner, TTS và MCP. `llmSeconds` riêng của prose stream là
 idle deadline cho first token/khoảng cách giữa hai event và được làm mới khi stream có
 tiến triển; nó không phải giới hạn tổng độ dài hoặc thời lượng câu trả lời.
+`maxCompletionTokens`/`max_tokens` vẫn là bound bắt buộc cho từng provider request,
+không phải duration cap. Adapter phải giữ `finish_reason`; `length|max_tokens` là
+incomplete, phần TTS đã phát được drain rồi runtime báo `llm_output_truncated` và không
+commit partial context/memory. Generated output vượt một request dùng resumable
+segment/cursor; file/source text dài stream bounded qua sentence chunker -> TTS với
+offset checkpoint, không tăng token ceiling hoặc load toàn bộ source vào RAM.
 `ttsFirstAudioSeconds` chỉ áp trước PCM đầu tiên của toàn speech turn;
 `ttsSeconds`/`ttsStreamIdleSeconds` là synthesis idle deadline giữa các audio chunk
 và cho first audio của những batch sau. Thời gian chờ hàng đợi và tổng thời lượng câu

@@ -35,6 +35,58 @@ void CopyBounded(char* destination, std::size_t capacity, const char* source) {
 
 }  // namespace
 
+bool WebSocketTransport::AcquireIoTaskReserve() {
+    if (io_task_reserve_ != nullptr) return true;
+
+    constexpr std::uint32_t kInternalCaps =
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    std::size_t largest = heap_caps_get_largest_free_block(kInternalCaps);
+    std::size_t reserve_bytes =
+        WebSocketIoReserveBytesForLargestBlock(largest);
+    if (reserve_bytes == 0) {
+        ESP_LOGW(
+            kTag,
+            "Unable to reserve WebSocket I/O stack block internal_free=%u largest=%u minimum=%u",
+            static_cast<unsigned>(heap_caps_get_free_size(kInternalCaps)),
+            static_cast<unsigned>(largest),
+            static_cast<unsigned>(kWebSocketIoReserveMinimumBytes));
+        return false;
+    }
+
+    void* reserve = heap_caps_malloc(reserve_bytes, kInternalCaps);
+    if (reserve == nullptr &&
+        reserve_bytes > kWebSocketIoReserveMinimumBytes) {
+        largest = heap_caps_get_largest_free_block(kInternalCaps);
+        if (CanAllocateWebSocketIoTask(largest)) {
+            reserve_bytes = kWebSocketIoReserveMinimumBytes;
+            reserve = heap_caps_malloc(reserve_bytes, kInternalCaps);
+        }
+    }
+    if (reserve == nullptr) {
+        ESP_LOGW(
+            kTag,
+            "WebSocket I/O stack reserve allocation failed internal_free=%u largest=%u requested=%u",
+            static_cast<unsigned>(heap_caps_get_free_size(kInternalCaps)),
+            static_cast<unsigned>(
+                heap_caps_get_largest_free_block(kInternalCaps)),
+            static_cast<unsigned>(reserve_bytes));
+        return false;
+    }
+
+    io_task_reserve_ = reserve;
+    io_task_reserve_bytes_ = reserve_bytes;
+    ESP_LOGD(kTag, "Reserved WebSocket I/O internal block bytes=%u",
+             static_cast<unsigned>(io_task_reserve_bytes_));
+    return true;
+}
+
+void WebSocketTransport::ReleaseIoTaskReserve() {
+    if (io_task_reserve_ == nullptr) return;
+    heap_caps_free(io_task_reserve_);
+    io_task_reserve_ = nullptr;
+    io_task_reserve_bytes_ = 0;
+}
+
 esp_err_t WebSocketTransport::Initialize(settings::SettingsStore* settings_store,
                                          EventSink event_sink,
                                          AudioSink audio_sink, McpSink mcp_sink,
@@ -59,15 +111,23 @@ esp_err_t WebSocketTransport::Initialize(settings::SettingsStore* settings_store
                   "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
                   mac[3], mac[4], mac[5]);
 
+    if (!AcquireIoTaskReserve()) return ESP_ERR_NO_MEM;
+    ESP_LOGI(kTag, "WebSocket I/O internal reserve ready bytes=%u",
+             static_cast<unsigned>(io_task_reserve_bytes_));
+
     const UBaseType_t external_memory_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     command_queue_ = xQueueCreateWithCaps(kCommandQueueDepth, sizeof(Command),
                                           external_memory_caps);
-    if (command_queue_ == nullptr) return ESP_ERR_NO_MEM;
+    if (command_queue_ == nullptr) {
+        ReleaseIoTaskReserve();
+        return ESP_ERR_NO_MEM;
+    }
     urgent_command_queue_ = xQueueCreateWithCaps(
         kUrgentCommandQueueDepth, sizeof(Command), external_memory_caps);
     if (urgent_command_queue_ == nullptr) {
         vQueueDeleteWithCaps(command_queue_);
         command_queue_ = nullptr;
+        ReleaseIoTaskReserve();
         return ESP_ERR_NO_MEM;
     }
     outbound_audio_queue_ = xQueueCreateWithCaps(
@@ -78,6 +138,7 @@ esp_err_t WebSocketTransport::Initialize(settings::SettingsStore* settings_store
         vQueueDeleteWithCaps(urgent_command_queue_);
         command_queue_ = nullptr;
         urgent_command_queue_ = nullptr;
+        ReleaseIoTaskReserve();
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreateWithCaps(&WebSocketTransport::TaskEntry, "veetee_ws", 12288,
@@ -88,6 +149,7 @@ esp_err_t WebSocketTransport::Initialize(settings::SettingsStore* settings_store
         command_queue_ = nullptr;
         urgent_command_queue_ = nullptr;
         outbound_audio_queue_ = nullptr;
+        ReleaseIoTaskReserve();
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
@@ -407,6 +469,10 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
         HandleLoss(generation, "transport_headers_invalid", true);
         return;
     }
+    if (!AcquireIoTaskReserve()) {
+        HandleLoss(generation, "io_task_reserve_unavailable");
+        return;
+    }
 
     esp_websocket_client_config_t config = {};
     config.uri = uri_.data();
@@ -436,9 +502,32 @@ void WebSocketTransport::StartClient(std::uint32_t generation,
     const esp_err_t register_error = esp_websocket_register_events(
         client_, WEBSOCKET_EVENT_ANY, &WebSocketTransport::WebSocketEventHandler,
         this);
-    const esp_err_t start_error = register_error == ESP_OK
-                                      ? esp_websocket_client_start(client_)
-                                      : register_error;
+    esp_err_t start_error = register_error;
+    if (register_error == ESP_OK) {
+        ReleaseIoTaskReserve();
+        const std::size_t largest_internal_block =
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                             MALLOC_CAP_8BIT);
+        if (!CanAllocateWebSocketIoTask(largest_internal_block)) {
+            ESP_LOGW(
+                kTag,
+                "WebSocket I/O preflight rejected internal_free=%u largest=%u required=%u",
+                static_cast<unsigned>(heap_caps_get_free_size(
+                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(largest_internal_block),
+                static_cast<unsigned>(kWebSocketIoTaskStackBytes));
+            start_error = ESP_ERR_NO_MEM;
+        } else {
+            ESP_LOGI(
+                kTag,
+                "WebSocket I/O preflight passed internal_free=%u largest=%u required=%u",
+                static_cast<unsigned>(heap_caps_get_free_size(
+                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                static_cast<unsigned>(largest_internal_block),
+                static_cast<unsigned>(kWebSocketIoTaskStackBytes));
+            start_error = esp_websocket_client_start(client_);
+        }
+    }
     if (start_error != ESP_OK) {
         ESP_LOGW(
             kTag,
@@ -751,6 +840,10 @@ void WebSocketTransport::Teardown(bool clean, int close_code,
             esp_websocket_client_stop(client);
         }
         esp_websocket_client_destroy(client);
+    }
+    if (!AcquireIoTaskReserve()) {
+        ESP_LOGW(kTag,
+                 "WebSocket I/O reserve unavailable after client teardown");
     }
     text_assembler_.Reset();
     binary_assembler_.Reset();

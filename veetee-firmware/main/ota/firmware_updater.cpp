@@ -16,6 +16,7 @@
 #include "esp_partition.h"
 #include "esp_psram.h"
 #include "esp_system.h"
+#include "freertos/idf_additions.h"
 #include "network/endpoint_url.h"
 #include "psa/crypto.h"
 #include "sdkconfig.h"
@@ -27,7 +28,7 @@ constexpr char kFirmwareReleaseMarker[] =
     "VEETEE_RELEASE_VERSION=" CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION;
 constexpr std::size_t kChunkBytes = 8192;
 constexpr std::size_t kMaximumResponseBytes = 32768;
-constexpr TickType_t kNotificationRetryTicks = pdMS_TO_TICKS(20);
+constexpr std::uint32_t kNotificationRetryMs = 20;
 constexpr char kAttemptRecordKey[] = "attempt";
 
 class SemaphoreGuard {
@@ -89,11 +90,13 @@ FirmwareUpdater::~FirmwareUpdater() {
 }
 
 esp_err_t FirmwareUpdater::Initialize(settings::SettingsStore* settings_store,
+                                       maintenance::MaintenanceExecutor* executor,
                                        EventSink sink, void* context) {
-    if (settings_store == nullptr || sink == nullptr ||
+    if (settings_store == nullptr || executor == nullptr || sink == nullptr ||
         std::strlen(CONFIG_VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX) != 64 ||
         CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID[0] == '\0') return ESP_ERR_INVALID_ARG;
     settings_store_ = settings_store;
+    executor_ = executor;
     sink_ = sink;
     sink_context_ = context;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
@@ -144,16 +147,27 @@ esp_err_t FirmwareUpdater::Initialize(settings::SettingsStore* settings_store,
     response_ = static_cast<char*>(heap_caps_calloc(
         kMaximumResponseBytes + 1, sizeof(char), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (response_ == nullptr) return ESP_ERR_NO_MEM;
-    queue_ = xQueueCreate(1, sizeof(Target));
-    if (queue_ == nullptr) {
+    queue_ = xQueueCreateWithCaps(1, sizeof(Target),
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    notification_queue_ = xQueueCreateWithCaps(
+        1, sizeof(PendingNotification), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (queue_ == nullptr || notification_queue_ == nullptr) {
+        if (queue_ != nullptr) vQueueDeleteWithCaps(queue_);
+        if (notification_queue_ != nullptr) {
+            vQueueDeleteWithCaps(notification_queue_);
+        }
+        queue_ = nullptr;
+        notification_queue_ = nullptr;
         heap_caps_free(response_);
         response_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&FirmwareUpdater::TaskEntry, "veetee_fw_ota", 12288, this, 4,
-                    &task_) != pdPASS) {
-        vQueueDelete(queue_);
+    if (!executor_->Register(maintenance::MaintenanceJobKind::kFirmware,
+                             &FirmwareUpdater::MaintenanceEntry, this)) {
+        vQueueDeleteWithCaps(queue_);
+        vQueueDeleteWithCaps(notification_queue_);
         queue_ = nullptr;
+        notification_queue_ = nullptr;
         heap_caps_free(response_);
         response_ = nullptr;
         return ESP_ERR_NO_MEM;
@@ -190,13 +204,21 @@ FirmwareScheduleResult FirmwareUpdater::Schedule(const char* desired_version,
     target.generation = generation_.fetch_add(1) + 1;
     std::snprintf(target.desired_version, sizeof(target.desired_version), "%s", desired_version);
     std::snprintf(target.manifest_url, sizeof(target.manifest_url), "%s", manifest_url);
-    return xQueueOverwrite(queue_, &target) == pdTRUE
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (xQueueOverwrite(queue_, &target) != pdTRUE) {
+        return FirmwareScheduleResult::kRejected;
+    }
+    return executor_->Request(maintenance::MaintenanceJobKind::kFirmware)
                ? FirmwareScheduleResult::kScheduled
                : FirmwareScheduleResult::kRejected;
 }
 
 void FirmwareUpdater::Cancel() {
     if (queue_ != nullptr) xQueueReset(queue_);
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (executor_ != nullptr) {
+        executor_->Cancel(maintenance::MaintenanceJobKind::kFirmware);
+    }
     if (state_mutex_ == nullptr) {
         generation_.fetch_add(1);
         return;
@@ -481,24 +503,25 @@ esp_err_t FirmwareUpdater::CancelStagedBoot() {
     return ESP_OK;
 }
 
-void FirmwareUpdater::TaskEntry(void* context) {
-    static_cast<FirmwareUpdater*>(context)->TaskLoop();
+void FirmwareUpdater::MaintenanceEntry(void* context) {
+    static_cast<FirmwareUpdater*>(context)->ProcessPending();
 }
-void FirmwareUpdater::TaskLoop() {
+void FirmwareUpdater::ProcessPending() {
+    if (DeliverPendingNotification()) return;
     Target target{};
-    while (xQueueReceive(queue_, &target, portMAX_DELAY) == pdTRUE) {
-        if (IsCurrent(target.generation)) Reconcile(target);
+    if (xQueueReceive(queue_, &target, 0) == pdTRUE &&
+        IsCurrent(target.generation)) {
+        Reconcile(target);
     }
 }
 bool FirmwareUpdater::IsCurrent(std::uint32_t generation) const {
     return generation == generation_.load();
 }
 
-bool FirmwareUpdater::Emit(FirmwareOtaEvent event, const Target& target,
-                            const VerifiedFirmwareManifest* manifest,
-                            const char* error,
-                            std::uint32_t downloaded_bytes) const {
-    if (sink_ == nullptr || !IsCurrent(target.generation)) return false;
+FirmwareOtaNotification FirmwareUpdater::MakeNotification(
+    FirmwareOtaEvent event, const Target& target,
+    const VerifiedFirmwareManifest* manifest, const char* error,
+    std::uint32_t downloaded_bytes) const {
     FirmwareOtaNotification notification{};
     notification.event = event;
     std::snprintf(notification.desired_version, sizeof(notification.desired_version), "%s",
@@ -513,11 +536,69 @@ bool FirmwareUpdater::Emit(FirmwareOtaEvent event, const Target& target,
     notification.active_slot = ActiveSlot();
     notification.target_slot = target_slot_;
     if (error != nullptr) std::snprintf(notification.error_code, sizeof(notification.error_code), "%s", error);
-    while (IsCurrent(target.generation)) {
-        if (sink_(notification, sink_context_)) return true;
-        vTaskDelay(kNotificationRetryTicks);
+    return notification;
+}
+
+bool FirmwareUpdater::Emit(FirmwareOtaEvent event, const Target& target,
+                           const VerifiedFirmwareManifest* manifest,
+                           const char* error,
+                           std::uint32_t downloaded_bytes) {
+    if (sink_ == nullptr || !IsCurrent(target.generation) ||
+        notification_queue_ == nullptr || executor_ == nullptr) {
+        return false;
+    }
+    const PendingNotification pending{
+        .generation = target.generation,
+        .notification = MakeNotification(event, target, manifest, error,
+                                         downloaded_bytes),
+    };
+    if (uxQueueMessagesWaiting(notification_queue_) != 0) {
+        if (xQueueOverwrite(notification_queue_, &pending) != pdTRUE) {
+            return false;
+        }
+        return executor_->Request(maintenance::MaintenanceJobKind::kFirmware,
+                                  kNotificationRetryMs);
+    }
+    if (sink_(pending.notification, sink_context_)) return true;
+    if (!IsCurrent(target.generation) ||
+        xQueueOverwrite(notification_queue_, &pending) != pdTRUE) {
+        return false;
+    }
+    return executor_->Request(maintenance::MaintenanceJobKind::kFirmware,
+                              kNotificationRetryMs);
+}
+
+bool FirmwareUpdater::DeliverPendingNotification() {
+    if (notification_queue_ == nullptr) return false;
+    PendingNotification pending{};
+    while (xQueueReceive(notification_queue_, &pending, 0) == pdTRUE) {
+        if (!IsCurrent(pending.generation)) continue;
+        if (sink_ != nullptr &&
+            sink_(pending.notification, sink_context_)) {
+            RequestIfPending();
+            return true;
+        }
+        if (IsCurrent(pending.generation) &&
+            xQueueSendToFront(notification_queue_, &pending, 0) == pdTRUE &&
+            executor_ != nullptr) {
+            executor_->Request(maintenance::MaintenanceJobKind::kFirmware,
+                               kNotificationRetryMs);
+        }
+        return true;
     }
     return false;
+}
+
+void FirmwareUpdater::RequestIfPending() {
+    if (executor_ == nullptr) return;
+    const bool pending_notification =
+        notification_queue_ != nullptr &&
+        uxQueueMessagesWaiting(notification_queue_) != 0;
+    const bool pending_target =
+        queue_ != nullptr && uxQueueMessagesWaiting(queue_) != 0;
+    if (pending_notification || pending_target) {
+        executor_->Request(maintenance::MaintenanceJobKind::kFirmware);
+    }
 }
 
 esp_err_t FirmwareUpdater::FetchManifest(const Target& target) {
@@ -552,8 +633,18 @@ esp_err_t FirmwareUpdater::FetchManifest(const Target& target) {
     if (error == ESP_OK) {
         error = esp_http_client_set_header(client, "Accept-Encoding", "identity");
     }
+    const bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(maintenance::MaintenanceJobKind::kFirmware,
+                                   client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) error = esp_http_client_perform(client);
-    const int status = error == ESP_OK ? esp_http_client_get_status_code(client) : 0;
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kFirmware, client);
+    }
+    const int status =
+        error == ESP_OK ? esp_http_client_get_status_code(client) : 0;
     esp_http_client_cleanup(client);
     if (error != ESP_OK) return error;
     if (status != 200 || response_overflow_) return ESP_ERR_INVALID_RESPONSE;
@@ -594,17 +685,44 @@ esp_err_t FirmwareUpdater::Download(const Target& target,
     if (error == ESP_OK) {
         error = esp_http_client_set_header(client, "Accept-Encoding", "identity");
     }
+    bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(maintenance::MaintenanceJobKind::kFirmware,
+                                   client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) error = esp_http_client_open(client, 0);
     const int status = error == ESP_OK ? esp_http_client_fetch_headers(client) : 0;
     if (error == ESP_OK && status < 0) error = ESP_FAIL;
-    if (error == ESP_OK && esp_http_client_get_status_code(client) != 200) error = ESP_ERR_INVALID_RESPONSE;
+    // Disarm cross-task close while reading response metadata. Re-register
+    // before the blocking body reads so realtime can still preempt the stream.
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kFirmware, client);
+        tracked = false;
+    }
+    if (error == ESP_OK && esp_http_client_get_status_code(client) != 200) {
+        error = ESP_ERR_INVALID_RESPONSE;
+    }
+    if (error == ESP_OK) {
+        tracked = executor_->TrackHttpClient(
+            maintenance::MaintenanceJobKind::kFirmware, client);
+        if (!tracked) error = ESP_ERR_INVALID_STATE;
+    }
     if (error != ESP_OK) {
+        if (tracked) {
+            executor_->UntrackHttpClient(
+                maintenance::MaintenanceJobKind::kFirmware, client);
+        }
         esp_http_client_cleanup(client);
         esp_ota_abort(handle);
         return error;
     }
     psa_hash_operation_t digest = PSA_HASH_OPERATION_INIT;
     if (psa_hash_setup(&digest, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        if (tracked) {
+            executor_->UntrackHttpClient(
+                maintenance::MaintenanceJobKind::kFirmware, client);
+        }
         esp_http_client_cleanup(client);
         esp_ota_abort(handle);
         return ESP_FAIL;
@@ -615,6 +733,10 @@ esp_err_t FirmwareUpdater::Download(const Target& target,
     auto* buffer = reinterpret_cast<std::uint8_t*>(response_);
     if (buffer == nullptr) {
         psa_hash_abort(&digest);
+        if (tracked) {
+            executor_->UntrackHttpClient(
+                maintenance::MaintenanceJobKind::kFirmware, client);
+        }
         esp_http_client_cleanup(client);
         esp_ota_abort(handle);
         return ESP_ERR_NO_MEM;
@@ -640,6 +762,10 @@ esp_err_t FirmwareUpdater::Download(const Target& target,
                  static_cast<std::uint32_t>(downloaded));
             nextProgress = downloaded + 256U * 1024U;
         }
+    }
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kFirmware, client);
     }
     std::array<std::uint8_t, 32> actual{};
     std::size_t hashLength = 0;

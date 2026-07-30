@@ -86,8 +86,10 @@ void CopyError(char* destination, std::size_t capacity, const char* source) {
 esp_err_t DeviceConfigReconciler::Initialize(
     settings::SettingsStore* settings_store,
     settings::DeviceConfigStore* store,
+    maintenance::MaintenanceExecutor* executor,
     EventSink sink, void* context) {
-    if (settings_store == nullptr || store == nullptr || sink == nullptr ||
+    if (settings_store == nullptr || store == nullptr || executor == nullptr ||
+        sink == nullptr ||
         settings_store_ != nullptr ||
         CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID[0] == '\0' ||
         !DecodePublicKey(CONFIG_VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX,
@@ -96,6 +98,7 @@ esp_err_t DeviceConfigReconciler::Initialize(
     }
     settings_store_ = settings_store;
     store_ = store;
+    executor_ = executor;
     sink_ = sink;
     sink_context_ = context;
     trusted_key_.key_id = CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID;
@@ -114,12 +117,20 @@ esp_err_t DeviceConfigReconciler::Initialize(
     response_ = static_cast<char*>(heap_caps_calloc(
         kMaximumResponseBytes + 1, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (response_ == nullptr) return ESP_ERR_NO_MEM;
-    queue_ = xQueueCreate(1, sizeof(Target));
-    if (queue_ == nullptr ||
-        xTaskCreate(&DeviceConfigReconciler::TaskEntry, "veetee_config",
-                    12288, this, 4, &task_) != pdPASS) {
-        if (queue_ != nullptr) vQueueDelete(queue_);
+    constexpr UBaseType_t queue_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    queue_ = xQueueCreateWithCaps(1, sizeof(Target), queue_caps);
+    notification_queue_ =
+        xQueueCreateWithCaps(1, sizeof(PendingNotification), queue_caps);
+    if (queue_ == nullptr || notification_queue_ == nullptr ||
+        !executor_->Register(
+            maintenance::MaintenanceJobKind::kDeviceConfig,
+            &DeviceConfigReconciler::MaintenanceEntry, this)) {
+        if (queue_ != nullptr) vQueueDeleteWithCaps(queue_);
+        if (notification_queue_ != nullptr) {
+            vQueueDeleteWithCaps(notification_queue_);
+        }
         queue_ = nullptr;
+        notification_queue_ = nullptr;
         heap_caps_free(response_);
         response_ = nullptr;
         return ESP_ERR_NO_MEM;
@@ -143,7 +154,8 @@ bool DeviceConfigReconciler::Schedule(std::uint32_t desired_version,
             : std::snprintf(path, sizeof(path),
                             "/veetee/config/v1/devices/%s",
                             settings_snapshot.device_id);
-    if (queue_ == nullptr || desired_version == 0 ||
+    if (queue_ == nullptr || notification_queue_ == nullptr ||
+        executor_ == nullptr || desired_version == 0 ||
         desired_version > kMaximumDeviceConfigVersion || etag == nullptr ||
         url == nullptr || std::strlen(etag) >= sizeof(target.etag) ||
         std::strlen(url) >= sizeof(target.url) ||
@@ -157,22 +169,31 @@ bool DeviceConfigReconciler::Schedule(std::uint32_t desired_version,
     }
     target.generation = generation_.fetch_add(1) + 1;
     target.version = desired_version;
+    target.retry_ms = kInitialRetryMs;
     std::snprintf(target.url, sizeof(target.url), "%s", url);
-    return xQueueOverwrite(queue_, &target) == pdTRUE;
+    xQueueReset(notification_queue_);
+    if (xQueueOverwrite(queue_, &target) != pdTRUE) return false;
+    return executor_->Request(maintenance::MaintenanceJobKind::kDeviceConfig);
 }
 
 void DeviceConfigReconciler::Cancel() {
     generation_.fetch_add(1);
     if (queue_ != nullptr) xQueueReset(queue_);
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (executor_ != nullptr) {
+        executor_->Cancel(maintenance::MaintenanceJobKind::kDeviceConfig);
+    }
 }
 
-void DeviceConfigReconciler::TaskEntry(void* context) {
-    static_cast<DeviceConfigReconciler*>(context)->TaskLoop();
+void DeviceConfigReconciler::MaintenanceEntry(void* context) {
+    static_cast<DeviceConfigReconciler*>(context)->ProcessPending();
 }
 
-void DeviceConfigReconciler::TaskLoop() {
+void DeviceConfigReconciler::ProcessPending() {
+    if (DeliverPendingNotification()) return;
     Target target{};
-    while (xQueueReceive(queue_, &target, portMAX_DELAY) == pdTRUE) {
+    if (queue_ != nullptr && xQueueReceive(queue_, &target, 0) == pdTRUE &&
+        IsCurrent(target.generation)) {
         Run(target);
     }
 }
@@ -200,67 +221,64 @@ void DeviceConfigReconciler::Run(const Target& target) {
         return;
     }
 
-    std::uint32_t retry_ms = kInitialRetryMs;
-    while (IsCurrent(target.generation)) {
-        int status = 0;
-        esp_err_t error = Fetch(target, &status);
-        if (error == ESP_OK && status == 304) {
-            // A 304 is only useful when the exact signed snapshot is already
-            // persisted. Otherwise accepting it would create desired/applied drift.
-            applied = store_->Snapshot();
-            notification.applied_version = applied.applied_version;
-            error = target.version == applied.applied_version &&
-                            std::strcmp(target.etag, applied.etag) == 0
-                        ? ESP_OK
-                        : ESP_ERR_INVALID_STATE;
-            if (error == ESP_OK) {
-                notification.event =
-                    DeviceConfigReconcileEvent::kAlreadyApplied;
-                store_->LoadApplied(&notification.config);
-                Emit(notification, target.generation);
-                return;
-            }
-            notification.event = DeviceConfigReconcileEvent::kFailed;
-            CopyError(notification.error_code,
-                      sizeof(notification.error_code),
-                      "not_modified_without_applied");
+    int status = 0;
+    esp_err_t error = Fetch(target, &status);
+    if (!IsCurrent(target.generation)) return;
+    if (error == ESP_OK && status == 304) {
+        // A 304 is only useful when the exact signed snapshot is already
+        // persisted. Otherwise accepting it would create desired/applied drift.
+        applied = store_->Snapshot();
+        notification.applied_version = applied.applied_version;
+        error = target.version == applied.applied_version &&
+                        std::strcmp(target.etag, applied.etag) == 0
+                    ? ESP_OK
+                    : ESP_ERR_INVALID_STATE;
+        if (error == ESP_OK) {
+            notification.event = DeviceConfigReconcileEvent::kAlreadyApplied;
+            store_->LoadApplied(&notification.config);
             Emit(notification, target.generation);
             return;
         }
-        if (error == ESP_OK && status == 200) {
-            applied = store_->Snapshot();
-            notification.applied_version = applied.applied_version;
-            trusted_key_.minimum_security_epoch = std::max<std::uint32_t>(
-                CONFIG_VEETEE_MIN_CONFIG_SECURITY_EPOCH,
-                applied.security_epoch_floor);
-            const settings::DeviceSettings settings_snapshot =
-                settings_store_->Snapshot();
-            const DeviceConfigError verify = VerifyDeviceConfig(
-                std::string_view(response_, response_size_),
-                settings_snapshot.device_id, target.version, &trusted_key_, 1,
-                &notification.config);
-            if (verify == DeviceConfigError::kOk &&
-                std::strcmp(response_etag_, target.etag) == 0) {
-                notification.event = DeviceConfigReconcileEvent::kStaged;
-                Emit(notification, target.generation);
-                return;
-            }
-            CopyError(notification.error_code, sizeof(notification.error_code),
-                      verify == DeviceConfigError::kOk
-                          ? "etag_mismatch"
-                          : DeviceConfigErrorName(verify));
-            notification.event = DeviceConfigReconcileEvent::kFailed;
-            Emit(notification, target.generation);
-            return;
-        }
-        if (error == ESP_OK) error = ESP_ERR_INVALID_RESPONSE;
-        ESP_LOGW(kTag,
-                 "Config pull failed desired=%" PRIu32
-                 " status=%d error=%s retry_ms=%" PRIu32,
-                 target.version, status, esp_err_to_name(error), retry_ms);
-        if (!Delay(target.generation, retry_ms)) return;
-        retry_ms = std::min(kMaximumRetryMs, retry_ms * 2U);
+        notification.event = DeviceConfigReconcileEvent::kFailed;
+        CopyError(notification.error_code, sizeof(notification.error_code),
+                  "not_modified_without_applied");
+        Emit(notification, target.generation);
+        return;
     }
+    if (error == ESP_OK && status == 200) {
+        applied = store_->Snapshot();
+        notification.applied_version = applied.applied_version;
+        trusted_key_.minimum_security_epoch = std::max<std::uint32_t>(
+            CONFIG_VEETEE_MIN_CONFIG_SECURITY_EPOCH,
+            applied.security_epoch_floor);
+        const settings::DeviceSettings settings_snapshot =
+            settings_store_->Snapshot();
+        const DeviceConfigError verify = VerifyDeviceConfig(
+            std::string_view(response_, response_size_),
+            settings_snapshot.device_id, target.version, &trusted_key_, 1,
+            &notification.config);
+        if (verify == DeviceConfigError::kOk &&
+            std::strcmp(response_etag_, target.etag) == 0) {
+            notification.event = DeviceConfigReconcileEvent::kStaged;
+            Emit(notification, target.generation);
+            return;
+        }
+        CopyError(notification.error_code, sizeof(notification.error_code),
+                  verify == DeviceConfigError::kOk
+                      ? "etag_mismatch"
+                      : DeviceConfigErrorName(verify));
+        notification.event = DeviceConfigReconcileEvent::kFailed;
+        Emit(notification, target.generation);
+        return;
+    }
+    if (error == ESP_OK) error = ESP_ERR_INVALID_RESPONSE;
+    const std::uint32_t retry_ms =
+        target.retry_ms == 0 ? kInitialRetryMs : target.retry_ms;
+    ESP_LOGW(kTag,
+             "Config pull failed desired=%" PRIu32
+             " status=%d error=%s retry_ms=%" PRIu32,
+             target.version, status, esp_err_to_name(error), retry_ms);
+    Reschedule(target, retry_ms);
 }
 
 esp_err_t DeviceConfigReconciler::Fetch(const Target& target,
@@ -326,8 +344,17 @@ esp_err_t DeviceConfigReconciler::Fetch(const Target& target,
                                                  if_none_match)
                     : ESP_ERR_INVALID_SIZE;
     }
+    const bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(
+            maintenance::MaintenanceJobKind::kDeviceConfig, client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) {
         error = esp_http_client_perform(client);
+    }
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kDeviceConfig, client);
         *status_code = esp_http_client_get_status_code(client);
     }
     esp_http_client_cleanup(client);
@@ -348,6 +375,10 @@ esp_err_t DeviceConfigReconciler::HttpEventHandler(
     }
     auto* reconciler =
         static_cast<DeviceConfigReconciler*>(event->user_data);
+    if (reconciler->executor_ != nullptr &&
+        reconciler->executor_->realtime_active()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (event->event_id == HTTP_EVENT_ON_HEADER &&
         HeaderEquals(event->header_key, "ETag")) {
         if (!CopyEtag(event->header_value, reconciler->response_etag_,
@@ -373,23 +404,75 @@ esp_err_t DeviceConfigReconciler::HttpEventHandler(
 
 bool DeviceConfigReconciler::Emit(
     const DeviceConfigReconcileNotification& notification,
-    std::uint32_t generation) const {
-    while (IsCurrent(generation)) {
-        if (sink_(notification, sink_context_)) return true;
-        if (!Delay(generation, kNotificationRetryMs)) return false;
+    std::uint32_t generation) {
+    if (!IsCurrent(generation) || sink_ == nullptr) return false;
+    if (sink_(notification, sink_context_)) return true;
+
+    const PendingNotification pending{
+        .generation = generation,
+        .notification = notification,
+    };
+    if (!IsCurrent(generation) || notification_queue_ == nullptr ||
+        xQueueOverwrite(notification_queue_, &pending) != pdTRUE) {
+        return false;
+    }
+    return executor_ != nullptr &&
+           executor_->Request(maintenance::MaintenanceJobKind::kDeviceConfig,
+                              kNotificationRetryMs);
+}
+
+bool DeviceConfigReconciler::DeliverPendingNotification() {
+    if (notification_queue_ == nullptr) return false;
+    PendingNotification pending{};
+    while (xQueueReceive(notification_queue_, &pending, 0) == pdTRUE) {
+        if (!IsCurrent(pending.generation)) continue;
+        if (sink_ != nullptr &&
+            sink_(pending.notification, sink_context_)) {
+            RequestIfPending();
+            return true;
+        }
+        if (IsCurrent(pending.generation) &&
+            xQueueSendToFront(notification_queue_, &pending, 0) == pdTRUE &&
+            executor_ != nullptr) {
+            executor_->Request(
+                maintenance::MaintenanceJobKind::kDeviceConfig,
+                kNotificationRetryMs);
+        }
+        return true;
     }
     return false;
 }
 
-bool DeviceConfigReconciler::Delay(std::uint32_t generation,
-                                   std::uint32_t milliseconds) const {
-    std::uint32_t remaining = milliseconds;
-    while (remaining > 0 && IsCurrent(generation)) {
-        const std::uint32_t slice = std::min<std::uint32_t>(remaining, 100);
-        vTaskDelay(pdMS_TO_TICKS(slice));
-        remaining -= slice;
+bool DeviceConfigReconciler::Reschedule(const Target& target,
+                                        std::uint32_t delay_ms) {
+    if (!IsCurrent(target.generation) || queue_ == nullptr ||
+        executor_ == nullptr) {
+        return false;
     }
-    return IsCurrent(generation);
+    Target retry = target;
+    const std::uint32_t current_retry =
+        retry.retry_ms == 0 ? kInitialRetryMs : retry.retry_ms;
+    retry.retry_ms =
+        std::min(kMaximumRetryMs, current_retry * 2U);
+
+    // A newer Schedule() owns a non-empty mailbox. Never overwrite it with an
+    // older delayed retry after this HTTP attempt returns.
+    if (xQueueSend(queue_, &retry, 0) != pdTRUE) return false;
+    if (!IsCurrent(retry.generation)) return false;
+    return executor_->Request(
+        maintenance::MaintenanceJobKind::kDeviceConfig, delay_ms);
+}
+
+void DeviceConfigReconciler::RequestIfPending() {
+    if (executor_ == nullptr) return;
+    const bool pending_notification =
+        notification_queue_ != nullptr &&
+        uxQueueMessagesWaiting(notification_queue_) != 0;
+    const bool pending_target =
+        queue_ != nullptr && uxQueueMessagesWaiting(queue_) != 0;
+    if (pending_notification || pending_target) {
+        executor_->Request(maintenance::MaintenanceJobKind::kDeviceConfig);
+    }
 }
 
 bool DeviceConfigReconciler::IsCurrent(std::uint32_t generation) const {

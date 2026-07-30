@@ -15,6 +15,7 @@
 #include "esp_mac.h"
 #include "esp_partition.h"
 #include "esp_psram.h"
+#include "freertos/idf_additions.h"
 #include "network/endpoint_url.h"
 #include "psa/crypto.h"
 #include "sdkconfig.h"
@@ -26,7 +27,9 @@ constexpr char kTag[] = "veetee_resources";
 constexpr std::size_t kMaximumManifestBytes = 32768;
 constexpr std::uint32_t kNotificationRetryMs = 100;
 constexpr std::size_t kDownloadBufferBytes = 8192;
-constexpr std::uint32_t kEraseChunkBytes = 64U * 1024U;
+// Check the realtime gate between physical flash sectors. A single 64 KiB
+// erase call can otherwise outlive the voice-admission barrier.
+constexpr std::uint32_t kEraseChunkBytes = 4U * 1024U;
 constexpr std::uint32_t kProgressCheckpointBytes = 256U * 1024U;
 constexpr std::uint64_t kBoardFlashBytes = 16ULL * 1024ULL * 1024ULL;
 constexpr SupportedResourceRuntime kWakeSupportedRuntimes[] = {
@@ -139,9 +142,10 @@ bool ParseContentRange(const char* value, std::uint64_t* first,
 }  // namespace
 
 esp_err_t ResourceReconciler::Initialize(settings::SettingsStore* settings_store,
+                                         maintenance::MaintenanceExecutor* executor,
                                          EventSink sink, void* context,
                                          ResourceClass resource_class) {
-    if (settings_store == nullptr || sink == nullptr ||
+    if (settings_store == nullptr || executor == nullptr || sink == nullptr ||
         CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID[0] == '\0' ||
         !DecodePublicKey(CONFIG_VEETEE_RESOURCE_SIGNING_PUBLIC_KEY_HEX,
                          &trusted_key_.public_key)) {
@@ -149,7 +153,11 @@ esp_err_t ResourceReconciler::Initialize(settings::SettingsStore* settings_store
     }
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     settings_store_ = settings_store;
+    executor_ = executor;
     resource_class_ = resource_class;
+    job_kind_ = resource_class_ == ResourceClass::kUiPack
+                    ? maintenance::MaintenanceJobKind::kUiPack
+                    : maintenance::MaintenanceJobKind::kWakeResource;
     sink_ = sink;
     sink_context_ = context;
     trusted_key_.key_id = CONFIG_VEETEE_RESOURCE_SIGNING_KEY_ID;
@@ -190,16 +198,27 @@ esp_err_t ResourceReconciler::Initialize(settings::SettingsStore* settings_store
         CONFIG_VEETEE_MIN_RESOURCE_SECURITY_EPOCH,
         resource_state_.record().security_epoch_floor);
 
-    queue_ = xQueueCreate(1, sizeof(Target));
-    if (queue_ == nullptr) {
+    queue_ = xQueueCreateWithCaps(1, sizeof(Target),
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    notification_queue_ = xQueueCreateWithCaps(
+        1, sizeof(PendingNotification), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (queue_ == nullptr || notification_queue_ == nullptr) {
+        if (queue_ != nullptr) vQueueDeleteWithCaps(queue_);
+        if (notification_queue_ != nullptr) {
+            vQueueDeleteWithCaps(notification_queue_);
+        }
+        queue_ = nullptr;
+        notification_queue_ = nullptr;
         vSemaphoreDelete(state_mutex_);
         state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(&ResourceReconciler::TaskEntry, profile.task_name, 12288,
-                    this, 4, &task_) != pdPASS) {
-        vQueueDelete(queue_);
+    if (!executor_->Register(job_kind_, &ResourceReconciler::MaintenanceEntry,
+                             this)) {
+        vQueueDeleteWithCaps(queue_);
+        vQueueDeleteWithCaps(notification_queue_);
         queue_ = nullptr;
+        notification_queue_ = nullptr;
         vSemaphoreDelete(state_mutex_);
         state_mutex_ = nullptr;
         return ESP_ERR_NO_MEM;
@@ -228,12 +247,16 @@ bool ResourceReconciler::Schedule(const char* desired_version,
                   desired_version);
     std::snprintf(target.manifest_url, sizeof(target.manifest_url), "%s",
                   manifest_url);
-    return xQueueOverwrite(queue_, &target) == pdTRUE;
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (xQueueOverwrite(queue_, &target) != pdTRUE) return false;
+    return executor_->Request(job_kind_);
 }
 
 void ResourceReconciler::Cancel() {
     generation_.fetch_add(1);
     if (queue_ != nullptr) xQueueReset(queue_);
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (executor_ != nullptr) executor_->Cancel(job_kind_);
 }
 
 const char* ResourceReconciler::ActivePartitionLabel() const {
@@ -307,14 +330,16 @@ esp_err_t ResourceReconciler::Rollback() {
     return error;
 }
 
-void ResourceReconciler::TaskEntry(void* context) {
-    static_cast<ResourceReconciler*>(context)->TaskLoop();
+void ResourceReconciler::MaintenanceEntry(void* context) {
+    static_cast<ResourceReconciler*>(context)->ProcessPending();
 }
 
-void ResourceReconciler::TaskLoop() {
+void ResourceReconciler::ProcessPending() {
+    if (DeliverPendingNotification()) return;
     Target target{};
-    while (xQueueReceive(queue_, &target, portMAX_DELAY) == pdTRUE) {
-        if (IsCurrent(target.generation)) Reconcile(target);
+    if (xQueueReceive(queue_, &target, 0) == pdTRUE &&
+        IsCurrent(target.generation)) {
+        Reconcile(target);
     }
 }
 
@@ -324,6 +349,8 @@ void ResourceReconciler::Reconcile(const Target& target) {
     const esp_err_t fetch_error =
         FetchManifest(target, &document, &document_size);
     if (fetch_error != ESP_OK) {
+        if (DeferForRealtime(target)) return;
+        if (executor_ != nullptr && executor_->firmware_exclusive()) return;
         if (IsCurrent(target.generation)) {
             EmitWithRetry(ResourceReconcileEvent::kTransportFailed, target,
                           nullptr, esp_err_to_name(fetch_error));
@@ -332,6 +359,11 @@ void ResourceReconciler::Reconcile(const Target& target) {
     }
     if (!IsCurrent(target.generation)) {
         heap_caps_free(document);
+        return;
+    }
+    if (!CanContinue(target.generation)) {
+        heap_caps_free(document);
+        DeferForRealtime(target);
         return;
     }
 
@@ -413,6 +445,8 @@ void ResourceReconciler::Reconcile(const Target& target) {
     const esp_err_t download_error =
         DownloadPayload(target, manifest, target_slot, resume_bytes);
     if (download_error != ESP_OK) {
+        if (DeferForRealtime(target)) return;
+        if (executor_ != nullptr && executor_->firmware_exclusive()) return;
         if (download_error == ESP_ERR_INVALID_CRC) {
             Rollback();
             EmitWithRetry(ResourceReconcileEvent::kPayloadRejected, target,
@@ -421,6 +455,10 @@ void ResourceReconciler::Reconcile(const Target& target) {
             EmitWithRetry(ResourceReconcileEvent::kTransportFailed, target,
                           manifest.version, esp_err_to_name(download_error));
         }
+        return;
+    }
+    if (!CanContinue(target.generation)) {
+        DeferForRealtime(target);
         return;
     }
     Emit(ResourceReconcileEvent::kVerifying, target, manifest.version, "ok");
@@ -538,7 +576,7 @@ esp_err_t ResourceReconciler::ErasePartition(const Target& target,
         return ESP_ERR_INVALID_ARG;
     }
     while (offset < partition->size) {
-        if (!IsCurrent(target.generation)) return ESP_ERR_INVALID_STATE;
+        if (!CanContinue(target.generation)) return ESP_ERR_INVALID_STATE;
         const std::uint32_t bytes = std::min<std::uint32_t>(
             kEraseChunkBytes, partition->size - offset);
         const esp_err_t error = esp_partition_erase_range(partition, offset, bytes);
@@ -551,7 +589,7 @@ esp_err_t ResourceReconciler::ErasePartition(const Target& target,
 esp_err_t ResourceReconciler::DownloadPayload(
     const Target& target, const VerifiedResourceManifest& manifest,
     std::uint8_t target_slot, std::uint32_t resume_bytes) {
-    if (!IsCurrent(target.generation) || target_slot > 1 ||
+    if (!CanContinue(target.generation) || target_slot > 1 ||
         resource_partitions_[target_slot] == nullptr ||
         settings_store_ == nullptr ||
         manifest.payload_bytes == 0 || manifest.payload_bytes > UINT32_MAX ||
@@ -582,7 +620,7 @@ esp_err_t ResourceReconciler::DownloadPayload(
             : ESP_FAIL;
     const esp_partition_t* partition = resource_partitions_[target_slot];
     for (std::uint32_t offset = 0; error == ESP_OK && offset < resume_bytes;) {
-        if (!IsCurrent(target.generation)) {
+        if (!CanContinue(target.generation)) {
             error = ESP_ERR_INVALID_STATE;
             break;
         }
@@ -661,9 +699,19 @@ esp_err_t ResourceReconciler::DownloadPayload(
                 error = esp_http_client_set_header(client, "Range", range);
             }
         }
+        bool tracked =
+            error == ESP_OK && executor_ != nullptr &&
+            executor_->TrackHttpClient(job_kind_, client);
+        if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
         if (error == ESP_OK) error = esp_http_client_open(client, 0);
         const std::int64_t content_length =
             error == ESP_OK ? esp_http_client_fetch_headers(client) : -1;
+        // Disarm cross-task close while reading response metadata. Re-register
+        // before the blocking body reads so realtime can still preempt the stream.
+        if (tracked) {
+            executor_->UntrackHttpClient(job_kind_, client);
+            tracked = false;
+        }
         const int status =
             error == ESP_OK ? esp_http_client_get_status_code(client) : 0;
 
@@ -708,13 +756,17 @@ esp_err_t ResourceReconciler::DownloadPayload(
                 error = ESP_ERR_INVALID_RESPONSE;
             }
         }
+        if (error == ESP_OK) {
+            tracked = executor_->TrackHttpClient(job_kind_, client);
+            if (!tracked) error = ESP_ERR_INVALID_STATE;
+        }
 
         std::uint32_t downloaded = resume_bytes;
         std::uint32_t next_checkpoint =
             ((downloaded / kProgressCheckpointBytes) + 1U) *
             kProgressCheckpointBytes;
         while (error == ESP_OK && downloaded < expected_bytes) {
-            if (!IsCurrent(target.generation)) {
+            if (!CanContinue(target.generation)) {
                 error = ESP_ERR_INVALID_STATE;
                 break;
             }
@@ -742,6 +794,9 @@ esp_err_t ResourceReconciler::DownloadPayload(
                     next_checkpoint += kProgressCheckpointBytes;
                 }
             }
+        }
+        if (tracked) {
+            executor_->UntrackHttpClient(job_kind_, client);
         }
         if (error == ESP_OK &&
             !esp_http_client_is_complete_data_received(client)) {
@@ -782,7 +837,7 @@ esp_err_t ResourceReconciler::DownloadPayload(
 
 esp_err_t ResourceReconciler::SaveDownloadProgress(
     const Target& target, std::uint32_t downloaded_bytes) {
-    if (!IsCurrent(target.generation) || state_mutex_ == nullptr) {
+    if (!CanContinue(target.generation) || state_mutex_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(state_mutex_, portMAX_DELAY);
@@ -802,7 +857,7 @@ esp_err_t ResourceReconciler::SaveDownloadProgress(
 }
 
 esp_err_t ResourceReconciler::ResetDownloadProgress(const Target& target) {
-    if (!IsCurrent(target.generation) || state_mutex_ == nullptr) {
+    if (!CanContinue(target.generation) || state_mutex_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(state_mutex_, portMAX_DELAY);
@@ -818,7 +873,7 @@ esp_err_t ResourceReconciler::ResetDownloadProgress(const Target& target) {
 }
 
 esp_err_t ResourceReconciler::StageDownload(const Target& target) {
-    if (!IsCurrent(target.generation) || state_mutex_ == nullptr) {
+    if (!CanContinue(target.generation) || state_mutex_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(state_mutex_, portMAX_DELAY);
@@ -849,7 +904,7 @@ esp_err_t ResourceReconciler::FetchManifest(const Target& target, char** documen
                                             std::size_t* document_size) {
     if (document == nullptr || document_size == nullptr ||
         settings_store_ == nullptr ||
-        !IsCurrent(target.generation)) {
+        !CanContinue(target.generation)) {
         return ESP_ERR_INVALID_ARG;
     }
     response_ = static_cast<char*>(heap_caps_malloc(
@@ -909,14 +964,21 @@ esp_err_t ResourceReconciler::FetchManifest(const Target& target, char** documen
     if (error == ESP_OK) {
         error = esp_http_client_set_header(client, "Accept", "application/json");
     }
+    const bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(job_kind_, client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) error = esp_http_client_perform(client);
+    if (tracked) executor_->UntrackHttpClient(job_kind_, client);
     const int status =
         error == ESP_OK ? esp_http_client_get_status_code(client) : 0;
     esp_http_client_cleanup(client);
     request_generation_.store(0);
     std::fill(std::begin(authorization), std::end(authorization), '\0');
 
-    if (error == ESP_OK && !IsCurrent(target.generation)) error = ESP_ERR_INVALID_STATE;
+    if (error == ESP_OK && !CanContinue(target.generation)) {
+        error = ESP_ERR_INVALID_STATE;
+    }
     if (error == ESP_OK && status != 200) error = ESP_ERR_INVALID_RESPONSE;
     if (error == ESP_OK && response_overflow_) error = ESP_ERR_INVALID_SIZE;
     if (error == ESP_OK && response_size_ == 0) error = ESP_ERR_INVALID_RESPONSE;
@@ -937,11 +999,11 @@ esp_err_t ResourceReconciler::FetchManifest(const Target& target, char** documen
 esp_err_t ResourceReconciler::HttpEventHandler(esp_http_client_event_t* event) {
     if (event == nullptr || event->user_data == nullptr) return ESP_ERR_INVALID_ARG;
     auto* reconciler = static_cast<ResourceReconciler*>(event->user_data);
-    if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
     const std::uint32_t generation = reconciler->request_generation_.load();
-    if (generation == 0 || !reconciler->IsCurrent(generation)) {
+    if (generation == 0 || !reconciler->CanContinue(generation)) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
     const std::size_t length = static_cast<std::size_t>(event->data_len);
     if (reconciler->response_ == nullptr ||
         reconciler->response_size_ + length > kMaximumManifestBytes) {
@@ -958,6 +1020,10 @@ esp_err_t ResourceReconciler::PayloadHttpEventHandler(
     esp_http_client_event_t* event) {
     if (event == nullptr || event->user_data == nullptr) return ESP_ERR_INVALID_ARG;
     auto* reconciler = static_cast<ResourceReconciler*>(event->user_data);
+    const std::uint32_t generation = reconciler->request_generation_.load();
+    if (generation == 0 || !reconciler->CanContinue(generation)) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (event->event_id != HTTP_EVENT_ON_HEADER || event->header_key == nullptr ||
         event->header_value == nullptr ||
         strcasecmp(event->header_key, "Content-Range") != 0) {
@@ -972,10 +1038,9 @@ esp_err_t ResourceReconciler::PayloadHttpEventHandler(
     return ESP_OK;
 }
 
-bool ResourceReconciler::Emit(ResourceReconcileEvent event,
-                              const Target& target, const char* bundle_version,
-                              const char* error_code) const {
-    if (!IsCurrent(target.generation) || sink_ == nullptr) return false;
+ResourceReconcileNotification ResourceReconciler::MakeNotification(
+    ResourceReconcileEvent event, const Target& target,
+    const char* bundle_version, const char* error_code) const {
     ResourceReconcileNotification notification{
         .event = event,
         .resource_class = resource_class_,
@@ -999,21 +1064,91 @@ bool ResourceReconciler::Emit(ResourceReconcileEvent event,
                                            : record.active_security_epoch;
     notification.active_slot = record.active_slot;
     notification.target_slot = record.target_slot;
+    return notification;
+}
+
+bool ResourceReconciler::Emit(ResourceReconcileEvent event,
+                              const Target& target, const char* bundle_version,
+                              const char* error_code) const {
+    if (!IsCurrent(target.generation) || sink_ == nullptr) return false;
+    const ResourceReconcileNotification notification = MakeNotification(
+        event, target, bundle_version, error_code);
     return sink_(notification, sink_context_);
 }
 
 bool ResourceReconciler::EmitWithRetry(
     ResourceReconcileEvent event, const Target& target,
-    const char* bundle_version, const char* error_code) const {
-    while (IsCurrent(target.generation)) {
-        if (Emit(event, target, bundle_version, error_code)) return true;
-        vTaskDelay(pdMS_TO_TICKS(kNotificationRetryMs));
+    const char* bundle_version, const char* error_code) {
+    if (!IsCurrent(target.generation) || sink_ == nullptr ||
+        notification_queue_ == nullptr || executor_ == nullptr) {
+        return false;
+    }
+    const PendingNotification pending{
+        .generation = target.generation,
+        .notification =
+            MakeNotification(event, target, bundle_version, error_code),
+    };
+    if (sink_(pending.notification, sink_context_)) return true;
+    if (!IsCurrent(target.generation) ||
+        xQueueOverwrite(notification_queue_, &pending) != pdTRUE) {
+        return false;
+    }
+    return executor_->Request(job_kind_, kNotificationRetryMs);
+}
+
+bool ResourceReconciler::DeliverPendingNotification() {
+    if (notification_queue_ == nullptr) return false;
+    PendingNotification pending{};
+    while (xQueueReceive(notification_queue_, &pending, 0) == pdTRUE) {
+        if (!IsCurrent(pending.generation)) continue;
+        if (sink_ != nullptr &&
+            sink_(pending.notification, sink_context_)) {
+            RequestIfPending();
+            return true;
+        }
+        if (IsCurrent(pending.generation) &&
+            xQueueSendToFront(notification_queue_, &pending, 0) == pdTRUE &&
+            executor_ != nullptr) {
+            executor_->Request(job_kind_, kNotificationRetryMs);
+        }
+        return true;
     }
     return false;
 }
 
+bool ResourceReconciler::DeferForRealtime(const Target& target) {
+    if (!IsCurrent(target.generation) || executor_ == nullptr ||
+        !executor_->realtime_active() || queue_ == nullptr) {
+        return false;
+    }
+    // A concurrently scheduled newer generation already owns a non-empty
+    // mailbox. Never overwrite it with this interrupted target.
+    if (xQueueSend(queue_, &target, 0) == pdTRUE) {
+        executor_->Request(job_kind_);
+    }
+    return true;
+}
+
+void ResourceReconciler::RequestIfPending() {
+    if (executor_ == nullptr) return;
+    const bool pending_notification =
+        notification_queue_ != nullptr &&
+        uxQueueMessagesWaiting(notification_queue_) != 0;
+    const bool pending_target =
+        queue_ != nullptr && uxQueueMessagesWaiting(queue_) != 0;
+    if (pending_notification || pending_target) executor_->Request(job_kind_);
+}
+
 bool ResourceReconciler::IsCurrent(std::uint32_t generation) const {
     return generation_.load() == generation;
+}
+
+bool ResourceReconciler::CanContinue(std::uint32_t generation) const {
+    return IsCurrent(generation) &&
+           (executor_ == nullptr ||
+            maintenance::CanRunMaintenanceJob(
+                job_kind_, executor_->realtime_active(),
+                executor_->firmware_exclusive()));
 }
 
 }  // namespace veetee::ota

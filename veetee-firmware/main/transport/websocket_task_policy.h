@@ -26,8 +26,25 @@ constexpr bool ShouldReplaceOldestUrgentCommand(
 inline constexpr std::size_t kWebSocketIoTaskStackBytes = 10 * 1024;
 inline constexpr char kWebSocketIoTaskName[] = "veetee_ws_io";
 
+// Hold a contiguous internal block while the component allocates its client
+// state. Releasing it immediately before start guarantees that the I/O task has
+// a suitable stack block even when the remaining internal heap is fragmented.
+inline constexpr std::size_t kWebSocketIoReserveDesiredBytes = 16 * 1024;
+inline constexpr std::size_t kWebSocketIoReserveMinimumBytes =
+    kWebSocketIoTaskStackBytes;
+
 constexpr bool CanAllocateWebSocketIoTask(std::size_t largest_internal_block) {
     return largest_internal_block >= kWebSocketIoTaskStackBytes;
+}
+
+constexpr std::size_t WebSocketIoReserveBytesForLargestBlock(
+    std::size_t largest_internal_block) {
+    if (largest_internal_block >= kWebSocketIoReserveDesiredBytes) {
+        return kWebSocketIoReserveDesiredBytes;
+    }
+    return CanAllocateWebSocketIoTask(largest_internal_block)
+               ? kWebSocketIoReserveMinimumBytes
+               : 0;
 }
 
 inline constexpr std::uint8_t kWebSocketReconnectAttempts = 3;

@@ -29,7 +29,11 @@ from veetee_voice_server.conversation.types import (
     Transcript,
     WakeSource,
 )
-from veetee_voice_server.providers.contracts import LlmRequest, LlmTextDelta
+from veetee_voice_server.providers.contracts import (
+    LlmRequest,
+    LlmStreamDone,
+    LlmTextDelta,
+)
 from veetee_voice_server.transport.sink import MemoryConversationSink
 
 pytestmark = pytest.mark.asyncio
@@ -720,7 +724,15 @@ async def test_tts_chunk_capability_coalesces_short_sentences_for_natural_pacing
 async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail() -> None:
     arbiter = TurnArbiter("session-unbounded-response")
     sink = MemoryConversationSink()
-    deltas = tuple(f"Đây là phần trả lời số {index}. " for index in range(60))
+    # Roughly 4,200 spoken words at normal Vietnamese speech rates: comfortably
+    # beyond the representative 5-10 minute soak.  Duration is deliberately not
+    # a product limit; the fixture runs quickly while exercising the same
+    # progress-refreshed deadlines and bounded context/backpressure path.
+    delta_count = 600
+    deltas = tuple(
+        f"Đây là phần trả lời số {index} vẫn đang tiếp tục. "
+        for index in range(delta_count)
+    )
 
     class ProgressiveLlm:
         async def stream(
@@ -728,7 +740,7 @@ async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail
         ) -> AsyncIterator[LlmTextDelta]:
             del request, context
             for delta in deltas:
-                await asyncio.sleep(0.004)
+                await asyncio.sleep(0)
                 yield LlmTextDelta(delta)
 
     engine = ConversationEngine(
@@ -760,14 +772,176 @@ async def test_long_but_active_stream_is_unbounded_and_retains_only_context_tail
         timeout=2.0,
     )
 
-    assert len([output for output in sink.outputs if output.kind is OutputKind.TEXT_DELTA]) == 60
+    assert (
+        len(
+            [
+                output
+                for output in sink.outputs
+                if output.kind is OutputKind.TEXT_DELTA
+            ]
+        )
+        == delta_count
+    )
     assert len(engine.context[-1].text) <= 96
-    assert engine.context[-1].text.endswith("Đây là phần trả lời số 59.")
+    assert engine.context[-1].text.endswith(
+        f"Đây là phần trả lời số {delta_count - 1} vẫn đang tiếp tục."
+    )
     assert len(recorded) == 1
     assert len(recorded[0].assistant_text) <= 160
-    assert recorded[0].assistant_text.startswith("Đây là phần trả lời số 0.")
-    assert recorded[0].assistant_text.endswith("Đây là phần trả lời số 59.")
+    assert recorded[0].assistant_text.startswith(
+        "Đây là phần trả lời số 0 vẫn đang tiếp tục."
+    )
+    assert recorded[0].assistant_text.endswith(
+        f"Đây là phần trả lời số {delta_count - 1} vẫn đang tiếp tục."
+    )
     assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "max_tokens"])
+async def test_truncated_llm_stream_is_reported_and_not_committed_as_memory(
+    finish_reason: str,
+) -> None:
+    arbiter = TurnArbiter(f"session-truncated-{finish_reason}")
+    sink = MemoryConversationSink()
+
+    class TruncatedLlm:
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta | LlmStreamDone]:
+            del request
+            context.checkpoint()
+            yield LlmTextDelta("Phần trả lời đã phát nhưng chưa hoàn tất.")
+            yield LlmStreamDone(finish_reason)
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=TruncatedLlm(),
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Hãy giải thích thật dài.", "vi-VN"))
+
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TTS_START]) == 1
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TTS_STOP]) == 1
+    assert [
+        output.payload
+        for output in sink.outputs
+        if output.kind is OutputKind.ERROR
+    ] == [{"code": "llm_output_truncated", "stage": "llm"}]
+    assert engine.context == ()
+    assert recorded == []
+
+
+async def test_terminal_llm_event_finishes_before_provider_eof() -> None:
+    arbiter = TurnArbiter("session-terminal-before-eof")
+    sink = MemoryConversationSink()
+
+    class HangingAfterTerminalLlm:
+        def __init__(self) -> None:
+            self.closed = asyncio.Event()
+
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta | LlmStreamDone]:
+            del request
+            try:
+                context.checkpoint()
+                yield LlmTextDelta("Phần trả lời đã phát nhưng chưa hoàn tất.")
+                yield LlmStreamDone("length")
+                # A gateway may leave its response body open after the terminal
+                # finish chunk.  The engine must not wait for this keep-alive.
+                await asyncio.Event().wait()
+            finally:
+                self.closed.set()
+
+    llm = HangingAfterTerminalLlm()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=llm,
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(
+            llm_first_token_seconds=0.02,
+            llm_stream_idle_seconds=0.02,
+            sentence_min_characters=1,
+        ),
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await asyncio.wait_for(
+        engine.handle_transcript(Transcript("Hãy giải thích thật dài.", "vi-VN")),
+        timeout=1.0,
+    )
+    await asyncio.wait_for(llm.closed.wait(), timeout=0.2)
+
+    assert not any(
+        output.payload == {"code": "provider_deadline", "stage": "provider"}
+        for output in sink.outputs
+        if output.kind is OutputKind.ERROR
+    )
+    assert [
+        output.payload
+        for output in sink.outputs
+        if output.kind is OutputKind.ERROR
+    ] == [{"code": "llm_output_truncated", "stage": "llm"}]
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TTS_START]) == 1
+    assert len([output for output in sink.outputs if output.kind is OutputKind.TTS_STOP]) == 1
+    assert engine.context == ()
+    assert recorded == []
+
+
+async def test_completed_llm_stream_is_committed_without_truncation_error() -> None:
+    arbiter = TurnArbiter("session-finish-stop")
+    sink = MemoryConversationSink()
+
+    class CompletedLlm:
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta | LlmStreamDone]:
+            del request
+            context.checkpoint()
+            yield LlmTextDelta("Đây là câu trả lời đã hoàn tất.")
+            yield LlmStreamDone("stop")
+
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(response_plan()),
+        llm=CompletedLlm(),
+        tts=FakeTts(),
+        tools=FakeTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    recorded: list[CompletedMemoryTurn] = []
+    engine.configure_cross_session_memory(
+        MemorySnapshot(), lambda turn: not recorded.append(turn)
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Hãy trả lời.", "vi-VN"))
+
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+    assert tuple(message.role for message in engine.context) == ("user", "assistant")
+    assert len(recorded) == 1
+    assert recorded[0].assistant_text == "Đây là câu trả lời đã hoàn tất."
 
 
 async def test_first_token_deadline_is_shorter_than_stream_idle_deadline() -> None:

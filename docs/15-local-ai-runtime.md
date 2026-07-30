@@ -231,6 +231,16 @@ keep it at `0` unless a product policy explicitly requires a ceiling. Low TTS fi
 or idle deadlines can also cancel output when CPU contention or a large batch delays the
 next audio event.
 
+Runtime defaults keep `max_session_seconds`, `total_turn_seconds`, `llm_total_seconds`
+and `tts_total_seconds` at `0`; token/audio progress refreshes the separate idle
+watchdogs. Provider `maxCompletionTokens` remains a per-request resource bound. A prose
+terminal `length|max_tokens` is incomplete: partial TTS drains, runtime reports
+`llm_output_truncated`, and the partial pair is not committed to context/memory.
+Arbitrarily long generated output therefore needs resumable segment/cursor orchestration;
+long file/source reading streams bounded text through the sentence chunker and TTS with
+an offset checkpoint instead of loading the full source or raising token limits without
+bound.
+
 Use `docs/21-local-development-runbook.md` for the complete cold-start order, health
 checks, safe process inspection, authorized live Lab probe design and AI handoff prompt.
 
@@ -269,7 +279,9 @@ PCM. Later provider batches use the synthesis-idle watchdog while the device see
 continuous `tts:start`/audio/`tts:stop` lifecycle. Queue wait is cancellation-aware and
 does not consume the synthesis-idle deadline. The bounded five-second server queue and
 three-frame prebuffer protect pacing but cannot repair a TTS generator slower than the
-speaker clock.
+speaker clock. Five seconds is queue capacity, not an output-duration cap: when full at
+the final inference event, the Device paced sender is expected to take about 5.1 seconds
+to drain before its wire `tts.stop`.
 
 The long 2,352-character fixed-text diagnostic compared all-160 sentence batching with
 first-160/steady-256. Hybrid reduced outer requests and actual internal starts from 23 to
@@ -333,6 +345,17 @@ CPU (p95 1%), proving playback drain rather than continued inference. Sampler RS
 at 834.29 MiB, peaked at 1,044.54 MiB and ended at a flat 1,020.93 MiB; the final 61
 samples had zero KiB range and the process held 27 threads throughout.
 
+A 2026-07-30 Device-session recheck recorded 30 active one-second samples at
+119.633/157/165% CPU average/p95/peak, 27 threads and sampled RSS
+1,133,320--1,157,964 KiB (high-water 1,158,036 KiB). Engine `tts.stop` to
+`tts.paced_sender_summary`/`listen.start` took 5.115 s with zero starvation and two
+scheduler-lateness events totalling 44 ms (27 ms max), matching the five-second paced
+queue. The following 20-second tail averaged 2.75% CPU. The sampler missed the exact
+inference-to-drain boundary, so this run does not prove the release requirement that
+interval CPU return near idle in the next sample and within two seconds; collect a
+continuous sampler for that gate. The 5.115 s value is server queue drain, not device
+speaker acknowledgement.
+
 The 2026-07-28 accepted live HTTPS Realtime Lab session used the current ONNX/2-thread,
 Trúc Ly, `tu_nhien`, 1.0x profile. Two natural user turns completed with one
 `tts.start`/`tts.stop` lifecycle each, no deadline, turn error or stale output. Their
@@ -361,6 +384,8 @@ Prefer structured Voice Server logs and wire events over bounded telemetry. Corr
 - `conversation_tts_text_chunk_ready` (`reason`, `text_characters`)
 - `conversation_tts_request`, turn-level `conversation_tts_first_audio`, and
   `conversation_tts_batch_first_audio` (`reason`, character count, duration)
+- `conversation_llm_stream_complete` (`finish_reason`, `incomplete`) and bounded
+  `conversation_llm_output_truncated`
 - `conversation_provider_deadline`
 - `tts:start`, `tts:stop` with cancellation state, and `listen:start`
 - `vieneu_tts_completed` (`request_wall_rtf`, normalized chunks, actual internal starts,
@@ -374,6 +399,9 @@ it is a process-lifetime average and can decay slowly after a large synthesis bu
 `pidstat -p <voice-pid> 1` or another interval/delta sampler for the post-synthesis tail.
 In the accepted long soak, instantaneous Voice CPU returned to approximately zero in
 less than 0.5 s even while the lifetime average remained visibly high.
+For a fresh release gate, keep the one-second sampler continuous across the final
+`vieneu_tts_completed`: CPU must be near idle in the next sample and no later than two
+seconds. A missing sampler interval cannot prove this gate even if the later tail is low.
 
 RSS also need not return to its prewarm value: resident model pages and the ONNX allocator
 retain a high-water mark. Treat a flat 30--60 s tail or a plateau across repeated turns

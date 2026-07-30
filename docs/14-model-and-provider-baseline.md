@@ -236,8 +236,13 @@ sang official API hoặc model self-hosted tương thích; toàn bộ voice loop
 
 ### 2.3 LLM policy realtime
 
-- Dùng streaming output, `max_output_tokens` thấp cho câu trả lời thoại và structured
-  output cho planner/tool call.
+- Dùng streaming output và per-request `max_output_tokens` bounded phù hợp cho câu trả
+  lời thoại; đây không phải duration cap. Generated output dài hơn một request dùng
+  resumable segment/cursor, còn file/source text stream bounded trực tiếp qua sentence
+  chunker -> TTS với offset checkpoint.
+- Bảo toàn terminal `finish_reason`; `length|max_tokens` phải được báo
+  `llm_output_truncated` sau khi partial TTS drain và không được commit vào completed
+  context/memory.
 - Tách planner/tool decision khỏi prose TTS; không phát chain-of-thought ra loa.
 - Áp dụng `llmSeconds` như first-token/inter-event idle deadline được làm mới, không
   dùng nó làm absolute ceiling cho câu trả lời đang tiếp tục sinh hoặc TTS đang drain.

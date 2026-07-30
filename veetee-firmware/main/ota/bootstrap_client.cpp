@@ -11,6 +11,7 @@
 #include "board/board_config.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "network/endpoint_url.h"
@@ -21,6 +22,8 @@ namespace veetee::ota {
 namespace {
 
 constexpr char kTag[] = "veetee_bootstrap";
+constexpr std::size_t kMaximumResponseBytes = 8192;
+constexpr UBaseType_t kNotificationQueueDepth = 6;
 constexpr std::uint32_t kInitialRetryMs = 1000;
 constexpr std::uint32_t kMaximumRetryMs = 30000;
 constexpr std::uint32_t kActivationPollMs = 2000;
@@ -107,12 +110,15 @@ std::string ActivationUrl(const char* bootstrap_url) {
 
 esp_err_t BootstrapClient::Initialize(settings::SettingsStore* store,
                                       settings::DeviceSettings* settings,
+                                      maintenance::MaintenanceExecutor* executor,
                                       EventSink sink, void* context) {
-    if (store == nullptr || settings == nullptr || sink == nullptr) {
+    if (store == nullptr || settings == nullptr || executor == nullptr ||
+        sink == nullptr || store_ != nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     store_ = store;
     settings_ = settings;
+    executor_ = executor;
     sink_ = sink;
     sink_context_ = context;
 
@@ -123,188 +129,231 @@ esp_err_t BootstrapClient::Initialize(settings::SettingsStore* store,
                   "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
                   mac[3], mac[4], mac[5]);
 
-    if (xTaskCreate(&BootstrapClient::TaskEntry, "veetee_bootstrap", 12288, this,
-                    5, &task_) != pdPASS) {
-        task_ = nullptr;
+    response_ = static_cast<char*>(heap_caps_calloc(
+        kMaximumResponseBytes + 1, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (response_ == nullptr) return ESP_ERR_NO_MEM;
+    constexpr UBaseType_t queue_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    attempt_queue_ = xQueueCreateWithCaps(1, sizeof(Attempt), queue_caps);
+    notification_queue_ = xQueueCreateWithCaps(
+        kNotificationQueueDepth, sizeof(PendingNotification), queue_caps);
+    if (attempt_queue_ == nullptr || notification_queue_ == nullptr ||
+        !executor_->Register(maintenance::MaintenanceJobKind::kBootstrap,
+                             &BootstrapClient::MaintenanceEntry, this)) {
+        if (attempt_queue_ != nullptr) {
+            vQueueDeleteWithCaps(attempt_queue_);
+        }
+        if (notification_queue_ != nullptr) {
+            vQueueDeleteWithCaps(notification_queue_);
+        }
+        attempt_queue_ = nullptr;
+        notification_queue_ = nullptr;
+        heap_caps_free(response_);
+        response_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
 }
 
 void BootstrapClient::Start() {
-    if (task_ == nullptr) return;
+    if (executor_ == nullptr || attempt_queue_ == nullptr ||
+        notification_queue_ == nullptr) {
+        return;
+    }
     active_.store(true);
-    generation_.fetch_add(1);
-    xTaskNotifyGive(task_);
+    const std::uint32_t generation = generation_.fetch_add(1) + 1;
+    const settings::DeviceSettings snapshot = store_->Snapshot();
+    const bool pending_activation = snapshot.HasPendingActivation();
+    const Attempt attempt{
+        .generation = generation,
+        .retry_ms = kInitialRetryMs,
+        .activation_elapsed_ms = 0,
+        .refresh_activation_ticket = pending_activation,
+        .announce_pending_activation = pending_activation,
+    };
+    xQueueReset(notification_queue_);
+    if (xQueueOverwrite(attempt_queue_, &attempt) != pdTRUE ||
+        !executor_->Request(maintenance::MaintenanceJobKind::kBootstrap)) {
+        ESP_LOGE(kTag, "Unable to schedule bootstrap maintenance attempt");
+    }
 }
 
 void BootstrapClient::Cancel() {
     active_.store(false);
     generation_.fetch_add(1);
-}
-
-void BootstrapClient::TaskEntry(void* context) {
-    static_cast<BootstrapClient*>(context)->TaskLoop();
-}
-
-void BootstrapClient::TaskLoop() {
-    while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        const std::uint32_t generation = generation_.load();
-        if (active_.load()) Run(generation);
+    if (attempt_queue_ != nullptr) xQueueReset(attempt_queue_);
+    if (notification_queue_ != nullptr) xQueueReset(notification_queue_);
+    if (executor_ != nullptr) {
+        executor_->Cancel(maintenance::MaintenanceJobKind::kBootstrap);
     }
 }
 
-void BootstrapClient::Run(std::uint32_t generation) {
+void BootstrapClient::MaintenanceEntry(void* context) {
+    static_cast<BootstrapClient*>(context)->ProcessPending();
+}
+
+void BootstrapClient::ProcessPending() {
+    if (DeliverPendingNotification()) return;
+    Attempt attempt{};
+    if (attempt_queue_ != nullptr &&
+        xQueueReceive(attempt_queue_, &attempt, 0) == pdTRUE &&
+        IsCurrent(attempt.generation)) {
+        ProcessAttempt(attempt);
+    }
+}
+
+void BootstrapClient::ProcessAttempt(Attempt attempt) {
+    if (!IsCurrent(attempt.generation)) return;
     settings::DeviceSettings snapshot = store_->Snapshot();
-    std::uint32_t retry_ms = kInitialRetryMs;
-    std::uint32_t activation_elapsed_ms = 0;
-    bool refresh_activation_ticket = snapshot.HasPendingActivation();
+    if (attempt.announce_pending_activation &&
+        snapshot.HasPendingActivation()) {
+        if (QueueNotification(BootstrapEvent::kActivationCodeAvailable,
+                              snapshot.activation_code, nullptr,
+                              attempt.generation)) {
+            attempt.announce_pending_activation = false;
+            Reschedule(attempt, 0);
+        } else {
+            Reschedule(attempt, kNotificationRetryMs);
+        }
+        return;
+    }
+
+    esp_err_t error = ESP_FAIL;
+    if (snapshot.HasDeviceIdentity()) {
+        BootstrapPayload payload{};
+        error = RequestBootstrap(snapshot, true, &payload, attempt.generation);
+        if (error == ESP_OK && IsCurrent(attempt.generation)) {
+            if (FirmwareBootstrapRequiresUpdate(
+                    payload.has_firmware, payload.firmware_version,
+                    CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION,
+                    firmware_updates_deferred_.load())) {
+                if (!QueueNotification(BootstrapEvent::kFirmwareDesired,
+                                       nullptr, &payload,
+                                       attempt.generation)) {
+                    Reschedule(attempt, kNotificationRetryMs);
+                }
+                return;
+            }
+            const std::uint32_t config_version =
+                payload.has_config ? payload.config_version
+                                   : snapshot.config_version;
+            error = store_->SaveBoundBootstrap(payload.websocket_url,
+                                                config_version, settings_);
+            if (error == ESP_OK) {
+                if (!QueueBootstrapComplete(payload, attempt.generation)) {
+                    Reschedule(attempt, kNotificationRetryMs);
+                }
+                return;
+            }
+        }
+        if (error == ESP_ERR_INVALID_STATE && IsCurrent(attempt.generation)) {
+            ESP_LOGE(
+                kTag,
+                "Manager rejected the stored device identity; physical recovery required");
+            if (!QueueNotification(BootstrapEvent::kDeviceIdentityRejected,
+                                   nullptr, nullptr, attempt.generation)) {
+                Reschedule(attempt, kNotificationRetryMs);
+            }
+            return;
+        }
+        Retry(attempt, error);
+        return;
+    }
 
     if (snapshot.HasPendingActivation()) {
-        if (!EmitWithRetry(BootstrapEvent::kActivationCodeAvailable,
-                           snapshot.activation_code, nullptr, generation)) {
+        if (attempt.refresh_activation_ticket) {
+            BootstrapPayload ticket{};
+            error = RequestBootstrap(snapshot, false, &ticket,
+                                     attempt.generation);
+            if (error == ESP_OK && !ticket.has_activation) {
+                error = ESP_ERR_INVALID_RESPONSE;
+            }
+            if (error == ESP_OK) {
+                error = store_->SavePendingActivation(
+                    ticket.activation_code, ticket.activation_challenge,
+                    settings_);
+                if (error == ESP_OK) {
+                    snapshot = store_->Snapshot();
+                    attempt.refresh_activation_ticket = false;
+                    attempt.activation_elapsed_ms = 0;
+                    attempt.retry_ms = kInitialRetryMs;
+                    if (QueueNotification(
+                            BootstrapEvent::kActivationCodeAvailable,
+                            snapshot.activation_code, nullptr,
+                            attempt.generation)) {
+                        Reschedule(attempt, 0);
+                    } else {
+                        attempt.announce_pending_activation = true;
+                        Reschedule(attempt, kNotificationRetryMs);
+                    }
+                    return;
+                }
+            } else if (error == ESP_ERR_INVALID_STATE) {
+                // HTTP 409 means Manager already consumed the code; keep polling
+                // activate without blocking the shared maintenance worker.
+                attempt.refresh_activation_ticket = false;
+                attempt.activation_elapsed_ms = 0;
+                attempt.retry_ms = kInitialRetryMs;
+                Reschedule(attempt, 0);
+                return;
+            }
+            Retry(attempt, error);
+            return;
+        }
+
+        ActivationPayload payload{};
+        error = RequestActivation(snapshot, &payload, attempt.generation);
+        if (error == ESP_OK && IsCurrent(attempt.generation)) {
+            error = store_->SaveDeviceActivation(
+                payload.device_id, payload.device_token,
+                payload.websocket_url, payload.config_version, settings_);
+            if (error == ESP_OK) {
+                // The activation response has no immutable snapshot ETag or
+                // canonical URL. Re-enter authenticated bootstrap before
+                // declaring activation complete.
+                attempt.retry_ms = kInitialRetryMs;
+                attempt.activation_elapsed_ms = 0;
+                attempt.refresh_activation_ticket = false;
+                Reschedule(attempt, 0);
+                return;
+            }
+        } else if (error == ESP_ERR_TIMEOUT) {
+            attempt.retry_ms = kInitialRetryMs;
+            attempt.activation_elapsed_ms += kActivationPollMs;
+            if (attempt.activation_elapsed_ms >=
+                kActivationTicketRefreshMs) {
+                attempt.refresh_activation_ticket = true;
+            }
+            Reschedule(attempt, kActivationPollMs);
+            return;
+        }
+        Retry(attempt, error);
+        return;
+    }
+
+    BootstrapPayload payload{};
+    error = RequestBootstrap(snapshot, false, &payload, attempt.generation);
+    if (error == ESP_OK && IsCurrent(attempt.generation) &&
+        payload.has_activation) {
+        error = store_->SavePendingActivation(
+            payload.activation_code, payload.activation_challenge, settings_);
+        if (error == ESP_OK) {
+            snapshot = store_->Snapshot();
+            attempt.refresh_activation_ticket = false;
+            attempt.activation_elapsed_ms = 0;
+            attempt.retry_ms = kInitialRetryMs;
+            if (QueueNotification(BootstrapEvent::kActivationCodeAvailable,
+                                  snapshot.activation_code, nullptr,
+                                  attempt.generation)) {
+                Reschedule(attempt, 0);
+            } else {
+                attempt.announce_pending_activation = true;
+                Reschedule(attempt, kNotificationRetryMs);
+            }
             return;
         }
     }
-
-    while (IsCurrent(generation)) {
-        esp_err_t error = ESP_FAIL;
-        if (snapshot.HasDeviceIdentity()) {
-            BootstrapPayload payload{};
-            error = RequestBootstrap(snapshot, true, &payload, generation);
-            if (error == ESP_OK && IsCurrent(generation)) {
-                if (FirmwareBootstrapRequiresUpdate(
-                        payload.has_firmware, payload.firmware_version,
-                        CONFIG_VEETEE_FIRMWARE_COMPAT_VERSION,
-                        firmware_updates_deferred_.load())) {
-                    EmitWithRetry(BootstrapEvent::kFirmwareDesired, nullptr,
-                                  &payload, generation);
-                    return;
-                }
-                const std::uint32_t config_version =
-                    payload.has_config ? payload.config_version
-                                       : snapshot.config_version;
-                error = store_->SaveBoundBootstrap(payload.websocket_url,
-                                                   config_version, settings_);
-                if (error == ESP_OK) {
-                    if (payload.has_config &&
-                        !EmitWithRetry(BootstrapEvent::kConfigDesired, nullptr,
-                                       &payload, generation)) {
-                        return;
-                    }
-                    if (payload.has_resources &&
-                        !EmitWithRetry(BootstrapEvent::kResourceDesired, nullptr,
-                                       &payload, generation)) {
-                        return;
-                    }
-                    if (payload.has_ui &&
-                        !EmitWithRetry(BootstrapEvent::kUiPackDesired, nullptr,
-                                       &payload, generation)) {
-                        return;
-                    }
-                    EmitWithRetry(BootstrapEvent::kActivationComplete, nullptr,
-                                  nullptr, generation);
-                    return;
-                }
-            }
-            if (error == ESP_ERR_INVALID_STATE && IsCurrent(generation)) {
-                ESP_LOGE(kTag,
-                         "Manager rejected the stored device identity; physical recovery required");
-                EmitWithRetry(BootstrapEvent::kDeviceIdentityRejected, nullptr,
-                              nullptr, generation);
-                return;
-            }
-        } else if (snapshot.HasPendingActivation()) {
-            if (refresh_activation_ticket) {
-                BootstrapPayload ticket{};
-                error = RequestBootstrap(snapshot, false, &ticket, generation);
-                if (error == ESP_OK) {
-                    if (!ticket.has_activation) {
-                        error = ESP_ERR_INVALID_RESPONSE;
-                    } else {
-                        error = store_->SavePendingActivation(
-                            ticket.activation_code, ticket.activation_challenge,
-                            settings_);
-                        if (error == ESP_OK) {
-                            snapshot = store_->Snapshot();
-                            if (!EmitWithRetry(
-                                    BootstrapEvent::kActivationCodeAvailable,
-                                    snapshot.activation_code, nullptr,
-                                    generation)) {
-                                return;
-                            }
-                            refresh_activation_ticket = false;
-                            activation_elapsed_ms = 0;
-                            retry_ms = kInitialRetryMs;
-                        }
-                    }
-                } else if (error == ESP_ERR_INVALID_STATE) {
-                    // HTTP 409 means Manager already consumed the code; keep polling activate.
-                    refresh_activation_ticket = false;
-                    activation_elapsed_ms = 0;
-                    retry_ms = kInitialRetryMs;
-                    error = ESP_OK;
-                }
-                if (error != ESP_OK) {
-                    goto retry;
-                }
-            }
-
-            ActivationPayload payload{};
-            error = RequestActivation(snapshot, &payload, generation);
-            if (error == ESP_OK && IsCurrent(generation)) {
-                error = store_->SaveDeviceActivation(
-                    payload.device_id, payload.device_token, payload.websocket_url,
-                    payload.config_version, settings_);
-                if (error == ESP_OK) {
-                    // The activation response has no immutable snapshot ETag or
-                    // canonical URL. Re-enter authenticated bootstrap before
-                    // declaring activation complete so first boot reconciles
-                    // config without requiring a reboot.
-                    snapshot = store_->Snapshot();
-                    retry_ms = kInitialRetryMs;
-                    continue;
-                }
-            } else if (error == ESP_ERR_TIMEOUT) {
-                retry_ms = kInitialRetryMs;
-                if (!Delay(generation, kActivationPollMs)) return;
-                activation_elapsed_ms += kActivationPollMs;
-                if (activation_elapsed_ms >= kActivationTicketRefreshMs) {
-                    refresh_activation_ticket = true;
-                }
-                continue;
-            }
-        } else {
-            BootstrapPayload payload{};
-            error = RequestBootstrap(snapshot, false, &payload, generation);
-            if (error == ESP_OK && IsCurrent(generation) && payload.has_activation) {
-                error = store_->SavePendingActivation(
-                    payload.activation_code, payload.activation_challenge, settings_);
-                if (error == ESP_OK) {
-                    snapshot = store_->Snapshot();
-                    if (!EmitWithRetry(BootstrapEvent::kActivationCodeAvailable,
-                                       snapshot.activation_code, nullptr,
-                                       generation)) {
-                        return;
-                    }
-                    refresh_activation_ticket = false;
-                    activation_elapsed_ms = 0;
-                    retry_ms = kInitialRetryMs;
-                    continue;
-                }
-            }
-            if (error == ESP_OK) error = ESP_ERR_INVALID_RESPONSE;
-        }
-
-    retry:
-        if (!IsCurrent(generation)) return;
-        ESP_LOGW(kTag, "Bootstrap/activation attempt failed: %s; retry in %" PRIu32 " ms",
-                 esp_err_to_name(error), retry_ms);
-        if (!Delay(generation, retry_ms)) return;
-        retry_ms = std::min(kMaximumRetryMs, retry_ms * 2);
-        snapshot = store_->Snapshot();
-    }
+    if (error == ESP_OK) error = ESP_ERR_INVALID_RESPONSE;
+    Retry(attempt, error);
 }
 
 esp_err_t BootstrapClient::RequestBootstrap(
@@ -359,7 +408,8 @@ esp_err_t BootstrapClient::RequestActivation(
 esp_err_t BootstrapClient::PerformPost(
     const settings::DeviceSettings& snapshot, const char* url, const char* body,
     const char* bearer_token, int* status_code) {
-    if (url == nullptr || body == nullptr || status_code == nullptr) {
+    if (url == nullptr || body == nullptr || status_code == nullptr ||
+        response_ == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     *status_code = 0;
@@ -421,8 +471,17 @@ esp_err_t BootstrapClient::PerformPost(
     if (error == ESP_OK) {
         error = esp_http_client_set_post_field(client, body, std::strlen(body));
     }
+    const bool tracked =
+        error == ESP_OK && executor_ != nullptr &&
+        executor_->TrackHttpClient(maintenance::MaintenanceJobKind::kBootstrap,
+                                   client);
+    if (error == ESP_OK && !tracked) error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) {
         error = esp_http_client_perform(client);
+    }
+    if (tracked) {
+        executor_->UntrackHttpClient(
+            maintenance::MaintenanceJobKind::kBootstrap, client);
         // A 401 challenge can make esp_http_client return ESP_ERR_NOT_SUPPORTED.
         // Preserve the received status so identity rejection remains recoverable.
         *status_code = esp_http_client_get_status_code(client);
@@ -439,20 +498,25 @@ esp_err_t BootstrapClient::PerformPost(
 esp_err_t BootstrapClient::HttpEventHandler(esp_http_client_event_t* event) {
     if (event == nullptr || event->user_data == nullptr) return ESP_ERR_INVALID_ARG;
     auto* client = static_cast<BootstrapClient*>(event->user_data);
+    if (client->executor_ != nullptr && client->executor_->realtime_active()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
     const std::size_t length = static_cast<std::size_t>(event->data_len);
-    if (client->response_size_ + length >= client->response_.size()) {
+    if (client->response_ == nullptr ||
+        client->response_size_ + length > kMaximumResponseBytes) {
         client->response_overflow_ = true;
         return ESP_FAIL;
     }
-    std::memcpy(client->response_.data() + client->response_size_, event->data, length);
+    std::memcpy(client->response_ + client->response_size_, event->data,
+                length);
     client->response_size_ += length;
     return ESP_OK;
 }
 
 esp_err_t BootstrapClient::ParseBootstrap(BootstrapPayload* payload) const {
     if (payload == nullptr) return ESP_ERR_INVALID_ARG;
-    cJSON* root = cJSON_ParseWithLength(response_.data(), response_size_);
+    cJSON* root = cJSON_ParseWithLength(response_, response_size_);
     if (root == nullptr) return ESP_ERR_INVALID_RESPONSE;
 
     bool valid = true;
@@ -521,7 +585,7 @@ esp_err_t BootstrapClient::ParseBootstrap(BootstrapPayload* payload) const {
 
 esp_err_t BootstrapClient::ParseActivation(ActivationPayload* payload) const {
     if (payload == nullptr) return ESP_ERR_INVALID_ARG;
-    cJSON* root = cJSON_ParseWithLength(response_.data(), response_size_);
+    cJSON* root = cJSON_ParseWithLength(response_, response_size_);
     if (root == nullptr) return ESP_ERR_INVALID_RESPONSE;
     const bool valid =
         CopyJsonString(root, "device_id", payload->device_id,
@@ -538,11 +602,19 @@ esp_err_t BootstrapClient::ParseActivation(ActivationPayload* payload) const {
     return valid ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
 
-bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
-                           const BootstrapPayload* payload,
-                           std::uint32_t generation) const {
-    if (!IsCurrent(generation) || sink_ == nullptr) return false;
-    BootstrapNotification notification{.event = event};
+bool BootstrapClient::QueueNotification(BootstrapEvent event,
+                                        const char* activation_code,
+                                        const BootstrapPayload* payload,
+                                        std::uint32_t generation) {
+    if (!IsCurrent(generation) || notification_queue_ == nullptr ||
+        executor_ == nullptr) {
+        return false;
+    }
+    PendingNotification pending{
+        .generation = generation,
+        .notification = BootstrapNotification{.event = event},
+    };
+    BootstrapNotification& notification = pending.notification;
     if (activation_code != nullptr) {
         std::snprintf(notification.activation_code,
                       sizeof(notification.activation_code), "%s", activation_code);
@@ -583,29 +655,99 @@ bool BootstrapClient::Emit(BootstrapEvent event, const char* activation_code,
                       sizeof(notification.firmware_manifest_url), "%s",
                       payload->firmware_manifest_url);
     }
-    return sink_(notification, sink_context_);
+    if (!IsCurrent(generation) ||
+        xQueueSend(notification_queue_, &pending, 0) != pdTRUE) {
+        return false;
+    }
+    return executor_->Request(maintenance::MaintenanceJobKind::kBootstrap);
 }
 
-bool BootstrapClient::EmitWithRetry(BootstrapEvent event,
-                                    const char* activation_code,
-                                    const BootstrapPayload* payload,
-                                    std::uint32_t generation) const {
-    while (IsCurrent(generation)) {
-        if (Emit(event, activation_code, payload, generation)) return true;
-        if (!Delay(generation, kNotificationRetryMs)) return false;
+bool BootstrapClient::QueueBootstrapComplete(const BootstrapPayload& payload,
+                                             std::uint32_t generation) {
+    if (!IsCurrent(generation) || notification_queue_ == nullptr) return false;
+    const UBaseType_t required =
+        1U + static_cast<UBaseType_t>(payload.has_config) +
+        static_cast<UBaseType_t>(payload.has_resources) +
+        static_cast<UBaseType_t>(payload.has_ui);
+    if (uxQueueSpacesAvailable(notification_queue_) < required) return false;
+
+    if (payload.has_config &&
+        !QueueNotification(BootstrapEvent::kConfigDesired, nullptr, &payload,
+                           generation)) {
+        return false;
+    }
+    if (payload.has_resources &&
+        !QueueNotification(BootstrapEvent::kResourceDesired, nullptr, &payload,
+                           generation)) {
+        return false;
+    }
+    if (payload.has_ui &&
+        !QueueNotification(BootstrapEvent::kUiPackDesired, nullptr, &payload,
+                           generation)) {
+        return false;
+    }
+    return QueueNotification(BootstrapEvent::kActivationComplete, nullptr,
+                             nullptr, generation);
+}
+
+bool BootstrapClient::DeliverPendingNotification() {
+    if (notification_queue_ == nullptr) return false;
+    PendingNotification pending{};
+    while (xQueueReceive(notification_queue_, &pending, 0) == pdTRUE) {
+        if (!IsCurrent(pending.generation)) continue;
+        if (sink_ != nullptr &&
+            sink_(pending.notification, sink_context_)) {
+            RequestIfPending();
+            return true;
+        }
+        if (IsCurrent(pending.generation) &&
+            xQueueSendToFront(notification_queue_, &pending, 0) == pdTRUE &&
+            executor_ != nullptr) {
+            executor_->Request(maintenance::MaintenanceJobKind::kBootstrap,
+                               kNotificationRetryMs);
+        }
+        return true;
     }
     return false;
 }
 
-bool BootstrapClient::Delay(std::uint32_t generation,
-                            std::uint32_t milliseconds) const {
-    std::uint32_t remaining = milliseconds;
-    while (remaining > 0 && IsCurrent(generation)) {
-        const std::uint32_t slice = std::min<std::uint32_t>(remaining, 100);
-        vTaskDelay(pdMS_TO_TICKS(slice));
-        remaining -= slice;
+bool BootstrapClient::Reschedule(const Attempt& attempt,
+                                 std::uint32_t delay_ms) {
+    if (!IsCurrent(attempt.generation) || attempt_queue_ == nullptr ||
+        executor_ == nullptr) {
+        return false;
     }
-    return IsCurrent(generation);
+    // A concurrent Start() owns a non-empty mailbox. Never let this older
+    // delayed attempt overwrite the new generation.
+    if (xQueueSend(attempt_queue_, &attempt, 0) != pdTRUE) return false;
+    if (!IsCurrent(attempt.generation)) return false;
+    return executor_->Request(maintenance::MaintenanceJobKind::kBootstrap,
+                              delay_ms);
+}
+
+void BootstrapClient::Retry(Attempt attempt, esp_err_t error) {
+    if (!IsCurrent(attempt.generation)) return;
+    const std::uint32_t retry_ms =
+        attempt.retry_ms == 0 ? kInitialRetryMs : attempt.retry_ms;
+    ESP_LOGW(kTag,
+             "Bootstrap/activation attempt failed: %s; retry in %" PRIu32
+             " ms",
+             esp_err_to_name(error), retry_ms);
+    attempt.retry_ms =
+        std::min(kMaximumRetryMs, retry_ms * 2U);
+    Reschedule(attempt, retry_ms);
+}
+
+void BootstrapClient::RequestIfPending() {
+    if (executor_ == nullptr) return;
+    const bool pending_notification =
+        notification_queue_ != nullptr &&
+        uxQueueMessagesWaiting(notification_queue_) != 0;
+    const bool pending_attempt =
+        attempt_queue_ != nullptr && uxQueueMessagesWaiting(attempt_queue_) != 0;
+    if (pending_notification || pending_attempt) {
+        executor_->Request(maintenance::MaintenanceJobKind::kBootstrap);
+    }
 }
 
 bool BootstrapClient::IsCurrent(std::uint32_t generation) const {

@@ -5,13 +5,60 @@
 
 namespace {
 
-void TestObservedFragmentedHeapCanCreateIoTask() {
-    assert(veetee::transport::CanAllocateWebSocketIoTask(11'776));
+void TestIoTaskPreflightUsesTheContiguousBlockBoundary() {
+    using namespace veetee::transport;
+    assert(!CanAllocateWebSocketIoTask(0));
+    assert(!CanAllocateWebSocketIoTask(kWebSocketIoTaskStackBytes - 1));
+    assert(CanAllocateWebSocketIoTask(kWebSocketIoTaskStackBytes));
+    assert(CanAllocateWebSocketIoTask(kWebSocketIoTaskStackBytes + 1));
 }
 
-void TestInsufficientContiguousHeapIsRejected() {
-    assert(!veetee::transport::CanAllocateWebSocketIoTask(
-        veetee::transport::kWebSocketIoTaskStackBytes - 1));
+void TestObservedFragmentationRejectsOpenEvenWhenTotalHeapIsLarger() {
+    using namespace veetee::transport;
+    constexpr std::size_t kObservedInternalFreeBytes = 11'975;
+    constexpr std::size_t kObservedLargestInternalBlockBytes = 3'584;
+    static_assert(kObservedInternalFreeBytes > kWebSocketIoTaskStackBytes);
+    assert(!CanAllocateWebSocketIoTask(kObservedLargestInternalBlockBytes));
+}
+
+void TestReservePrefersSixteenKiBAndFallsBackToTheIoTaskMinimum() {
+    using namespace veetee::transport;
+    static_assert(kWebSocketIoReserveMinimumBytes ==
+                  kWebSocketIoTaskStackBytes);
+    static_assert(kWebSocketIoReserveDesiredBytes == 16 * 1024);
+    assert(WebSocketIoReserveBytesForLargestBlock(
+               kWebSocketIoReserveMinimumBytes - 1) == 0);
+    assert(WebSocketIoReserveBytesForLargestBlock(
+               kWebSocketIoReserveMinimumBytes) ==
+           kWebSocketIoReserveMinimumBytes);
+    assert(WebSocketIoReserveBytesForLargestBlock(
+               kWebSocketIoReserveDesiredBytes - 1) ==
+           kWebSocketIoReserveMinimumBytes);
+    assert(WebSocketIoReserveBytesForLargestBlock(
+               kWebSocketIoReserveDesiredBytes) ==
+           kWebSocketIoReserveDesiredBytes);
+    assert(WebSocketIoReserveBytesForLargestBlock(
+               kWebSocketIoReserveDesiredBytes + 4096) ==
+           kWebSocketIoReserveDesiredBytes);
+}
+
+void TestRepeatedOpenClosePreflightDoesNotLatchAnAllocationFailure() {
+    using namespace veetee::transport;
+    constexpr std::size_t kLargestBlocksByCycle[] = {
+        kWebSocketIoTaskStackBytes + 4096,
+        kWebSocketIoTaskStackBytes,
+        kWebSocketIoTaskStackBytes - 1,
+        kWebSocketIoTaskStackBytes + 2048,
+    };
+    constexpr bool kExpectedAdmissionByCycle[] = {true, true, false, true};
+
+    for (std::size_t cycle = 0;
+         cycle < sizeof(kLargestBlocksByCycle) /
+                     sizeof(kLargestBlocksByCycle[0]);
+         ++cycle) {
+        assert(CanAllocateWebSocketIoTask(kLargestBlocksByCycle[cycle]) ==
+               kExpectedAdmissionByCycle[cycle]);
+    }
 }
 
 void TestReconnectPolicyIsBoundedAndJittered() {
@@ -67,8 +114,10 @@ void TestCriticalControlCannotFallBackBehindMcpBacklog() {
 }  // namespace
 
 int main() {
-    TestObservedFragmentedHeapCanCreateIoTask();
-    TestInsufficientContiguousHeapIsRejected();
+    TestIoTaskPreflightUsesTheContiguousBlockBoundary();
+    TestObservedFragmentationRejectsOpenEvenWhenTotalHeapIsLarger();
+    TestReservePrefersSixteenKiBAndFallsBackToTheIoTaskMinimum();
+    TestRepeatedOpenClosePreflightDoesNotLatchAnAllocationFailure();
     TestReconnectPolicyIsBoundedAndJittered();
     TestWakeOpeningRetryKeepsOnlyAnUntouchedMatchingSnapshot();
     TestCriticalControlCannotFallBackBehindMcpBacklog();

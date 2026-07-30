@@ -20,6 +20,12 @@
   JSON rejection và trusted-key/security-epoch downgrade.
 - Apply journal and power-loss recovery parser.
 - Reported-state sequence/CRC, durable terminal retry và latest-state coalescing.
+- Shared-maintenance policy: đúng priority
+  `reporter -> firmware -> bootstrap -> config -> wake resource -> UI`, realtime
+  chặn mọi lane, exclusive upgrading chỉ cho firmware/reporter, stale dispatch epoch
+  bị requeue và chỉ exclusive firmware HTTP là không được preempt.
+- WebSocket contiguous-reserve policy: floor đúng 10 KiB, ưu tiên 16 KiB, reject
+  largest block nhỏ hơn 10 KiB và nhiều vòng pass/fail/recover không latch lỗi.
 
 ### Firmware hardware tests
 
@@ -35,6 +41,13 @@
   hold 5 giây mới clear identity/provisioning và mở AP.
 - Activation wake accuracy in standby and interrupt-profile accuracy in standby/thinking; speaking interrupt is best-effort until AEC gate passes.
 - 30 phút conversation loop và heap watermark.
+- Bắt đầu button/wake trong lúc bootstrap/config/resource/UI/reporter HTTP đang chạy:
+  executor đóng HTTP deferrable, quiesce trong budget 150 ms rồi mới mở WebSocket;
+  phép đo bắt đầu trước socket close và bao gồm cả close/handler cleanup;
+  target/report còn nguyên và resume ở idle. Timeout phải từ chối voice TLS chồng lấn
+  và recover qua `transport_lost`, không treo ở `connecting`.
+- A/B firmware stats-off ở 160 MHz trước; chỉ bật runtime-stats build để lấy per-core/
+  per-task evidence và chỉ A/B 240 MHz sau khi RAM/stack/zero-drop gate 160 MHz pass.
 
 ### Hardware validation pending user interaction
 
@@ -46,8 +59,10 @@ thay Wi-Fi đang dùng và không được tự xóa NVS:
    HTML/CSS/JS, scan SSID, lưu cấu hình, chuyển AP -> station rồi reconnect.
 3. Bấm nút ngắn, nói tiếng Việt và xác nhận WebSocket/ASR/LLM/TTS cùng loa thật;
    không cần bấm lần hai để gửi câu.
-4. Nghe một lượt kể liên tục 5--10 phút trên loa thật, rồi nói thêm ít nhất ba turn;
-   xác nhận không hụt/đứt, pop/chirp, kẹt speaking hoặc mất `listen.start`.
+4. Nghe một lượt kể representative ít nhất 5 phút trên loa thật (5--10 phút là cửa
+   sổ soak thuận tiện, không phải product cap), rồi nói thêm ít nhất ba turn; xác nhận
+   không hụt/đứt, pop/chirp, kẹt speaking hoặc mất `listen.start`. Response dài hơn
+   10 phút vẫn phải tiếp tục nếu token/chunk còn progress.
 5. Kiểm tra wake word và button interrupt khi robot đang thinking/speaking.
 6. Kiểm tra trực quan hướng/độ sáng LCD, trạng thái activation/idle và nghe loa
    xem có pop/chirp lặp trong 10 phút.
@@ -62,6 +77,10 @@ thay Wi-Fi đang dùng và không được tự xóa NVS:
   conditional re-decode, VieNeu first-audio/RTF/OpenBLAS budget và CLIProxyAPI
   stream/tool/cancel; 9Router chỉ chạy conformance khi operator bật adapter opt-in.
 - Turn cancellation/race tests.
+- LLM terminal reason: `length`/`max_tokens` phải drain TTS đã user-visible, emit
+  `llm_output_truncated` bounded và không commit partial context/memory; terminal
+  reason/EOF khác theo conformance contract của adapter. Provider token budget là
+  per-request bound, không phải time cap.
 - Input admission conformance: accepted/rejected/unclear/interrupt/end, reason bounded; dialogue-act tests riêng cho follow-up/confirmation/correction.
 - Inactivity timeout, closing grace and wake-during-goodbye race tests.
 - MCP cancellation/stale-result tests, including side effect completed after abort.
@@ -116,14 +135,28 @@ E2E-24 10 phút speaker idle/reconnect/bootstrap retry -> không startup chime l
 E2E-25 UI Pack upload -> publish -> desired `state.ui` -> inactive `ui_*` slot -> render health -> complete
 E2E-26 corrupt/incompatible UI Pack -> rollback UI journal hoặc built-in Mobile (`signal`), wake resource không đổi
 E2E-27 goodbye TTS slow/fail -> vẫn đóng assistant gate; button trong goodbye -> cancel và quay lại listening
-E2E-28 CLIProxyAPI -> VieNeu long response -> 300--600 giây PCM, zero schedule gap/error -> tts.stop
+E2E-28 CLIProxyAPI -> VieNeu long response -> >=300 giây PCM representative, zero schedule gap/error -> tts.stop; không truncate nếu >600 giây
 E2E-29 sau long response -> ba turn thường liên tiếp -> mỗi turn trở lại listen.start, không tăng RSS/thread plateau
+E2E-30 maintenance HTTP đang chạy -> button/wake -> bounded preemption/barrier -> fresh WebSocket; desired/report resume ở idle
+E2E-31 synthetic progressive response tương đương >10 phút -> total caps off, idle deadlines refresh, bounded queue/context -> complete
+E2E-32 LLM finish_reason length/max_tokens -> report truncation after TTS drain, no partial context/memory; resumable segment may continue explicitly
 ```
 
 E2E-28/29 phải ghi effective `OPENBLAS_NUM_THREADS=1`, ONNX thread count, provider
 planner/prose/fallback, interval CPU, RSS/thread tail và PCM duration. `%CPU` lifetime từ
 `ps` không thay thế interval sampler. Browser/Lab chỉ chứng minh server PCM/scheduler;
 nghe liên tục qua Opus/I2S/MAX98357A/loa là hardware acceptance riêng.
+
+Mốc 300--600 giây là representative soak window, không phải maximum response/file/story.
+Default `max_session_seconds=0`, `total_turn_seconds=0`, `llm_total_seconds=0` và
+`tts_total_seconds=0`; chỉ first-event/idle-progress deadline được refresh theo token/chunk.
+Queue speech/playback bounded áp backpressure để RAM không tăng theo độ dài output.
+E2E-31 chạy nhanh bằng fake progressive provider, không cần sinh hơn 10 phút PCM thật;
+long physical soak vẫn là gate riêng.
+Workflow generated dài hơn một provider request phải resume bằng segment/cursor explicit;
+workflow đọc file stream source-text bounded qua sentence chunker -> TTS và checkpoint
+offset. Không tăng một `maxCompletionTokens` vô hạn, load cả file vào RAM hoặc coi
+`finish_reason=length|max_tokens` là normal completion.
 
 E2E-09 phải kiểm tra riêng mất Wi-Fi khi `evaluating/thinking/speaking`: transport
 dùng abortive close, station reconnect, assistant trở về `idle`, rồi một lần bấm
@@ -263,4 +296,24 @@ Dev LAN có thể bắt đầu bằng HTTP/WS, nhưng token vẫn phải bật, 
 - Physical hardware validation được ghi rõ; build pass không thay thế test board.
 - Release evidence phải tách rõ host/build/serial pass với nghiệm thu nghe/nhìn:
   LCD orientation/độ sáng và speaker idle noise luôn cần người kiểm tra trực tiếp.
+- Firmware stats-off soak giữ largest internal block không dưới 16 KiB và hướng tới
+  20 KiB; floor 10 KiB trong WebSocket preflight chỉ là admission/recovery, không phải
+  release target. Current/minimum heap phải plateau sau warm-up, không giảm thêm theo
+  từng turn tương đương.
+- Mọi realtime task được kỳ vọng chạy còn ít nhất 2 KiB stack, gồm capture, playback,
+  wake, WebSocket control và WebSocket I/O khi session mở. Delta mic/detector/uplink/
+  playback drop, Opus decode/speaker-write failure đều bằng 0; không panic, watchdog
+  hoặc reset bất thường trong soak.
+- Runtime-stats build chỉ dùng lấy interval CPU per-core/per-task và stack watermark;
+  overhead FreeRTOS trace/TCB của nó làm thay đổi heap nên không được dùng làm final
+  release heap gate. Rebuild stats-off với `mem-control` để quyết định release.
+- Board A/B ngày 2026-07-30 đã reject `mem-t2-r64` (2 KiB/64 KiB): wake mở
+  WebSocket/hello và vào `listening`, sau đó `LoadProhibited` tại
+  `esp_transport_read`/`ws_read_header`. Release giữ `mem-control` 16 KiB/32 KiB;
+  profile bị reject chỉ dùng tái hiện lỗi, không dùng production hoặc release gate.
+- A/B allocator/TLS mới phải bắt đầu ở 160 MHz. Chỉ so 240 MHz sau khi gate
+  160 MHz pass và có workload DSP/AEC cụ thể cần thêm CPU; clock cao hơn không được
+  dùng để che RAM/drop.
+- Flash từng candidate bằng `idf.py ... app-flash`, không `erase-flash`, để giữ NVS,
+  Wi-Fi/device identity và resource/UI A/B. Ghi rõ profile/build dir trên từng trace.
 - Rollout canary 1-5 thiết bị trước khi mở rộng.

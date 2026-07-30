@@ -50,10 +50,32 @@ veetee-firmware/
 │   ├── ota/              # bootstrap, activation, signed executable OTA
 │   ├── config/           # desired/reported snapshot, reconcile, apply journal
 │   ├── resources/        # signed wake/model/assets bundle, A/B slot loader
+│   ├── maintenance/      # một executor tuần tự cho control-plane HTTP/TLS
 │   └── settings/         # NVS schema/version/migration
 ├── boards/veetee-s3-n16r8/
 └── partitions/
 ```
+
+Bootstrap, device config, wake resource, UI Pack, executable OTA và
+reported-state không sở hữu sáu task TLS thường trú. Chúng đăng ký sáu lane vào một
+`MaintenanceExecutor` dùng chung: stack RAM nội 12 KiB, priority 3; mailbox, response
+buffer và state lớn phù hợp nằm trong PSRAM. Executor chạy tuần tự theo thứ tự
+`reporter -> firmware -> bootstrap -> device config -> wake resource -> UI Pack`;
+mỗi owner vẫn giữ parser, generation, journal, A/B transaction và retry policy riêng.
+Topology này chỉ thay đổi scheduling/memory ownership, không đổi bootstrap/OTA/MCP/
+WebSocket wire contract.
+
+Khi application chuyển từ idle sang một state hội thoại realtime, nó đóng gate trước,
+ngắt HTTP deferrable đang chạy rồi chờ executor quiescent tối đa 150 ms trước khi mở
+WebSocket. Budget được đo từ trước thao tác đóng socket, bao gồm cả close handshake và
+handler cleanup; vượt budget phải log elapsed và từ chối voice TLS của lần đó.
+Target/config/report bền vững không bị xóa và được chạy lại ở boundary idle
+tiếp theo. Nếu cleanup không hoàn tất trong budget, firmware từ chối mở thêm voice TLS,
+đi qua `transport_lost` và giữ recovery bounded thay vì chạy hai TLS workload chồng
+nhau. Sau khi application đã vào exclusive `upgrading`, chỉ firmware OTA và durable
+reporter được schedule; HTTP ghi firmware đang ở boundary này không bị voice preempt.
+Resource/UI erase kiểm realtime gate giữa từng sector 4 KiB; không dùng một erase 64 KiB
+đơn lẻ có thể giữ shared worker quá barrier.
 
 ## 3. State machine
 
@@ -510,8 +532,9 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
 
 - authenticated bootstrap parse và validate `config.url`/ETag cùng
   `resources.version`/`manifest_url`;
-- resource task riêng kéo manifest tối đa 32 KiB bằng Bearer device token, không
-  follow redirect và ưu tiên cấp phát response buffer từ PSRAM;
+- lane wake-resource của shared maintenance executor kéo manifest tối đa 32 KiB bằng
+  Bearer device token, không follow redirect và ưu tiên cấp phát response buffer từ
+  PSRAM;
 - verifier kiểm tra strict schema V1, target/flash/PSRAM/slot, firmware SemVer,
   resource ABI, đúng một ESP-SR member 16 kHz cùng signed detector inventory
   (một activation, optional interrupt, exact WakeNet ID duy nhất), runtime member
@@ -537,8 +560,9 @@ Firmware hiện đã có đường resource A/B hoàn chỉnh ở mức implemen
 - activation chuyển qua `pending_health`, health window xác nhận slot mới; load/task
   health fail hoặc boot active fail sẽ reload previous slot và rollback. Nếu cả hai
   model lỗi, firmware tiếp tục button-only thay vì bootloop;
-- reporter task riêng gửi `checking/downloading/verifying/staged/applying/active`
-  hoặc `failed/rolled_back` tới Manager API. Intermediate state được coalesce theo
+- lane reporter của cùng executor gửi
+  `checking/downloading/verifying/staged/applying/active` hoặc
+  `failed/rolled_back` tới Manager API. Intermediate state được coalesce theo
   latest-wins; terminal state đi FIFO và terminal đang retry được giữ trong NVS;
 - reported-state sequence tăng đơn điệu, lưu bằng record V1 + CRC độc lập với
   resource recovery journal. Mất HTTP response retry cùng version nên server xử lý
@@ -622,6 +646,14 @@ layout hoặc giảm scope; không tự ghi đè slot đang active.
   3.392 byte stack. Budget 12 KiB cũ không tạo được khi heap còn 37.735 byte nhưng
   block nội lớn nhất chỉ 11.776 byte. Không tăng lại budget hoặc chuyển stack I/O
   sang PSRAM nếu chưa stress cả WS/WSS, cache-disabled path và heap fragmentation.
+- Trước khi tạo các task maintenance/application, transport giữ một block RAM nội
+  liên tục 16 KiB dành cho lần mở WebSocket; nếu heap chỉ còn một block từ 10 KiB tới
+  dưới 16 KiB thì fallback reserve đúng 10 KiB. Reserve được giữ trong lúc
+  `esp_websocket_client_init`, nhả ngay trước `esp_websocket_client_start`, rồi
+  preflight yêu cầu largest internal block ít nhất 10 KiB. Teardown/failure phải lấy
+  reserve lại để lần mở sau không phụ thuộc heap đã phân mảnh. Đây là admission floor;
+  release gate chặt hơn yêu cầu stats-off soak giữ largest internal block tối thiểu
+  16 KiB và hướng tới 20 KiB.
 - Khi Wi-Fi/link đã mất, firmware dùng abortive WebSocket stop; không gửi close frame
   lịch sự trên socket chết vì API component có đường chờ không giới hạn. Sau station
   reconnect, lần mở assistant tiếp theo phải tạo session/task mới thay vì kẹt

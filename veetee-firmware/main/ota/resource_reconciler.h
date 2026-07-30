@@ -11,7 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
+#include "maintenance/maintenance_executor.h"
 #include "ota/resource_manifest.h"
 #include "settings/resource_state_store.h"
 #include "settings/settings_store.h"
@@ -52,8 +52,9 @@ public:
     using EventSink = bool (*)(const ResourceReconcileNotification& notification,
                                void* context);
 
-    esp_err_t Initialize(settings::SettingsStore* settings_store, EventSink sink,
-                         void* context,
+    esp_err_t Initialize(settings::SettingsStore* settings_store,
+                         maintenance::MaintenanceExecutor* executor,
+                         EventSink sink, void* context,
                          ResourceClass resource_class = ResourceClass::kWakeModel);
     bool Schedule(const char* desired_version, const char* manifest_url);
     void Cancel();
@@ -73,11 +74,16 @@ private:
         char manifest_url[257] = {};
     };
 
-    static void TaskEntry(void* context);
+    struct PendingNotification {
+        std::uint32_t generation = 0;
+        ResourceReconcileNotification notification{};
+    };
+
+    static void MaintenanceEntry(void* context);
     static esp_err_t HttpEventHandler(esp_http_client_event_t* event);
     static esp_err_t PayloadHttpEventHandler(esp_http_client_event_t* event);
 
-    void TaskLoop();
+    void ProcessPending();
     void Reconcile(const Target& target);
     esp_err_t FetchManifest(const Target& target, char** document,
                             std::size_t* document_size);
@@ -97,20 +103,30 @@ private:
     esp_err_t ResetDownloadProgress(const Target& target);
     esp_err_t StageDownload(const Target& target);
     settings::ResourceRecord RecordSnapshot() const;
+    ResourceReconcileNotification MakeNotification(
+        ResourceReconcileEvent event, const Target& target,
+        const char* bundle_version, const char* error_code) const;
     bool Emit(ResourceReconcileEvent event, const Target& target,
               const char* bundle_version, const char* error_code) const;
     bool EmitWithRetry(ResourceReconcileEvent event, const Target& target,
-                       const char* bundle_version, const char* error_code) const;
+                       const char* bundle_version, const char* error_code);
+    bool DeliverPendingNotification();
+    bool DeferForRealtime(const Target& target);
+    void RequestIfPending();
     [[nodiscard]] bool IsCurrent(std::uint32_t generation) const;
+    [[nodiscard]] bool CanContinue(std::uint32_t generation) const;
     [[nodiscard]] const char* PartitionLabel(std::uint8_t slot) const;
 
     settings::SettingsStore* settings_store_ = nullptr;
+    maintenance::MaintenanceExecutor* executor_ = nullptr;
+    maintenance::MaintenanceJobKind job_kind_ =
+        maintenance::MaintenanceJobKind::kWakeResource;
     ResourceClass resource_class_ = ResourceClass::kWakeModel;
     EventSink sink_ = nullptr;
     void* sink_context_ = nullptr;
     QueueHandle_t queue_ = nullptr;
+    QueueHandle_t notification_queue_ = nullptr;
     SemaphoreHandle_t state_mutex_ = nullptr;
-    TaskHandle_t task_ = nullptr;
     std::atomic<std::uint32_t> generation_{0};
     std::atomic<std::uint32_t> request_generation_{0};
     TrustedReleaseKey trusted_key_{};
