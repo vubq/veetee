@@ -339,6 +339,52 @@ Realtime Lab có hai mức kiểm thử:
 2. Audio Replay/Live Mic để kiểm tra PCM browser path; Live Mic cần HTTPS hoặc
    localhost. Browser PCM không thay thế kiểm thử Opus/AEC/loa ESP32.
 
+### 3.1 Probe và chạy YouTube Music
+
+Voice local được enable bằng `VEETEE_MEDIA_PROVIDER=youtube_music`. `env:voice:sync`
+lấy giá trị này từ `.env.example`, vẫn giữ `OPENBLAS_NUM_THREADS=1`; `yt-dlp` nằm trong
+`uv.lock`, còn FFmpeg là dependency host phải có trước startup. Không cài/cập nhật
+extractor trong lúc Voice đang phục vụ nếu chưa probe read-only:
+
+```bash
+cd /home/vubq/Project/EmYeuKhoaHoc/veetee/veetee-server
+command -v ffmpeg
+uv sync --project apps/voice-server --all-groups
+npm run media:probe:youtube -- \
+  --title "<tên bài>" --artist "<nghệ sĩ>" --decode-seconds 5
+```
+
+Expected là JSON `status=decoded`, provider item ID 11 ký tự, PCM 24 kHz và số byte
+lớn hơn 0; không có warning subprocess transport và không tạo media file. Dùng `--query`
+thay cho title/artist để kiểm `any_track`. Nếu specific search trả `needs_selection`,
+probe không tự chọn trừ khi operator thêm `--accept-first`; trong hội thoại AI hỏi lại
+dựa trên alternatives/context.
+
+Sau restart, `/health/ready` có component optional `youtube-music=healthy` và catalog
+session mới có `media.play` với `operationClass=streaming`. Test một lượt metadata-only,
+một lượt decode/play và một lượt button/abort giữa bài; abort phải có đúng một
+`tts.stop`, không PCM stale, không còn process `yt-dlp`/FFmpeg mồ côi. Tool không nhận
+URL, cookie hay downloader argument từ AI. Không dùng cơ chế bypass DRM/private/
+age-restricted content; khi YouTube thay đổi, pin phiên bản mới chỉ sau probe + test
+cancellation, không fallback sang scraper/arbitrary URL.
+
+Anonymous mode có thể trả `youtube_music_rate_limited` do `429`/bot challenge. Không
+retry loop vì sẽ kéo dài block. Nếu operator chọn authenticated mode, export Netscape
+cookies từ một tài khoản YouTube riêng, đặt file ngoài repo với mode `0600`, rồi cấu hình
+`VEETEE_MEDIA_YOUTUBE_COOKIE_FILE=/absolute/private/path`. Không trỏ vào browser profile
+cá nhân, không commit/backup chung/log cookie path hoặc content, và không dùng cookie để
+bypass DRM/private/age-restricted content. Chạy lại probe một lần sau cấu hình; nếu vẫn
+fail thì disable provider hoặc chờ upstream, không đổi qua proxy/scraper tùy ý.
+
+Khi render lại local env, truyền path qua process environment ở lần đầu; các lần sau
+`env:voice:sync` giữ giá trị không rỗng đang có trong Voice `.env` ignored, nhưng process
+environment luôn có ưu tiên cao hơn. Script không in path. YouTube có thể trả `403` cho
+DASH audio dù metadata/challenge đã pass; adapter ưu tiên HLS có audio với băng thông
+thấp rồi mới fallback về audio-only và dùng FFmpeg downloader qua stdout để không để
+fragment HLS trong working directory. Đây là selector nội bộ cố định, không phải option
+được expose cho AI. Sau abort, chỉ chấp nhận PCM đã in-flight trước `abort.complete`;
+sau event này phải có zero PCM và zero child `yt-dlp`/FFmpeg.
+
 Trên mobile, thao tác `Bắt đầu phiên thử` phải unlock/resume `AudioContext` trước khi
 Manager cấp token một lần. Nếu banner `Điện thoại chưa cho phép phát âm thanh` còn hiện,
 chạm `Bật âm thanh`; không coi session là audio-pass cho tới khi banner biến mất và
@@ -347,7 +393,7 @@ console không có playback error. `401 /api/v1/auth/refresh` trước đăng nh
 `admission.final`, `llm.delta`, `tts.start`, `tts.first_audio`, `tts.stop`,
 `listen.start` và không có `turn.error`.
 
-### 3.1 Smoke hội thoại và soak output dài representative
+### 3.2 Smoke hội thoại và soak output dài representative
 
 Chỉ dùng Realtime Lab đã được Manager cấp one-use token hoặc ESP32 đã authenticated;
 không bypass auth và không publish/ghi đè agent version chỉ để chạy soak. Giữ active
@@ -444,7 +490,7 @@ trong drain này. Delay dài hơn đáng kể ở Device sink cần kiểm queue
 Realtime Lab có thể giữ toàn bộ browser playback timeline nên khoảng last-PCM tới
 `tts.stop` của Lab có thể dài hơn nhiều và không dùng gate 5,1 giây này.
 
-### 3.2 Tailscale HTTPS trên host hiện tại
+### 3.3 Tailscale HTTPS trên host hiện tại
 
 Host đã nghiệm thu dùng userspace `tailscaled`, không phải system service toàn máy:
 

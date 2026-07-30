@@ -2017,6 +2017,24 @@ bool ReadDeviceStatus(veetee::mcp::DeviceStatus* status, void*) {
     status->assistant_gate_open = g_state_machine.assistant_gate_open();
     status->firmware_version = esp_app_get_description()->version;
     status->volume_percent = g_board.speaker_volume();
+    status->brightness_percent = g_board.display_brightness();
+    return true;
+}
+
+bool ReadNetworkStatus(veetee::mcp::NetworkStatus* status, void*) {
+    if (status == nullptr) return false;
+    const veetee::network::WifiHealth network = g_wifi.Health();
+    *status = veetee::mcp::NetworkStatus{
+        .connected = network.connected,
+        .rssi = network.rssi,
+        .disconnect_count = network.disconnect_count,
+        .reconnect_attempt_count = network.reconnect_attempt_count,
+        .websocket_reconnect_attempt_count =
+            g_transport.reconnect_attempt_count(),
+        .websocket_reconnect_exhausted_count =
+            g_transport.reconnect_exhausted_count(),
+        .last_disconnect_reason = network.last_disconnect_reason,
+    };
     return true;
 }
 
@@ -2120,6 +2138,10 @@ bool StartAudioDiagnostic(std::uint32_t duration_seconds, void*) {
 
 bool SetSpeakerVolume(int volume_percent, void*) {
     return g_board.SetSpeakerVolume(volume_percent);
+}
+
+bool SetDisplayBrightness(int brightness_percent, void*) {
+    return g_board.SetDisplayBrightness(brightness_percent);
 }
 
 bool SendMcpResponse(const char* payload, std::size_t length, void*) {
@@ -3303,7 +3325,8 @@ extern "C" void app_main() {
         g_ui_apply_pending = true;
     }
     if (!g_mcp.Initialize(&ReadDeviceStatus, &ReadDeviceDiagnostics,
-                          &StartAudioDiagnostic, &SetSpeakerVolume,
+                          &ReadNetworkStatus, &StartAudioDiagnostic,
+                          &SetSpeakerVolume, &SetDisplayBrightness,
                           &SendMcpResponse, nullptr)) {
         ESP_LOGE(kTag, "Unable to initialize device MCP");
         abort();

@@ -341,7 +341,7 @@ class ConversationEngine:
         }:
             if plan.tool_call is None:
                 raise ValueError("Tool plan is missing tool_call")
-            tool_context = context.child(self._policy.mcp_seconds)
+            tool_context = self._tool_context(plan.tool_call.name, context)
             tool_result = await await_operation(
                 self._tools.call(
                     plan.tool_call.name,
@@ -366,6 +366,26 @@ class ConversationEngine:
                 context,
             )
         return None
+
+    def _tool_context(self, name: str, context: OperationContext) -> OperationContext:
+        """Apply the generic catalog operation class to tool deadlines.
+
+        The engine deliberately does not know semantic tool names. A bounded
+        registry may mark a provider-owned streaming operation, in which case
+        the parent turn deadline/cancellation scope is used so long playback
+        is interruptible without being cut off by the short request deadline.
+        """
+
+        operation_class = "request"
+        for item in self._tools.list_tools():
+            if isinstance(item, dict) and item.get("name") == name:
+                value = item.get("operationClass")
+                if isinstance(value, str):
+                    operation_class = value
+                break
+        if operation_class == "streaming":
+            return context
+        return context.child(self._policy.mcp_seconds)
 
     async def _stream_response(
         self, request: LlmRequest, context: OperationContext

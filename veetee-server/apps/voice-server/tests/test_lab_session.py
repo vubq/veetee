@@ -333,6 +333,48 @@ async def test_normal_tts_stop_waits_for_restart_lead_after_schedule_gap() -> No
     assert sink._playback_gap_seconds > 0
 
 
+async def test_playback_queue_backpressures_fast_stream_and_abort_unblocks_it() -> None:
+    websocket = FakeWebSocket()
+    sink = LabConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="lab-session",
+        output_sample_rate=1_000,
+        playback_queue_seconds=0.25,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(0, 1_000, "pcm_s16le", b"\0\0" * 50),
+        )
+    )
+    blocked = asyncio.create_task(
+        sink.emit(
+            ConversationOutput(
+                OutputKind.AUDIO,
+                "turn-1",
+                2,
+                audio=AudioChunk(1, 1_000, "pcm_s16le", b"\0\0" * 50),
+            )
+        )
+    )
+    await asyncio.sleep(0.01)
+    assert not blocked.done()
+
+    await sink.cancel_tts(3)
+    await asyncio.wait_for(blocked, timeout=0.1)
+
+    outgoing: list[dict[str, Any] | bytes] = []
+    while not websocket.outgoing.empty():
+        outgoing.append(websocket.outgoing.get_nowait())
+    assert sum(isinstance(item, bytes) for item in outgoing) == 1
+    assert [
+        item["event"] for item in outgoing if isinstance(item, dict)
+    ] == ["tts.start", "tts.first_audio", "tts.stop"]
+
+
 async def test_abort_while_first_audio_event_is_blocked_drops_stale_pcm() -> None:
     websocket = BlockingFirstAudioWebSocket()
     sink = LabConversationSink(

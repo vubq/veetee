@@ -62,6 +62,7 @@ idf_component_register(
     REQUIRES
         esp_driver_gpio
         esp_driver_i2s
+        esp_driver_ledc
         esp_driver_spi
         app_update
         esp_app_format

@@ -73,6 +73,8 @@ public:
     bool PlayRecoverySignal();
     bool SetSpeakerVolume(int volume_percent);
     [[nodiscard]] int speaker_volume() const;
+    bool SetDisplayBrightness(int brightness_percent);
+    [[nodiscard]] int display_brightness() const;
     bool StartAudioDiagnostic(std::uint32_t duration_seconds,
                               std::uint64_t now_ms);
     audio::AudioRuntimeHealth AudioHealth(std::uint64_t now_ms);

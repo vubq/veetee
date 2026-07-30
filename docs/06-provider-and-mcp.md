@@ -235,8 +235,10 @@ Model chỉ được tự gọi `read_only` và các `reversible` đã được 
 Regular AI-callable:
 
 - `self.get_device_status`;
+- `self.audio_speaker.get_volume`;
 - `self.audio_speaker.set_volume`;
 - `self.screen.set_brightness`;
+- `self.network.get_status` (bounded, không trả SSID/credential/endpoint URL);
 - `self.robot.set_expression`;
 - board-specific actuator tools.
 
@@ -253,6 +255,47 @@ User-only:
 Tool names dùng namespace `self.<domain>.<action>`. Mô tả phải nói rõ side effect, range và đơn vị. Không cho LLM tự gọi firmware upgrade, network credential, factory reset hoặc actuator nguy hiểm nếu policy chưa explicit.
 
 Firmware hard-code implementation và safe range của capability vật lý, nhưng không hard-code các câu người dùng phải nói để gọi capability đó. Ví dụ mọi cách diễn đạt “nói nhỏ thôi”, “giảm loa xuống” hoặc “bé quá” đều do AI hiểu theo context; firmware chỉ nhận lệnh có schema như `{"volume": 35}` và validate range.
+
+Firmware Veetee expose brightness `0..100` qua PWM backlight và network status
+read-only gồm connected/RSSI/counter reconnect. Network tool regular không trả SSID,
+credential hoặc endpoint URL.
+
+### Media playback và streaming tool
+
+Phát nhạc là một provider capability, không phải bộ dò câu lệnh. Planner structured
+chọn `media.play` từ catalog và conversation context:
+
+- `specific_track` chỉ hợp lệ khi schema có cả `title` và `artist`;
+- nếu mới biết một phần thông tin, planner dùng `ask_clarification`, lượt sau đọc
+  context giới hạn để hoàn thiện tool call;
+- `any_track` bắt buộc có `query` do planner tạo theo context; code không có fallback
+  keyword kiểu `music`, locale hoặc playlist mặc định;
+- kết quả mơ hồ trả tối đa 8 lựa chọn để planner hỏi lại; provider mới quyết định
+  candidate nào được stream.
+
+Tool không nhận URL, shell command, codec tùy ý hoặc dữ liệu hướng dẫn từ model.
+Adapter được cấu hình/allowlist ở server, tự tìm và giải mã PCM bounded. Session media
+broker phát cùng lifecycle `tts.start` -> PCM -> `tts.stop` và giữ `turn_id`, generation
+và cancellation scope; nút/wake interrupt dừng stream ngay cả khi bài dài. Catalog đánh
+`operationClass=streaming` để engine không áp deadline MCP request ngắn, nhưng provider
+vẫn phải checkpoint cancellation, giới hạn chunk/byte và không giữ dữ liệu bài hát vô hạn.
+Adapter local được chọn là `youtube_music`, dùng `yt-dlp` đã pin để search metadata và
+FFmpeg host để decode provider stream thành PCM signed 16-bit mono 24 kHz. Adapter ưu
+tiên HLS có audio băng thông thấp trước audio-only fallback vì YouTube có thể từ chối
+DASH media URL riêng dù metadata/challenge hợp lệ. Selector vẫn là policy nội bộ; tool chỉ nhận
+`mode/title/artist/query`; adapter tự dựng URL từ video ID đúng regex 11 ký tự và không
+expose direct/signed media URL vào catalog, model, result hoặc log. Không dùng cookie
+mặc định và không bypass DRM, private/age-restricted content hoặc access control.
+Anonymous mode có thể bị `429`/bot challenge. Khi cần ổn định hơn, operator cung cấp
+Netscape cookie export mode `0600` từ một tài khoản riêng qua
+`VEETEE_MEDIA_YOUTUBE_COOKIE_FILE`; không đọc trực tiếp browser profile, không commit/
+sync/log path hoặc content. Cookie chỉ xác thực request, không cấp quyền bypass DRM,
+private hay age restriction. YouTube có thể đổi extractor/response bất kỳ lúc nào;
+phải chạy probe metadata + bounded decode trước khi
+update `yt-dlp`, và lỗi provider phải fail rõ thay vì tự đổi nguồn.
+
+Nếu `VEETEE_MEDIA_PROVIDER=disabled`, thiếu module `yt-dlp` hoặc thiếu FFmpeg thì tool
+không được publish/start như thể đã sẵn sàng; không fallback sang arbitrary URL.
 
 ## 5. Server tool broker
 

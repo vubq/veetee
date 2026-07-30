@@ -8,6 +8,7 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from pathlib import Path
 from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
@@ -52,9 +53,11 @@ from veetee_voice_server.providers.semantic import (
     StructuredConversationGate,
 )
 from veetee_voice_server.providers.silero_vad import SileroVadModel
+from veetee_voice_server.providers.youtube_music import YouTubeMusicProvider
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
 from veetee_voice_server.telemetry import ConversationTelemetryBuffer
 from veetee_voice_server.tools.context import with_session_context_tools
+from veetee_voice_server.tools.media import MediaProvider
 from veetee_voice_server.tools.remote_mcp import (
     RemoteMcpAuditContext,
     RemoteMcpDiscoveryIssue,
@@ -1051,6 +1054,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
         manager = ManagerClient(resolved_settings)
+        if resolved_settings.media_provider == "youtube_music":
+            media_provider = YouTubeMusicProvider(
+                output_sample_rate=resolved_settings.wire_sample_rate,
+                search_results=resolved_settings.media_search_results,
+                search_seconds=resolved_settings.media_search_seconds,
+                pcm_chunk_ms=resolved_settings.media_pcm_chunk_ms,
+                ffmpeg_binary=resolved_settings.media_ffmpeg_binary,
+                process_shutdown_seconds=(
+                    resolved_settings.media_process_shutdown_seconds
+                ),
+                cookie_file=(
+                    Path(resolved_settings.media_youtube_cookie_file)
+                    if resolved_settings.media_youtube_cookie_file
+                    else None
+                ),
+            )
+            runtime["media_provider"] = media_provider
+            readiness.register(
+                lambda: _youtube_music_health(media_provider.authenticated)
+            )
         memory = ConversationMemoryService(
             manager,
             queue_capacity=resolved_settings.memory_queue_capacity,
@@ -1175,6 +1198,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             engine_factory=engine_factory,
             remote_mcp=remote_mcp,
+            media_provider=cast(
+                MediaProvider | None, runtime.get("media_provider")
+            ),
             memory_session=memory_session,
         )
         registration_id: str | None = None
@@ -1292,6 +1318,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 tool_broker=tool_broker,
                 engine_factory=engine_factory,
                 remote_mcp=remote_mcp,
+                media_provider=cast(
+                    MediaProvider | None, runtime.get("media_provider")
+                ),
             )
             await session.run()
         except TimeoutError:
@@ -1407,6 +1436,22 @@ async def _manager_health(manager: ManagerClient) -> ComponentHealth:
         healthy=healthy,
         required=True,
         detail=None if healthy else "unreachable",
+    )
+
+
+async def _youtube_music_health(authenticated: bool) -> ComponentHealth:
+    # Constructor preflight has already verified the pinned yt-dlp module and
+    # FFmpeg binary. External availability is checked per bounded search so a
+    # transient YouTube failure cannot make the core voice pipeline unready.
+    return ComponentHealth(
+        "youtube-music",
+        healthy=True,
+        required=False,
+        detail=(
+            "provider_preflight_ok_authenticated"
+            if authenticated
+            else "provider_preflight_ok_anonymous"
+        ),
     )
 
 

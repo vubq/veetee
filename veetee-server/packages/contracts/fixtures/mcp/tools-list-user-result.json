@@ -8,7 +8,7 @@
       "tools": [
         {
           "name": "self.get_device_status",
-          "description": "Read the current device state, assistant gate, firmware version and speaker volume.",
+          "description": "Read the current device state, assistant gate, firmware version, speaker volume and screen brightness.",
           "audience": "regular",
           "safetyClass": "read_only",
           "requiresConfirmation": false,
@@ -47,6 +47,37 @@
                 "maximum": 100
               }
             }
+          }
+        },
+        {
+          "name": "self.screen.set_brightness",
+          "description": "Set LCD backlight brightness from 0 to 100 percent.",
+          "audience": "regular",
+          "safetyClass": "reversible",
+          "requiresConfirmation": false,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["brightness"],
+            "properties": {
+              "brightness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        },
+        {
+          "name": "self.network.get_status",
+          "description": "Read bounded Wi-Fi and voice reconnect status without exposing SSID, credentials or endpoint URLs.",
+          "audience": "regular",
+          "safetyClass": "read_only",
+          "requiresConfirmation": false,
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
           }
         },
         {

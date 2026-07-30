@@ -67,6 +67,14 @@ export class McpController {
         requiresConfirmation: false,
       },
       {
+        name: "self.audio_speaker.get_volume",
+        description: "Read speaker volume from 0 to 100.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        audience: "regular",
+        safetyClass: "read_only",
+        requiresConfirmation: false,
+      },
+      {
         name: "self.audio_speaker.set_volume",
         description: "Set speaker volume from 0 to 100.",
         inputSchema: {
@@ -77,6 +85,28 @@ export class McpController {
         },
         audience: "regular",
         safetyClass: "reversible",
+        requiresConfirmation: false,
+      },
+      {
+        name: "self.screen.set_brightness",
+        description: "Set LCD backlight brightness from 0 to 100 percent.",
+        inputSchema: {
+          type: "object",
+          properties: { brightness: { type: "integer", minimum: 0, maximum: 100 } },
+          required: ["brightness"],
+          additionalProperties: false,
+        },
+        audience: "regular",
+        safetyClass: "reversible",
+        requiresConfirmation: false,
+      },
+      {
+        name: "self.network.get_status",
+        description:
+          "Read bounded Wi-Fi and voice reconnect status without network credentials.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        audience: "regular",
+        safetyClass: "read_only",
         requiresConfirmation: false,
       },
     ];

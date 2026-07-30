@@ -21,6 +21,10 @@ public:
     esp_err_t DrawActivationCode(const char* code);
     esp_err_t DrawAnimationFrame();
     esp_err_t DrawStandby();
+    esp_err_t SetBrightness(int brightness_percent);
+    [[nodiscard]] int brightness_percent() const {
+        return brightness_percent_;
+    }
     esp_err_t ReloadUiPack(const char* partition_label);
     void UseBuiltInSignal();
     [[nodiscard]] bool UiPackHealthy() const;
@@ -84,6 +88,7 @@ private:
     std::uint32_t animation_frame_ = 0;
     bool last_render_ok_ = false;
     bool transfer_faulted_ = false;
+    int brightness_percent_ = 100;
 };
 
 }  // namespace veetee::display

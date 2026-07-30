@@ -22,6 +22,11 @@ class ToolSpec:
     audience: str = "regular"
     safety_class: str = "read_only"
     requires_confirmation: bool = False
+    # Request tools inherit the bounded MCP deadline. Streaming tools keep the
+    # parent turn cancellation scope so playback can continue until completion
+    # or an interrupt; the provider remains responsible for its own stream
+    # bounds and cancellation checkpoints.
+    operation_class: str = "request"
 
 
 class RegistryToolBroker:
@@ -42,6 +47,7 @@ class RegistryToolBroker:
                 "audience": tool.audience,
                 "safetyClass": tool.safety_class,
                 "requiresConfirmation": tool.requires_confirmation,
+                "operationClass": tool.operation_class,
             }
             for tool in self._tools.values()
         ]
@@ -82,6 +88,7 @@ class RegistryToolBroker:
             or tool.audience not in {"regular", "user"}
             or tool.safety_class
             not in {"read_only", "reversible", "disruptive", "destructive"}
+            or tool.operation_class not in {"request", "streaming"}
             or (tool.audience == "user" and not tool.requires_confirmation)
         ):
             raise ValueError(f"Invalid server MCP tool: {tool.name}")

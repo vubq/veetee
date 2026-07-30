@@ -287,6 +287,12 @@ Supported request methods for V1:
 
 Tool result uses `result.content[]` and `isError`; error uses JSON-RPC `error.code/message`. Firmware giới hạn payload khoảng 8 KB nên server phải follow `nextCursor`.
 
+Regular device catalog hiện có thêm hai capability mà không đổi envelope:
+
+- `self.screen.set_brightness` với integer `brightness=0..100`;
+- `self.network.get_status` chỉ trả connected/RSSI và counter reconnect bounded,
+  không trả SSID, credential hoặc endpoint URL.
+
 Diagnostic V1 bổ sung ba user-only tool canonical mà không đổi envelope:
 
 - `self.diagnostics.get_health`;

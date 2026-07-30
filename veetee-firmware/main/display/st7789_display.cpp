@@ -10,6 +10,7 @@
 #include "display/state_visual.h"
 #include "display/ui_state_policy.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_vendor.h"
@@ -22,6 +23,12 @@ namespace {
 constexpr char kTag[] = "veetee_display";
 constexpr spi_host_device_t kLcdHost = SPI3_HOST;
 constexpr int kDrawLines = 16;
+constexpr ledc_mode_t kBacklightSpeedMode = LEDC_LOW_SPEED_MODE;
+constexpr ledc_timer_t kBacklightTimer = LEDC_TIMER_0;
+constexpr ledc_channel_t kBacklightChannel = LEDC_CHANNEL_0;
+constexpr ledc_timer_bit_t kBacklightResolution = LEDC_TIMER_10_BIT;
+constexpr std::uint32_t kBacklightMaximumDuty = (1U << 10U) - 1U;
+constexpr std::uint32_t kBacklightFrequencyHz = 5000;
 constexpr std::array<std::uint16_t, 8> kColorBars = {
     0xFFFF,  // white
     0xFFE0,  // yellow
@@ -183,13 +190,53 @@ esp_err_t St7789Display::Initialize() {
         return error;
     }
 
-    gpio_set_level(board::kDisplayBacklight,
-                   board::kLcdBacklightInvert ? 0 : 1);
+    ledc_timer_config_t backlight_timer = {};
+    backlight_timer.speed_mode = kBacklightSpeedMode;
+    backlight_timer.duty_resolution = kBacklightResolution;
+    backlight_timer.timer_num = kBacklightTimer;
+    backlight_timer.freq_hz = kBacklightFrequencyHz;
+    backlight_timer.clk_cfg = LEDC_AUTO_CLK;
+    if ((error = ledc_timer_config(&backlight_timer)) != ESP_OK) return error;
+
+    ledc_channel_config_t backlight_channel = {};
+    backlight_channel.gpio_num = board::kDisplayBacklight;
+    backlight_channel.speed_mode = kBacklightSpeedMode;
+    backlight_channel.channel = kBacklightChannel;
+    backlight_channel.timer_sel = kBacklightTimer;
+    backlight_channel.duty = board::kLcdBacklightInvert
+                                 ? 0
+                                 : kBacklightMaximumDuty;
+    backlight_channel.hpoint = 0;
+    if ((error = ledc_channel_config(&backlight_channel)) != ESP_OK) {
+        return error;
+    }
+    brightness_percent_ = 100;
     ESP_LOGI(kTag, "ST7789 initialized: %dx%d offset=%d,%d SPI=%d Hz mode=%d",
              CONFIG_VEETEE_LCD_WIDTH, CONFIG_VEETEE_LCD_HEIGHT,
              CONFIG_VEETEE_LCD_OFFSET_X, CONFIG_VEETEE_LCD_OFFSET_Y,
              CONFIG_VEETEE_LCD_SPI_CLOCK_HZ, board::kLcdSpiMode);
     return ESP_OK;
+}
+
+esp_err_t St7789Display::SetBrightness(int brightness_percent) {
+    if (panel_ == nullptr || brightness_percent < 0 ||
+        brightness_percent > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const std::uint32_t requested =
+        (kBacklightMaximumDuty * static_cast<std::uint32_t>(brightness_percent) +
+         50U) /
+        100U;
+    const std::uint32_t duty = board::kLcdBacklightInvert
+                                   ? kBacklightMaximumDuty - requested
+                                   : requested;
+    esp_err_t error = ledc_set_duty(kBacklightSpeedMode,
+                                    kBacklightChannel, duty);
+    if (error == ESP_OK) {
+        error = ledc_update_duty(kBacklightSpeedMode, kBacklightChannel);
+    }
+    if (error == ESP_OK) brightness_percent_ = brightness_percent;
+    return error;
 }
 
 esp_err_t St7789Display::DrawColorBars() {

@@ -103,6 +103,19 @@ class Settings(BaseSettings):
     tts_native_realtime_headroom: float = Field(default=1.15, ge=1.0, le=2.0)
     tts_native_use_ref_codes: bool = True
     tts_playback_queue_seconds: float = Field(default=5.0, ge=1.0, le=15.0)
+    media_provider: Literal["disabled", "youtube_music"] = "disabled"
+    media_search_results: int = Field(default=8, ge=1, le=12)
+    media_search_seconds: float = Field(default=15.0, ge=1.0, le=30.0)
+    media_pcm_chunk_ms: int = Field(default=60, ge=20, le=200)
+    media_max_audio_chunks: int = Field(default=240_000, ge=1_000, le=1_000_000)
+    media_max_audio_bytes: int = Field(
+        default=512 * 1_024 * 1_024,
+        ge=16 * 1_024 * 1_024,
+        le=2 * 1_024 * 1_024 * 1_024,
+    )
+    media_process_shutdown_seconds: float = Field(default=3.0, ge=0.5, le=10.0)
+    media_ffmpeg_binary: str = Field(default="ffmpeg", min_length=1, max_length=240)
+    media_youtube_cookie_file: str = Field(default="", max_length=1_024, repr=False)
     default_locale: str = "vi-VN"
     default_persona: str = ""
     default_agent_name: str = "VeeTee"

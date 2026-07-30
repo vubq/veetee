@@ -39,7 +39,9 @@ from veetee_voice_server.manager import SessionProfile
 from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
+from veetee_voice_server.providers.tools import CompositeToolBroker
 from veetee_voice_server.telemetry import ConversationTelemetry, NullConversationTelemetry
+from veetee_voice_server.tools.media import MediaProvider, MediaToolBroker
 from veetee_voice_server.tools.remote_mcp import (
     RemoteAugmentedToolBroker,
     SessionRemoteMcpBroker,
@@ -521,6 +523,7 @@ class VoiceSession:
         ],
         telemetry: ConversationTelemetry | None = None,
         remote_mcp: SessionRemoteMcpBroker | None = None,
+        media_provider: MediaProvider | None = None,
         memory_session: DeviceMemorySession | None = None,
     ) -> None:
         self.websocket = websocket
@@ -557,6 +560,17 @@ class VoiceSession:
         tool_broker: ToolBroker = self.mcp
         if remote_mcp is not None:
             tool_broker = RemoteAugmentedToolBroker(tool_broker, remote_mcp)
+        if media_provider is not None:
+            tool_broker = CompositeToolBroker(
+                MediaToolBroker(
+                    media_provider,
+                    sink=self.sink,
+                    arbiter=self.arbiter,
+                    max_audio_chunks=settings.media_max_audio_chunks,
+                    max_audio_bytes=settings.media_max_audio_bytes,
+                ),
+                tool_broker,
+            )
         self.engine = engine_factory(self.arbiter, self.sink, profile, tool_broker)
         if memory_session is not None:
             self.engine.configure_cross_session_memory(

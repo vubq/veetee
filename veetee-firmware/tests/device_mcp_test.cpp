@@ -16,6 +16,7 @@ struct Harness {
     veetee::mcp::DeviceMcp mcp;
     std::string response;
     int volume = 70;
+    int brightness = 100;
     std::uint32_t diagnostic_duration = 0;
     std::uint32_t capture_stack_free_bytes = 4'096;
 };
@@ -67,11 +68,31 @@ bool ReadStatus(veetee::mcp::DeviceStatus* status, void* context) {
     status->assistant_gate_open = true;
     status->firmware_version = "0.1.0";
     status->volume_percent = harness->volume;
+    status->brightness_percent = harness->brightness;
+    return true;
+}
+
+bool ReadNetworkStatus(veetee::mcp::NetworkStatus* status, void*) {
+    if (status == nullptr) return false;
+    *status = veetee::mcp::NetworkStatus{
+        .connected = true,
+        .rssi = -52,
+        .disconnect_count = 2,
+        .reconnect_attempt_count = 3,
+        .websocket_reconnect_attempt_count = 4,
+        .websocket_reconnect_exhausted_count = 1,
+        .last_disconnect_reason = 201,
+    };
     return true;
 }
 
 bool SetVolume(int volume, void* context) {
     static_cast<Harness*>(context)->volume = volume;
+    return true;
+}
+
+bool SetBrightness(int brightness, void* context) {
+    static_cast<Harness*>(context)->brightness = brightness;
     return true;
 }
 
@@ -155,7 +176,8 @@ bool CaptureResponse(const char* payload, std::size_t length, void* context) {
 
 void InitializeHarness(Harness* harness) {
     Expect(harness->mcp.Initialize(&ReadStatus, &ReadDiagnostics,
-                                   &StartDiagnostic, &SetVolume,
+                                   &ReadNetworkStatus, &StartDiagnostic,
+                                   &SetVolume, &SetBrightness,
                                    &CaptureResponse, harness),
            "MCP harness initializes");
 }
@@ -225,6 +247,43 @@ void TestVolumeCallAndArgumentSafety() {
     Expect(harness.volume == 55, "additional property does not mutate device");
 }
 
+void TestBrightnessAndNetworkTools() {
+    Harness harness;
+    InitializeHarness(&harness);
+    const std::string brightness = Envelope(
+        R"({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"self.screen.set_brightness","arguments":{"brightness":35}}})");
+    Expect(harness.mcp.HandleEnvelope(brightness.data(), brightness.size()),
+           "brightness call handles");
+    Expect(harness.brightness == 35,
+           "brightness setter receives exact bounded value");
+
+    const std::string invalid = Envelope(
+        R"({"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"self.screen.set_brightness","arguments":{"brightness":-1}}})");
+    Expect(harness.mcp.HandleEnvelope(invalid.data(), invalid.size()),
+           "invalid brightness returns an error");
+    Expect(harness.brightness == 35,
+           "invalid brightness does not mutate the display");
+
+    const std::string network = Envelope(
+        R"({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"self.network.get_status","arguments":{}}})");
+    Expect(harness.mcp.HandleEnvelope(network.data(), network.size()),
+           "network status call handles");
+    cJSON* response = cJSON_Parse(harness.response.c_str());
+    cJSON* result = cJSON_GetObjectItemCaseSensitive(response, "result");
+    cJSON* content = cJSON_GetObjectItemCaseSensitive(result, "content");
+    cJSON* text = cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetArrayItem(content, 0), "text");
+    cJSON* status = cJSON_Parse(text->valuestring);
+    Expect(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(status, "connected")) &&
+               cJSON_GetObjectItemCaseSensitive(status, "rssi")->valueint == -52,
+           "network status contains bounded connectivity evidence");
+    Expect(cJSON_GetObjectItemCaseSensitive(status, "ssid") == nullptr &&
+               cJSON_GetObjectItemCaseSensitive(status, "ipv4") == nullptr,
+           "AI-callable network status does not expose network identity");
+    cJSON_Delete(status);
+    cJSON_Delete(response);
+}
+
 void TestStatusPaginationAndUserOnlySplit() {
     Harness harness;
     InitializeHarness(&harness);
@@ -243,6 +302,9 @@ void TestStatusPaginationAndUserOnlySplit() {
     Expect(cJSON_GetObjectItemCaseSensitive(status_json, "volume_percent")
                    ->valueint == 70,
            "status result includes volume");
+    Expect(cJSON_GetObjectItemCaseSensitive(status_json, "brightness_percent")
+                   ->valueint == 100,
+           "status result includes brightness");
     cJSON_Delete(status_json);
     cJSON_Delete(response);
 
@@ -253,7 +315,7 @@ void TestStatusPaginationAndUserOnlySplit() {
     response = cJSON_Parse(harness.response.c_str());
     result = cJSON_GetObjectItemCaseSensitive(response, "result");
     content = cJSON_GetObjectItemCaseSensitive(result, "tools");
-    Expect(cJSON_GetArraySize(content) == 2,
+    Expect(cJSON_GetArraySize(content) == 4,
            "cursor resumes at the requested regular tool");
     cJSON_Delete(response);
 
@@ -264,7 +326,7 @@ void TestStatusPaginationAndUserOnlySplit() {
     response = cJSON_Parse(harness.response.c_str());
     result = cJSON_GetObjectItemCaseSensitive(response, "result");
     content = cJSON_GetObjectItemCaseSensitive(result, "tools");
-    Expect(cJSON_GetArraySize(content) == 7,
+    Expect(cJSON_GetArraySize(content) == 9,
            "user-only catalog is hidden unless explicitly requested");
     ExpectJsonEquals(
         harness.response,
@@ -457,6 +519,7 @@ void TestMalformedEnvelopeAndUnknownTool() {
 int main() {
     TestInitializeAndRegularCatalogFixtures();
     TestVolumeCallAndArgumentSafety();
+    TestBrightnessAndNetworkTools();
     TestStatusPaginationAndUserOnlySplit();
     TestStructuredDiagnosticsAndBounds();
     TestMalformedEnvelopeAndUnknownTool();

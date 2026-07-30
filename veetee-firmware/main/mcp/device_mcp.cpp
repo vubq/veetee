@@ -19,6 +19,8 @@ enum class ToolHandler {
     kDeviceStatus,
     kGetVolume,
     kSetVolume,
+    kSetBrightness,
+    kNetworkStatus,
     kSystemInfo,
     kDiagnosticsHealth,
     kDiagnosticsAudioStart,
@@ -38,13 +40,15 @@ constexpr char kEmptyInputSchema[] =
     R"({"type":"object","additionalProperties":false,"properties":{}})";
 constexpr char kVolumeInputSchema[] =
     R"({"type":"object","additionalProperties":false,"required":["volume"],"properties":{"volume":{"type":"integer","minimum":0,"maximum":100}}})";
+constexpr char kBrightnessInputSchema[] =
+    R"({"type":"object","additionalProperties":false,"required":["brightness"],"properties":{"brightness":{"type":"integer","minimum":0,"maximum":100}}})";
 constexpr char kAudioDiagnosticInputSchema[] =
     R"({"type":"object","additionalProperties":false,"required":["duration_seconds"],"properties":{"duration_seconds":{"type":"integer","minimum":1,"maximum":30}}})";
 
-constexpr std::array<ToolDefinition, 7> kTools = {{
+constexpr std::array<ToolDefinition, 9> kTools = {{
     {
         "self.get_device_status",
-        "Read the current device state, assistant gate, firmware version and speaker volume.",
+        "Read the current device state, assistant gate, firmware version, speaker volume and screen brightness.",
         kEmptyInputSchema,
         "read_only",
         false,
@@ -65,6 +69,22 @@ constexpr std::array<ToolDefinition, 7> kTools = {{
         "reversible",
         false,
         ToolHandler::kSetVolume,
+    },
+    {
+        "self.screen.set_brightness",
+        "Set LCD backlight brightness from 0 to 100 percent.",
+        kBrightnessInputSchema,
+        "reversible",
+        false,
+        ToolHandler::kSetBrightness,
+    },
+    {
+        "self.network.get_status",
+        "Read bounded Wi-Fi and voice reconnect status without exposing SSID, credentials or endpoint URLs.",
+        kEmptyInputSchema,
+        "read_only",
+        false,
+        ToolHandler::kNetworkStatus,
     },
     {
         "self.get_system_info",
@@ -461,18 +481,23 @@ const ToolDefinition* FindTool(const char* name) {
 
 bool DeviceMcp::Initialize(StatusProvider status_provider,
                            DiagnosticsProvider diagnostics_provider,
+                           NetworkStatusProvider network_status_provider,
                            AudioDiagnosticStarter audio_diagnostic_starter,
                            VolumeSetter volume_setter,
+                           BrightnessSetter brightness_setter,
                            ResponseSink response_sink, void* context) {
     if (status_provider == nullptr || diagnostics_provider == nullptr ||
+        network_status_provider == nullptr ||
         audio_diagnostic_starter == nullptr || volume_setter == nullptr ||
-        response_sink == nullptr) {
+        brightness_setter == nullptr || response_sink == nullptr) {
         return false;
     }
     status_provider_ = status_provider;
     diagnostics_provider_ = diagnostics_provider;
+    network_status_provider_ = network_status_provider;
     audio_diagnostic_starter_ = audio_diagnostic_starter;
     volume_setter_ = volume_setter;
+    brightness_setter_ = brightness_setter;
     response_sink_ = response_sink;
     context_ = context;
     return true;
@@ -657,7 +682,8 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
     DeviceStatus status{};
     if (!status_provider_(&status, context_) || status.state == nullptr ||
         status.firmware_version == nullptr || status.volume_percent < 0 ||
-        status.volume_percent > 100) {
+        status.volume_percent > 100 || status.brightness_percent < 0 ||
+        status.brightness_percent > 100) {
         return ReplyError(request_id, -32000, "Device status unavailable");
     }
 
@@ -672,6 +698,23 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
         }
         if (!volume_setter_(static_cast<int>(volume->valuedouble), context_)) {
             return ReplyError(request_id, -32000, "Unable to set volume");
+        }
+        return ReplyResult(request_id, CreateTextResult("true"));
+    }
+    if (tool->handler == ToolHandler::kSetBrightness) {
+        const cJSON* brightness =
+            cJSON_GetObjectItemCaseSensitive(arguments, "brightness");
+        if (arguments->child == nullptr || arguments->child->next != nullptr ||
+            !cJSON_IsNumber(brightness) ||
+            !std::isfinite(brightness->valuedouble) ||
+            std::floor(brightness->valuedouble) != brightness->valuedouble ||
+            brightness->valuedouble < 0 || brightness->valuedouble > 100) {
+            return ReplyError(request_id, -32602, "Invalid brightness");
+        }
+        if (!brightness_setter_(static_cast<int>(brightness->valuedouble),
+                                context_)) {
+            return ReplyError(request_id, -32000,
+                              "Unable to set brightness");
         }
         return ReplyResult(request_id, CreateTextResult("true"));
     }
@@ -714,6 +757,33 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
         std::snprintf(volume, sizeof(volume), "%d", status.volume_percent);
         return ReplyResult(request_id, CreateTextResult(volume));
     }
+    if (tool->handler == ToolHandler::kNetworkStatus) {
+        NetworkStatus network{};
+        if (!network_status_provider_(&network, context_)) {
+            return ReplyError(request_id, -32000,
+                              "Network status unavailable");
+        }
+        cJSON* value = cJSON_CreateObject();
+        if (value == nullptr ||
+            !cJSON_AddBoolToObject(value, "connected", network.connected) ||
+            !cJSON_AddNumberToObject(value, "rssi", network.rssi) ||
+            !cJSON_AddNumberToObject(value, "disconnect_count",
+                                     network.disconnect_count) ||
+            !cJSON_AddNumberToObject(value, "reconnect_attempt_count",
+                                     network.reconnect_attempt_count) ||
+            !cJSON_AddNumberToObject(
+                value, "websocket_reconnect_attempt_count",
+                network.websocket_reconnect_attempt_count) ||
+            !cJSON_AddNumberToObject(
+                value, "websocket_reconnect_exhausted_count",
+                network.websocket_reconnect_exhausted_count) ||
+            !cJSON_AddNumberToObject(value, "last_disconnect_reason",
+                                     network.last_disconnect_reason)) {
+            cJSON_Delete(value);
+            return false;
+        }
+        return ReplyResult(request_id, CreateJsonTextResult(value));
+    }
     if (tool->handler == ToolHandler::kDiagnosticsHealth ||
         tool->handler == ToolHandler::kDiagnosticsSelfTest) {
         DeviceDiagnostics diagnostics{};
@@ -745,7 +815,9 @@ bool DeviceMcp::HandleToolsCall(const void* request_id, const void* params_value
             !cJSON_AddBoolToObject(status_json, "assistant_gate_open",
                                   status.assistant_gate_open) ||
             !cJSON_AddNumberToObject(status_json, "volume_percent",
-                                    status.volume_percent)) {
+                                    status.volume_percent) ||
+            !cJSON_AddNumberToObject(status_json, "brightness_percent",
+                                     status.brightness_percent)) {
             cJSON_Delete(status_json);
             return false;
         }

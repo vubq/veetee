@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -82,7 +83,15 @@ def _consume_task_result(task: asyncio.Task[object]) -> None:
 
 
 async def await_operation[T](awaitable: Awaitable[T], context: OperationContext) -> T:
-    context.checkpoint()
+    try:
+        context.checkpoint()
+    except BaseException:
+        # Callers commonly pass a freshly-created coroutine. If cancellation was
+        # already visible, close that coroutine before re-raising so no un-awaited
+        # StreamReader/read coroutine is left for event-loop teardown warnings.
+        if inspect.iscoroutine(awaitable):
+            awaitable.close()
+        raise
     operation = asyncio.ensure_future(awaitable)
     cancellation = asyncio.create_task(context.token.wait())
     try:

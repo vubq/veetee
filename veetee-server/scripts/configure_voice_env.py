@@ -107,6 +107,7 @@ def atomic_write_private(path: Path, content: str) -> None:
 
 def main() -> None:
     manager = parse_environment(MANAGER_ENV)
+    current_voice = parse_environment(VOICE_ENV) if VOICE_ENV.is_file() else {}
     manager_token = manager.get("VEETEE_INTERNAL_SERVICE_TOKEN", "")
     if len(manager_token) < 24:
         raise RuntimeError("Manager internal service token is missing or invalid")
@@ -124,6 +125,11 @@ def main() -> None:
         "VEETEE_CLIPROXY_API_KEY": active_cliproxy_key(),
         "VEETEE_CLIPROXY_MODEL": "gpt-5.6-terra",
     }
+    cookie_file = os.environ.get("VEETEE_MEDIA_YOUTUBE_COOKIE_FILE", "").strip()
+    if not cookie_file:
+        cookie_file = current_voice.get("VEETEE_MEDIA_YOUTUBE_COOKIE_FILE", "").strip()
+    if cookie_file:
+        replacements["VEETEE_MEDIA_YOUTUBE_COOKIE_FILE"] = cookie_file
     atomic_write_private(VOICE_ENV, render_environment(replacements))
     print(f"Configured ignored voice environment at {VOICE_ENV} (secrets redacted)")
 

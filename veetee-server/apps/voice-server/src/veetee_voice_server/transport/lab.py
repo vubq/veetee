@@ -40,7 +40,9 @@ from veetee_voice_server.manager import LabSessionContext, SessionProfile
 from veetee_voice_server.providers.contracts import ToolBroker, TtsProvider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.silero_vad import SileroVadModel, SileroVadSession
+from veetee_voice_server.providers.tools import CompositeToolBroker
 from veetee_voice_server.tools.context import with_session_context_tools
+from veetee_voice_server.tools.media import MediaProvider, MediaToolBroker
 from veetee_voice_server.tools.remote_mcp import (
     RemoteAugmentedToolBroker,
     SessionRemoteMcpBroker,
@@ -67,10 +69,14 @@ class LabConversationSink:
         *,
         session_id: str,
         output_sample_rate: int,
+        playback_queue_seconds: float = 5.0,
     ) -> None:
+        if playback_queue_seconds <= 0:
+            raise ValueError("Lab playback queue must be positive")
         self._websocket = websocket
         self._session_id = session_id
         self._output_sample_rate = output_sample_rate
+        self._playback_queue_seconds = playback_queue_seconds
         self._started_at = monotonic()
         self._wire_lock = asyncio.Lock()
         self._cancel_generation = 0
@@ -251,6 +257,11 @@ class LabConversationSink:
             if not self._is_current_tts_generation(output.generation):
                 return
         first_audio = self._first_audio_generation != output.generation
+        duration_seconds = len(pcm) / (self._output_sample_rate * 2)
+        if not await self._wait_for_playback_capacity(
+            duration_seconds, output.generation
+        ):
+            return
         if first_audio:
             await self.send_event(
                 "tts.first_audio",
@@ -267,7 +278,6 @@ class LabConversationSink:
         if not self._is_current_tts_generation(output.generation):
             return
         self._first_audio_generation = output.generation
-        duration_seconds = len(pcm) / (self._output_sample_rate * 2)
         now = monotonic()
         buffered_seconds = max(0.0, self._playback_until - now)
         if not first_audio:
@@ -291,6 +301,27 @@ class LabConversationSink:
                     )
             playback_base = now + LAB_PLAYBACK_LEAD_SECONDS
         self._playback_until = playback_base + duration_seconds
+
+    async def _wait_for_playback_capacity(
+        self, duration_seconds: float, generation: int
+    ) -> bool:
+        while self._is_current_tts_generation(generation):
+            buffered_seconds = max(0.0, self._playback_until - monotonic())
+            wait_seconds = (
+                buffered_seconds
+                + duration_seconds
+                - self._playback_queue_seconds
+            )
+            if wait_seconds <= 0:
+                return True
+            try:
+                await asyncio.wait_for(
+                    self._playback_cancelled.wait(), timeout=wait_seconds
+                )
+            except TimeoutError:
+                continue
+            return False
+        return False
 
     def _is_current_tts_generation(self, generation: int) -> bool:
         return (
@@ -515,6 +546,7 @@ class LabSession:
         tool_broker: ToolBroker,
         engine_factory: EngineFactory,
         remote_mcp: SessionRemoteMcpBroker | None = None,
+        media_provider: MediaProvider | None = None,
     ) -> None:
         # Lab sessions are operator tests, not authenticated physical-user sessions.
         # Enforce opt-out at this boundary even if a caller forgets to sanitize the
@@ -530,10 +562,22 @@ class LabSession:
             websocket,
             session_id=self.session_id,
             output_sample_rate=settings.wire_sample_rate,
+            playback_queue_seconds=settings.tts_playback_queue_seconds,
         )
         self.remote_mcp = remote_mcp
         if remote_mcp is not None:
             tool_broker = RemoteAugmentedToolBroker(tool_broker, remote_mcp)
+        if media_provider is not None:
+            tool_broker = CompositeToolBroker(
+                MediaToolBroker(
+                    media_provider,
+                    sink=self.sink,
+                    arbiter=self.arbiter,
+                    max_audio_chunks=settings.media_max_audio_chunks,
+                    max_audio_bytes=settings.media_max_audio_bytes,
+                ),
+                tool_broker,
+            )
         session_tools = with_session_context_tools(profile, tool_broker)
         self.tools = InstrumentedLabToolBroker(session_tools, self.sink)
         self.engine = engine_factory(self.arbiter, self.sink, profile, self.tools)

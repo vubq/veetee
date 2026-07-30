@@ -69,6 +69,57 @@ def test_voice_example_pins_openblas_before_python_start() -> None:
     assert rendered["OPENBLAS_NUM_THREADS"] == "1"
 
 
+def test_voice_env_sync_preserves_or_overrides_youtube_cookie_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    voice_example = tmp_path / "voice.env.example"
+    voice_env = tmp_path / "voice.env"
+    manager_env = tmp_path / "manager.env"
+    cliproxy_config = tmp_path / "cliproxy.yaml"
+    voice_example.write_text(
+        "VEETEE_MEDIA_YOUTUBE_COOKIE_FILE=\n",
+        encoding="utf-8",
+    )
+    voice_env.write_text(
+        "VEETEE_MEDIA_YOUTUBE_COOKIE_FILE=/private/preserved-cookies.txt\n",
+        encoding="utf-8",
+    )
+    manager_env.write_text(
+        "VEETEE_INTERNAL_SERVICE_TOKEN=manager-token-long-enough-for-validation\n",
+        encoding="utf-8",
+    )
+    cliproxy_config.write_text(
+        'api-keys:\n  - "cliproxy-test-key"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(configure_voice_env, "VOICE_EXAMPLE", voice_example)
+    monkeypatch.setattr(configure_voice_env, "VOICE_ENV", voice_env)
+    monkeypatch.setattr(configure_voice_env, "MANAGER_ENV", manager_env)
+    monkeypatch.setattr(configure_voice_env, "CLIPROXY_CONFIG", cliproxy_config)
+
+    configure_voice_env.main()
+
+    rendered = configure_voice_env.parse_environment(voice_env)
+    assert (
+        rendered["VEETEE_MEDIA_YOUTUBE_COOKIE_FILE"]
+        == "/private/preserved-cookies.txt"
+    )
+    monkeypatch.setenv(
+        "VEETEE_MEDIA_YOUTUBE_COOKIE_FILE", "/private/override-cookies.txt"
+    )
+    configure_voice_env.main()
+    rendered = configure_voice_env.parse_environment(voice_env)
+    assert (
+        rendered["VEETEE_MEDIA_YOUTUBE_COOKIE_FILE"]
+        == "/private/override-cookies.txt"
+    )
+    output = capsys.readouterr().out
+    assert "preserved-cookies" not in output
+    assert "override-cookies" not in output
+
+
 def test_bare_voice_commands_pin_openblas_before_python_start() -> None:
     package = json.loads((SERVER_ROOT / "package.json").read_text(encoding="utf-8"))
 

@@ -51,6 +51,38 @@ nên không thay thế được cap này. 9Router
 
 Conversation mặc định là `mode=auto`: button/wake word chỉ mở assistant gate; VAD tự finalize, admission gate quyết định có gọi LLM/MCP, inactivity timeout phát goodbye rồi sleep.
 
+## YouTube Music
+
+`VEETEE_MEDIA_PROVIDER=youtube_music` publish server tool `media.play` cho cả ESP32 và
+Realtime Lab. Planner AI chọn structured `specific_track` hoặc `any_track`; code không
+dò keyword/câu nói. `specific_track` cần đủ title + artist, còn `any_track` cần query do
+AI tạo từ context. Tool không nhận URL. Adapter dùng `yt-dlp` đã pin để resolve một
+provider item ID rồi stream qua FFmpeg thành PCM 24 kHz mono trong cùng turn/generation;
+button/abort đóng downloader và decoder.
+
+FFmpeg là host dependency. Kiểm tra read-only trước khi start hoặc sau khi nâng `yt-dlp`:
+
+```bash
+command -v ffmpeg
+npm run media:probe:youtube -- --title "<tên bài>" --artist "<nghệ sĩ>" --decode-seconds 5
+```
+
+Probe không ghi audio ra file. Adapter không dùng cookie hoặc bypass DRM/private/
+age-restricted content mặc định. Anonymous YouTube có thể trả `429`/bot challenge sau
+nhiều request. Production có thể đặt `VEETEE_MEDIA_YOUTUBE_COOKIE_FILE` tới Netscape
+cookie export mode `0600` của một tài khoản riêng cho thiết bị; không trỏ vào browser
+profile cá nhân, không commit/sync cookie và không log path/content. Cookie không được
+dùng để bypass DRM/private/age restriction. Availability vẫn phụ thuộc YouTube và có
+thể cần cập nhật extractor sau thay đổi upstream. Đặt
+`VEETEE_MEDIA_PROVIDER=disabled` để bỏ tool khỏi catalog.
+
+Lần sync đầu có thể truyền `VEETEE_MEDIA_YOUTUBE_COOKIE_FILE` cho
+`npm run env:voice:sync`; lần sau script giữ giá trị không rỗng trong Voice `.env`
+ignored, còn process environment có quyền override. Adapter ưu tiên HLS có audio trước
+audio-only fallback và dùng FFmpeg downloader qua stdout để không giữ fragment tạm;
+selector này không nằm trong schema AI. Abort phải reap cả yt-dlp và FFmpeg, không còn
+PCM sau `abort.complete`.
+
 ## Web Device Simulator
 
 Manager Web mở pipeline thật qua `ws://<voice-host>:8000/veetee/lab/v1/`. Manager

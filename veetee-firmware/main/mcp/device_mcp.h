@@ -13,6 +13,17 @@ struct DeviceStatus {
     bool assistant_gate_open;
     const char* firmware_version;
     int volume_percent;
+    int brightness_percent;
+};
+
+struct NetworkStatus {
+    bool connected = false;
+    std::int32_t rssi = 0;
+    std::uint64_t disconnect_count = 0;
+    std::uint64_t reconnect_attempt_count = 0;
+    std::uint64_t websocket_reconnect_attempt_count = 0;
+    std::uint64_t websocket_reconnect_exhausted_count = 0;
+    std::uint32_t last_disconnect_reason = 0;
 };
 
 struct TaskDiagnostics {
@@ -56,16 +67,21 @@ public:
     using StatusProvider = bool (*)(DeviceStatus* status, void* context);
     using DiagnosticsProvider = bool (*)(DeviceDiagnostics* diagnostics,
                                          void* context);
+    using NetworkStatusProvider = bool (*)(NetworkStatus* status,
+                                           void* context);
     using AudioDiagnosticStarter = bool (*)(std::uint32_t duration_seconds,
                                             void* context);
     using VolumeSetter = bool (*)(int volume_percent, void* context);
+    using BrightnessSetter = bool (*)(int brightness_percent, void* context);
     using ResponseSink = bool (*)(const char* payload, std::size_t length,
                                   void* context);
 
     bool Initialize(StatusProvider status_provider,
                     DiagnosticsProvider diagnostics_provider,
+                    NetworkStatusProvider network_status_provider,
                     AudioDiagnosticStarter audio_diagnostic_starter,
                     VolumeSetter volume_setter,
+                    BrightnessSetter brightness_setter,
                     ResponseSink response_sink, void* context);
     bool HandleEnvelope(const char* envelope, std::size_t length);
 
@@ -79,8 +95,10 @@ private:
 
     StatusProvider status_provider_ = nullptr;
     DiagnosticsProvider diagnostics_provider_ = nullptr;
+    NetworkStatusProvider network_status_provider_ = nullptr;
     AudioDiagnosticStarter audio_diagnostic_starter_ = nullptr;
     VolumeSetter volume_setter_ = nullptr;
+    BrightnessSetter brightness_setter_ = nullptr;
     ResponseSink response_sink_ = nullptr;
     void* context_ = nullptr;
 };
