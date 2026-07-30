@@ -107,6 +107,27 @@ class TurnArbiter:
                 )
             self._state = ConversationState.SPEAKING
 
+    async def resume_thinking(self, context: OperationContext) -> bool:
+        """Return a current turn from completed tool output to planning/prose.
+
+        A tool may own a bounded output lifecycle before returning its result. The
+        engine still needs the same turn to consume that result and optionally speak
+        a natural response. Stale/aborted turns are intentionally ignored here so
+        cleanup cannot revive a cancelled generation.
+        """
+
+        async with self._lock:
+            if not self._is_current(context) or context.token.cancelled:
+                return False
+            if self._state is ConversationState.THINKING:
+                return False
+            if self._state is not ConversationState.SPEAKING:
+                raise InvalidConversationTransitionError(
+                    f"Cannot resume thinking while state={self._state.value}"
+                )
+            self._state = ConversationState.THINKING
+            return True
+
     async def complete_turn(self, context: OperationContext) -> bool:
         async with self._lock:
             if not self._is_current(context):

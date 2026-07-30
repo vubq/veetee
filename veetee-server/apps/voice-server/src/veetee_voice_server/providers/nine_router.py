@@ -377,6 +377,15 @@ class NineRouterLlmProvider:
                 "action": request.plan.action.value,
                 "intent": request.plan.intent,
                 "response_required": request.plan.response_required,
+                "tool_name": (
+                    request.plan.tool_call.name
+                    if request.plan.tool_call is not None
+                    else None
+                ),
+                "tool_operation_class": getattr(
+                    request, "tool_operation_class", None
+                ),
+                "tool_response_phase": getattr(request, "tool_response_phase", None),
             },
             "input_evidence": input_evidence_payload(request.transcript.input_evidence),
             "context_message_count": len(request.transcript.context),

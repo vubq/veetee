@@ -20,6 +20,7 @@ from veetee_voice_server.conversation.types import (
     AdmissionDecision,
     AdmissionDisposition,
     AudioChunk,
+    ConversationOutput,
     ConversationPlan,
     ConversationPolicy,
     DialogueAct,
@@ -562,6 +563,93 @@ async def test_button_abort_cancels_mcp_and_drops_result_from_cancel_ignoring_ad
     await asyncio.sleep(0)
     assert llm.calls == 0
     assert tts.calls == []
+
+
+async def test_streaming_tool_output_returns_to_thinking_before_prose_tts() -> None:
+    arbiter = TurnArbiter("session-streaming-tool-prose")
+    sink = MemoryConversationSink()
+
+    class PhaseAwareLlm:
+        def __init__(self) -> None:
+            self.phases: list[str | None] = []
+
+        async def stream(
+            self, request: LlmRequest, context: OperationContext
+        ) -> AsyncIterator[LlmTextDelta | LlmStreamDone]:
+            context.checkpoint()
+            self.phases.append(request.tool_response_phase)
+            if request.tool_response_phase == "before":
+                yield LlmTextDelta("Mình bắt đầu phát nhé.")
+            elif request.tool_response_phase == "after":
+                yield LlmTextDelta("Đã phát hết. Bạn có muốn nghe thêm không?")
+            else:  # pragma: no cover - this fixture only exercises tool phases
+                raise AssertionError("unexpected response phase")
+            yield LlmStreamDone("stop")
+
+    class StreamingTools:
+        def list_tools(self) -> list[dict[str, Any]]:
+            return [{"name": "fixture.stream", "operationClass": "streaming"}]
+
+        async def call(
+            self,
+            name: str,
+            arguments: dict[str, Any],
+            context: OperationContext,
+        ) -> Any:
+            del name, arguments
+            await arbiter.mark_speaking(context)
+            await sink.emit(
+                ConversationOutput(OutputKind.TTS_START, context.turn_id, context.generation)
+            )
+            await sink.emit(
+                ConversationOutput(
+                    OutputKind.AUDIO,
+                    context.turn_id,
+                    context.generation,
+                    audio=AudioChunk(0, 24_000, "pcm_s16le", b"stream"),
+                )
+            )
+            await sink.emit(
+                ConversationOutput(OutputKind.TTS_STOP, context.turn_id, context.generation)
+            )
+            return {"status": "completed"}
+
+    llm = PhaseAwareLlm()
+    tts = FakeTts()
+    engine = ConversationEngine(
+        arbiter=arbiter,
+        admission=FakeAdmission(AdmissionDisposition.ACCEPTED),
+        planner=FakePlanner(
+            ConversationPlan(
+                action=PlanAction.CALL_TOOL_THEN_RESPOND,
+                dialogue_act=DialogueAct.COMMAND,
+                locale="vi-VN",
+                intent="fixture.stream",
+                response_required=True,
+                tool_call=ToolCall("fixture.stream", {}),
+            )
+        ),
+        llm=llm,
+        tts=tts,
+        tools=StreamingTools(),
+        sink=sink,
+        policy=ConversationPolicy(sentence_min_characters=1),
+    )
+    await arbiter.open_assistant(WakeSource.BUTTON)
+
+    await engine.handle_transcript(Transcript("Chạy nội dung", "vi-VN"))
+
+    kinds = [output.kind for output in sink.outputs]
+    assert kinds.count(OutputKind.TTS_START) == 3
+    assert kinds.count(OutputKind.TTS_STOP) == 3
+    assert llm.phases == ["before", "after"]
+    assert tts.calls == [
+        "Mình bắt đầu phát nhé.",
+        "Đã phát hết.",
+        "Bạn có muốn nghe thêm không?",
+    ]
+    assert not any(output.kind is OutputKind.ERROR for output in sink.outputs)
+    assert arbiter.snapshot.state is ConversationState.LISTENING
 
 
 async def test_abort_after_partial_tts_output_does_not_commit_memory() -> None:

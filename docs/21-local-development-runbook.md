@@ -368,6 +368,15 @@ URL, cookie hay downloader argument từ AI. Không dùng cơ chế bypass DRM/p
 age-restricted content; khi YouTube thay đổi, pin phiên bản mới chỉ sau probe + test
 cancellation, không fallback sang scraper/arbitrary URL.
 
+Lượt play hoàn chỉnh phải có thứ tự `planner -> LLM/TTS before -> mcp.start -> media
+tts.start/audio/tts.stop -> LLM/TTS after -> listen.start`. Phase `before` là thông báo
+ngắn rằng stream sắp bắt đầu; phase `after` đọc kết quả thật và khi `played/completed`
+thì báo đã phát hết, đồng thời hỏi tự nhiên có muốn nghe thêm hay không. Câu chữ do LLM
+tạo theo persona/locale, không hard-code trong media adapter. Nếu phase `before` không
+phát được audio thì fail-closed trước dispatch. Abort ở media lifecycle hủy turn nên
+không phát câu completion giả, nhưng vẫn phải có cancelled `tts.stop`, `abort.complete`,
+`listen.start` và zero child process.
+
 Anonymous mode có thể trả `youtube_music_rate_limited` do `429`/bot challenge. Không
 retry loop vì sẽ kéo dài block. Nếu operator chọn authenticated mode, export Netscape
 cookies từ một tài khoản YouTube riêng, đặt file ngoài repo với mode `0600`, rồi cấu hình

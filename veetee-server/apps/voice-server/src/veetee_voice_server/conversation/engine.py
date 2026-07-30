@@ -68,6 +68,7 @@ class _AssistantCompletion:
     durable_text: str
     incomplete: bool = False
     finish_reason: str | None = None
+    spoken: bool = False
 
 
 class _SemanticProviderUnavailableError(RuntimeError):
@@ -335,39 +336,97 @@ class ConversationEngine:
             return _AssistantCompletion(plan.response_text, plan.response_text)
 
         tool_result: Any | None = None
+        operation_class: Literal["request", "streaming"] | None = None
         if plan.action in {
             PlanAction.CALL_TOOL_THEN_RESPOND,
             PlanAction.EXECUTE_PENDING_TOOL,
         }:
             if plan.tool_call is None:
                 raise ValueError("Tool plan is missing tool_call")
-            tool_context = self._tool_context(plan.tool_call.name, context)
-            tool_result = await await_operation(
-                self._tools.call(
-                    plan.tool_call.name,
-                    plan.tool_call.arguments,
-                    tool_context,
-                ),
-                tool_context,
+            operation_class = self._tool_operation_class(plan.tool_call.name)
+            if operation_class == "streaming":
+                notice = await self._stream_response(
+                    LlmRequest(
+                        transcript=transcript,
+                        plan=plan,
+                        admission=admission,
+                        tool_operation_class=operation_class,
+                        tool_response_phase="before",
+                        system_prompt=self._system_prompt,
+                    ),
+                    context,
+                )
+                if notice.incomplete or not notice.spoken:
+                    raise RuntimeError("Streaming tool pre-action notice was not spoken")
+                await self._arbiter.resume_thinking(context)
+            tool_context = self._tool_context(
+                plan.tool_call.name,
+                context,
+                operation_class=operation_class,
             )
+            try:
+                tool_result = await await_operation(
+                    self._tools.call(
+                        plan.tool_call.name,
+                        plan.tool_call.arguments,
+                        tool_context,
+                    ),
+                    tool_context,
+                )
+            finally:
+                # A generic streaming tool may have emitted its own bounded
+                # TTS/audio lifecycle. Restore the same current turn to THINKING
+                # before prose/recovery TTS; aborted generations remain stale.
+                await self._arbiter.resume_thinking(context)
             # The adapter may swallow task cancellation. Re-check the arbiter
             # generation at the broker boundary before a result can reach LLM/TTS.
             self._arbiter.require_current(context)
 
         if plan.response_required:
-            return await self._stream_response(
+            completion = await self._stream_response(
                 LlmRequest(
                     transcript=transcript,
                     plan=plan,
                     admission=admission,
                     tool_result=tool_result,
+                    tool_operation_class=(
+                        operation_class if plan.tool_call is not None else None
+                    ),
+                    tool_response_phase=(
+                        "after" if plan.tool_call is not None else None
+                    ),
                     system_prompt=self._system_prompt,
                 ),
                 context,
             )
+            if (
+                plan.tool_call is not None
+                and operation_class == "streaming"
+                and not completion.spoken
+            ):
+                raise RuntimeError("Streaming tool completion response was not spoken")
+            return completion
         return None
 
-    def _tool_context(self, name: str, context: OperationContext) -> OperationContext:
+    def _tool_operation_class(self, name: str) -> Literal["request", "streaming"]:
+        operation_class: Literal["request", "streaming"] = "request"
+        for item in self._tools.list_tools():
+            if isinstance(item, dict) and item.get("name") == name:
+                value = item.get("operationClass")
+                if value == "streaming":
+                    operation_class = "streaming"
+                elif value == "request":
+                    operation_class = "request"
+                break
+        return operation_class
+
+    def _tool_context(
+        self,
+        name: str,
+        context: OperationContext,
+        *,
+        operation_class: Literal["request", "streaming"] | None = None,
+    ) -> OperationContext:
         """Apply the generic catalog operation class to tool deadlines.
 
         The engine deliberately does not know semantic tool names. A bounded
@@ -376,13 +435,7 @@ class ConversationEngine:
         is interruptible without being cut off by the short request deadline.
         """
 
-        operation_class = "request"
-        for item in self._tools.list_tools():
-            if isinstance(item, dict) and item.get("name") == name:
-                value = item.get("operationClass")
-                if isinstance(value, str):
-                    operation_class = value
-                break
+        operation_class = operation_class or self._tool_operation_class(name)
         if operation_class == "streaming":
             return context
         return context.child(self._policy.mcp_seconds)
@@ -442,6 +495,8 @@ class ConversationEngine:
                         session_id=context.session_id,
                         turn_id=context.turn_id,
                         duration_ms=round((first_delta_at - stream_started_at) * 1_000, 1),
+                        tool_operation_class=request.tool_operation_class,
+                        tool_response_phase=request.tool_response_phase,
                     )
                 if len(event.text) > self._policy.llm_delta_max_characters:
                     raise ValueError("LLM delta exceeds the bounded streaming contract")
@@ -487,6 +542,8 @@ class ConversationEngine:
                 response_characters=response_characters,
                 finish_reason=finish_reason or "unknown",
                 incomplete=incomplete,
+                tool_operation_class=request.tool_operation_class,
+                tool_response_phase=request.tool_response_phase,
             )
             for remainder in chunker.flush_chunks():
                 logger.info(
@@ -533,6 +590,7 @@ class ConversationEngine:
             durable_text,
             incomplete=incomplete,
             finish_reason=finish_reason,
+            spoken=speech.started,
         )
 
     async def _drain_speech_queue(

@@ -279,6 +279,12 @@ broker phát cùng lifecycle `tts.start` -> PCM -> `tts.stop` và giữ `turn_id
 và cancellation scope; nút/wake interrupt dừng stream ngay cả khi bài dài. Catalog đánh
 `operationClass=streaming` để engine không áp deadline MCP request ngắn, nhưng provider
 vẫn phải checkpoint cancellation, giới hạn chunk/byte và không giữ dữ liệu bài hát vô hạn.
+Trước dispatch, engine yêu cầu prose LLM tạo và TTS phát một thông báo anticipatory ngắn
+theo persona/locale; thiếu audio thông báo thì fail-closed và chưa chạy tool. Khi stream
+kết thúc, engine khôi phục cùng current turn về `thinking` trước khi dùng tool result
+cho prose/TTS. Kết quả `played/completed` phải được AI diễn đạt là đã phát hết và mời
+người dùng nghe tiếp, không dùng fixed phrase hoặc nhánh theo tên `media.play`.
+Generation đã abort không được khôi phục.
 Adapter local được chọn là `youtube_music`, dùng `yt-dlp` đã pin để search metadata và
 FFmpeg host để decode provider stream thành PCM signed 16-bit mono 24 kHz. Adapter ưu
 tiên HLS có audio băng thông thấp trước audio-only fallback vì YouTube có thể từ chối

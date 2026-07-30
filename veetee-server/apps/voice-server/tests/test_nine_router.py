@@ -23,6 +23,7 @@ from veetee_voice_server.conversation.types import (
     InputEvidence,
     InputSource,
     PlanAction,
+    ToolCall,
     Transcript,
     WakeSource,
 )
@@ -108,8 +109,44 @@ async def test_payload_includes_structured_turn_context_for_prose_response() -> 
     assert metadata["admission"]["addressed_to_robot"] == 0.88
     assert metadata["input_evidence"]["wake_source"] == "button"
     assert metadata["context_message_count"] == 1
+    assert metadata["plan"]["tool_name"] is None
+    assert metadata["plan"]["tool_operation_class"] is None
+    assert metadata["plan"]["tool_response_phase"] is None
     assert payload["messages"][0] == {"role": "system", "content": "published"}
     assert "max_tokens" not in payload
+    await provider.close()
+
+
+async def test_streaming_tool_phase_is_explicit_in_prose_metadata() -> None:
+    provider = NineRouterLlmProvider(base_url="http://router/v1", model="test")
+    payload = provider._payload(
+        LlmRequest(
+            transcript=Transcript("Mở nhạc", "vi-VN"),
+            plan=ConversationPlan(
+                PlanAction.CALL_TOOL_THEN_RESPOND,
+                DialogueAct.COMMAND,
+                "vi-VN",
+                "media.play",
+                True,
+                tool_call=ToolCall("media.play", {"mode": "any_track"}),
+            ),
+            tool_operation_class="streaming",
+            tool_response_phase="before",
+            system_prompt="published",
+        )
+    )
+    metadata = json.loads(
+        payload["messages"][-1]["content"].split("Turn metadata (JSON): ", 1)[1]
+    )
+
+    assert metadata["plan"] == {
+        "action": "call_tool_then_respond",
+        "intent": "media.play",
+        "response_required": True,
+        "tool_name": "media.play",
+        "tool_operation_class": "streaming",
+        "tool_response_phase": "before",
+    }
     await provider.close()
 
 

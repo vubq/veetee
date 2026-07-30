@@ -363,6 +363,14 @@ speech -> quality gate -> ASR final -> semantic planner
 
 Tool result không được đọc thẳng ra loa nếu chứa JSON/kỹ thuật. LLM chuyển result thành câu trả lời tự nhiên theo locale. Nếu tool cần xác nhận, robot hỏi lại và giữ `WAITING_CONFIRMATION`; timeout hoặc abort phải hủy tool call.
 
+Một streaming tool có thể sở hữu lifecycle output bounded riêng trong cùng turn. Trước
+khi dispatch, prose LLM phải tạo một thông báo ngắn theo persona/locale rằng stream sắp
+bắt đầu và TTS phải phát xong thông báo đó; không hard-code câu thông báo trong runtime.
+Sau `tts.stop` của tool, arbiter đưa đúng generation hiện tại từ `SPEAKING` về
+`THINKING`, rồi LLM dùng tool result để báo trạng thái thật. Với kết quả đã phát hết,
+LLM báo đã hoàn tất và hỏi tự nhiên người dùng có muốn nghe tiếp hay không. Abort/stale
+generation không được đi qua các transition này hoặc phát output mới.
+
 ## 4. Turn arbiter
 
 Mỗi session có một `TurnArbiter` và `turn_id` tăng dần.

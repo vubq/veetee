@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from veetee_voice_server.conversation.cancellation import OperationContext
 from veetee_voice_server.conversation.types import (
@@ -19,6 +19,8 @@ class LlmRequest:
     plan: ConversationPlan
     admission: AdmissionDecision | None = None
     tool_result: Any | None = None
+    tool_operation_class: Literal["request", "streaming"] | None = None
+    tool_response_phase: Literal["before", "after"] | None = None
     system_prompt: str | None = None
 
 

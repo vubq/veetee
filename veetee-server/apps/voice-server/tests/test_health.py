@@ -152,6 +152,9 @@ async def test_response_prompt_omits_tool_input_schemas_from_prose_call() -> Non
     assert "A compact fixture tool." in prompt
     assert "inputSchema" not in prompt
     assert '"properties"' not in prompt
+    assert "tool_response_phase" in prompt
+    assert "whether the user wants another selection" in prompt
+    assert "do not use a fixed phrase" in prompt
 
 
 async def test_gate_artifact_cache_refreshes_after_device_mcp_discovery() -> None:

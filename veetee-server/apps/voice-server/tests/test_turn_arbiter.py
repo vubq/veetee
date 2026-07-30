@@ -53,6 +53,34 @@ async def test_close_gate_cancels_current_turn_and_enters_standby() -> None:
     assert snapshot.state is ConversationState.STANDBY
 
 
+async def test_completed_tool_output_can_resume_same_turn_for_prose() -> None:
+    arbiter = TurnArbiter("session-tool-output")
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    turn = await arbiter.begin_turn(30)
+    await arbiter.mark_speaking(turn)
+
+    changed = await arbiter.resume_thinking(turn)
+
+    assert changed is True
+    assert arbiter.snapshot.state is ConversationState.THINKING
+    await arbiter.mark_speaking(turn)
+    assert arbiter.snapshot.state is ConversationState.SPEAKING
+
+
+async def test_aborted_tool_output_cannot_revive_stale_turn() -> None:
+    arbiter = TurnArbiter("session-stale-tool-output")
+    await arbiter.open_assistant(WakeSource.BUTTON)
+    turn = await arbiter.begin_turn(30)
+    await arbiter.mark_speaking(turn)
+    receipt = await arbiter.abort("button_interrupt")
+    await arbiter.finish_cancellation(receipt)
+
+    changed = await arbiter.resume_thinking(turn)
+
+    assert changed is False
+    assert arbiter.snapshot.state is ConversationState.LISTENING
+
+
 async def test_external_task_cancellation_cleans_up_child_operation() -> None:
     child_stopped = asyncio.Event()
 
