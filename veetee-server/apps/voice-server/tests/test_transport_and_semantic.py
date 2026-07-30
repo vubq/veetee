@@ -254,6 +254,94 @@ async def test_signal_gate_keeps_clear_one_word_contextual_reply() -> None:
     assert calls == 1
 
 
+@pytest.mark.parametrize(
+    (
+        "characters",
+        "duration_ms",
+        "signal_rms",
+        "snr",
+        "vad_mean",
+        "vad_peak",
+        "vad_ratio",
+    ),
+    [
+        (14, 1_160, -15.16, -1.96, 0.4915, 0.9999, 0.5000),
+        (18, 1_640, -16.75, 0.84, 0.5573, 0.9985, 0.5349),
+    ],
+)
+async def test_signal_gate_keeps_strong_contextual_follow_up_when_noise_reference_is_unreliable(
+    characters: int,
+    duration_ms: int,
+    signal_rms: float,
+    snr: float,
+    vad_mean: float,
+    vad_peak: float,
+    vad_ratio: float,
+) -> None:
+    calls = 0
+
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return gate_payload(dialogue_act="clarification_answer")
+
+    gate = StructuredConversationGate(complete_json)
+    decision = await gate.evaluate(
+        Transcript(
+            "x" * characters,
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Bạn muốn chọn phương án nào?"),),
+            input_evidence=InputEvidence(
+                source=InputSource.DEVICE_MIC,
+                wake_source=WakeSource.WAKE_WORD,
+                utterance_duration_ms=duration_ms,
+                signal_rms_dbfs=signal_rms,
+                estimated_snr_db=snr,
+                vad_mean_probability=vad_mean,
+                vad_peak_probability=vad_peak,
+                vad_speech_ratio=vad_ratio,
+            ),
+        ),
+        context(),
+    )
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert calls == 1
+
+
+async def test_signal_gate_rejects_sharp_contextual_noise_without_dense_vad_support() -> None:
+    calls = 0
+
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return gate_payload()
+
+    gate = StructuredConversationGate(complete_json)
+    decision = await gate.evaluate(
+        Transcript(
+            "x" * 12,
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Tôi vẫn đang nghe."),),
+            input_evidence=InputEvidence(
+                source=InputSource.DEVICE_MIC,
+                wake_source=WakeSource.WAKE_WORD,
+                utterance_duration_ms=1_400,
+                signal_rms_dbfs=-18.0,
+                estimated_snr_db=-1.0,
+                vad_mean_probability=0.46,
+                vad_peak_probability=0.999,
+                vad_speech_ratio=0.46,
+            ),
+        ),
+        context(),
+    )
+
+    assert decision.disposition is AdmissionDisposition.NON_ACTIONABLE
+    assert decision.reason_code == "low_quality"
+    assert calls == 0
+
+
 async def test_planner_tolerates_unknown_model_dialogue_label() -> None:
     async def complete_json(_: object, __: object) -> dict[str, object]:
         return {

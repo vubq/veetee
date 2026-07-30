@@ -1000,6 +1000,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 short_min_signal_supports=(
                     resolved_settings.admission_short_min_signal_supports
                 ),
+                contextual_vad_threshold_factor=(
+                    resolved_settings.admission_contextual_vad_threshold_factor
+                ),
+                contextual_vad_peak_probability=(
+                    resolved_settings.admission_contextual_vad_peak_probability
+                ),
             ),
         )
         system_prompt = _response_system_prompt(profile, tools)

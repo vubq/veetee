@@ -12,6 +12,7 @@ from veetee_voice_server.conversation.types import (
     AdmissionDisposition,
     ConversationPlan,
     DialogueAct,
+    InputEvidence,
     InputSource,
     PlanAction,
     ToolCall,
@@ -37,6 +38,8 @@ class LocalAdmissionProvider:
     short_transcript_characters: int = 3
     short_utterance_ms: int = 1_200
     short_min_signal_supports: int = 3
+    contextual_vad_threshold_factor: float = 0.85
+    contextual_vad_peak_probability: float = 0.9
 
     async def evaluate(
         self, transcript: Transcript, context: OperationContext
@@ -121,6 +124,8 @@ class LocalAdmissionProvider:
                 required,
                 min(max(self.short_min_signal_supports, 1), 3),
             )
+        if self._has_contextual_speech_support(transcript, evidence, text):
+            return None
         if available >= required and supports < required:
             confidence = max(0.75, 1.0 - supports / available)
             return AdmissionDecision(
@@ -129,6 +134,38 @@ class LocalAdmissionProvider:
                 "low_quality",
             )
         return None
+
+    def _has_contextual_speech_support(
+        self,
+        transcript: Transcript,
+        evidence: InputEvidence,
+        text: str,
+    ) -> bool:
+        """Admit a strong near-field follow-up when the noise reference is unreliable.
+
+        This does not accept the turn semantically. It only lets the structured gate
+        decide relevance after four independent contextual/signal conditions agree.
+        """
+
+        if (
+            not transcript.context
+            or transcript.context[-1].role != "assistant"
+            or len(text) <= self.short_transcript_characters
+            or evidence.signal_rms_dbfs is None
+            or evidence.vad_mean_probability is None
+            or evidence.vad_peak_probability is None
+            or evidence.vad_speech_ratio is None
+        ):
+            return False
+        factor = min(max(self.contextual_vad_threshold_factor, 0.5), 1.0)
+        peak_floor = min(max(self.contextual_vad_peak_probability, 0.5), 1.0)
+        return (
+            evidence.signal_rms_dbfs >= self.strong_signal_rms_dbfs
+            and evidence.vad_peak_probability >= peak_floor
+            and evidence.vad_mean_probability
+            >= self.dense_vad_mean_probability * factor
+            and evidence.vad_speech_ratio >= self.dense_vad_speech_ratio * factor
+        )
 
 
 class JsonPlannerProvider:

@@ -234,6 +234,13 @@ LLM/MCP. Riêng candidate tối đa 3 ký tự và 1.200 ms yêu cầu đủ 3/3
 trong runtime config và phải A/B bằng corpus đa dạng, không được
 thay bằng rule theo tên nguồn âm hoặc exact transcript.
 
+Sau một assistant turn, noise reference có thể còn bị nhiễm tail playback hoặc speech
+onset dù follow-up thật có mức near-field mạnh. Với transcript dài hơn short-candidate,
+runtime cho semantic gate quyết định tiếp nếu last context là assistant, RMS đạt ngưỡng,
+VAD peak ít nhất `0.9` và cả VAD mean/ratio đạt ít nhất `0.85` lần ngưỡng dense. Đây chỉ
+là contextual signal admission, không tự chấp nhận intent/tool; corpus âm nền vẫn phải
+fail nếu thiếu một trong các bằng chứng này. Hai factor là runtime config, không phrase rule.
+
 Context của một phiên là một cửa sổ in-memory có giới hạn gồm các lượt `user` và
 `assistant` gần nhất; không ghi vào Manager DB. Gate nhận cả cửa sổ này cùng transcript
 hiện tại. Khi assistant vừa nói xong, một câu đáp ngắn, phản ứng, câu đùa, phủ định,

@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     admission_short_transcript_characters: int = Field(default=3, ge=1, le=20)
     admission_short_utterance_ms: int = Field(default=1_200, ge=200, le=3_000)
     admission_short_min_signal_supports: int = Field(default=3, ge=1, le=3)
+    admission_contextual_vad_threshold_factor: float = Field(
+        default=0.85, ge=0.5, le=1.0
+    )
+    admission_contextual_vad_peak_probability: float = Field(
+        default=0.9, ge=0.5, le=1.0
+    )
     # Device wake audio is privacy opt-in. This bound only limits a pending
     # detect -> binary Opus -> start sequence; it does not enable collection.
     wake_audio_pre_roll_max_ms: int = Field(default=2_000, ge=0, le=3_000)
