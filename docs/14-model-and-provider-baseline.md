@@ -375,6 +375,14 @@ ESP-SR AFE hoặc audio front-end trên ESP chỉ đảm nhiệm capture/wake pa
 feature mà board thật chứng minh được. Full-duplex voice barge-in vẫn phụ thuộc
 far-end reference/AEC benchmark; button interrupt là guarantee V1.
 
+Trước structured admission, device-mic dùng evidence fusion cấu hình được: ít nhất hai
+trong ba support từ absolute RMS, estimated SNR và VAD density. Baseline hiện là
+`2/3`, `-28 dBFS`, `8 dB` và VAD mean/ratio `0.55/0.55`. Đây là prefilter chất lượng,
+không phải intent classifier: evidence thiếu giữ `unknown`, typed text bypass, và turn
+đạt gate vẫn phải qua semantic relevance/addressing. Candidate rất ngắn (mặc định tối đa
+3 ký tự/1.200 ms) yêu cầu đủ `3/3` support; câu một từ có VAD dày vẫn hợp lệ. Corpus
+regression chỉ lưu metadata đã redact; không lưu raw audio hoặc transcript thật.
+
 Không lưu raw audio mặc định. Nếu bật dataset/eval, phải có consent, retention và
 redaction rõ trong Manager.
 

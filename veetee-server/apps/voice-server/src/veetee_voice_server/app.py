@@ -47,7 +47,10 @@ from veetee_voice_server.providers.llm_factory import create_llm_provider
 from veetee_voice_server.providers.local_asr import SherpaZipformerAsrProvider
 from veetee_voice_server.providers.local_tts import VieNeuTtsProvider
 from veetee_voice_server.providers.nine_router import NineRouterProviderError
-from veetee_voice_server.providers.semantic import StructuredConversationGate
+from veetee_voice_server.providers.semantic import (
+    LocalAdmissionProvider,
+    StructuredConversationGate,
+)
 from veetee_voice_server.providers.silero_vad import SileroVadModel
 from veetee_voice_server.readiness import ComponentHealth, ReadinessRegistry
 from veetee_voice_server.telemetry import ConversationTelemetryBuffer
@@ -192,10 +195,15 @@ def _planner_system_prompt(
         "part of this conversation; it need not be a standalone command or question. If an "
         "input_evidence.source is typed_text, the user intentionally submitted the linguistic "
         "turn to the assistant, so never classify it as non_actionable or not_addressed. "
-        "A button/wake-word-opened session and recent dialogue are strong addressing evidence; "
-        "do not reject a usable linguistic turn merely because it is informal, terse, playful "
-        "or socially ambiguous. Only override that evidence when signal, self-echo, duplicate, "
-        "target-speaker or clearly incidental-speech evidence actually conflicts. If an "
+        "An open button/wake-word session proves that the assistant is listening, but does not "
+        "by itself prove that every later speech candidate is addressed to it. Recent dialogue "
+        "is strong addressing evidence when the transcript is a plausible continuation, "
+        "reaction, correction or answer to that context. Do not reject such a usable turn merely "
+        "because it is informal, terse or playful. Coherent speech that is unrelated to the "
+        "active dialogue and lacks assistant-directed evidence is not_addressed; an unexplained "
+        "fragment must not become ask_clarification only because the gate is open. Signal, "
+        "self-echo, duplicate, target-speaker and incidental-speech evidence can also conflict. "
+        "If an "
         "assistant-directed turn is ambiguous or missing details, admission must be accepted "
         "and action ask_clarification. unclear is only for genuinely conflicting admission "
         "evidence. non_actionable is only unusable linguistic signal, self-echo or duplicate; "
@@ -957,7 +965,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 tool_count=gate_tool_count,
             )
 
-        gate = StructuredConversationGate(gate_json, locale=profile.locale)
+        gate = StructuredConversationGate(
+            gate_json,
+            locale=profile.locale,
+            signal_gate=LocalAdmissionProvider(
+                min_signal_supports=resolved_settings.admission_min_signal_supports,
+                strong_signal_rms_dbfs=(
+                    resolved_settings.admission_strong_signal_rms_dbfs
+                ),
+                clean_snr_db=resolved_settings.admission_clean_snr_db,
+                dense_vad_mean_probability=(
+                    resolved_settings.admission_dense_vad_mean_probability
+                ),
+                dense_vad_speech_ratio=(
+                    resolved_settings.admission_dense_vad_speech_ratio
+                ),
+                short_transcript_characters=(
+                    resolved_settings.admission_short_transcript_characters
+                ),
+                short_utterance_ms=resolved_settings.admission_short_utterance_ms,
+                short_min_signal_supports=(
+                    resolved_settings.admission_short_min_signal_supports
+                ),
+            ),
+        )
         system_prompt = _response_system_prompt(profile, tools)
         return ConversationEngine(
             arbiter=arbiter,

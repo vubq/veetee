@@ -111,6 +111,7 @@ async def test_planner_prompt_cannot_invent_tools_for_empty_registry() -> None:
     assert "available tool catalog: []" in prompt
     assert "never invent a tool name" in prompt
     assert "ambiguous or missing details, admission must be accepted" in prompt
+    assert "does not by itself prove that every later speech candidate" in prompt
     assert "not hard-coded phrase rules" in prompt
 
 

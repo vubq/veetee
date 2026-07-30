@@ -128,6 +128,9 @@ VAD 1 thread, LLM prewarm 12 giây và planner ceiling 15 giây. OpenBLAS là pr
 cap phải có trước khi Python import NumPy; `VEETEE_TTS_THREADS=2` chỉ giới hạn ONNX
 Runtime. Manager agent snapshot có thể override voice/style/rate/volume và provider
 deadlines cho session; nó không đổi process-wide backend/thread count hoặc BLAS cap.
+Device-mic admission mặc định yêu cầu 2/3 support độc lập từ RMS `-28 dBFS`, SNR `8 dB`
+và VAD mean/ratio `0.55/0.55`; candidate tối đa 3 ký tự/1.200 ms yêu cầu 3/3. Đây là
+quality baseline có thể cấu hình, không phải phrase/noise rule và không áp dụng typed text.
 
 `VEETEE_WAKE_AUDIO_PRE_ROLL_MAX_MS=2000` chỉ là trần RAM tạm ở Voice cho sequence
 device `listen:detect -> binary -> listen:start`; nó không tự bật thu âm. Quyền gửi vẫn
@@ -234,6 +237,14 @@ allowed = {
     "OPENBLAS_NUM_THREADS",
     "VEETEE_ASR_THREADS",
     "VEETEE_VAD_THREADS",
+    "VEETEE_ADMISSION_MIN_SIGNAL_SUPPORTS",
+    "VEETEE_ADMISSION_STRONG_SIGNAL_RMS_DBFS",
+    "VEETEE_ADMISSION_CLEAN_SNR_DB",
+    "VEETEE_ADMISSION_DENSE_VAD_MEAN_PROBABILITY",
+    "VEETEE_ADMISSION_DENSE_VAD_SPEECH_RATIO",
+    "VEETEE_ADMISSION_SHORT_TRANSCRIPT_CHARACTERS",
+    "VEETEE_ADMISSION_SHORT_UTTERANCE_MS",
+    "VEETEE_ADMISSION_SHORT_MIN_SIGNAL_SUPPORTS",
     "VEETEE_TTS_THREADS",
     "VEETEE_TTS_BACKEND",
     "VEETEE_TTS_VOICE",

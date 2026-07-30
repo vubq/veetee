@@ -128,6 +128,16 @@ class Settings(BaseSettings):
     vad_fast_endpoint_min_speech_ms: int = Field(default=640, ge=160, le=4_000)
     vad_quiet_probability: float = Field(default=0.15, ge=0.0, le=1.0)
     vad_pre_roll_ms: int = Field(default=320, ge=0, le=1_000)
+    # A usable device-mic turn must have at least two independent supports:
+    # near-field level, signal-to-noise separation, or dense VAD speech.
+    admission_min_signal_supports: int = Field(default=2, ge=1, le=3)
+    admission_strong_signal_rms_dbfs: float = Field(default=-28.0, ge=-80.0, le=0.0)
+    admission_clean_snr_db: float = Field(default=8.0, ge=-20.0, le=40.0)
+    admission_dense_vad_mean_probability: float = Field(default=0.55, ge=0.0, le=1.0)
+    admission_dense_vad_speech_ratio: float = Field(default=0.55, ge=0.0, le=1.0)
+    admission_short_transcript_characters: int = Field(default=3, ge=1, le=20)
+    admission_short_utterance_ms: int = Field(default=1_200, ge=200, le=3_000)
+    admission_short_min_signal_supports: int = Field(default=3, ge=1, le=3)
     # Device wake audio is privacy opt-in. This bound only limits a pending
     # detect -> binary Opus -> start sequence; it does not enable collection.
     wake_audio_pre_roll_max_ms: int = Field(default=2_000, ge=0, le=3_000)

@@ -29,6 +29,14 @@ class LocalAdmissionProvider:
 
     min_characters: int = 2
     min_confidence: float = 0.0
+    min_signal_supports: int = 2
+    strong_signal_rms_dbfs: float = -28.0
+    clean_snr_db: float = 8.0
+    dense_vad_mean_probability: float = 0.55
+    dense_vad_speech_ratio: float = 0.55
+    short_transcript_characters: int = 3
+    short_utterance_ms: int = 1_200
+    short_min_signal_supports: int = 3
 
     async def evaluate(
         self, transcript: Transcript, context: OperationContext
@@ -51,7 +59,76 @@ class LocalAdmissionProvider:
             return AdmissionDecision(
                 AdmissionDisposition.NON_ACTIONABLE, 0.95, "no_linguistic_signal"
             )
+        signal_decision = self._evaluate_signal_evidence(transcript)
+        if signal_decision is not None:
+            return signal_decision
         return AdmissionDecision(AdmissionDisposition.ACCEPTED, 0.75, "local_signal_pass")
+
+    def _evaluate_signal_evidence(
+        self, transcript: Transcript
+    ) -> AdmissionDecision | None:
+        evidence = transcript.input_evidence
+        if evidence is None or evidence.source is InputSource.TYPED_TEXT:
+            return None
+        if (
+            evidence.server_buffer_truncated
+            or evidence.audio_overrun is True
+            or (
+                evidence.packet_loss_ratio is not None
+                and evidence.packet_loss_ratio >= 0.25
+            )
+        ):
+            return AdmissionDecision(
+                AdmissionDisposition.NON_ACTIONABLE, 1.0, "low_quality"
+            )
+        if (
+            evidence.self_echo_probability is not None
+            and evidence.self_echo_probability >= 0.8
+        ):
+            return AdmissionDecision(
+                AdmissionDisposition.NON_ACTIONABLE, 1.0, "self_echo"
+            )
+
+        available = 0
+        supports = 0
+        if evidence.signal_rms_dbfs is not None:
+            available += 1
+            supports += evidence.signal_rms_dbfs >= self.strong_signal_rms_dbfs
+        if evidence.estimated_snr_db is not None:
+            available += 1
+            supports += evidence.estimated_snr_db >= self.clean_snr_db
+        if (
+            evidence.vad_mean_probability is not None
+            and evidence.vad_speech_ratio is not None
+        ):
+            available += 1
+            supports += (
+                evidence.vad_mean_probability >= self.dense_vad_mean_probability
+                and evidence.vad_speech_ratio >= self.dense_vad_speech_ratio
+            )
+
+        # Missing evidence stays unknown rather than becoming a zero. Once enough
+        # independent channels are available, require agreement from the configured
+        # minimum so one speech-like noise feature cannot create an AI turn alone.
+        required = min(max(self.min_signal_supports, 1), 3)
+        text = " ".join(transcript.text.split())
+        if (
+            evidence.utterance_duration_ms is not None
+            and evidence.utterance_duration_ms <= self.short_utterance_ms
+            and len(text) <= self.short_transcript_characters
+        ):
+            required = max(
+                required,
+                min(max(self.short_min_signal_supports, 1), 3),
+            )
+        if available >= required and supports < required:
+            confidence = max(0.75, 1.0 - supports / available)
+            return AdmissionDecision(
+                AdmissionDisposition.NON_ACTIONABLE,
+                round(confidence, 4),
+                "low_quality",
+            )
+        return None
 
 
 class JsonPlannerProvider:
@@ -280,6 +357,19 @@ class StructuredConversationGate:
                 dialogue_act=DialogueAct.END,
                 tool_call=None,
             )
+        elif disposition is AdmissionDisposition.ACCEPTED and reason_code in {
+            "non_speech",
+            "low_quality",
+            "not_addressed",
+            "self_echo",
+            "duplicate",
+            "low_confidence",
+            "unclear",
+        }:
+            # The configured signal prefilter already rejected concrete unusable
+            # device audio before this model call. Preserve the model's primary
+            # decision and normalize only its contradictory diagnostic label.
+            reason_code = "speech_relevant"
         elif disposition is AdmissionDisposition.ACCEPTED and plan.action is PlanAction.NOOP:
             # An intentional linguistic turn should not disappear just because the
             # planner omitted a response. The prose stream remains tool-disabled.

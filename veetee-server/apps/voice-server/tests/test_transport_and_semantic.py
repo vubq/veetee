@@ -117,6 +117,143 @@ async def test_input_evidence_bounds_audio_and_keeps_unavailable_signals_explici
     assert payload["aec"]["self_echo_probability"] is None  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("characters", "duration_ms", "signal_rms", "snr", "vad_mean", "vad_ratio"),
+    [
+        (3, 2_240, -37.90, 1.85, 0.6929, 0.7541),
+        (20, 740, -28.95, 0.55, 0.3141, 0.0667),
+        (61, 7_040, -33.34, 5.24, 0.7735, 0.8208),
+        (16, 1_400, -29.39, 6.14, 0.3973, 0.2857),
+        (12, 2_060, -28.50, -0.28, 0.4431, 0.4821),
+        (17, 2_180, -38.63, 2.49, 0.6483, 0.7167),
+        (10, 2_300, -35.72, 4.58, 0.5906, 0.6406),
+        (29, 2_600, -34.44, -0.41, 0.7884, 0.7917),
+        (3, 980, -29.97, 11.48, 0.2910, 0.2857),
+        (3, 860, -29.48, 7.08, 0.2364, 0.2632),
+        (5, 740, -29.01, 6.28, 0.1951, 0.0667),
+        (13, 860, -28.01, -2.24, 0.3781, 0.1667),
+        # A short sharp sound can have level + SNR but still lack dense speech.
+        (3, 980, -26.39, 9.09, 0.3550, 0.3810),
+    ],
+)
+async def test_signal_gate_rejects_redacted_ambient_false_turn_corpus(
+    characters: int,
+    duration_ms: int,
+    signal_rms: float,
+    snr: float,
+    vad_mean: float,
+    vad_ratio: float,
+) -> None:
+    calls = 0
+
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return gate_payload()
+
+    gate = StructuredConversationGate(complete_json)
+    decision = await gate.evaluate(
+        Transcript(
+            "x" * characters,
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Tôi vẫn đang nghe."),),
+            input_evidence=InputEvidence(
+                source=InputSource.DEVICE_MIC,
+                wake_source=WakeSource.WAKE_WORD,
+                utterance_duration_ms=duration_ms,
+                signal_rms_dbfs=signal_rms,
+                estimated_snr_db=snr,
+                vad_mean_probability=vad_mean,
+                vad_speech_ratio=vad_ratio,
+            ),
+        ),
+        context(),
+    )
+
+    assert decision.disposition is AdmissionDisposition.NON_ACTIONABLE
+    assert decision.reason_code == "low_quality"
+    assert calls == 0
+
+
+@pytest.mark.parametrize(
+    ("signal_rms", "snr", "vad_mean", "vad_ratio"),
+    [
+        (-24.75, 15.26, 0.7505, 0.8125),
+        # Loud near-field speech remains usable even when room noise lowers SNR.
+        (-18.06, 2.42, 0.6422, 0.6538),
+        # A short turn can pass through level + SNR even with sparse VAD frames.
+        (-20.00, 12.00, 0.4500, 0.4000),
+        # Quiet speech can pass through clean SNR + dense VAD support.
+        (-34.00, 12.00, 0.7000, 0.7500),
+    ],
+)
+async def test_signal_gate_keeps_two_independent_speech_supports(
+    signal_rms: float,
+    snr: float,
+    vad_mean: float,
+    vad_ratio: float,
+) -> None:
+    calls = 0
+
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return gate_payload()
+
+    gate = StructuredConversationGate(complete_json)
+    decision = await gate.evaluate(
+        Transcript(
+            "Ừ, kể tiếp đi",
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Tôi đang kể câu chuyện."),),
+            input_evidence=InputEvidence(
+                source=InputSource.DEVICE_MIC,
+                wake_source=WakeSource.WAKE_WORD,
+                utterance_duration_ms=1_200,
+                signal_rms_dbfs=signal_rms,
+                estimated_snr_db=snr,
+                vad_mean_probability=vad_mean,
+                vad_speech_ratio=vad_ratio,
+            ),
+        ),
+        context(),
+    )
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert calls == 1
+
+
+async def test_signal_gate_keeps_clear_one_word_contextual_reply() -> None:
+    calls = 0
+
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return gate_payload()
+
+    gate = StructuredConversationGate(complete_json)
+    decision = await gate.evaluate(
+        Transcript(
+            "Ừ",
+            "vi-VN",
+            context=(ConversationMessage("assistant", "Bạn muốn tôi kể tiếp chứ?"),),
+            input_evidence=InputEvidence(
+                source=InputSource.DEVICE_MIC,
+                wake_source=WakeSource.WAKE_WORD,
+                utterance_duration_ms=700,
+                signal_rms_dbfs=-20.0,
+                estimated_snr_db=12.0,
+                vad_mean_probability=0.7,
+                vad_speech_ratio=0.7,
+            ),
+        ),
+        context(),
+    )
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert calls == 1
+
+
 async def test_planner_tolerates_unknown_model_dialogue_label() -> None:
     async def complete_json(_: object, __: object) -> dict[str, object]:
         return {
@@ -329,6 +466,33 @@ async def test_structured_gate_bounds_unknown_reason_code() -> None:
     decision = await gate.evaluate(Transcript("fixture", "vi-VN"), context())
 
     assert decision.reason_code == "invalid_model_output"
+
+
+async def test_structured_gate_normalizes_accepted_low_quality_reason() -> None:
+    async def complete_json(_: object, __: object) -> dict[str, object]:
+        return gate_payload(
+            decision="accepted",
+            action="ask_clarification",
+            reason_code="low_quality",
+        )
+
+    gate = StructuredConversationGate(complete_json)
+    operation = context()
+    transcript = Transcript(
+        "fixture",
+        "vi-VN",
+        context=(ConversationMessage("assistant", "Tôi vẫn đang nghe."),),
+        input_evidence=InputEvidence(
+            source=InputSource.DEVICE_MIC,
+            wake_source=WakeSource.WAKE_WORD,
+        ),
+    )
+    decision = await gate.evaluate(transcript, operation)
+    plan = await gate.plan(transcript, decision, operation)
+
+    assert decision.disposition is AdmissionDisposition.ACCEPTED
+    assert decision.reason_code == "speech_relevant"
+    assert plan.action is PlanAction.ASK_CLARIFICATION
 
 
 async def test_accepted_noop_is_streamed_as_a_natural_turn() -> None:

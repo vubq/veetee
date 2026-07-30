@@ -222,6 +222,18 @@ không mặc định lưu raw audio.
 
 VAD chỉ chứng minh có tín hiệu giống lời nói, không chứng minh đó là yêu cầu dành cho robot. `UtteranceGate` phải kết hợp session context, target-speaker probability (nếu user bật), ASR confidence, wake context, semantic relevance và duplicate/self-audio detection. Không được coi “ASR có text” là “người dùng đang hỏi robot”.
 
+Baseline device-mic chạy một quality gate rẻ trước semantic provider. Khi đủ telemetry,
+input phải đạt ít nhất hai trong ba bằng chứng độc lập: mức tín hiệu near-field, SNR sạch
+so với noise reference, và VAD speech đủ dày. Mặc định tương ứng
+`VEETEE_ADMISSION_MIN_SIGNAL_SUPPORTS=2`, RMS `-28 dBFS`, SNR `8 dB`, VAD mean/ratio
+`0.55/0.55`. Thiếu một kênh telemetry là `unknown`, không phải fail; typed text không
+đi qua signal gate. Cách fusion này cho phép giọng nhỏ nhưng sạch, giọng lớn trong phòng
+ồn hoặc câu ngắn rõ vẫn đi tiếp, nhưng một feature speech-like đơn lẻ không đủ tạo lượt
+LLM/MCP. Riêng candidate tối đa 3 ký tự và 1.200 ms yêu cầu đủ 3/3 support để một xung
+âm ngắn có mức/SNR cao nhưng VAD thưa không biến thành follow-up giả. Threshold nằm
+trong runtime config và phải A/B bằng corpus đa dạng, không được
+thay bằng rule theo tên nguồn âm hoặc exact transcript.
+
 Context của một phiên là một cửa sổ in-memory có giới hạn gồm các lượt `user` và
 `assistant` gần nhất; không ghi vào Manager DB. Gate nhận cả cửa sổ này cùng transcript
 hiện tại. Khi assistant vừa nói xong, một câu đáp ngắn, phản ứng, câu đùa, phủ định,
