@@ -24,11 +24,19 @@ Groq nhận cấu hình `serviceTier`, `maxCompletionTokens`, `temperature`, `to
 không nằm trong agent snapshot và không có đường gửi transcript ra dịch vụ ngoài.
 Với model mặc định `llama-3.3-70b-versatile`, adapter không gửi
 `reasoning_effort` hoặc metadata tùy biến vì Groq sẽ trả HTTP 400; semantic gate
-dùng JSON Object Mode streaming và vẫn validate lại schema tại voice-server.
-Groq Structured Outputs (`json_schema`) hiện không được dùng cho đường streaming
-này. `streamProseResponse=true` giữ gate ở vai trò admission/planner và đưa prose
+ưu tiên native function calling streaming với forced structured-plan function,
+giống contract chung của các OpenAI-compatible provider có tool calling. JSON Object
+Mode chỉ là cấu hình explicit cho model không có native tool API và vẫn phải validate
+lại schema tại voice-server. `streamProseResponse=true` giữ gate ở vai trò admission/planner và đưa prose
 stream qua sentence chunker để TTS bắt đầu trước khi model hoàn thành toàn câu trả
 lời.
+
+Contract này áp dụng cho toàn bộ catalog, không riêng media: nếu transcript yêu cầu
+một operation đã có tool, planner phải trả `call_tool_then_respond` hoặc
+`execute_pending_tool` cùng exact tool name và arguments hợp schema. Runtime không
+hard-code intent/câu nói; model đọc catalog động, còn validator/policy chặn tool name,
+arguments, quyền và side effect không hợp lệ. Một JSON response chỉ nói rằng đã làm
+nhưng không có `tool_call` không được coi là thực thi thành công.
 
 ASR, VAD và TTS không chạy trên ESP32-S3. Firmware chỉ thu/phát audio, Opus,
 wake/interrupt local, state machine và transport. Cách chia này phù hợp giới hạn

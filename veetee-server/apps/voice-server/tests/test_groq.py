@@ -53,7 +53,7 @@ def test_groq_payload_uses_cloud_specific_parameters_without_changing_context() 
     assert json.loads(payload["messages"][-1]["content"].split("Turn metadata (JSON): ", 1)[1])[
         "dialogue_act"
     ] == "question"
-    assert provider._config["responseFormat"] == "json_object"
+    assert provider._config["responseFormat"] == "auto"
     assert "reasoningEffort" not in provider._config
 
 
@@ -79,7 +79,7 @@ def test_groq_reasoning_is_preserved_for_supported_model_families() -> None:
 
 
 @pytest.mark.asyncio
-async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
+async def test_groq_structured_gate_uses_native_tool_call_mode() -> None:
     observed: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -88,8 +88,9 @@ async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
             200,
             headers={"content-type": "text/event-stream"},
             content=(
-                b'data: {"choices":[{"delta":{"content":"{\\"accepted\\":true}"},'
-                b'"finish_reason":"stop"}]}\n\n'
+                b'data: {"choices":[{"delta":{"tool_calls":[{"id":"call-1",'
+                b'"function":{"name":"veetee_return_json","arguments":"{\\"accepted\\":true}"}}]},'
+                b'"finish_reason":"tool_calls"}]}\n\n'
             ),
         )
 
@@ -117,6 +118,7 @@ async def test_groq_structured_gate_uses_streaming_json_object_mode() -> None:
     await client.aclose()
 
     assert value == {"accepted": True}
-    assert observed["response_format"] == {"type": "json_object"}
+    assert observed["tool_choice"]["function"]["name"] == "veetee_return_json"
+    assert observed["tools"][0]["function"]["name"] == "veetee_return_json"
     assert observed["max_completion_tokens"] == 256
     assert "reasoning_effort" not in observed
