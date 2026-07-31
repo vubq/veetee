@@ -253,3 +253,25 @@ Vẫn cần người dùng nghiệm thu trên board:
 
 Sau V1 mới bổ sung percentage rollout, pause/resume/operator rollback, MinIO/multi-
 node, `.vfont`/icon/background/earcon renderer và animation bounded theo benchmark.
+
+## 9. Demo hướng hình ảnh
+
+`veetee-firmware-ui-demo/` ở gốc repo là bản dựng độc lập, không build, để duyệt hướng
+hình ảnh trước khi viết renderer mới. Nó vẽ ở đúng `240x280` đơn vị panel, lượng tử hóa
+RGB565 và in ngân sách SPI theo `CONFIG_VEETEE_LCD_SPI_CLOCK_HZ`. Ba giao diện giữ nguyên
+composition ID `signal` / `monolith` / `quiet`; copy và palette mirror từ `kScreenCopy` và
+`veetee-server/ui-packs/`, phải giữ đồng bộ khi một trong hai đổi.
+
+Demo là mục tiêu, không phải mô tả renderer đang ship: hướng đã chốt là hình học
+anti-aliased và chữ `.vfont`, không phải font bitmap 5x7. Nó không được inject vào firmware
+hay Manager Web dưới dạng HTML/JS runtime (`docs/22-veetee-interface-language.md` §7), và
+khác với `veetee-firmware/prototypes/device-ui/` vốn là concept cũ đã bị thay thế.
+
+Giao diện Companion trong demo dùng đường ống clip: nhân vật render trên PC, xuất frame
+sequence, crop về `240x280`, nén RGB565-RLE thành container `VTCLIP1` và thiết bị chỉ giải
+nén span vào framebuffer. Chữ không nướng vào frame mà firmware vẽ đè, để locale, mã ghép
+thiết bị và copy lỗi không cần export lại nhân vật. Phát clip trên thiết bị **chưa** hợp lệ
+theo UI ABI 1: member allowlist ở §3 chưa có `clips/*.vclip`, nên đây là thay đổi ABI có
+phiên bản (`ui_abi` 1 -> 2) phải quyết định riêng, kèm giới hạn parser cho kích thước clip
+và ngân sách slot. Bản decode tham chiếu nằm ở `veetee-firmware-ui-demo/integration/vclip.c`
+và không thuộc build firmware.

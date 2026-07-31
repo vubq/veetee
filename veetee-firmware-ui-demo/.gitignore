@@ -1,0 +1,6 @@
+# Clip nhân vật là dữ liệu dẫn xuất từ Live2D sample data — tạo lại tại chỗ,
+# không commit. Xem NOTICE.md.
+assets/hiyori/*.vclip
+assets/hiyori/manifest.json
+assets/hiyori/png/
+*.zip

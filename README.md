@@ -17,6 +17,7 @@
 veetee/
 ├── docs/                         # vision, audit, contracts, roadmap và tiêu chuẩn
 ├── skills/veetee-development/    # skill để AI triển khai đúng workflow của dự án
+├── veetee-firmware-ui-demo/      # demo độc lập chốt hướng device UI 240×280, không phải code ship
 ├── veetee-firmware/              # source repo thứ nhất (ESP-IDF)
 └── veetee-server/                # source repo thứ hai (voice-server + API + web)
 ```

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xuất clip Hiyori → VTCLIP1</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    .capture { max-width: 900px; margin: 0 auto; display: grid; gap: 16px; }
+    .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; align-items: start; }
+    #viewport canvas, #preview { image-rendering: pixelated; border-radius: 8px; background: #102c33; }
+    #preview { width: 240px; height: 280px; }
+    pre#log { margin: 0; padding: 12px; background: var(--surface-inset); border-radius: 10px; font-size: 12px; min-height: 120px; white-space: pre-wrap; }
+    ol { margin: 8px 0 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="capture">
+    <header class="masthead">
+      <div class="masthead-title">
+        <p class="eyebrow">VEETEE · CLIP PIPELINE</p>
+        <h1>Xuất clip Hiyori → VTCLIP1</h1>
+        <p class="lede">
+          Chạy Live2D trên PC, pose từng frame theo pha lặp, crop đúng <strong>240 × 280</strong>,
+          nén RGB565-RLE và tải về một file zip đặt vào <code>assets/hiyori/</code>.
+          ESP32-S3 chỉ giải nén RLE, không có runtime Live2D.
+        </p>
+      </div>
+    </header>
+
+    <div class="capture-grid">
+      <fieldset>
+        <legend>Tham số xuất</legend>
+        <div class="row">
+          <label for="slot-size">Ngân sách UI slot</label>
+          <select id="slot-size"></select>
+        </div>
+        <div class="row">
+          <label for="fps">FPS tối đa</label>
+          <select id="fps">
+            <option value="10">10 fps</option>
+            <option value="12" selected>12 fps</option>
+            <option value="15">15 fps</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="frame-scale">Độ dài vòng lặp</label>
+          <select id="frame-scale">
+            <option value="0.5">Ngắn</option>
+            <option value="1" selected>Chuẩn</option>
+            <option value="1.5">Dài</option>
+          </select>
+        </div>
+        <p class="hint">
+          FPS là mức <em>tối đa</em>. Tool chụp thử, đo dung lượng thật rồi tự hạ fps
+          đến mức cao nhất còn vừa ngân sách — nên kết quả luôn nạp được.
+        </p>
+        <div class="row">
+          <label for="mouth-rect">Vùng miệng <code>auto</code> hoặc <code>x,y,w,h</code></label>
+          <input id="mouth-rect" value="auto" />
+        </div>
+        <div class="row buttons">
+          <button id="start" type="button" disabled>Xuất clip</button>
+        </div>
+        <p id="status" class="status">Đang tải Live2D Cubism…</p>
+        <ol>
+          <li>Giải nén zip vào <code>veetee-firmware-ui-demo/assets/hiyori/</code>.</li>
+          <li>Mở demo và bấm <em>Nạp assets/hiyori</em>.</li>
+          <li>Kiểm tra dòng ngân sách: clip phải nằm dưới 2 MiB của một UI slot.</li>
+        </ol>
+      </fieldset>
+
+      <fieldset>
+        <legend>Khung vừa chụp</legend>
+        <canvas id="preview" width="240" height="280"></canvas>
+        <div id="viewport" hidden></div>
+        <pre id="log"></pre>
+      </fieldset>
+    </div>
+
+    <p class="foot">
+      This content uses sample data owned and copyrighted by Live2D Inc.
+      Xem <code>../NOTICE.md</code> trước khi phân phối clip đã xuất.
+    </p>
+  </div>
+
+  <!--
+    Cubism Core là phần mềm độc quyền của Live2D, tải từ URL hosting chính thức và
+    không đóng gói lại trong repo. Live2D khuyến cáo không dựa vào direct link cho
+    production; với tool chạy một lần trên PC thì chấp nhận được, còn nếu cần chạy
+    lặp lại hoặc offline thì tải Cubism SDK for Web rồi trỏ src về bản local.
+
+    pixi-live2d-display 0.4.0 là bản ổn định cuối và chạy trên PixiJS v6, KHÔNG phải v7.
+    (v7 chỉ được hỗ trợ từ 0.5.0-beta.) Ghim đúng cặp phiên bản này, đừng nâng riêng PIXI.
+  -->
+  <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+  <script type="module" src="./capture-hiyori.js"></script>
+</body>
+</html>

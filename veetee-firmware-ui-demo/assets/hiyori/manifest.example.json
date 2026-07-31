@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "ui_clip_set",
+  "character": "hiyori",
+  "source": "Live2D Cubism sample data — Hiyori Momose",
+  "target": {
+    "board": "veetee-s3-n16r8",
+    "display": "st7789-240x280-rgb565"
+  },
+  "clips": {
+    "boot": { "file": "boot.vclip", "fps": 12, "x": 0, "y": 0, "loop": true },
+    "idle": { "file": "idle.vclip", "fps": 12, "x": 0, "y": 0, "loop": true },
+    "listening": { "file": "listening.vclip", "fps": 12, "x": 0, "y": 0, "loop": true },
+    "thinking": { "file": "thinking.vclip", "fps": 12, "x": 0, "y": 0, "loop": true },
+    "speaking": { "file": "speaking.vclip", "fps": 12, "x": 0, "y": 0, "loop": true },
+    "closing": { "file": "closing.vclip", "fps": 12, "x": 0, "y": 0, "loop": true }
+  },
+  "overlays": {
+    "mouth": {
+      "file": "mouth.vclip",
+      "x": 88,
+      "y": 150,
+      "levels": 4,
+      "per_frame": true,
+      "base": "speaking"
+    }
+  },
+  "state_map": {
+    "starting": "boot",
+    "wifi_configuring": "boot",
+    "network_connecting": "boot",
+    "activating": "idle",
+    "pairing_recovery": "idle",
+    "idle": "idle",
+    "connecting": "idle",
+    "listening": "listening",
+    "evaluating": "thinking",
+    "thinking": "thinking",
+    "speaking": "speaking",
+    "aborting": "idle",
+    "closing": "closing"
+  }
+}

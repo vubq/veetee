@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Veetee Firmware UI Demo · ST7789 240×280</title>
+  <meta name="description" content="Demo ba giao diện thiết bị Veetee cho ESP32-S3 + ST7789 240×280, vẽ đúng đơn vị pixel panel và lượng tử hóa RGB565." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-title">
+      <p class="eyebrow">VEETEE · DEVICE UI</p>
+      <h1>Firmware UI Demo</h1>
+      <p class="lede">
+        Ba giao diện thiết bị vẽ ở đúng <strong>240 × 280</strong> đơn vị panel, lượng tử hóa
+        <strong>RGB565</strong> và phóng to bằng nearest-neighbour. Không có chi tiết nào ở đây mà ST7789 không hiển thị được.
+      </p>
+    </div>
+    <dl class="masthead-facts">
+      <div><dt>Board</dt><dd>veetee-s3-n16r8</dd></div>
+      <div><dt>Panel</dt><dd>st7789-240x280-rgb565</dd></div>
+      <div><dt>UI ABI</dt><dd>1 · resource ABI 2</dd></div>
+    </dl>
+  </header>
+
+  <main class="workspace">
+    <section class="stage" aria-label="Mô phỏng màn hình thiết bị">
+      <div class="device-shell">
+        <div class="device-speaker" aria-hidden="true"></div>
+        <div class="device-screen">
+          <canvas id="panel" width="480" height="560" role="img" aria-label="Màn hình thiết bị mô phỏng"></canvas>
+        </div>
+        <div class="device-button" aria-hidden="true"></div>
+      </div>
+
+      <div class="stage-caption">
+        <div>
+          <strong id="caption-title">01 · Mobile</strong>
+          <span id="caption-note">Bảng thông tin kiểu điện thoại</span>
+        </div>
+        <code id="caption-state">idle · 05</code>
+      </div>
+
+      <dl class="budget" aria-label="Ngân sách khung hình">
+        <div><dt>Full flush</dt><dd id="budget-full">—</dd></div>
+        <div><dt>Vùng bẩn / frame</dt><dd id="budget-dirty">—</dd></div>
+        <div><dt>Trần FPS SPI</dt><dd id="budget-fps">—</dd></div>
+        <div><dt>Clip đã nạp</dt><dd id="budget-clip">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="controls" aria-label="Bảng điều khiển demo">
+      <fieldset>
+        <legend>Giao diện</legend>
+        <div id="composition-list" class="composition-list" role="radiogroup" aria-label="Chọn giao diện"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Trạng thái firmware</legend>
+        <div id="state-list" class="state-list" role="radiogroup" aria-label="Chọn trạng thái"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Nội dung</legend>
+        <div class="row">
+          <label for="palette">Bảng màu</label>
+          <select id="palette"></select>
+        </div>
+        <div class="row">
+          <label for="locale">Bản chữ</label>
+          <select id="locale">
+            <option value="ascii">ASCII kScreenCopy (đang ship)</option>
+            <option value="vi-VN">vi-VN từ UI Pack (cần .vfont)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="activation-code">Mã ghép thiết bị</label>
+          <input id="activation-code" inputmode="numeric" maxlength="6" value="284716" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Tín hiệu âm thanh</legend>
+        <div class="row">
+          <label for="level">Biên độ <output id="level-output">45%</output></label>
+          <input id="level" type="range" min="0" max="100" value="45" />
+        </div>
+        <label class="check"><input id="auto-level" type="checkbox" checked /> Tự sinh envelope khi nghe / nói</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Panel truth</legend>
+        <label class="check"><input id="rgb565" type="checkbox" checked /> Lượng tử hóa RGB565</label>
+        <label class="check"><input id="dither" type="checkbox" /> Dither 4×4 Bayer</label>
+        <label class="check"><input id="grid" type="checkbox" /> Lưới pixel (từ 3×)</label>
+        <div class="row">
+          <label for="zoom">Phóng to</label>
+          <select id="zoom">
+            <option value="1">1× (kích thước thật)</option>
+            <option value="2" selected>2×</option>
+            <option value="3">3×</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="frame-model">Nhịp khung hình</label>
+          <select id="frame-model">
+            <option value="500">500 ms · renderer 0.3.1 đang ship</option>
+            <option value="33" selected>30 fps · mục tiêu partial flush</option>
+            <option value="66">15 fps</option>
+            <option value="83">12 fps · nhịp clip</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="spi-clock">SPI LCD</label>
+          <select id="spi-clock">
+            <option value="10000000" selected>10 MHz · sdkconfig.defaults</option>
+            <option value="40000000">40 MHz</option>
+            <option value="80000000">80 MHz · trần Kconfig</option>
+          </select>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Clip Hiyori</legend>
+        <p class="hint">
+          Giao diện 02 phát VTCLIP1 giải nén thẳng vào framebuffer. Xuất clip bằng
+          <code>tools/capture-hiyori.html</code> hoặc <code>tools/pack-clip.mjs</code>,
+          rồi đặt vào <code>assets/hiyori/</code>.
+        </p>
+        <div class="row buttons">
+          <button id="load-clips" type="button">Nạp assets/hiyori</button>
+          <label class="file-button">
+            Chọn file .vclip
+            <input id="clip-files" type="file" accept=".vclip,application/json" multiple hidden />
+          </label>
+        </div>
+        <p id="clip-status" class="status" role="status">Chưa nạp clip — giao diện 02 hiển thị ô trống.</p>
+      </fieldset>
+
+      <p class="foot">
+        Đây là bản demo độc lập để chốt hướng hình ảnh. Không inject HTML/JS này vào firmware hay Manager Web.
+        Xem <code>README.md</code> để biết đường tích hợp và điều kiện ABI.
+      </p>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
