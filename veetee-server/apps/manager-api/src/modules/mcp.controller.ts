@@ -14,6 +14,7 @@ import {
   IsNumber,
   IsObject,
   IsOptional,
+  IsUUID,
   Matches,
   Max,
   Min,
@@ -26,7 +27,10 @@ import type { Principal, RequestWithPrincipal } from "../auth/auth.types.js";
 import { VoiceMcpService, type McpToolRecord } from "../mcp/voice-mcp.service.js";
 import { ControlPlaneStore } from "../store/control-plane.store.js";
 
-class DeviceToolPathDto {
+export class DeviceToolPathDto {
+  @IsUUID("4")
+  id!: string;
+
   @Matches(/^self\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/)
   name!: string;
 }

@@ -747,6 +747,46 @@ async def test_websocket_sink_records_paced_sender_summary() -> None:
     assert isinstance(summaries[0]["queue_low_water_frames"], int)
 
 
+async def test_websocket_sink_shutdown_consumes_closed_transport_sender() -> None:
+    class ClosedTransportWebSocket(FakeWebSocket):
+        async def send_bytes(self, data: bytes) -> None:
+            del data
+            raise RuntimeError("fixture transport closed")
+
+    websocket = ClosedTransportWebSocket()
+    sink = WebSocketConversationSink(
+        websocket,  # type: ignore[arg-type]
+        session_id="session-closed-transport",
+        output_sample_rate=24_000,
+        frame_duration_ms=60,
+    )
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "turn-1", 2))
+    stream = sink._audio_stream
+    assert stream is not None and stream.task is not None
+    await sink.emit(
+        ConversationOutput(
+            OutputKind.AUDIO,
+            "turn-1",
+            2,
+            audio=AudioChunk(0, 24_000, "pcm_s16le", b"\0\0" * 2_880),
+        )
+    )
+    await asyncio.sleep(0)
+    assert stream.task.done()
+
+    await sink.shutdown()
+    await sink.emit(ConversationOutput(OutputKind.TTS_START, "late-turn", 3))
+
+    assert sink._audio_stream is None
+    assert websocket.sent_text == [
+        json.dumps(
+            {"session_id": "session-closed-transport", "type": "tts", "state": "start"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    ]
+
+
 async def test_paced_sender_separates_queue_starvation_from_scheduler_lateness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

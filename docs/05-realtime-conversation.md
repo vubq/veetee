@@ -400,6 +400,10 @@ Quy tắc:
 - Khi `abort`, tăng generation counter; frame/result cũ bị drop dù provider không cancel kịp.
 - Tool call phải có timeout riêng và không được giữ audio sender.
 - `tts.stop` chỉ phát sau khi audio queue drain hoặc khi explicit abort.
+- Khi WebSocket đóng, sink phải chặn writer mới trước lần `await` cleanup đầu tiên,
+  đánh thức mọi producer đang chờ queue, cancel/await paced sender và consume lỗi
+  transport. Media/provider cleanup sau đó chỉ được drop output; không được ghi lên
+  socket đã đóng hoặc để lại `Queue.put`/`Event.wait` task pending.
 - Server prebuffer tối đa ba frame 60 ms; sau lúc client gửi abort có thể còn hai
   frame đã nằm trên wire, nhưng playback generation local phải drop chúng và đưa
   loa về im lặng trong budget 250 ms mà không đóng session.

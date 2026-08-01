@@ -207,8 +207,12 @@ DNS wildcard và các probe URL riêng cho Apple/Android/Windows/Firefox.
 HTTP scan không được chạy lúc portal vừa start. Firmware phải chờ client nhận IPv4
 từ DHCP, sau đó mới cho request `/api/scan` khởi động scan bất đồng bộ và trả cache.
 Không chạy full-channel scan định kỳ khi SoftAP đang phục vụ client vì radio channel
-hopping có thể làm DHCP thất bại hoặc captive webview trắng rồi timeout. Trong config
-mode, Wi-Fi power-save phải tắt để SoftAP phản hồi ổn định.
+hopping có thể làm DHCP thất bại hoặc captive webview trắng rồi timeout. Trong cả
+config mode và station realtime, Wi-Fi power-save phải tắt. SoftAP cần phản hồi ổn
+định; station phải nghe mỗi beacon (`listen_interval=1`) để WebSocket/audio không bị
+ngắt bởi modem-sleep. Đây là profile thiết bị thoại cấp nguồn liên tục; nếu một board
+chạy pin cần power-save thì phải có board profile riêng và vượt lại gate beacon
+timeout, audio drop, wake latency trước khi rollout.
 
 Firmware chỉ mở DNS/HTTP captive services sau khi `esp_netif` xác nhận DHCP server
 đã ở trạng thái `STARTED`; thời gian chờ phải bounded và lỗi rõ ràng thay vì quảng bá

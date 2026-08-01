@@ -9,6 +9,7 @@
 #include "esp_mac.h"
 #include "esp_wifi.h"
 #include "lwip/ip_addr.h"
+#include "network/wifi_radio_policy.h"
 #include "sdkconfig.h"
 
 namespace veetee::network {
@@ -159,6 +160,12 @@ esp_err_t WifiManager::StartStation() {
     esp_err_t error = esp_wifi_set_mode(keep_portal ? WIFI_MODE_APSTA
                                                     : WIFI_MODE_STA);
     if (error == ESP_OK) error = EnsureWifiStarted();
+    const auto radio_policy = RadioPolicyFor(WifiRadioMode::kRealtimeStation);
+    if (error == ESP_OK) {
+        error = esp_wifi_set_ps(radio_policy.power_save_enabled
+                                    ? WIFI_PS_MIN_MODEM
+                                    : WIFI_PS_NONE);
+    }
     if (error == ESP_OK) {
         const esp_err_t disconnect_error = esp_wifi_disconnect();
         if (disconnect_error != ESP_OK &&
@@ -256,7 +263,13 @@ esp_err_t WifiManager::StartProvisioning() {
         // proven order and avoiding a second stop/start after WIFI_EVENT_AP_START.
         if (error == ESP_OK) error = ConfigureCaptivePortalDhcp();
         if (error == ESP_OK) error = EnsureWifiStarted();
-        if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
+        const auto radio_policy =
+            RadioPolicyFor(WifiRadioMode::kProvisioningPortal);
+        if (error == ESP_OK) {
+            error = esp_wifi_set_ps(radio_policy.power_save_enabled
+                                        ? WIFI_PS_MIN_MODEM
+                                        : WIFI_PS_NONE);
+        }
         if (error == ESP_OK) {
             error = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
         }
@@ -743,7 +756,8 @@ void WifiManager::ConnectNextCandidate() {
         config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
         config.sta.failure_retry_cnt = 3;
-        config.sta.listen_interval = 10;
+        config.sta.listen_interval =
+            RadioPolicyFor(WifiRadioMode::kRealtimeStation).listen_interval;
 
         std::snprintf(connecting_ssid_, sizeof(connecting_ssid_), "%s",
                       profile.ssid);

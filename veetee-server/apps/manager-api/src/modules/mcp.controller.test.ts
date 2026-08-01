@@ -1,12 +1,14 @@
 import { ConflictException, Logger } from "@nestjs/common";
 import { TenantRole } from "@prisma/client";
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuditService } from "../audit/audit.service.js";
 import type { Principal, RequestWithPrincipal } from "../auth/auth.types.js";
 import type { VoiceMcpService } from "../mcp/voice-mcp.service.js";
 import type { ControlPlaneStore } from "../store/control-plane.store.js";
-import { McpController } from "./mcp.controller.js";
+import { DeviceToolPathDto, McpController } from "./mcp.controller.js";
 
 const principal: Principal = {
   userId: "user-1",
@@ -47,6 +49,17 @@ function harness() {
 }
 
 describe("McpController", () => {
+  it("accepts both route parameters under whitelist validation", async () => {
+    const path = plainToInstance(DeviceToolPathDto, {
+      id: "fb9753df-2bd5-4572-abc3-be804edfbfa2",
+      name: "self.network.get_status",
+    });
+
+    await expect(validate(path, { whitelist: true, forbidNonWhitelisted: true })).resolves.toEqual(
+      [],
+    );
+  });
+
   it("checks tenant ownership before proxying the device catalog", async () => {
     const { controller, store, voice } = harness();
     await controller.listDeviceTools("device-1", principal);
@@ -61,7 +74,7 @@ describe("McpController", () => {
     await expect(
       controller.callDeviceTool(
         "device-1",
-        { name: userTool.name },
+        { id: "fb9753df-2bd5-4572-abc3-be804edfbfa2", name: userTool.name },
         { arguments: {}, confirmed: false, timeoutSeconds: 10 },
         principal,
         request,
@@ -75,7 +88,7 @@ describe("McpController", () => {
     const { controller, voice, audit } = harness();
     await controller.callDeviceTool(
       "device-1",
-      { name: userTool.name },
+      { id: "fb9753df-2bd5-4572-abc3-be804edfbfa2", name: userTool.name },
       { arguments: {}, confirmed: true, timeoutSeconds: 4 },
       principal,
       request,
@@ -95,7 +108,7 @@ describe("McpController", () => {
     await expect(
       controller.callDeviceTool(
         "device-1",
-        { name: userTool.name },
+        { id: "fb9753df-2bd5-4572-abc3-be804edfbfa2", name: userTool.name },
         { arguments: {}, confirmed: true, timeoutSeconds: 4 },
         principal,
         request,
@@ -111,7 +124,7 @@ describe("McpController", () => {
     await expect(
       controller.callDeviceTool(
         "device-1",
-        { name: userTool.name },
+        { id: "fb9753df-2bd5-4572-abc3-be804edfbfa2", name: userTool.name },
         { arguments: {}, confirmed: true, timeoutSeconds: 4 },
         principal,
         request,

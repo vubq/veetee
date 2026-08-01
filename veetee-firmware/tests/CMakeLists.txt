@@ -195,6 +195,16 @@ target_compile_options(wifi_candidate_order_test PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME wifi_candidate_order_test COMMAND wifi_candidate_order_test)
 
+add_executable(
+    wifi_radio_policy_test
+    wifi_radio_policy_test.cpp
+)
+target_include_directories(wifi_radio_policy_test PRIVATE ../main)
+target_compile_features(wifi_radio_policy_test PRIVATE cxx_std_17)
+target_compile_options(wifi_radio_policy_test PRIVATE -Wall -Wextra -Werror)
+
+add_test(NAME wifi_radio_policy_test COMMAND wifi_radio_policy_test)
+
 add_library(
     cjson_host STATIC
     ../managed_components/espressif__cjson/cJSON/cJSON.c

@@ -111,6 +111,7 @@ class WebSocketConversationSink:
         self._tts_generation: int | None = None
         self._audio_stream: _PacedAudioStream | None = None
         self._pending_pcm = bytearray()
+        self._closing = False
         self._prebuffer_frames = 3
         self._queue_frames = max(
             self._prebuffer_frames,
@@ -118,6 +119,8 @@ class WebSocketConversationSink:
         )
 
     async def emit(self, output: ConversationOutput) -> None:
+        if self._closing:
+            return
         if output.generation < self._cancel_generation:
             return
         event_type = {
@@ -158,10 +161,14 @@ class WebSocketConversationSink:
                 await self._send_text(payload)
 
     async def send_control(self, payload: dict[str, Any]) -> None:
+        if self._closing:
+            return
         async with self._lock:
             await self._send_text({"session_id": self._session_id, **payload})
 
     async def send_stt(self, transcript: Transcript, *, generation: int = 0) -> None:
+        if self._closing:
+            return
         self._telemetry.record(
             self._session_id,
             "stt.final",
@@ -179,6 +186,8 @@ class WebSocketConversationSink:
     async def send_listening(
         self, source: WakeSource | None = None, *, generation: int = 0
     ) -> None:
+        if self._closing:
+            return
         self._telemetry.record(
             self._session_id,
             "listen.start",
@@ -193,6 +202,8 @@ class WebSocketConversationSink:
             )
 
     async def send_assistant_sleep(self, reason: str, *, generation: int = 0) -> None:
+        if self._closing:
+            return
         self._telemetry.record(
             self._session_id,
             "assistant.sleep",
@@ -203,10 +214,14 @@ class WebSocketConversationSink:
             await self._send_text(assistant_sleep_payload(self._session_id, reason))
 
     async def send_mcp(self, payload: dict[str, Any]) -> None:
+        if self._closing:
+            return
         async with self._lock:
             await self._send_text(mcp_payload(self._session_id, payload))
 
     async def send_hello(self) -> None:
+        if self._closing:
+            return
         async with self._lock:
             payload = server_hello_payload(
                 self._session_id,
@@ -217,6 +232,18 @@ class WebSocketConversationSink:
 
     def mark_cancelled(self, generation: int) -> None:
         self._cancel_generation = max(self._cancel_generation, generation)
+
+    def begin_close(self) -> None:
+        self._closing = True
+        if self._audio_stream is not None:
+            self._audio_stream.cancelled.set()
+
+    async def shutdown(self) -> None:
+        self.begin_close()
+        async with self._lock:
+            stream = self._detach_tts()
+        await self._cancel_stream(stream)
+        self._encoder.close()
 
     async def cancel_tts(self, generation: int) -> None:
         self.mark_cancelled(generation)
@@ -456,6 +483,8 @@ class WebSocketConversationSink:
 
     async def _send_bytes(self, packet: bytes) -> None:
         async with self._wire_lock:
+            if self._closing:
+                return
             await self._websocket.send_bytes(packet)
 
     async def _send_text(self, payload: dict[str, Any]) -> None:
@@ -463,6 +492,8 @@ class WebSocketConversationSink:
         if len(encoded.encode("utf-8")) > MAX_CONTROL_FRAME_BYTES:
             raise ValueError("control frame exceeds 8 KiB wire limit")
         async with self._wire_lock:
+            if self._closing:
+                return
             await self._websocket.send_text(encoded)
 
     def _discard_tts(self) -> None:
@@ -504,6 +535,7 @@ class WebSocketConversationSink:
         return None
 
     def close(self) -> None:
+        self.begin_close()
         self._encoder.close()
 
 
@@ -658,6 +690,12 @@ class VoiceSession:
         if self._closed:
             return
         self._closed = True
+        # Stop all socket writers synchronously before cancellation cleanup can
+        # yield. The peer transport is already gone on this path.
+        self.sink.begin_close()
+        await self.inactivity.close()
+        await self.arbiter.abort("socket_closed")
+        await self._cancel_asr()
         if self._mcp_bootstrap_task is not None:
             self._mcp_bootstrap_task.cancel()
             await asyncio.gather(self._mcp_bootstrap_task, return_exceptions=True)
@@ -665,12 +703,9 @@ class VoiceSession:
         await self.mcp.close()
         if self.remote_mcp is not None:
             await self.remote_mcp.close()
-        await self._cancel_asr()
         self._clear_pending_wake_audio()
-        await self.inactivity.close()
-        await self.arbiter.abort("socket_closed")
         self._decoder.close()
-        self.sink.close()
+        await self.sink.shutdown()
         await self._telemetry.close()
 
     async def _handle_control(self, event: ClientEvent) -> None:
