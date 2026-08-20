@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     readiness_enabled: bool = True
 
+    # Device Gateway Settings (M1.3)
+    device_gateway_token: str = Field(default="")
+    hello_timeout_seconds: float = Field(default=10.0, gt=0)
+    idle_timeout_seconds: float = Field(default=60.0, gt=0)
+    ping_interval_seconds: float = Field(default=20.0, gt=0)
+    pong_timeout_seconds: float = Field(default=10.0, gt=0)
+    json_max_bytes: int = Field(default=16384, gt=0)
+    json_max_depth: int = Field(default=8, gt=0)
+    binary_max_bytes: int = Field(default=65536, gt=0)
+    id_max_length: int = Field(default=128, gt=0)
+    cleanup_timeout_seconds: float = Field(default=5.0, gt=0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

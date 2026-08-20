@@ -10,7 +10,9 @@ from veetee_server.domain.errors import (
     StaleGenerationError,
 )
 from veetee_server.domain.session import (
+    ConversationTurn,
     DeviceSession,
+    Generation,
     GenerationState,
     SessionState,
     TurnState,
@@ -27,7 +29,7 @@ def make_session(*, cleanup_timeout_seconds: float = 2.0) -> DeviceSession:
     return session
 
 
-async def stream_turn(session: DeviceSession):
+async def stream_turn(session: DeviceSession) -> tuple[ConversationTurn, Generation]:
     turn = await session.start_turn()
     session.begin_processing()
     generation = session.begin_streaming()
@@ -46,7 +48,7 @@ async def test_session_turn_generation_happy_path() -> None:
 
     session.complete_turn()
 
-    assert session.state is SessionState.IDLE
+    assert session.state == SessionState.IDLE
     assert turn.state is TurnState.COMPLETED
     assert generation.state is GenerationState.COMPLETED
     assert session.current_turn is None
@@ -252,4 +254,4 @@ def test_state_and_generation_mapping_are_read_only() -> None:
     with pytest.raises(AttributeError):
         session.state = SessionState.CLOSED  # type: ignore[misc]
     with pytest.raises(TypeError):
-        session.generations[UUID(int=0)] = None  # type: ignore[index,assignment]
+        session.generations[UUID(int=0)] = None  # type: ignore[index]

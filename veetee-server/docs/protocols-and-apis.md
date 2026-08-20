@@ -1,8 +1,80 @@
 # Giao thức và API
 
-## Device WebSocket
+## Device WebSocket Veetee (Quyết định Veetee - M1.3)
 
-Endpoint mặc định quan sát từ firmware tham khảo (không phải endpoint Veetee):
+Endpoint chính thức của Veetee Server:
+
+```text
+ws://<host>:<port>/api/v1/devices/ws
+```
+
+### Handshake HTTP Headers
+
+- `Authorization: Bearer <token>` (Bắt buộc; so sánh constant-time với `VEETEE_DEVICE_GATEWAY_TOKEN`).
+- `Protocol-Version: 1` (Bắt buộc; chỉ hỗ trợ version 1).
+- `Device-Id: <string>` (Bắt buộc; non-empty, tối đa `VEETEE_ID_MAX_LENGTH=128`).
+- `Client-Id: <string>` (Bắt buộc; non-empty, tối đa `VEETEE_ID_MAX_LENGTH=128`).
+
+### Quy định Frame & Payload Limits
+
+- `VEETEE_HELLO_TIMEOUT_SECONDS`: 10.0s (bắt buộc gửi frame text `hello` trong 10s đầu).
+- `VEETEE_IDLE_TIMEOUT_SECONDS`: 60.0s (idle connection timeout).
+- `VEETEE_PING_INTERVAL_SECONDS`: 20.0s.
+- `VEETEE_PONG_TIMEOUT_SECONDS`: 10.0s.
+- `VEETEE_JSON_MAX_BYTES`: 16384 bytes (16 KiB).
+- `VEETEE_JSON_MAX_DEPTH`: 8.
+- `VEETEE_BINARY_MAX_BYTES`: 65536 bytes (64 KiB).
+- `VEETEE_CLEANUP_TIMEOUT_SECONDS`: 5.0s.
+
+### Error Envelope Format
+
+Mọi safe error envelope trả về từ server có cấu trúc:
+
+```json
+{
+  "code": "veetee_invalid_input",
+  "message": "Chi tiết lỗi an toàn (không lộ secret hay raw payload)",
+  "session_id": "uuid-string-hoặc-null"
+}
+```
+
+Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`, `veetee_timeout`, `veetee_internal`.
+
+### WebSocket Close Codes
+
+- `1000`: Goodbye / normal closure.
+- `1001`: Idle timeout.
+- `1002`: Protocol confusion (ví dụ nhận binary frame trước hello).
+- `1008`: Header/Auth failure, Hello timeout, schema violation, duplicate hello, session mismatch.
+- `1009`: Message too big (vượt quá 16 KiB JSON hoặc 64 KiB binary).
+- `1011`: Internal server error.
+- `1012`: Service restart / graceful shutdown.
+
+### Semantic JSON Control Frames (M1.3)
+
+1. `hello`:
+   - Device -> Server: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`. `features` là mapping boolean tùy chọn (tối đa 16 keys, key max 64 chars).
+   - Server -> Device: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque UUID>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`.
+2. `ping` / `pong`:
+   - Device -> Server `ping` -> Server trả `{"type": "pong", "session_id": "..."}`.
+   - Device -> Server `pong` -> Server cập nhật heartbeat.
+3. `goodbye`:
+   - Device -> Server `goodbye` -> Server trả `goodbye` và close websocket code 1000.
+4. `abort`:
+   - Device -> Server `abort` -> Idempotent abort active turn/generation.
+5. `listen`:
+   - Device -> Server `listen`: `state` (`start`, `stop`, `detect`), `mode` (`auto`, `manual`, `realtime`). Quản lý state machine `DeviceSession`.
+6. `mcp` và unsupported frames:
+   - Trả safe typed error envelope `veetee_invalid_input`. Tích hợp MCP pipeline hoãn lại M3.
+
+### Binary Frames
+
+- Binary trước hello: protocol error (close 1002).
+- Binary sau hello: kiểm tra size <= 64 KiB và accept/drop an toàn. Audio decoding/Opus pipeline hoãn lại M1.5.
+
+---
+
+## Endpoint mặc định quan sát từ firmware tham khảo (Upstream reference)
 
 ```text
 ws://<host>:8000/xiaozhi/v1/

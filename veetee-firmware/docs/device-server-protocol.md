@@ -1,6 +1,41 @@
 # Giao thức thiết bị-server
 
-## Trạng thái tài liệu
+## Hợp đồng Device WebSocket Veetee thực tế (M1.3 - Quyết định Veetee)
+
+Endpoint chính thức: `/api/v1/devices/ws`
+
+### Requirements & Defaults M1.3
+- **Handshake Headers**:
+  - `Authorization: Bearer <opaque_token>` (xác thực constant-time với token gateway)
+  - `Protocol-Version: 1`
+  - `Device-Id: <id>` (non-empty, <= 128 ký tự)
+  - `Client-Id: <id>` (non-empty, <= 128 ký tự)
+- **Timeouts & Boundaries**:
+  - Hello timeout: 10s (`VEETEE_HELLO_TIMEOUT_SECONDS=10.0`)
+  - Idle timeout: 60s (`VEETEE_IDLE_TIMEOUT_SECONDS=60.0`)
+  - Ping interval: 20s (`VEETEE_PING_INTERVAL_SECONDS=20.0`)
+  - Pong timeout: 10s (`VEETEE_PONG_TIMEOUT_SECONDS=10.0`)
+  - JSON max size: 16 KiB (16384 bytes) (`VEETEE_JSON_MAX_BYTES=16384`)
+  - JSON max depth: 8 (`VEETEE_JSON_MAX_DEPTH=8`)
+  - Binary max frame size: 64 KiB (65536 bytes) (`VEETEE_BINARY_MAX_BYTES=65536`)
+- **Hello Negotiation**:
+  - Uplink: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`
+  - Downlink response: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque_uuid>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`
+- **Close Codes & Errors**:
+  - `1008`: Auth / missing header / hello timeout / schema error / session mismatch
+  - `1009`: Oversized JSON (>16 KiB) or binary (>64 KiB)
+  - `1002`: Binary received before hello
+  - `1001`: Idle timeout
+  - `1000`: Goodbye normal close
+  - `1012`: Graceful server shutdown
+  - Safe error envelope: `{"code": "veetee_*", "message": "...", "session_id": "..."}`
+- **Deferred in M1.3**:
+  - Audio Opus decoding/resampling pipeline hoãn lại M1.5.
+  - Device MCP integration full tool call hoãn lại M3.
+
+---
+
+## Trạng thái tài liệu tham khảo (Upstream)
 
 Đây là bản tóm tắt wire protocol quan sát trong source tham khảo. Nếu Veetee kế thừa
 giao thức, cần tạo đặc tả versioned và test contract riêng; không nên phụ thuộc vào tài
