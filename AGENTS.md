@@ -7,8 +7,10 @@ File này áp dụng cho toàn bộ workspace `veetee/`. Các file `AGENTS.md` t
 Khi có nhiều file hướng dẫn, phải tuân theo cả quy tắc cấp gốc và quy tắc gần file đang
 thao tác nhất.
 
-Dự án hiện đang ở giai đoạn nghiên cứu. Chưa có source hay kiến trúc chính thức của
-Veetee; `references/` chỉ chứa upstream để tham khảo.
+Dự án đang lập kế hoạch và triển khai server-first. Frontend Veetee đã có source;
+backend và firmware Veetee chưa triển khai. Kiến trúc mục tiêu backend và thứ tự mốc
+chính thức nằm trong `veetee-server/docs/server-implementation-plan.md`; `references/`
+chỉ chứa upstream để tham khảo và làm test harness.
 
 ## Thứ tự đọc bắt buộc
 
@@ -22,6 +24,10 @@ Trước khi thực hiện công việc:
 
 Trong giai đoạn phát triển server-first hiện tại, mọi công việc server hoặc test tích hợp
 thiết bị phải đọc thêm `docs/server-first-development.md`.
+
+Mọi công việc triển khai server phải đọc
+`veetee-server/docs/server-implementation-plan.md`. AI chỉ được làm mốc đã được người
+dùng duyệt rõ ràng, phải dừng ở cổng duyệt cuối mốc và không tự bắt đầu mốc kế tiếp.
 
 Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 
@@ -67,6 +73,9 @@ Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 - Không tự chốt lựa chọn ảnh hưởng lớn như board/chip, framework, ngôn ngữ, database,
   broker, cloud provider, deployment topology hoặc backward compatibility khi chưa có
   yêu cầu/bằng chứng đầy đủ.
+- Với server, các quyết định đã chốt và quyết định còn mở được phân loại trong
+  `veetee-server/docs/server-implementation-plan.md`; không mở lại quyết định đã chốt
+  hoặc tự khóa quyết định còn mở ngoài cổng duyệt tương ứng.
 - Trong giai đoạn phát triển hiện tại, không dùng Docker hoặc Docker Compose. Backend,
   frontend, cơ sở dữ liệu và dịch vụ phụ trợ phải chạy trực tiếp trên máy local này;
   không tự thêm container manifest hoặc quy trình vận hành bằng container.
@@ -120,6 +129,11 @@ chung khi source Veetee đã tồn tại.
 - Cập nhật tài liệu khi tạo contract hoặc quyết định lâu dài.
 
 ## Quy trình thực hiện
+
+Trước mỗi task hoặc mốc mới, AI phải gửi cho người dùng bản tóm lược ngắn gồm mục tiêu,
+phạm vi/file hoặc dịch vụ bị ảnh hưởng, kiểm tra dự kiến, rủi ro và điểm dừng. AI phải
+chờ người dùng xác nhận trước khi bắt đầu bước đó; chỉ được thực hiện trước các kiểm tra
+read-only cần thiết để chuẩn bị bản tóm lược.
 
 ```text
 đọc yêu cầu

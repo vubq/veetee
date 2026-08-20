@@ -1,5 +1,10 @@
 # Provider và cấu hình
 
+Tài liệu này mô tả provider/config quan sát từ upstream và các nguyên tắc adapter chung.
+Provider mục tiêu, trạng thái benchmark và quyết định chính thức của Veetee nằm trong
+[kế hoạch triển khai server](server-implementation-plan.md); không suy ra lựa chọn Veetee
+từ danh mục implementation upstream bên dưới.
+
 ## Provider model
 
 Python server tham khảo dùng factory/plugin để chọn implementation theo config.

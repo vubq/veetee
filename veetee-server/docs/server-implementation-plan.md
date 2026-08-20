@@ -49,8 +49,12 @@ Mốc server tham khảo dùng để đối chiếu:
 
 ### 2.3 AI và audio
 
-- LLM mặc định: `groq/llama-3.3-70b-versatile` qua OmniRoute local tại API
-  OpenAI-compatible. Chat completions phải dùng `stream=true`.
+- LLM phải đi qua OmniRoute local bằng API OpenAI-compatible và `stream=true`. Yêu cầu
+  ban đầu chọn `groq/llama-3.3-70b-versatile`, nhưng Groq đã shutdown model này cho
+  free/developer tier ngày 16/08/2026. M0.3 phải benchmark các model thay thế chính thức
+  đang active là `groq/openai/gpt-oss-120b` và `groq/qwen/qwen3.6-27b`, sau đó trình
+  người dùng duyệt model mặc định; chỉ giữ Llama 3.3 nếu chứng minh account có enterprise
+  committed-spend entitlement và endpoint thực tế còn hoạt động.
 - TTS ưu tiên có ID nội bộ `gemini/gemini-3.1-flash-tts-preview`; fallback model cấu
   hình được là `gemini/gemini-2.5-flash-preview-tts`. Adapter bỏ prefix provider và gọi
   native Gemini Interactions streaming bằng model Google tương ứng
@@ -76,7 +80,7 @@ Opus ingress
   -> Silero VAD + utterance boundary
   -> PhoWhisper ASR local
   -> intent/tool/memory context
-  -> Groq LLM token stream qua OmniRoute
+  -> Groq LLM token stream qua OmniRoute (model khóa tại M0.3)
   -> bộ tách đoạn thích ứng
   -> Gemini native TTS stream qua Veetee key pool
   -> PCM -> Opus packet + pacing
@@ -254,6 +258,8 @@ AI không được:
 
 ### M0.1 Ma trận firmware compatibility
 
+- Hoàn tất [ma trận tương thích firmware-server](firmware-compatibility-matrix.md): request/
+  response OTA, handshake, hello, control JSON, binary frame, audio và state.
 - Ghi chính xác request/response OTA mà firmware baseline gửi/đọc.
 - Ghi handshake header, hello, control JSON, binary frame cho protocol version được dùng.
 - Ghi audio format uplink/downlink, frame duration, sample rate và byte order.
@@ -266,26 +272,39 @@ golden vector; không còn giả định URL upstream.
 
 ### M0.2 Khóa namespace Veetee
 
-- Chốt endpoint device/API/WS và response metadata.
+- Hoàn tất [chính sách namespace](namespace-policy.md) và bảng endpoint đề xuất.
+- Chốt endpoint device/API/WS và response metadata sau khi người dùng duyệt Cổng 0.
 - Chốt tên environment variable prefix `VEETEE_`, application name và database schema.
-- Viết namespace policy và script CI phát hiện identifier cấm.
+- Viết namespace policy và script CI phát hiện identifier cấm tại
+  `veetee-server/tools/scan_namespace.py`.
 - Chạy scan trên OpenAPI/source sản phẩm mẫu; references được exclude rõ ràng.
 
 **Nghiệm thu:** người dùng duyệt bảng endpoint; scan không có false positive ngoài
 allowlist có lý do.
 
-### M0.3 Spike Groq LLM qua OmniRoute
+### M0.3 Spike và khóa Groq LLM qua OmniRoute
 
-- Gọi `groq/llama-3.3-70b-versatile` qua `/v1/chat/completions`, `stream=true`.
+- Hoàn tất [benchmark Groq LLM qua OmniRoute](omniroute-llm-benchmark.md); khuyến nghị
+  GPT-OSS 120B production làm default và Qwen 3.6 27B preview làm low-latency candidate,
+  chờ người dùng duyệt tại Cổng 0.
+- Gọi `groq/openai/gpt-oss-120b` và `groq/qwen/qwen3.6-27b` qua
+  `/v1/chat/completions`, `stream=true`; không mặc định model chỉ vì còn xuất hiện trong
+  catalog cache của OmniRoute.
 - Đo connect, first token, total latency, cancellation và rate-limit response.
 - Xác minh streamed tool-call delta và usage metadata.
+- Đánh giá chất lượng hội thoại tiếng Việt, tuân thủ base prompt, function calling và
+  độ ổn định giữa nhiều lượt bằng cùng evaluation set.
+- Ghi rõ deprecation/stability tier, context/output limit và account entitlement của
+  từng model; trình người dùng duyệt model mặc định ở Cổng 0.
 - Không log API key hoặc nội dung nhạy cảm.
 
 **Nghiệm thu:** lưu báo cáo benchmark và transcript test vô hại; adapter protocol đủ dữ
-liệu để triển khai, không cần code production.
+liệu để triển khai, model mặc định được người dùng duyệt, không cần code production.
 
 ### M0.4 Spike Gemini native TTS streaming và key pool
 
+- Hoàn tất [benchmark Gemini native TTS](gemini-tts-benchmark.md): 4/4 key tạo audio
+  streaming với model 3.1; model 2.5 fallback buffered cũng trả audio thành công.
 - Gọi native Gemini Interactions API với `stream=true` bằng key Google AI Studio do
   Veetee quản lý; không đi qua OmniRoute cho TTS.
 - Xác minh mapping ID nội bộ `gemini/gemini-3.1-flash-tts-preview` sang model native
@@ -307,6 +326,8 @@ vì coi số key là số quota độc lập.
 
 ### M0.5 Benchmark PhoWhisper và Silero
 
+- Hoàn tất [benchmark ASR/VAD](asr-vad-benchmark.md): đề xuất PhoWhisper small + Silero
+  ONNX baseline; medium giữ làm quality candidate do cold load/RTF cao hơn.
 - Chuẩn bị tập audio tiếng Việt có giọng Bắc/Trung/Nam, câu ngắn/dài, nhiễu và im lặng;
   không commit dữ liệu không có quyền sử dụng.
 - Benchmark ít nhất PhoWhisper `small` và `medium`: WER/CER tương đối, cold/warm latency,
@@ -319,6 +340,7 @@ config nếu benchmark tương lai tốt hơn.
 
 ### M0.6 Thiết kế contract, threat model và parity backlog
 
+- Hoàn tất [contract, threat model và parity backlog](m0-contract-and-threat-model.md).
 - Khóa module boundary, provider event, error taxonomy và cancellation semantics.
 - Lập threat model cho device, OmniRoute, tool, control plane, OTA và persistence.
 - Chuyển ma trận parity ở mục 17 thành issue/task có dependency.
@@ -353,19 +375,29 @@ và danh sách quyết định còn mở.
 - Implement ping/pong, idle timeout, disconnect reason và reconnect sạch.
 - Không echo malformed payload; trả error envelope an toàn hoặc đóng theo policy.
 
-### M1.4 Audio primitives
+### M1.4 OTA/config responder tương thích tối thiểu
+
+- Implement endpoint Veetee đã khóa ở M0 để firmware baseline discover server time,
+  activation state tối thiểu và WebSocket URL/token.
+- Không triển khai sớm release catalog/rollout đầy đủ; nếu chưa có firmware update, trả
+  trạng thái không có bản mới theo đúng schema.
+- Test request firmware baseline, URL/namespace Veetee, auth token và malformed input.
+- Responder này là nền móng được mở rộng ở M5, không phải workaround dùng endpoint
+  upstream hoặc service tạm ngoài source Veetee.
+
+### M1.5 Audio primitives
 
 - Opus decode/encode, PCM format, resample và frame validation.
 - Bounded ingress/egress queue, slow-client policy và packet pacing.
 - Golden vector và malformed/truncated/oversized test.
 
-### M1.5 Fake AI pipeline
+### M1.6 Fake AI pipeline
 
 - Fake VAD/ASR/LLM/TTS deterministic để test không cần model/key.
 - Luồng hello/listen/audio/STT/TTS/audio/stop hoàn chỉnh.
 - Abort giữa stream phải loại toàn bộ stale token/audio.
 
-### M1.6 Device simulator và contract test
+### M1.7 Device simulator và contract test
 
 - Tạo simulator Veetee ngoài references đọc golden vector.
 - Test nhiều session song song, isolation, reconnect, timeout, slow client và shutdown.
@@ -559,8 +591,8 @@ thử nghiệm.
 
 ### M5.1 OTA/config discovery
 
-- Implement request schema tương thích firmware tại endpoint Veetee.
-- Trả time, activation state, WebSocket URL/token và firmware eligibility.
+- Mở rộng responder tương thích tối thiểu từ M1 thành lifecycle production đầy đủ.
+- Hoàn thiện activation state, WebSocket credential rotation và firmware eligibility.
 - Không có URL/path/metadata chứa namespace cấm.
 
 ### M5.2 Device credential
@@ -734,8 +766,8 @@ framework, endpoint hoặc số lượng vendor adapter.
 | Capability upstream | Mốc Veetee | Kết quả tương đương mong đợi |
 | --- | --- | --- |
 | WebSocket device session | M1-M2 | Veetee WS, wire behavior tương thích firmware |
-| OTA/config discovery | M0, M5 | Veetee endpoint và response tương thích |
-| VAD/ASR/LLM/TTS | M2 | Silero, PhoWhisper, Groq, Gemini qua adapter |
+| OTA/config discovery | M0, M1, M5 | Khóa contract, responder tối thiểu, rồi lifecycle đầy đủ |
+| VAD/ASR/LLM/TTS | M2 | Silero, PhoWhisper, Groq model duyệt tại M0, Gemini qua adapter |
 | Streaming response và interruption | M2 | Token -> TTS -> Opus, cancel xuyên pipeline |
 | Intent/function calling | M3 | Strategy cấu hình được, không keyword hardcode |
 | Device MCP | M3 | JSON-RPC discovery/call có policy |
@@ -760,6 +792,7 @@ AI không được tự bỏ chỉ vì upstream implementation khó hoặc công
 ## 18. Các quyết định còn phải khóa tại Mốc 0
 
 - Path device API/WS cuối cùng và version wire protocol đầu tiên.
+- Groq LLM mặc định sau benchmark model active và kiểm tra deprecation/entitlement.
 - PhoWhisper variant/runtime sau benchmark.
 - Cách khai báo/rotate secret cho Gemini TTS key pool mà không restart session đang chạy.
 - Voice Gemini mặc định và style prompt tiếng Việt.

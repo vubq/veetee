@@ -9,9 +9,12 @@ Veetee là dự án thiết bị trợ lý giọng nói gồm hai phạm vi chí
 | Firmware | Phần cứng, audio, kết nối, giao diện thiết bị và OTA | [veetee-firmware](veetee-firmware/README.md) |
 | Server | Phiên thiết bị, xử lý AI, API, quản trị và vận hành | [veetee-server](veetee-server/README.md) |
 
-Hiện tại dự án đang ở giai đoạn nghiên cứu và chuẩn bị. Chưa có source chính thức,
-kiến trúc đã chốt, build system, database schema, deployment hay bản phát hành Veetee.
-Hai phạm vi mới gồm tài liệu tổng hợp và source upstream để tham khảo.
+Hiện tại dự án đang ở giai đoạn lập kế hoạch và triển khai server-first. Frontend
+Veetee Console đã có source; backend và firmware Veetee chưa được triển khai, chưa có
+database schema, deployment hay bản phát hành. Kiến trúc mục tiêu, công nghệ và thứ tự
+triển khai backend được quản lý trong
+[kế hoạch Veetee Server](veetee-server/docs/server-implementation-plan.md); các tài liệu
+khảo sát upstream không phải kiến trúc chính thức của Veetee.
 
 Giai đoạn triển khai đầu tiên ưu tiên server. Việc phát triển và test server dùng firmware
 upstream trên thiết bị thật hoặc `digital-human` làm client tham chiếu theo
@@ -64,6 +67,7 @@ tạo sau khi có yêu cầu và quyết định kỹ thuật cụ thể.
 | Activation và OTA | [Firmware OTA](veetee-firmware/docs/provisioning-ota-config.md) và [Server security/operations](veetee-server/docs/security-operations-testing.md) |
 | Bảo mật đầu cuối | [Server security](veetee-server/docs/security-operations-testing.md) cùng các tài liệu protocol/OTA firmware |
 | Quy trình phát triển và test hiện tại | [Server-first development](docs/server-first-development.md) |
+| Kế hoạch triển khai server và cổng duyệt | [Veetee Server implementation plan](veetee-server/docs/server-implementation-plan.md) |
 
 ## Contract dùng chung
 
@@ -101,6 +105,8 @@ Thay đổi một contract dùng chung phải:
 
 ## Trạng thái build và vận hành
 
-Hiện chưa có lệnh build, test, flash, run hay deploy chung cho Veetee. Các lệnh bên
-trong hai repo tham khảo chỉ áp dụng cho upstream. Khi source chính thức được tạo, mục
-này cần được cập nhật bằng các lệnh có thể lặp lại cho mỗi phạm vi và cho test đầu cuối.
+Frontend có lệnh local trong
+[veetee-server/web/README.md](veetee-server/web/README.md). Backend và firmware Veetee
+chưa có lệnh build/run/test chính thức. Các lệnh bên trong hai repo tham khảo chỉ áp dụng
+cho upstream; khi source tương ứng được tạo, mục này phải được cập nhật bằng lệnh có thể
+lặp lại và test đầu cuối.

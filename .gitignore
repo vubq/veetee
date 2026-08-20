@@ -9,3 +9,7 @@ veetee-server/web/*.tsbuildinfo
 
 # Browser automation artifacts.
 .playwright-mcp/
+
+# Local credentials. Keep example files tracked.
+veetee-server/.secrets/*
+!veetee-server/.secrets/*.example

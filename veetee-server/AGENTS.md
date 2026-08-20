@@ -2,20 +2,23 @@
 
 ## Phạm vi
 
-File này áp dụng cho mọi thao tác trong `veetee-server/`. Workspace đang ở giai đoạn
-nghiên cứu; chưa có kiến trúc hay source server chính thức của Veetee.
+File này áp dụng cho mọi thao tác trong `veetee-server/`. Frontend Veetee đã có source;
+backend chưa triển khai. `docs/server-implementation-plan.md` là kiến trúc mục tiêu và
+thứ tự thực thi chính thức; các tài liệu khảo sát upstream còn lại không phải kiến trúc
+sản phẩm.
 
 ## Thứ tự đọc bắt buộc
 
 Trước khi thực hiện công việc server:
 
 1. Đọc `README.md` để nắm trạng thái và ranh giới workspace.
-2. Đọc `docs/README.md` và tài liệu chuyên đề liên quan.
-3. Chỉ đọc các file cần thiết trong `references/xiaozhi-esp32-server` để xác minh.
-4. Nếu công việc ảnh hưởng thiết bị, đọc thêm
+2. Đọc `docs/README.md` và `docs/server-implementation-plan.md`.
+3. Xác nhận mốc hiện tại đã được người dùng duyệt; đọc tài liệu chuyên đề liên quan.
+4. Chỉ đọc các file cần thiết trong `references/xiaozhi-esp32-server` để xác minh.
+5. Nếu công việc ảnh hưởng thiết bị, đọc thêm
    `../veetee-firmware/README.md` và
    `../veetee-firmware/docs/device-server-protocol.md`.
-5. Luôn đọc `../docs/server-first-development.md` trong giai đoạn phát triển server-first.
+6. Luôn đọc `../docs/server-first-development.md` trong giai đoạn phát triển server-first.
 
 ## Phân loại nội dung
 
@@ -52,8 +55,15 @@ Trước khi thực hiện công việc server:
   cầu và phạm vi rõ ràng.
 - Khi test server, ưu tiên thiết bị thật nếu đang cắm; nếu không có thì dùng
   `references/xiaozhi-esp32-server/main/digital-human` và kiểm thử cùng luồng giao thức.
+- Chỉ thực hiện mốc lớn đã được người dùng duyệt trong
+  `docs/server-implementation-plan.md`. Khi đạt Definition of Done của mốc, phải bàn giao,
+  dừng tại cổng duyệt và không tự bắt đầu task của mốc tiếp theo.
 
 ## Cách xử lý theo loại công việc
+
+Trước mỗi task hoặc mốc mới, AI phải gửi người dùng bản tóm lược gồm mục tiêu, phạm vi
+file/dịch vụ, kiểm tra dự kiến, rủi ro và điểm dừng. Phải chờ người dùng xác nhận trước
+khi bắt đầu bước đó; chỉ được làm kiểm tra read-only cần thiết để chuẩn bị bản tóm lược.
 
 ### Nghiên cứu
 
@@ -63,6 +73,7 @@ Trước khi thực hiện công việc server:
 
 ### Tạo service/source mới
 
+- Xác nhận task thuộc mốc đã được duyệt trong `docs/server-implementation-plan.md`.
 - Xác định domain ownership và boundary tối thiểu.
 - Chốt public/device/internal API và persistence trước khi mở rộng module.
 - Tạo source, config, migration, test và README vận hành ngoài `references/`.

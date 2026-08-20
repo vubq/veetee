@@ -39,6 +39,7 @@ quyết định kỹ thuật cụ thể. Không tạo sẵn các thư mục rỗ
 | Microphone, speaker, VAD, AEC | [Âm thanh và trạng thái](docs/audio-and-state.md) |
 | Kết nối với server | [Giao thức thiết bị-server](docs/device-server-protocol.md) |
 | Provisioning, activation, OTA | [Khởi tạo, OTA và cấu hình](docs/provisioning-ota-config.md) |
+| Mốc triển khai contract server-device | [Kế hoạch Veetee Server](../veetee-server/docs/server-implementation-plan.md) |
 
 4. Đối chiếu source trong `references/xiaozhi-esp32` nếu cần xác minh implementation.
 5. Trước khi viết code, xác định rõ yêu cầu Veetee, target chip/board và phạm vi cần

@@ -6,6 +6,11 @@
 Firmware Veetee chưa được phát triển; firmware và `digital-human` upstream chỉ đóng vai
 trò client tham chiếu để phát triển, debug và kiểm thử server Veetee.
 
+Thứ tự implementation, công nghệ mục tiêu, task và cổng duyệt nằm trong
+`../veetee-server/docs/server-implementation-plan.md`. Tài liệu hiện tại chỉ quy định
+cách vận hành/test server-first; nó không cấp quyền tự bắt đầu một mốc triển khai. AI
+phải hoàn tất đúng mốc đã được người dùng duyệt rồi dừng tại cổng duyệt tương ứng.
+
 Toàn bộ backend, frontend, cơ sở dữ liệu và dịch vụ phụ trợ phải chạy trực tiếp trên máy
 local hiện tại. Không dùng Docker, Docker Compose hoặc môi trường container trong giai
 đoạn này. Mỗi thành phần phải có lệnh cài đặt, khởi động, dừng và kiểm tra local rõ ràng

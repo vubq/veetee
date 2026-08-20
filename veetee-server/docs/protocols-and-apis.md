@@ -2,7 +2,7 @@
 
 ## Device WebSocket
 
-Endpoint mặc định quan sát:
+Endpoint mặc định quan sát từ firmware tham khảo (không phải endpoint Veetee):
 
 ```text
 ws://<host>:8000/xiaozhi/v1/
@@ -82,12 +82,12 @@ POST /xiaozhi/config/correct-words
 Cần đọc `ConfigController.java` và DTO tương ứng để lấy body/response chính xác tại
 commit đang pin. Không nên coi bảng tổng hợp này là OpenAPI contract.
 
-## API design nếu xây Veetee
+## API design Veetee (đề xuất M0.2)
 
 - Không dùng namespace, path, package hoặc response metadata chứa tên upstream. Firmware
   tham khảo phải nhận endpoint Veetee qua OTA/config discovery thay vì server giữ URL
-  upstream. Path đề xuất để khóa tại Mốc 0 là `/api/v1/devices/ws` và
-  `/api/v1/devices/ota/check`.
+  upstream. Bảng endpoint và identifier đầy đủ nằm trong
+  [chính sách namespace](namespace-policy.md); các path đó vẫn chờ duyệt tại Cổng 0.
 - Tách public device API, user API, admin API và service-to-service API.
 - Version endpoint/path hoặc media type.
 - Dùng OpenAPI sinh từ source và contract test cho client.

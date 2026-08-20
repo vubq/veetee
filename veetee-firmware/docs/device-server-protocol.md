@@ -134,6 +134,10 @@ object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quy
 - Giữ wire behavior cần cho firmware tham khảo nhưng dùng endpoint và namespace Veetee;
   cấm đưa tên/path/metadata upstream vào public contract sản phẩm. URL WebSocket Veetee
   được phân phối qua OTA/config discovery.
+- Các path `/api/v1/devices/ws`, `/api/v1/devices/ota/check` và
+  `/api/v1/devices/ota/artifacts/{artifact_id}` hiện là đề xuất chờ Cổng 0 trong
+  `../../veetee-server/docs/server-implementation-plan.md`, chưa phải contract cuối.
+  Sau khi duyệt phải bổ sung schema versioned và golden vector dùng chung cho hai đầu.
 - Version mới wire format và policy tương thích rõ ràng.
 - Giới hạn kích thước JSON, binary frame, MCP arguments và image base64.
 - Xác thực device, ràng buộc token với `Device-Id`/`Client-Id`.

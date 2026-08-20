@@ -2,9 +2,10 @@
 
 ## Mục đích
 
-Thư mục này tổng hợp các thành phần, phương thức và giao thức đang có trong source
-tham khảo `../references/xiaozhi-esp32-server`. Tài liệu dùng để nghiên cứu và lập kế
-hoạch cho Veetee; nó không định nghĩa kiến trúc chính thức của server Veetee.
+Thư mục này gồm hai loại tài liệu. Các tài liệu kiến trúc, pipeline, protocol, provider
+và security tổng hợp hành vi từ source tham khảo để nghiên cứu, không định nghĩa kiến
+trúc sản phẩm. Riêng `server-implementation-plan.md` là kế hoạch, kiến trúc mục tiêu và
+thứ tự thực thi chính thức đã được người dùng phê duyệt ở cấp tài liệu.
 
 Source tham khảo là monorepo gồm Python realtime server, Java management API, Vue web,
 uni-app mobile và digital-human test client. Veetee không mặc định phải sử dụng tất cả
@@ -16,6 +17,12 @@ các thành phần hoặc cùng công nghệ.
 | --- | --- |
 | [Tổng quan kiến trúc](architecture.md) | Thành phần, boundary và deployment mode |
 | [Realtime AI pipeline](realtime-ai-pipeline.md) | Connection, audio, VAD, ASR, LLM, tool và TTS |
+| [Ma trận tương thích firmware-server](firmware-compatibility-matrix.md) | OTA/config, WebSocket, Opus, state và golden vector cần khóa |
+| [Chính sách namespace](namespace-policy.md) | Endpoint, package, metadata và identifier policy |
+| [Benchmark Groq LLM](omniroute-llm-benchmark.md) | Streaming, latency, reasoning, tool call và model lifecycle |
+| [Benchmark Gemini TTS](gemini-tts-benchmark.md) | Native streaming, fallback và key-pool contract |
+| [Benchmark ASR/VAD](asr-vad-benchmark.md) | PhoWhisper small/medium và Silero ONNX |
+| [Contract, threat model và parity](m0-contract-and-threat-model.md) | Boundary, event/error semantics, rủi ro và dependency backlog M0.6 |
 | [Giao thức và API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP và manager API |
 | [Provider và cấu hình](providers-and-configuration.md) | Plugin factory, selected modules và config precedence |
 | [Bảo mật, vận hành và kiểm thử](security-operations-testing.md) | Auth, secret, scale, observability và test gap |

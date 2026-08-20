@@ -59,7 +59,9 @@ hành vẫn chỉ là khung thư mục cho đến khi có yêu cầu cụ thể.
 - Không mặc định copy monorepo hay chạy full stack tham khảo.
 - Thay đổi device protocol phải được đối chiếu đồng thời với `../veetee-firmware`.
 - API key, token, database password và service secret không được ghi vào source/tài liệu.
-- Endpoint, port và provider trong `docs/` là giá trị quan sát, chưa phải contract Veetee.
+- Endpoint, port và provider trong tài liệu khảo sát là giá trị quan sát. Ngoại lệ là
+  các mục được đánh dấu quyết định Veetee hoặc quyết định chờ cổng duyệt trong
+  [kế hoạch triển khai](docs/server-implementation-plan.md).
 - Public contract Veetee không được dùng tên/namespace upstream. Tương thích firmware
   được thực hiện bằng wire behavior và endpoint Veetee do OTA/config discovery trả về.
 - Mỗi API/service chính thức cần có ownership, cấu hình, migration, test và cách vận
