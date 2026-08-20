@@ -23,6 +23,7 @@ các thành phần hoặc cùng công nghệ.
 | [Benchmark Gemini TTS](gemini-tts-benchmark.md) | Native streaming, fallback và key-pool contract |
 | [Benchmark ASR/VAD](asr-vad-benchmark.md) | PhoWhisper small/medium và Silero ONNX |
 | [Contract, threat model và parity](m0-contract-and-threat-model.md) | Boundary, event/error semantics, rủi ro và dependency backlog M0.6 |
+| [Báo cáo kiểm thử Mốc 1](m1-test-report.md) | Backend fake-AI, simulator, contract/E2E evidence và giới hạn |
 | [Giao thức và API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP và manager API |
 | [Provider và cấu hình](providers-and-configuration.md) | Plugin factory, selected modules và config precedence |
 | [Bảo mật, vận hành và kiểm thử](security-operations-testing.md) | Auth, secret, scale, observability và test gap |

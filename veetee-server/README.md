@@ -3,9 +3,9 @@
 ## Trạng thái hiện tại
 
 `veetee-server` là không gian phát triển server và web console của Veetee. Backend FastAPI
-hiện có nền tảng M1, state machine, Device WebSocket, OTA discovery, audio primitives và
-fake AI pipeline deterministic; frontend Vue 3 + Vite nằm trong `web/`. Database,
-provider AI production và deployment manifest chưa được triển khai.
+hiện có nền tảng M1, state machine, Device WebSocket, OTA discovery, audio primitives,
+fake AI pipeline deterministic và device simulator; frontend Vue 3 + Vite nằm trong
+`web/`. Database, provider AI production và deployment manifest chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model

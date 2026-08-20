@@ -35,5 +35,19 @@ tự `stt`, `tts/start`, `tts/sentence_start`, binary audio đã đóng frame th
 gọi model, mạng hoặc secret. `abort` và `listen/start` mới tăng I/O generation, purge
 control/audio cũ và reset pacer.
 
+M1.7 cung cấp simulator đọc golden vector tại `../contracts/device/`. Chạy server ở một
+terminal, rồi chạy demo ở terminal khác:
+
+```bash
+VEETEE_DEVICE_GATEWAY_TOKEN='<local-token>' uv run veetee-simulator \
+  --url http://127.0.0.1:8080 --protocol-version 1 --demo --send-goodbye
+```
+
+Demo gọi OTA discovery, lấy URL/token runtime, thực hiện
+`hello -> listen -> audio -> stt -> tts/audio -> stop -> goodbye` và fail nếu thứ tự
+contract hoặc downlink framing sai. Đổi `--protocol-version` thành `2` hoặc `3` để kiểm
+tra wire format tương ứng. Token OTA được redact khỏi log; không truyền secret production
+trên command line.
+
 Runtime config dùng biến `VEETEE_` (xem `.env.example`). Không đặt secret vào
 `.env.example` hoặc log.

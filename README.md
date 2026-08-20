@@ -9,10 +9,10 @@ Veetee là dự án thiết bị trợ lý giọng nói gồm hai phạm vi chí
 | Firmware | Phần cứng, audio, kết nối, giao diện thiết bị và OTA | [veetee-firmware](veetee-firmware/README.md) |
 | Server | Phiên thiết bị, xử lý AI, API, quản trị và vận hành | [veetee-server](veetee-server/README.md) |
 
-Hiện tại dự án đang ở giai đoạn lập kế hoạch và triển khai server-first. Frontend
-Veetee Console đã có source; backend và firmware Veetee chưa được triển khai, chưa có
-database schema, deployment hay bản phát hành. Kiến trúc mục tiêu, công nghệ và thứ tự
-triển khai backend được quản lý trong
+Hiện tại dự án đang triển khai server-first. Frontend Veetee Console đã có source;
+backend Mốc 1 đã có foundation, Device WebSocket/OTA/audio, fake AI pipeline và simulator.
+Firmware Veetee riêng, database schema, provider AI production, deployment và bản phát
+hành chưa được triển khai. Kiến trúc mục tiêu, công nghệ và thứ tự triển khai backend được quản lý trong
 [kế hoạch Veetee Server](veetee-server/docs/server-implementation-plan.md); các tài liệu
 khảo sát upstream không phải kiến trúc chính thức của Veetee.
 
@@ -106,7 +106,6 @@ Thay đổi một contract dùng chung phải:
 ## Trạng thái build và vận hành
 
 Frontend có lệnh local trong
-[veetee-server/web/README.md](veetee-server/web/README.md). Backend và firmware Veetee
-chưa có lệnh build/run/test chính thức. Các lệnh bên trong hai repo tham khảo chỉ áp dụng
-cho upstream; khi source tương ứng được tạo, mục này phải được cập nhật bằng lệnh có thể
-lặp lại và test đầu cuối.
+[veetee-server/web/README.md](veetee-server/web/README.md); backend trong
+[veetee-server/server/README.md](veetee-server/server/README.md). Firmware Veetee chưa có
+lệnh build/test chính thức. Các lệnh bên trong hai repo tham khảo chỉ áp dụng cho upstream.

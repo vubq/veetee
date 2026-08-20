@@ -161,6 +161,18 @@ Config fake pipeline: `VEETEE_PIPELINE_VAD_SPEECH_THRESHOLD`,
 `VEETEE_PIPELINE_MAX_UTTERANCE_FRAMES` và `VEETEE_PIPELINE_TTS_CHUNKS_PER_SENTENCE`.
 `pipeline_max_utterance_frames` phải không nhỏ hơn `pipeline_vad_start_frames`.
 
+## Device simulator (M1.7 - Quyết định Veetee)
+
+`veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc
+OTA/audio golden vectors trong `contracts/device`, có transport WebSocket local thật và
+adapter TestClient cho integration test deterministic. Luồng demo xác minh hello, turn
+fake-AI đầy đủ, binary downlink v1/v2/v3 và goodbye; OTA token luôn được redact khỏi log.
+
+Contract suite bao phủ malformed vectors, nhiều session mở đồng thời và isolation,
+reconnect với session ID mới, hello/idle timeout, slow-client overflow `1009`, active
+session shutdown `1012` và namespace của OpenAPI. Simulator là bằng chứng protocol M1,
+không thay thế `digital-human`, native Opus hoặc hardware E2E của M2.
+
 ## Cleanup và failure mode
 
 - Device chưa bind: drop message và phát bind prompt theo interval.
