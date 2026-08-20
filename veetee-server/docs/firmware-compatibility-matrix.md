@@ -66,13 +66,34 @@ Firmware ghi các key trong `websocket` trực tiếp vào persistent settings. 
 
 | Path đề xuất | Producer | Consumer | Trạng thái |
 | --- | --- | --- | --- |
-| `POST /api/v1/devices/ota/check` | Veetee Server | firmware `Ota` | proposed |
-| `GET /api/v1/devices/ota/artifacts/{artifact_id}` | Veetee Server | firmware OTA downloader | proposed |
-| URL trong `websocket.url` | Veetee Server response | firmware WebSocket client | proposed |
-| URL WebSocket thực tế | Veetee Server | firmware `WebsocketProtocol` | proposed |
+| `POST /api/v1/devices/ota/check` | Veetee Server | firmware `Ota` | proposed → **implemented M1.4** |
+| `GET /api/v1/devices/ota/artifacts/{artifact_id}` | Veetee Server | firmware OTA downloader | proposed (M5) |
+| URL trong `websocket.url` | Veetee Server response | firmware WebSocket client | proposed → **implemented M1.4** |
+| URL WebSocket thực tế | Veetee Server | firmware `WebsocketProtocol` | proposed → **implemented M1.4** |
 
-M1 phải có responder tối thiểu để trả `websocket.url`, token/version hợp lệ và trạng thái
-không có firmware mới. M5 mới bổ sung activation/binding/release/rollout đầy đủ.
+M1.4 đã triển khai responder tối thiểu tại `/api/v1/devices/ota/check` (GET/POST/OPTIONS):
+trả `websocket.url`, `websocket.token`, `websocket.version`, `server_time` và `firmware`
+no-update. Đặc tả request/response đầy đủ nằm ở
+[protocols-and-apis.md](protocols-and-apis.md#ota-config-discovery-veetee-quyết-định-veetee---m14)
+và golden vector tại `../contracts/device/ota_check_request.json` /
+`ota_check_response.json`. M5 mới bổ sung activation/binding/release/rollout đầy đủ.
+
+### Chi tiết tương thích baseline đã xác minh ở M1.4
+
+- `server_time.timestamp` phải là **epoch milliseconds**: firmware baseline
+  `main/ota.cc:194-205` đọc `timestamp` là number và tính `tv_sec = ts / 1000`; gửi giây
+  sẽ làm clock thiết bị sai về ~1970. `timezone_offset` là phút (firmware cộng
+  `offset * 60 * 1000` vào timestamp ms).
+- `firmware.version`/`firmware.url` rỗng là trạng thái no-update an toàn: firmware chỉ set
+  `has_new_version_` khi cả hai là string và `IsNewVersionAvailable(current, new)` true
+  (`ota.cc:225-237`); version rỗng parse thành 0 component nên không thể lớn hơn version
+  thiết bị.
+- POST có body phải `Content-Type: application/json` (firmware baseline luôn gửi header
+  này trong `SetupHttp`, `ota.cc:69`); body rỗng chấp nhận.
+- Các header bổ sung firmware gửi (`Activation-Version`, `Serial-Number`) được bỏ qua an
+  toàn ở M1.4; `User-Agent`, `Accept-Language` chỉ giới hạn kích thước.
+- Firmware ghi toàn bộ key string/number trong object `websocket` vào NVS
+  (`ota.cc:169-183`); server chỉ trả đúng allowlist `url`, `token`, `version`.
 
 ## 2. WebSocket handshake
 

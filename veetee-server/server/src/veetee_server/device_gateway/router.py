@@ -12,6 +12,7 @@ from veetee_server.domain.errors import InvalidTransitionError
 from veetee_server.domain.session import DeviceSession, SessionState
 
 from .auth import validate_handshake_headers
+from .ota import ota_router
 from .protocol import (
     HelloMessage,
     ListenMessage,
@@ -24,6 +25,7 @@ from .registry import DeviceSessionRegistry
 logger = logging.getLogger("veetee.device_gateway")
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
+router.include_router(ota_router)
 
 
 @router.websocket("/ws")

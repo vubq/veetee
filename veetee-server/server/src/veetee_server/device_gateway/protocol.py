@@ -15,9 +15,16 @@ def make_error_envelope(code: str, message: str, session_id: str | None = None) 
     }
 
 
-def parse_and_validate_json(raw: str, max_depth: int = 8) -> dict[str, Any]:
+def _reject_nonstandard_constant(value: str) -> Any:
+    raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def parse_and_validate_json(raw: str | bytes, max_depth: int = 8) -> dict[str, Any]:
     """Parses JSON text and strictly validates depth and object root structure."""
-    parsed = json.loads(raw)
+    parsed = json.loads(
+        raw,
+        parse_constant=_reject_nonstandard_constant,
+    )
     if not isinstance(parsed, dict):
         raise ValueError("Root JSON payload must be an object")
 

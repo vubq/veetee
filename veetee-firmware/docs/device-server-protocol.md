@@ -164,15 +164,73 @@ Flow chính:
 Method quan sát: `initialize`, `tools/list`, `tools/call`. Tool schema theo JSON Schema
 object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quyền.
 
+## OTA/config discovery (M1.4 - Quyết định Veetee)
+
+Endpoint thiết bị gọi để discover server time, WebSocket URL/token và trạng thái
+firmware. Golden vector chung nằm tại
+`../veetee-server/contracts/device/ota_check_request.json` và
+`ota_check_response.json`.
+
+### Endpoint
+
+```text
+GET  /api/v1/devices/ota/check   (fallback khi không có body system info)
+POST /api/v1/devices/ota/check   (mặc định; body là system info JSON)
+```
+
+### Request headers (bắt buộc)
+
+- `Device-Id`: non-empty, <= 128 ký tự.
+- `Client-Id`: non-empty, <= 128 ký tự.
+
+Tùy chọn có giới hạn: `User-Agent` <= 256, `Accept-Language` <= 128. POST có body phải
+kèm `Content-Type: application/json` (firmware baseline luôn gửi header này). Body tối đa
+16 KiB; JSON phải là object, depth tối đa 8. Body rỗng được chấp nhận.
+
+### Response 200
+
+```json
+{
+  "server_time": {
+    "timestamp": 1724150400000,
+    "timezone_offset": 420
+  },
+  "websocket": {
+    "url": "ws://<host>:<port>/api/v1/devices/ws",
+    "token": "<gateway-token>",
+    "version": 1
+  },
+  "firmware": {
+    "version": "",
+    "url": ""
+  }
+}
+```
+
+- `server_time.timestamp` là **epoch milliseconds** (baseline firmware chia 1000 khi set
+  clock); `timezone_offset` là phút so với UTC và được firmware cộng vào timestamp.
+- `websocket.url` luôn là ws/wss, không userinfo/query/fragment.
+- `websocket.token` là gateway token dùng cho handshake WebSocket; chỉ xuất hiện ở
+  response này.
+- `firmware` trả no-update (`version`, `url` rỗng) ở M1.4: firmware chỉ trigger update khi
+  cả hai field là string và version mới lớn hơn version hiện tại; version rỗng không bao
+  giờ lớn hơn.
+- M1.4 không trả `mqtt` hay `activation`.
+
+Error: `400 veetee_invalid_input` (header/JSON/depth/bounds), `413
+veetee_payload_too_large`, `415 veetee_invalid_input` (Content-Type sai). Envelope:
+`{"code": "veetee_*", "message": "...", "request_id": "..."}`.
+
 ## Yêu cầu contract nếu áp dụng cho Veetee
 
 - Giữ wire behavior cần cho firmware tham khảo nhưng dùng endpoint và namespace Veetee;
   cấm đưa tên/path/metadata upstream vào public contract sản phẩm. URL WebSocket Veetee
   được phân phối qua OTA/config discovery.
 - Các path `/api/v1/devices/ws`, `/api/v1/devices/ota/check` và
-  `/api/v1/devices/ota/artifacts/{artifact_id}` hiện là đề xuất chờ Cổng 0 trong
-  `../../veetee-server/docs/server-implementation-plan.md`, chưa phải contract cuối.
-  Sau khi duyệt phải bổ sung schema versioned và golden vector dùng chung cho hai đầu.
+  `/api/v1/devices/ota/artifacts/{artifact_id}` đã được khóa ở M0.2/Cổng 0;
+  `/api/v1/devices/ota/check` đã có responder ở M1.4. Schema versioned và golden vector
+  dùng chung nằm tại `../veetee-server/contracts/device/`. Artifact download sẽ triển
+  khai ở M5.
 - Version mới wire format và policy tương thích rõ ràng.
 - Giới hạn kích thước JSON, binary frame, MCP arguments và image base64.
 - Xác thực device, ràng buộc token với `Device-Id`/`Client-Id`.

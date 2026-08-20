@@ -74,6 +74,93 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
 
 ---
 
+## OTA/config discovery Veetee (Quyết định Veetee - M1.4)
+
+Endpoint thiết bị gọi để nhận server time, WebSocket URL/token và trạng thái firmware.
+
+```text
+GET  /api/v1/devices/ota/check   (fallback khi không có body system info)
+POST /api/v1/devices/ota/check   (firmware baseline gửi system info JSON)
+OPTIONS /api/v1/devices/ota/check (CORS preflight, credentials-free)
+```
+
+### Request
+
+Header bắt buộc (có phân biệt hoa thường, so khớp không phân biệt case):
+
+| Header | Yêu cầu |
+| --- | --- |
+| `Device-Id` | non-empty, <= `VEETEE_ID_MAX_LENGTH=128` |
+| `Client-Id` | non-empty, <= `VEETEE_ID_MAX_LENGTH=128` |
+
+Header tùy chọn có giới hạn:
+
+| Header | Giới hạn |
+| --- | --- |
+| `User-Agent` | <= 256 chars |
+| `Accept-Language` | <= 128 chars |
+| `Content-Type` | POST có body phải là `application/json` (kèm charset chấp nhận) |
+
+Body POST:
+
+- Giới hạn kích thước trước khi parse: `VEETEE_JSON_MAX_BYTES=16384` (413 nếu vượt).
+- JSON phải là object; depth tối đa `VEETEE_JSON_MAX_DEPTH=8`.
+- Ràng buộc cấu trúc: tối đa 32 key mỗi object, key <= 64 chars, string value <= 256
+  chars, array <= 32 phần tử; value phải là string/number/boolean/null/object/list một cấp.
+- Body rỗng được chấp nhận (tương đương GET); body không phải JSON bị từ chối 400/415.
+
+### Response 200
+
+```json
+{
+  "server_time": {
+    "timestamp": 1724150400000,
+    "timezone_offset": 420
+  },
+  "websocket": {
+    "url": "ws://<host>:<port>/api/v1/devices/ws",
+    "token": "<gateway-token>",
+    "version": 1
+  },
+  "firmware": {
+    "version": "",
+    "url": ""
+  }
+}
+```
+
+- `server_time.timestamp`: **epoch milliseconds** (baseline firmware chia 1000 để ra
+  giây khi set clock; gửi giây sẽ làm clock thiết bị sai về ~1970).
+- `server_time.timezone_offset`: offset phút so với UTC của server host.
+- `websocket.url`: `VEETEE_DEVICE_WEBSOCKET_PUBLIC_URL` nếu cấu hình, ngược lại suy từ
+  `VEETEE_HOST:VEETEE_PORT`. Bắt buộc `ws`/`wss`, không userinfo, không query/fragment.
+- `websocket.token`: `VEETEE_DEVICE_GATEWAY_TOKEN`; chỉ xuất hiện ở response OTA này,
+  không ghi vào log. Token rỗng khi chưa cấu hình.
+- `firmware`: luôn là no-update ở M1.4 (`version` và `url` rỗng). Firmware baseline chỉ
+  nâng cấp khi cả `version` lẫn `url` là string và version mới lớn hơn version hiện tại;
+  version rỗng parse thành 0 component nên không bao giờ trigger update.
+- Không có object `mqtt`, `activation` ở M1.4.
+
+### Lỗi
+
+| Status | Code | Ý nghĩa |
+| --- | --- | --- |
+| 400 | `veetee_invalid_input` | Header thiếu/sai, JSON sai cú pháp/không phải object, vượt depth/bounds |
+| 413 | `veetee_payload_too_large` | Body vượt `VEETEE_JSON_MAX_BYTES` |
+| 415 | `veetee_invalid_input` | Body có nhưng `Content-Type` không phải `application/json` |
+
+Error envelope: `{"code": "veetee_*", "message": "...", "request_id": "..."}`. Mọi
+response OTA (kể cả lỗi) có header `X-Veetee-Request-Id` và `Access-Control-Allow-Origin: *`.
+
+### CORS
+
+`OPTIONS` trả 204 với `Access-Control-Allow-Origin: *`, methods `GET, POST, OPTIONS`,
+headers cho phép gồm `Device-Id, Client-Id, User-Agent, Accept-Language, Content-Type,
+X-Veetee-Request-Id`. Không dùng `Access-Control-Allow-Credentials` (endpoint device
+không dùng cookie/credential trình duyệt).
+
+---
+
 ## Endpoint mặc định quan sát từ firmware tham khảo (Upstream reference)
 
 ```text

@@ -1,0 +1,15 @@
+{
+  "server_time": {
+    "timestamp": 1724150400000,
+    "timezone_offset": 420
+  },
+  "websocket": {
+    "url": "ws://127.0.0.1:8080/api/v1/devices/ws",
+    "token": "test-gateway-token",
+    "version": 1
+  },
+  "firmware": {
+    "version": "",
+    "url": ""
+  }
+}

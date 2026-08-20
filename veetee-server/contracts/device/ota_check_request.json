@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "board": "esp32-s3-box",
+  "chip_model_name": "esp32s3",
+  "minimum_free_heap_size": 120000,
+  "elf_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}

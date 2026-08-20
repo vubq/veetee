@@ -9,7 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from .app_context import request_id_context
-from .config import Settings, get_settings
+from .config import (
+    Settings,
+    get_effective_device_websocket_url,
+    get_settings,
+    validate_device_websocket_url,
+)
 from .device_gateway import DeviceSessionRegistry
 from .device_gateway import router as device_gateway_router
 from .logging import configure_logging
@@ -90,6 +95,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "reason": "gateway_token_not_configured"},
+            )
+        eff_url = get_effective_device_websocket_url(runtime_settings)
+        url_valid, _ = validate_device_websocket_url(eff_url)
+        if not url_valid:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "reason": "invalid_websocket_public_url"},
             )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 

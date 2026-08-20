@@ -19,23 +19,22 @@ transport config, server time, serial number và activation data. Đây là coup
 trọng cần tách rõ trong thiết kế Veetee: provisioning/config discovery và firmware OTA
 có thể cần lifecycle, quyền và tần suất khác nhau.
 
-## Quyết định Veetee đang chờ Cổng 0
+## Quyết định Veetee đã triển khai (M1.4)
 
-Firmware tham khảo là consumer của OTA/config response; Veetee Server là producer. Để
-firmware kết nối được mà public contract không mang namespace upstream, các path đang
-được đề xuất trong
-`../../veetee-server/docs/server-implementation-plan.md` là:
+Firmware tham khảo là consumer của OTA/config response; Veetee Server là producer. Các
+path đã được khóa ở M0.2/Cổng 0 và responder tối thiểu đã triển khai ở M1.4:
 
-- `POST /api/v1/devices/ota/check`: server time, activation state tối thiểu,
-  WebSocket URL/token và firmware eligibility.
-- `GET /api/v1/devices/ota/artifacts/{artifact_id}`: tải artifact khi có bản phù hợp.
-- `/api/v1/devices/ws`: phiên realtime do URL trong OTA/config response phân phối.
+- `POST /api/v1/devices/ota/check` (và `GET` khi không có body): server time, WebSocket
+  URL/token và firmware eligibility (no-update). Đặc tả nằm ở
+  `../veetee-server/docs/protocols-and-apis.md` (mục OTA/config discovery) và golden
+  vector tại `../veetee-server/contracts/device/`.
+- `GET /api/v1/devices/ota/artifacts/{artifact_id}`: tải artifact khi có bản phù hợp —
+  triển khai ở M5.
+- `/api/v1/devices/ws`: phiên realtime do URL trong OTA/config response phân phối (M1.3).
 
-Các path trên là **proposed**, chưa phải contract cuối cho tới khi hoàn tất M0.1/M0.2 và
-được người dùng duyệt ở Cổng 0. Mốc 1 phải có responder OTA/config tương thích tối thiểu
-để test thiết bị; activation, binding, release catalog, rollout và reporting đầy đủ được
-hoàn thiện ở Mốc 5. Sau Cổng 0, hai phía phải thay phần này bằng schema versioned và
-golden vector chung.
+Lưu ý tương thích: `server_time.timestamp` phải là epoch **milliseconds** (baseline
+`ota.cc` chia 1000 khi set clock), `firmware.version`/`url` rỗng là no-update an toàn.
+Activation, binding, release catalog, rollout và reporting đầy đủ được hoàn thiện ở M5.
 
 ## API `Ota` quan trọng
 
