@@ -61,9 +61,11 @@ Trước khi thực hiện công việc server:
 
 ## Cách xử lý theo loại công việc
 
-Trước mỗi task hoặc mốc mới, AI phải gửi người dùng bản tóm lược gồm mục tiêu, phạm vi
-file/dịch vụ, kiểm tra dự kiến, rủi ro và điểm dừng. Phải chờ người dùng xác nhận trước
-khi bắt đầu bước đó; chỉ được làm kiểm tra read-only cần thiết để chuẩn bị bản tóm lược.
+Chỉ trình bày và chờ người dùng duyệt ở đầu mốc lớn. Trong mốc đã duyệt, orchestrator tự
+chia và thực hiện các task server liên tục theo quy trình điều phối tại `../AGENTS.md`, tự
+audit/fix/test/commit/push và chỉ bàn giao khi Definition of Done của toàn mốc đạt. Không
+dừng xin duyệt từng task nội bộ; chỉ dừng sớm trước quyết định kiến trúc lớn, quyền/secret
+mới, thao tác external ảnh hưởng lớn, hardware hoặc blocker không thể tự xử lý an toàn.
 
 ### Nghiên cứu
 

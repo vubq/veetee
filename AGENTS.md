@@ -130,10 +130,17 @@ chung khi source Veetee đã tồn tại.
 
 ## Quy trình thực hiện
 
-Trước mỗi task hoặc mốc mới, AI phải gửi cho người dùng bản tóm lược ngắn gồm mục tiêu,
-phạm vi/file hoặc dịch vụ bị ảnh hưởng, kiểm tra dự kiến, rủi ro và điểm dừng. AI phải
-chờ người dùng xác nhận trước khi bắt đầu bước đó; chỉ được thực hiện trước các kiểm tra
-read-only cần thiết để chuẩn bị bản tóm lược.
+Người dùng chỉ duyệt và nhận bàn giao ở cấp **mốc lớn** trong kế hoạch chính thức. Trước
+mỗi mốc lớn, orchestrator phải gửi bản tóm lược gồm mục tiêu, phạm vi, acceptance, kiểm
+tra dự kiến, rủi ro và điểm dừng, rồi chờ người dùng xác nhận. Sau khi mốc được duyệt,
+orchestrator tự chia task, điều phối implementation, audit/fix, test, commit và push liên
+tục; không hỏi duyệt hoặc bàn giao từng task nội bộ. Chỉ dừng giữa mốc khi cần quyết định
+kiến trúc lớn, quyền/secret mới, thao tác external ảnh hưởng lớn, hardware hoặc gặp blocker
+không thể tự xử lý an toàn.
+
+Phân công OpenCode mặc định: `cockpit/gpt-5.6-sol` lập plan, quản lý docs/contract,
+audit/fix và Git; `omniroute/antigravity/gemini-3.6-flash-high` implement code/test;
+`opencode/deepseek-v4-flash-free` là fallback khi Gemini lỗi provider, quota hoặc token.
 
 ```text
 đọc yêu cầu
@@ -141,10 +148,10 @@ read-only cần thiết để chuẩn bị bản tóm lược.
   -> đọc hướng dẫn và docs liên quan
   -> đối chiếu upstream nếu cần
   -> xác định điểm chưa được quyết định
-  -> triển khai ngoài references
-  -> test theo rủi ro
-  -> cập nhật tài liệu
-  -> báo cáo kết quả và giới hạn xác minh
+  -> Gemini implement ngoài references (DeepSeek fallback khi cần)
+  -> GPT-5.6 Sol audit/fix và test theo rủi ro
+  -> cập nhật tài liệu, commit và push
+  -> tiếp tục task nội bộ hoặc bàn giao khi hoàn tất mốc lớn
 ```
 
 Chỉ hỏi người dùng khi một lựa chọn còn thiếu có thể làm thay đổi đáng kể kết quả. Với
