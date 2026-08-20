@@ -1,8 +1,9 @@
-"""Device WebSocket router implementation for Veetee Server M1.3."""
+"""Device WebSocket router implementation for Veetee Server M1.3 (M1.6 wiring)."""
 
 import asyncio
 import logging
 from time import monotonic
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -20,8 +21,17 @@ from veetee_server.audio import (
 from veetee_server.config import Settings, get_settings
 from veetee_server.domain.errors import InvalidTransitionError
 from veetee_server.domain.session import DeviceSession, SessionState
+from veetee_server.pipeline.downlink import DownlinkQueue
+from veetee_server.pipeline.factory import (
+    PacerFactory,
+    PipelineFactory,
+    build_downlink_pacer,
+    build_fake_pipeline,
+)
+from veetee_server.pipeline.orchestrator import FakePipeline
 
 from .auth import validate_handshake_headers
+from .downlink import GatewayEventSink, run_downlink_sender, supervise_pipeline
 from .ota import ota_router
 from .protocol import (
     HelloMessage,
@@ -36,6 +46,43 @@ logger = logging.getLogger("veetee.device_gateway")
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 router.include_router(ota_router)
+
+
+def _make_pacer(settings: Settings, app_state: Any) -> PacketPacer:
+    """Builds the per-session downlink pacer, honoring test injection."""
+    factory: PacerFactory | None = getattr(app_state, "pacer_factory", None)
+    if factory is not None:
+        return factory(settings)
+    return build_downlink_pacer(settings)
+
+
+def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -> FakePipeline:
+    """Builds the pipeline for a turn, honoring test injection."""
+    factory: PipelineFactory | None = getattr(app_state, "pipeline_factory", None)
+    if factory is not None:
+        return factory(session, settings)
+    return build_fake_pipeline(session, settings)
+
+
+def _start_pipeline(
+    session: DeviceSession,
+    settings: Settings,
+    websocket: WebSocket,
+    app_state: Any,
+) -> None:
+    """Starts the fake pipeline for the current processing turn.
+
+    The pipeline task is owned by the turn's cancellation scope, so an abort
+    or a barge-in cancels it at its next await point; the supervisor lives in
+    the session scope and reacts to terminal outcomes.
+    """
+    turn = session.current_turn
+    if turn is None:
+        return
+    pipeline = _make_pipeline(session, settings, app_state)
+    sink = GatewayEventSink(session, generation=session.egress_queue.generation)
+    pipeline_task = turn.cancellation.create_task(pipeline.run(session, sink))
+    session.cancellation.create_task(supervise_pipeline(session, websocket, pipeline_task, turn))
 
 
 @router.websocket("/ws")
@@ -143,16 +190,14 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             client_id=client_id,
             cleanup_timeout_seconds=settings.cleanup_timeout_seconds,
             protocol_version=auth_result.protocol_version,
-            pacer=PacketPacer(
-                max_drift_seconds=settings.audio_pacing_max_drift_ms / 1000.0,
-            ),
+            pacer=_make_pacer(settings, websocket.app.state),
             ingress_queue=BoundedAudioQueue(
                 max_items=settings.audio_max_queue_items,
                 max_bytes=settings.audio_max_queue_bytes,
                 max_duration_ms=settings.audio_max_queue_duration_ms,
                 overflow_policy=OverflowPolicy.DROP_OLDEST,
             ),
-            egress_queue=BoundedAudioQueue(
+            egress_queue=DownlinkQueue(
                 max_items=settings.audio_max_queue_items,
                 max_bytes=settings.audio_max_queue_bytes,
                 max_duration_ms=settings.audio_max_queue_duration_ms,
@@ -176,6 +221,10 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             },
         }
         await websocket.send_json(server_hello)
+
+        # One downlink sender per session drains the egress queue (stt/tts
+        # control messages + paced audio frames) in FIFO order.
+        session.cancellation.create_task(run_downlink_sender(session, websocket))
 
         # 3. Message Loop
         last_activity = monotonic()
@@ -237,13 +286,6 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         negotiated_version=session.protocol_version,
                         max_payload_bytes=settings.binary_max_bytes,
                     )
-                    item = AudioQueueItem(
-                        payload=packet.payload,
-                        duration_ms=60.0,
-                        generation=session.ingress_queue.generation,
-                        timestamp_ms=packet.timestamp_ms,
-                    )
-                    await session.ingress_queue.put(item)
                 except OversizedAudioFrameError:
                     env = make_error_envelope(
                         "veetee_invalid_input",
@@ -262,6 +304,29 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json(env)
                     await websocket.close(code=1002)
                     break
+
+                if session.state is not SessionState.LISTENING:
+                    # Audio frames are only accepted while capturing; anything
+                    # arriving during processing/streaming is dropped.
+                    logger.debug(
+                        "dropping_audio_outside_listening",
+                        extra={
+                            "context": {
+                                "session_id": str(session.id),
+                                "state": str(session.state),
+                            }
+                        },
+                    )
+                    continue
+
+                try:
+                    item = AudioQueueItem(
+                        payload=packet.payload,
+                        duration_ms=60.0,
+                        generation=session.ingress_queue.generation,
+                        timestamp_ms=packet.timestamp_ms,
+                    )
+                    await session.ingress_queue.put(item)
                 except SlowClientQueueOverflowError:
                     env = make_error_envelope(
                         "veetee_invalid_input",
@@ -411,11 +476,15 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
 
                 try:
                     if listen_msg.state == "start":
-                        if session.state == SessionState.IDLE:
+                        # Barge-in: a start while speaking or while the
+                        # previous turn is still processing aborts it inside
+                        # start_turn and begins a fresh capture.
+                        if session.state in {SessionState.IDLE, SessionState.SPEAKING}:
                             await session.start_turn()
                     elif listen_msg.state == "stop":
                         if session.state is SessionState.LISTENING:
                             session.begin_processing()
+                            _start_pipeline(session, settings, websocket, websocket.app.state)
                 except InvalidTransitionError:
                     # Out-of-sync listen frames (e.g. stop before a streamable
                     # turn) must not tear down the connection; the device can

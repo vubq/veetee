@@ -130,6 +130,37 @@ Các settings áp dụng: `VEETEE_AUDIO_MAX_QUEUE_ITEMS`, `VEETEE_AUDIO_MAX_QUEU
 `VEETEE_AUDIO_MAX_QUEUE_DURATION_MS`, `VEETEE_AUDIO_PACING_MAX_DRIFT_MS` (validator bảo
 đảm duration >= 60ms và drift < duration).
 
+## Fake AI pipeline (M1.6 - Quyết định Veetee)
+
+`veetee_server.pipeline` là test harness deterministic chạy hoàn toàn in-process, không
+phải adapter AI production. Gateway chỉ enqueue binary audio hợp lệ khi session ở
+`LISTENING`; frame vẫn luôn được kiểm tra size và wire structure trước state gate để
+malformed/oversized giữ nguyên close policy `1002`/`1009`.
+
+Khi nhận `listen/stop`, pipeline drain các frame của turn hiện tại và chạy:
+
+```text
+FakeOpusDecoder -> FakeVAD -> FakeASR -> FakeLLM -> FakeTTS
+  -> FakeOpusEncoder -> negotiated v1/v2/v3 framing -> bounded downlink
+```
+
+Luồng thành công phát đúng thứ tự `stt`, `tts/start`, `tts/sentence_start`, một hoặc
+nhiều binary audio frame, rồi `tts/stop`. Không có speech hợp lệ thì turn được abort và
+không phát output. Fake VAD dùng RMS và frame count; Fake ASR dùng fingerprint/default
+text; Fake LLM chỉ tách câu; Fake TTS sinh PCM deterministic. Các thành phần này không
+được dùng làm bằng chứng về chất lượng nhận dạng, giọng nói hoặc native Opus.
+
+Mỗi turn giữ một queue generation cố định. `abort`, barge-in hoặc `listen/start` của turn
+mới tăng generation đồng bộ cho ingress/downlink, purge item cũ và reset pacer. Pipeline
+kiểm tra turn/generation trước từng event; sink không được gắn lại event cũ bằng generation
+mới; sender kiểm tra lại ngay trước control/audio write. Downlink queue giới hạn theo item,
+byte và duration, dùng `FAIL_SESSION` cho slow client.
+
+Config fake pipeline: `VEETEE_PIPELINE_VAD_SPEECH_THRESHOLD`,
+`VEETEE_PIPELINE_VAD_START_FRAMES`, `VEETEE_PIPELINE_VAD_END_SILENCE_FRAMES`,
+`VEETEE_PIPELINE_MAX_UTTERANCE_FRAMES` và `VEETEE_PIPELINE_TTS_CHUNKS_PER_SENTENCE`.
+`pipeline_max_utterance_frames` phải không nhỏ hơn `pipeline_vad_start_frames`.
+
 ## Cleanup và failure mode
 
 - Device chưa bind: drop message và phát bind prompt theo interval.

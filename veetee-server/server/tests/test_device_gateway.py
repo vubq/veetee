@@ -1,7 +1,7 @@
 """Comprehensive tests for Veetee Device WebSocket Gateway (M1.3)."""
 
 import json
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from veetee_server.app import create_app
+from veetee_server.audio import parse_audio_frame
 from veetee_server.config import Settings
 from veetee_server.device_gateway.registry import DeviceSessionRegistry
 from veetee_server.domain.session import DeviceSession, SessionState
@@ -502,11 +503,12 @@ def test_session_state_machine_after_hello_and_listen(
             )
             ws.send_json({"type": "ping", "session_id": session_id})
             assert ws.receive_json() == {"type": "pong", "session_id": session_id}
-            assert session.state is SessionState.LISTENING
+            assert session.state == SessionState.LISTENING
             assert session.current_turn is not None
 
             # listen/stop advances capture into processing without tearing down
-            # the connection. M1.6 will attach the fake pipeline to this state.
+            # the connection. M1.6 attaches the fake pipeline, which returns
+            # NO_UTTERANCE and cleans up the turn back to IDLE.
             ws.send_json(
                 {
                     "type": "listen",
@@ -517,7 +519,7 @@ def test_session_state_machine_after_hello_and_listen(
             ws.send_json({"type": "ping", "session_id": session_id})
             assert ws.receive_json()["type"] == "pong"
             assert session.state is SessionState.IDLE
-            assert session.current_turn is not None
+            assert session.current_turn is None
 
 
 def test_abort_cancels_active_turn(
@@ -553,7 +555,7 @@ def test_abort_cancels_active_turn(
             ws.send_json({"type": "ping", "session_id": session_id})
             assert ws.receive_json()["type"] == "pong"
 
-            assert session.state is SessionState.IDLE
+            assert session.state == SessionState.IDLE
             assert session.current_turn is None
 
 
@@ -601,7 +603,7 @@ async def test_registry_close_all_closes_sessions_and_websockets() -> None:
     session = DeviceSession(device_id="device-opaque", client_id="client-opaque")
     session.accept()
     ws = StubWebSocket()
-    await registry.register(session, ws)
+    await registry.register(session, cast(Any, ws))
     assert registry.active_count == 1
 
     await registry.close_all(code=1012, reason="Server shutdown")
@@ -616,7 +618,7 @@ async def test_registry_unregister_is_idempotent() -> None:
     registry = DeviceSessionRegistry()
     session = DeviceSession(device_id="device-opaque", client_id="client-opaque")
     ws = StubWebSocket()
-    await registry.register(session, ws)
+    await registry.register(session, cast(Any, ws))
 
     await registry.unregister(str(session.id))
     await registry.unregister(str(session.id))
@@ -668,7 +670,7 @@ def test_protocol_negotiation_binary_roundtrip(
     valid_hello_payload: dict[str, Any],
     version: int,
 ) -> None:
-    """Handshake with Protocol-Version 1/2/3 must accept valid binary frames."""
+    """Handshake with Protocol-Version 1/2/3 must accept valid binary frames while LISTENING."""
     app = create_app(test_settings)
     frames = {1: V1_FRAME, 2: V2_FRAME, 3: V3_FRAME}
     with TestClient(app) as client:
@@ -677,6 +679,9 @@ def test_protocol_negotiation_binary_roundtrip(
         ) as ws:
             ws.send_json(valid_hello_payload)
             session_id = ws.receive_json()["session_id"]
+
+            ws.send_json({"type": "listen", "state": "start", "session_id": session_id})
+            _sync_with_ping(ws, session_id)
 
             ws.send_bytes(frames[version])
             _sync_with_ping(ws, session_id)
@@ -697,7 +702,7 @@ def test_valid_binary_frame_queued_with_metadata(
     version: int,
     frame: bytes,
 ) -> None:
-    """Valid binary frames are parsed and queued with the right payload/timestamp."""
+    """Valid frames are queued with the right metadata while listening."""
     app = create_app(test_settings)
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -705,6 +710,9 @@ def test_valid_binary_frame_queued_with_metadata(
         ) as ws:
             ws.send_json(valid_hello_payload)
             session_id = ws.receive_json()["session_id"]
+
+            ws.send_json({"type": "listen", "state": "start", "session_id": session_id})
+            _sync_with_ping(ws, session_id)
 
             ws.send_bytes(frame)
             _sync_with_ping(ws, session_id)
@@ -829,15 +837,15 @@ def test_abort_purges_stale_audio_from_queue(
             session = _first_registered_session(app)
             assert session is not None
             assert session.ingress_queue.item_count == 1
-            assert session.ingress_queue.generation == 0
+            capture_generation = session.ingress_queue.generation
 
             ws.send_json({"type": "abort", "session_id": session_id})
             _sync_with_ping(ws, session_id)
 
             # Generation advanced and stale frames were purged.
-            assert session.ingress_queue.generation == 1
+            assert session.ingress_queue.generation == capture_generation + 1
             assert session.ingress_queue.item_count == 0
-            assert session.egress_queue.generation == 1
+            assert session.egress_queue.generation == capture_generation + 1
             assert session.state is SessionState.IDLE
 
 
@@ -852,6 +860,8 @@ def test_session_close_cleans_up_queues_and_websocket(
         with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(3)) as ws:
             ws.send_json(valid_hello_payload)
             session_id = ws.receive_json()["session_id"]
+            ws.send_json({"type": "listen", "state": "start", "session_id": session_id})
+            _sync_with_ping(ws, session_id)
             ws.send_bytes(V3_FRAME)
             _sync_with_ping(ws, session_id)
 
@@ -870,3 +880,69 @@ def test_session_close_cleans_up_queues_and_websocket(
         assert session.ingress_queue.is_closed
         assert session.egress_queue.is_closed
         assert registry.active_count == 0
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_fake_pipeline_end_to_end_for_each_wire_version(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+    version: int,
+) -> None:
+    """A captured utterance produces ordered STT, TTS and framed audio output."""
+    app = create_app(test_settings)
+    frame = {1: V1_FRAME, 2: V2_FRAME, 3: V3_FRAME}[version]
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/v1/devices/ws", headers=_headers_with_version(version)
+        ) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+            ws.send_json(
+                {
+                    "type": "listen",
+                    "state": "start",
+                    "mode": "auto",
+                    "session_id": session_id,
+                }
+            )
+            ws.send_bytes(frame)
+            ws.send_bytes(frame)
+            ws.send_json({"type": "listen", "state": "stop", "session_id": session_id})
+
+            stt = ws.receive_json()
+            assert stt["type"] == "stt"
+            assert stt["session_id"] == session_id
+            assert stt["text"]
+            assert ws.receive_json() == {
+                "type": "tts",
+                "state": "start",
+                "session_id": session_id,
+            }
+            sentence = ws.receive_json()
+            assert sentence == {
+                "type": "tts",
+                "state": "sentence_start",
+                "text": stt["text"],
+                "session_id": session_id,
+            }
+
+            for _ in range(test_settings.pipeline_tts_chunks_per_sentence):
+                downlink = ws.receive_bytes()
+                packet = parse_audio_frame(
+                    downlink,
+                    negotiated_version=version,
+                    max_payload_bytes=test_settings.binary_max_bytes,
+                )
+                assert packet.payload.startswith(b"\xf8\xff\xfe")
+
+            assert ws.receive_json() == {
+                "type": "tts",
+                "state": "stop",
+                "session_id": session_id,
+            }
+
+            session = _first_registered_session(app)
+            assert session is not None
+            assert session.state is SessionState.IDLE
+            assert session.current_turn is None

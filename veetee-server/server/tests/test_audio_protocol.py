@@ -28,7 +28,7 @@ def _load_golden(name: str) -> dict[str, Any]:
     path = CONTRACTS_DIR / name
     assert path.exists(), f"Missing golden file: {path}"
     with path.open(encoding="utf-8") as fh:
-        return json.load(fh)
+        return cast(dict[str, Any], json.load(fh))
 
 
 def test_v1_roundtrip() -> None:

@@ -1,4 +1,5 @@
 import asyncio
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -41,14 +42,14 @@ async def test_session_turn_generation_happy_path() -> None:
     session = make_session()
     turn, generation = await stream_turn(session)
 
-    assert session.state is SessionState.SPEAKING
+    assert session.state == SessionState.SPEAKING
     assert turn.state is TurnState.STREAMING
     assert UUID(str(generation.id))
     session.ensure_current_generation(generation)
 
     session.complete_turn()
 
-    assert session.state == SessionState.IDLE
+    assert cast(SessionState, session.state) == SessionState.IDLE
     assert turn.state is TurnState.COMPLETED
     assert generation.state is GenerationState.COMPLETED
     assert session.current_turn is None
@@ -96,8 +97,10 @@ async def test_abort_is_idempotent_and_stales_generation() -> None:
 async def test_stale_generation_cannot_emit_output_after_barge_in() -> None:
     session = make_session()
     _, old_generation = await stream_turn(session)
+    old_epoch = session.egress_queue.generation
 
     await session.start_turn()
+    assert session.egress_queue.generation == old_epoch + 1
     session.begin_processing()
     new_generation = session.begin_streaming()
 
@@ -105,6 +108,24 @@ async def test_stale_generation_cannot_emit_output_after_barge_in() -> None:
         session.ensure_current_generation(old_generation)
     assert error.value.code is DomainErrorCode.STALE_GENERATION
     session.ensure_current_generation(new_generation)
+
+
+@pytest.mark.asyncio
+async def test_new_turn_purges_completed_turn_downlink() -> None:
+    session = make_session()
+    await stream_turn(session)
+    old_epoch = session.egress_queue.generation
+    session.complete_turn()
+
+    from veetee_server.pipeline.downlink import DownlinkItem, DownlinkKind
+
+    await session.egress_queue.put(
+        DownlinkItem(kind=DownlinkKind.CONTROL, payload=b"old", generation=old_epoch)
+    )
+    await session.start_turn()
+
+    assert session.egress_queue.generation == old_epoch + 1
+    assert session.egress_queue.item_count == 0
 
 
 @pytest.mark.asyncio

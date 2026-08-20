@@ -237,7 +237,7 @@ async def test_queue_is_thread_safe_wrapper() -> None:
             await q.put(_item(bytes([i]), 60.0))
             await asyncio.sleep(0)
 
-    async def consumer() -> None:
+    async def consumer() -> list[int]:
         seen: list[int] = []
         for _ in range(20):
             item = await q.get()

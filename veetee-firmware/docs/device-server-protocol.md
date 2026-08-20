@@ -63,6 +63,12 @@ Cả WebSocket và MQTT/UDP chia sẻ các semantic JSON:
 
 Mỗi message sau handshake nên mang `session_id` để tránh trộn phiên.
 
+Trong implementation Veetee M1.6, thiết bị gửi binary audio hợp lệ trong khoảng
+`listen/start` đến `listen/stop`. Sau `listen/stop`, fake pipeline server phát theo thứ tự
+`stt`, `tts/start`, `tts/sentence_start`, binary audio, `tts/stop`. Binary hợp lệ ngoài
+trạng thái listening bị bỏ; malformed/oversized vẫn bị đóng bằng `1002`/`1009` để không
+làm yếu validation giao thức.
+
 ## WebSocket
 
 ### Handshake HTTP
@@ -119,9 +125,10 @@ lệ và malformed nằm tại `../veetee-server/contracts/device/audio_v{1,2,3}
 
 Server giới hạn queue audio uplink/downlink theo items, bytes và thời lượng
 (`VEETEE_AUDIO_MAX_QUEUE_*`): uplink dùng `drop_oldest`, downlink dùng `fail_session`
-(đóng 1009 khi client chậm). `abort` tăng generation và purge mọi frame cũ đang chờ, nên
-thiết bị phải gửi `abort` để hủy luồng cũ thay vì chỉ ngừng đọc. Native Opus decode/encode
-server hoãn tới khi tích hợp libopus; hiện tại dùng fake deterministic cho test pipeline.
+(đóng 1009 khi client chậm). `abort`, barge-in và turn mới tăng generation, purge mọi
+control/audio cũ đang chờ; thiết bị phải gửi `abort` để hủy luồng cũ thay vì chỉ ngừng đọc.
+Native Opus decode/encode server hoãn tới khi tích hợp libopus; hiện tại dùng fake
+deterministic cho test pipeline.
 
 ## MQTT control và UDP audio
 

@@ -8,13 +8,26 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from veetee_server.audio.pacer import PacketPacer
 from veetee_server.audio.queue import BoundedAudioQueue, OverflowPolicy
 
 from .errors import CleanupTimeoutError, InvalidTransitionError, StaleGenerationError
+
+if TYPE_CHECKING:
+    from veetee_server.pipeline.downlink import DownlinkQueue
+
+
+def _default_egress_queue() -> DownlinkQueue:
+    # Imported lazily to avoid the import cycle domain.session -> pipeline
+    # package -> pipeline.factory -> domain.session. The pipeline package owns
+    # the downlink queue type but depends on this module, so the dependency
+    # edge must point pipeline -> domain, never the reverse.
+    from veetee_server.pipeline.downlink import DownlinkQueue
+
+    return DownlinkQueue(overflow_policy=OverflowPolicy.FAIL_SESSION)
 
 
 def _now() -> datetime:
@@ -202,9 +215,9 @@ class DeviceSession:
     ingress_queue: BoundedAudioQueue = field(
         default_factory=lambda: BoundedAudioQueue(overflow_policy=OverflowPolicy.DROP_OLDEST)
     )
-    egress_queue: BoundedAudioQueue = field(
-        default_factory=lambda: BoundedAudioQueue(overflow_policy=OverflowPolicy.FAIL_SESSION)
-    )
+    # Downlink queue carries ordered control + audio items toward the device.
+    # It must stay a fail-session queue: a slow client must not buffer forever.
+    egress_queue: DownlinkQueue = field(default_factory=_default_egress_queue)
     _state: SessionState = field(default=SessionState.CONNECTING, init=False, repr=False)
     _current_turn: ConversationTurn | None = field(default=None, init=False, repr=False)
     _generations: dict[UUID, Generation] = field(default_factory=dict, init=False, repr=False)
@@ -231,10 +244,18 @@ class DeviceSession:
         self._transition(SessionState.IDLE)
 
     async def start_turn(self) -> ConversationTurn:
-        if self._state is SessionState.SPEAKING:
+        # A new listen/start barge-in is allowed while the session is speaking
+        # (streaming) or while the previous turn is still being processed
+        # (IDLE state with a processing turn); both abort the old turn first.
+        replaced_turn = self._state is SessionState.SPEAKING or (
+            self._state is SessionState.IDLE and self._current_turn is not None
+        )
+        if replaced_turn:
             await self.abort_turn()
         if self._state is not SessionState.IDLE or self._current_turn is not None:
             raise InvalidTransitionError("session", self._state, SessionState.LISTENING)
+        if not replaced_turn:
+            self._advance_queue_generation()
         turn = ConversationTurn()
         turn._start_capture()
         self._current_turn = turn
@@ -260,10 +281,8 @@ class DeviceSession:
 
     async def abort_turn(self) -> None:
         turn = self._current_turn
-        # Increment queue generation to drop any stale packets in flight
-        new_gen = self.ingress_queue.generation + 1
-        self.ingress_queue.set_generation(new_gen)
-        self.egress_queue.set_generation(new_gen)
+        # Increment queue generation to drop any stale packets in flight.
+        self._advance_queue_generation()
         # Reset the downlink pacing anchor so the next TTS stream starts fresh
         # instead of inheriting drift from the aborted stream.
         self.pacer.reset()
@@ -318,6 +337,12 @@ class DeviceSession:
         if self._current_turn is None:
             raise InvalidTransitionError("session", self._state, SessionState.LISTENING)
         return self._current_turn
+
+    def _advance_queue_generation(self) -> None:
+        """Starts a fresh I/O epoch and purges output from earlier turns."""
+        new_generation = max(self.ingress_queue.generation, self.egress_queue.generation) + 1
+        self.ingress_queue.set_generation(new_generation)
+        self.egress_queue.set_generation(new_generation)
 
     def _retire_turn(self, turn: ConversationTurn) -> None:
         if turn.generation:

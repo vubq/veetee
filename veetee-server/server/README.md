@@ -1,8 +1,9 @@
 # Veetee Server backend
 
 M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4 thêm OTA/config
-discovery responder; M1.5 thêm wire parser v1/v2/v3, PCM/codec boundary, bounded audio
-queue và packet pacer. Native Opus/resampler, database và provider AI chưa được tích hợp.
+discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TTS
+deterministic thành luồng device hoàn chỉnh. Native Opus/resampler, database và provider
+AI thật chưa được tích hợp.
 
 ## Local commands
 
@@ -27,6 +28,12 @@ Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format 
 bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.
 Các biến `VEETEE_AUDIO_*` trong `.env.example` giới hạn queue và pacing; chúng không chứa
 credential.
+
+M1.6 nhận audio hợp lệ trong khoảng `listen/start` đến `listen/stop`, rồi phát theo thứ
+tự `stt`, `tts/start`, `tts/sentence_start`, binary audio đã đóng frame theo protocol và
+`tts/stop`. Các biến `VEETEE_PIPELINE_*` chỉ cấu hình fake pipeline local; pipeline không
+gọi model, mạng hoặc secret. `abort` và `listen/start` mới tăng I/O generation, purge
+control/audio cũ và reset pacer.
 
 Runtime config dùng biến `VEETEE_` (xem `.env.example`). Không đặt secret vào
 `.env.example` hoặc log.

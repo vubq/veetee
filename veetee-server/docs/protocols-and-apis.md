@@ -76,6 +76,10 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
    - Device -> Server `abort` -> Idempotent abort active turn/generation.
 5. `listen`:
    - Device -> Server `listen`: `state` (`start`, `stop`, `detect`), `mode` (`auto`, `manual`, `realtime`). Quản lý state machine `DeviceSession`.
+   - Binary audio hợp lệ chỉ được enqueue từ `listen/start` tới `listen/stop`. Ngoài
+     `LISTENING`, frame hợp lệ bị drop; frame malformed/oversized vẫn đóng `1002`/`1009`.
+   - Từ M1.6, `listen/stop` chạy fake pipeline deterministic và server phát theo thứ tự
+     `stt` -> `tts/start` -> `tts/sentence_start` -> binary audio* -> `tts/stop`.
 6. `mcp` và unsupported frames:
    - Trả safe typed error envelope `veetee_invalid_input`. Tích hợp MCP pipeline hoãn lại M3.
 
@@ -142,8 +146,9 @@ Mỗi session có hai queue giới hạn đồng thời theo 3 chiều (items, b
   để giữ session sống, kết hợp `VEETEE_AUDIO_MAX_*`.
 - `egress_queue` (downlink tới device): policy `fail_session` — khi đầy do client chậm,
   raise `SlowClientQueueOverflowError` và đóng session (1009).
-- Mỗi item mang `generation`; `abort` tăng generation và purge toàn bộ frame cũ đang
-  trong queue, chặn stale audio chảy vào lượt mới.
+- Mỗi item mang `generation`; `abort`, barge-in và ranh giới `listen/start` của turn mới
+  tăng generation, purge toàn bộ control/audio cũ đang chờ và chặn output stale chảy vào
+  lượt mới.
 - `get()`/`close()` là cancellation-aware; `close()` đánh thức mọi waiter đang chờ.
 
 Golden vector cho v1/v2/v3 hợp lệ và malformed/truncated/oversized nằm tại

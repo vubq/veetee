@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     audio_max_queue_duration_ms: float = Field(default=10000.0, gt=0)
     audio_pacing_max_drift_ms: float = Field(default=100.0, gt=0)
 
+    # Fake AI Pipeline Settings (M1.6)
+    pipeline_vad_speech_threshold: float = Field(default=32.0, ge=0.0)
+    pipeline_vad_start_frames: int = Field(default=2, gt=0)
+    pipeline_vad_end_silence_frames: int = Field(default=3, gt=0)
+    pipeline_max_utterance_frames: int = Field(default=200, gt=0)
+    pipeline_tts_chunks_per_sentence: int = Field(default=3, gt=0)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -122,6 +129,12 @@ class Settings(BaseSettings):
         if self.audio_pacing_max_drift_ms >= self.audio_max_queue_duration_ms:
             raise ValueError(
                 "audio_pacing_max_drift_ms must be smaller than audio_max_queue_duration_ms"
+            )
+        # The VAD needs room to actually start a speech segment before the
+        # maximum utterance length forces it to close.
+        if self.pipeline_max_utterance_frames < self.pipeline_vad_start_frames:
+            raise ValueError(
+                "pipeline_max_utterance_frames must be at least pipeline_vad_start_frames"
             )
         return self
 
