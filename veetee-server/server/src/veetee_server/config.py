@@ -4,8 +4,12 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Veetee audio contract frame duration used in device hello negotiation.
+# Audio queue duration settings must always be able to hold at least one frame.
+_AUDIO_FRAME_DURATION_MS = 60.0
 
 
 def validate_device_websocket_url(url: str) -> tuple[bool, str | None]:
@@ -88,6 +92,12 @@ class Settings(BaseSettings):
     id_max_length: int = Field(default=128, gt=0)
     cleanup_timeout_seconds: float = Field(default=5.0, gt=0)
 
+    # Audio Primitives Settings (M1.5)
+    audio_max_queue_items: int = Field(default=100, gt=0)
+    audio_max_queue_bytes: int = Field(default=1048576, gt=0)
+    audio_max_queue_duration_ms: float = Field(default=10000.0, gt=0)
+    audio_pacing_max_drift_ms: float = Field(default=100.0, gt=0)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -97,6 +107,23 @@ class Settings(BaseSettings):
         if not valid:
             raise ValueError(f"Invalid device_websocket_public_url: {reason}")
         return v.strip()
+
+    @model_validator(mode="after")
+    def _validate_audio_constraints(self) -> "Settings":
+        # The audio queue must be able to hold at least one full 60 ms frame;
+        # a smaller budget makes every frame unschedulable by construction.
+        if self.audio_max_queue_duration_ms < _AUDIO_FRAME_DURATION_MS:
+            raise ValueError(
+                "audio_max_queue_duration_ms must be at least "
+                f"{_AUDIO_FRAME_DURATION_MS:.0f} ms (one audio frame)"
+            )
+        # Pacing drift budget must stay below the queue duration budget so a
+        # pacer reset can never exceed what the queue can buffer.
+        if self.audio_pacing_max_drift_ms >= self.audio_max_queue_duration_ms:
+            raise ValueError(
+                "audio_pacing_max_drift_ms must be smaller than audio_max_queue_duration_ms"
+            )
+        return self
 
 
 def get_effective_device_websocket_url(settings: Settings) -> str:

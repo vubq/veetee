@@ -130,3 +130,50 @@ def test_lifespan_resets_readiness() -> None:
     with TestClient(app):
         assert app.state.ready is True
     assert app.state.ready is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"audio_max_queue_duration_ms": 59.0},
+        {"audio_max_queue_duration_ms": 1.0},
+    ],
+)
+def test_audio_queue_duration_must_hold_one_frame(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(environment="test", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"audio_pacing_max_drift_ms": 10000.0},  # equal to queue duration
+        {"audio_pacing_max_drift_ms": 20000.0},  # larger than queue duration
+    ],
+)
+def test_audio_pacing_drift_must_be_below_queue_duration(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(environment="test", **kwargs)
+
+
+def test_audio_settings_defaults_are_valid() -> None:
+    settings = Settings(environment="test")
+    assert settings.audio_max_queue_items == 100
+    assert settings.audio_max_queue_bytes == 1048576
+    assert settings.audio_max_queue_duration_ms == 10000.0
+    assert settings.audio_pacing_max_drift_ms == 100.0
+    assert settings.audio_pacing_max_drift_ms < settings.audio_max_queue_duration_ms
+
+
+def test_audio_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEETEE_AUDIO_MAX_QUEUE_ITEMS", "50")
+    monkeypatch.setenv("VEETEE_AUDIO_MAX_QUEUE_BYTES", "65536")
+    monkeypatch.setenv("VEETEE_AUDIO_MAX_QUEUE_DURATION_MS", "5000.0")
+    monkeypatch.setenv("VEETEE_AUDIO_PACING_MAX_DRIFT_MS", "250.0")
+
+    settings = Settings(environment="test")
+
+    assert settings.audio_max_queue_items == 50
+    assert settings.audio_max_queue_bytes == 65536
+    assert settings.audio_max_queue_duration_ms == 5000.0
+    assert settings.audio_pacing_max_drift_ms == 250.0

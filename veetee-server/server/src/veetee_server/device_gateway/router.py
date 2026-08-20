@@ -7,6 +7,16 @@ from time import monotonic
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from veetee_server.audio import (
+    AudioProtocolError,
+    AudioQueueItem,
+    BoundedAudioQueue,
+    OverflowPolicy,
+    OversizedAudioFrameError,
+    PacketPacer,
+    SlowClientQueueOverflowError,
+    parse_audio_frame,
+)
 from veetee_server.config import Settings, get_settings
 from veetee_server.domain.errors import InvalidTransitionError
 from veetee_server.domain.session import DeviceSession, SessionState
@@ -132,6 +142,22 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             device_id=device_id,
             client_id=client_id,
             cleanup_timeout_seconds=settings.cleanup_timeout_seconds,
+            protocol_version=auth_result.protocol_version,
+            pacer=PacketPacer(
+                max_drift_seconds=settings.audio_pacing_max_drift_ms / 1000.0,
+            ),
+            ingress_queue=BoundedAudioQueue(
+                max_items=settings.audio_max_queue_items,
+                max_bytes=settings.audio_max_queue_bytes,
+                max_duration_ms=settings.audio_max_queue_duration_ms,
+                overflow_policy=OverflowPolicy.DROP_OLDEST,
+            ),
+            egress_queue=BoundedAudioQueue(
+                max_items=settings.audio_max_queue_items,
+                max_bytes=settings.audio_max_queue_bytes,
+                max_duration_ms=settings.audio_max_queue_duration_ms,
+                overflow_policy=OverflowPolicy.FAIL_SESSION,
+            ),
         )
         session.accept()
         if registry is not None:
@@ -205,7 +231,46 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json(env)
                     await websocket.close(code=1009)
                     break
-                # Accept/drop binary frame safely (audio decoder in M1.5)
+                try:
+                    packet = parse_audio_frame(
+                        binary_data,
+                        negotiated_version=session.protocol_version,
+                        max_payload_bytes=settings.binary_max_bytes,
+                    )
+                    item = AudioQueueItem(
+                        payload=packet.payload,
+                        duration_ms=60.0,
+                        generation=session.ingress_queue.generation,
+                        timestamp_ms=packet.timestamp_ms,
+                    )
+                    await session.ingress_queue.put(item)
+                except OversizedAudioFrameError:
+                    env = make_error_envelope(
+                        "veetee_invalid_input",
+                        "Audio payload size limit exceeded",
+                        session_id=str(session.id),
+                    )
+                    await websocket.send_json(env)
+                    await websocket.close(code=1009)
+                    break
+                except AudioProtocolError as exc:
+                    env = make_error_envelope(
+                        "veetee_invalid_input",
+                        f"Malformed binary audio frame: {exc}",
+                        session_id=str(session.id),
+                    )
+                    await websocket.send_json(env)
+                    await websocket.close(code=1002)
+                    break
+                except SlowClientQueueOverflowError:
+                    env = make_error_envelope(
+                        "veetee_invalid_input",
+                        "Audio queue overflow",
+                        session_id=str(session.id),
+                    )
+                    await websocket.send_json(env)
+                    await websocket.close(code=1009)
+                    break
                 continue
 
             # Text Frame Processing

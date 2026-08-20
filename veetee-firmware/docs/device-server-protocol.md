@@ -7,7 +7,8 @@ Endpoint chính thức: `/api/v1/devices/ws`
 ### Requirements & Defaults M1.3
 - **Handshake Headers**:
   - `Authorization: Bearer <opaque_token>` (xác thực constant-time với token gateway)
-  - `Protocol-Version: 1`
+  - `Protocol-Version: 1 | 2 | 3` (server hỗ trợ cả ba từ M1.5; version quyết định
+    wire format binary audio frame của session)
   - `Device-Id: <id>` (non-empty, <= 128 ký tự)
   - `Client-Id: <id>` (non-empty, <= 128 ký tự)
 - **Timeouts & Boundaries**:
@@ -23,14 +24,16 @@ Endpoint chính thức: `/api/v1/devices/ws`
   - Downlink response: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque_uuid>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`
 - **Close Codes & Errors**:
   - `1008`: Auth / missing header / hello timeout / schema error / session mismatch
-  - `1009`: Oversized JSON (>16 KiB) or binary (>64 KiB)
-  - `1002`: Binary received before hello
+  - `1009`: Oversized JSON (>16 KiB), binary (>64 KiB) hoặc payload khai báo vượt giới hạn
+  - `1002`: Binary received before hello; binary audio frame malformed/truncated hoặc
+    header version không khớp version đã thương lượng
   - `1001`: Idle timeout
   - `1000`: Goodbye normal close
   - `1012`: Graceful server shutdown
   - Safe error envelope: `{"code": "veetee_*", "message": "...", "session_id": "..."}`
-- **Deferred in M1.3**:
-  - Audio Opus decoding/resampling pipeline hoãn lại M1.5.
+- **Deferred**:
+  - Native Opus decode/encode thật và resampling hoãn tới khi tích hợp libopus
+    (`veetee_server.audio` chỉ có fake deterministic + deferred boundary).
   - Device MCP integration full tool call hoãn lại M3.
 
 ---
@@ -91,15 +94,34 @@ Header quan sát:
 Server phản hồi `type=hello`, `transport=websocket`, `session_id` và audio params. Nếu
 không có hello hợp lệ trong khoảng 10 giây theo implementation tham khảo, open thất bại.
 
-### Binary frame
+### Binary frame (Quyết định Veetee - M1.5)
 
-- Version 1: raw Opus payload.
-- Version 2: header packed gồm version, type, reserved, timestamp 32-bit,
-  payload size 32-bit, sau đó payload.
-- Version 3: header nhỏ gồm type 8-bit, reserved 8-bit, payload size 16-bit.
+Wire format theo `Protocol-Version` đã thương lượng. Mọi số nguyên đa byte dùng
+**network byte order (big-endian)**:
 
-Cần quy định rõ byte order khi viết implementation mới; việc copy C struct packed trực
-tiếp giữa kiến trúc là rủi ro nếu đặc tả không chốt endianness.
+- **Version 1**: raw Opus payload — toàn bộ binary frame là payload, không header.
+- **Version 2**: header 16 byte:
+  ```text
+  | version u16 | type u16 | reserved u32 | timestamp_ms u32 | payload_size u32 | payload |
+  ```
+  `version=2`, `type=0` (OPUS), `reserved=0`; `payload_size` phải khớp đúng payload còn
+  lại (frame dài đúng `16 + payload_size`); `timestamp_ms` là epoch milliseconds.
+- **Version 3**: header 4 byte:
+  ```text
+  | type u8 | reserved u8 | payload_size u16 | payload |
+  ```
+  `type=0` (OPUS), `reserved=0`; frame dài đúng `4 + payload_size`; không có timestamp.
+
+Server từ chối frame malformed/truncated/oversized bằng error envelope an toàn và close
+code tương ứng (1002 cho malformed/mismatch, 1009 cho quá kích thước). Golden vector hợp
+lệ và malformed nằm tại `../veetee-server/contracts/device/audio_v{1,2,3}_golden.json` và
+`audio_malformed_golden.json`.
+
+Server giới hạn queue audio uplink/downlink theo items, bytes và thời lượng
+(`VEETEE_AUDIO_MAX_QUEUE_*`): uplink dùng `drop_oldest`, downlink dùng `fail_session`
+(đóng 1009 khi client chậm). `abort` tăng generation và purge mọi frame cũ đang chờ, nên
+thiết bị phải gửi `abort` để hủy luồng cũ thay vì chỉ ngừng đọc. Native Opus decode/encode
+server hoãn tới khi tích hợp libopus; hiện tại dùng fake deterministic cho test pipeline.
 
 ## MQTT control và UDP audio
 

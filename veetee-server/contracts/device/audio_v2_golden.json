@@ -1,0 +1,16 @@
+{
+  "description": "Golden test vectors for Veetee Device Audio Binary Protocol Version 2",
+  "version": 2,
+  "vectors": [
+    {
+      "name": "v2_valid_header_and_payload",
+      "hex_payload": "0002000000000000000003e800000008f8fffe0102030405",
+      "expected": {
+        "protocol_version": 2,
+        "type": 0,
+        "timestamp_ms": 1000,
+        "payload_size": 8
+      }
+    }
+  ]
+}

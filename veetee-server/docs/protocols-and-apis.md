@@ -11,9 +11,12 @@ ws://<host>:<port>/api/v1/devices/ws
 ### Handshake HTTP Headers
 
 - `Authorization: Bearer <token>` (Bắt buộc; so sánh constant-time với `VEETEE_DEVICE_GATEWAY_TOKEN`).
-- `Protocol-Version: 1` (Bắt buộc; chỉ hỗ trợ version 1).
+- `Protocol-Version: 1 | 2 | 3` (Bắt buộc; server hỗ trợ 1, 2 và 3 từ M1.5).
 - `Device-Id: <string>` (Bắt buộc; non-empty, tối đa `VEETEE_ID_MAX_LENGTH=128`).
 - `Client-Id: <string>` (Bắt buộc; non-empty, tối đa `VEETEE_ID_MAX_LENGTH=128`).
+
+Protocol version xác định wire format cho toàn bộ binary audio frame của session; version
+2 và 3 thêm header frame nhị phân, version 1 là raw payload Opus (xem mục Binary Frames).
 
 ### Quy định Frame & Payload Limits
 
@@ -23,8 +26,15 @@ ws://<host>:<port>/api/v1/devices/ws
 - `VEETEE_PONG_TIMEOUT_SECONDS`: 10.0s.
 - `VEETEE_JSON_MAX_BYTES`: 16384 bytes (16 KiB).
 - `VEETEE_JSON_MAX_DEPTH`: 8.
-- `VEETEE_BINARY_MAX_BYTES`: 65536 bytes (64 KiB).
+- `VEETEE_BINARY_MAX_BYTES`: 65536 bytes (64 KiB) — áp dụng cho tổng frame binary
+  (header + payload) và cho payload khai báo trong header v2/v3.
 - `VEETEE_CLEANUP_TIMEOUT_SECONDS`: 5.0s.
+- `VEETEE_AUDIO_MAX_QUEUE_ITEMS`: 100 — giới hạn số item mỗi queue audio.
+- `VEETEE_AUDIO_MAX_QUEUE_BYTES`: 1048576 (1 MiB) — giới hạn tổng payload mỗi queue audio.
+- `VEETEE_AUDIO_MAX_QUEUE_DURATION_MS`: 10000.0 — giới hạn tổng thời lượng audio mỗi queue;
+  phải >= 60ms (một audio frame) theo validator config.
+- `VEETEE_AUDIO_PACING_MAX_DRIFT_MS`: 100.0 — drift tối đa của downlink pacer trước khi reset
+  anchor; phải nhỏ hơn `audio_max_queue_duration_ms` theo validator config.
 
 ### Error Envelope Format
 
@@ -44,9 +54,11 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
 
 - `1000`: Goodbye / normal closure.
 - `1001`: Idle timeout.
-- `1002`: Protocol confusion (ví dụ nhận binary frame trước hello).
+- `1002`: Protocol confusion (binary frame trước hello; binary audio frame malformed,
+  truncation hoặc header version mismatch với version đã thương lượng).
 - `1008`: Header/Auth failure, Hello timeout, schema violation, duplicate hello, session mismatch.
-- `1009`: Message too big (vượt quá 16 KiB JSON hoặc 64 KiB binary).
+- `1009`: Message too big (JSON > 16 KiB, binary > 64 KiB, hoặc payload khai báo trong
+  header v2/v3 vượt `VEETEE_BINARY_MAX_BYTES`).
 - `1011`: Internal server error.
 - `1012`: Service restart / graceful shutdown.
 
@@ -70,7 +82,72 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
 ### Binary Frames
 
 - Binary trước hello: protocol error (close 1002).
-- Binary sau hello: kiểm tra size <= 64 KiB và accept/drop an toàn. Audio decoding/Opus pipeline hoãn lại M1.5.
+- Binary sau hello: parse theo `Protocol-Version` đã thương lượng trong handshake.
+
+#### Wire format (Quyết định Veetee - M1.5)
+
+Mọi số nguyên đa byte dùng **network byte order (big-endian)**.
+
+**Version 1 — raw Opus:**
+
+```text
+| Opus payload (len = độ dài frame) |
+```
+
+Không có header. Toàn bộ binary frame là payload Opus; timestamp không có trên wire.
+`VEETEE_BINARY_MAX_BYTES` áp dụng cho toàn bộ frame.
+
+**Version 2 — header 16 byte:**
+
+```text
+| version (u16) | type (u16) | reserved (u32) | timestamp_ms (u32) | payload_size (u32) | payload |
+```
+
+- `version` phải là `2`; `type` phải là `0` (OPUS); `reserved` phải là `0`.
+- `timestamp_ms` là epoch milliseconds của frame (giá trị 0 được encode khi không có).
+- `payload_size` phải bằng đúng số byte payload còn lại; frame dài đúng
+  `16 + payload_size`. Không cho phép padding.
+
+**Version 3 — header 4 byte:**
+
+```text
+| type (u8) | reserved (u8) | payload_size (u16) | payload |
+```
+
+- `type` phải là `0` (OPUS); `reserved` phải là `0`.
+- `payload_size` là u16; frame dài đúng `4 + payload_size`. Không có timestamp trên wire.
+
+Mọi violation cấu trúc (truncated header/payload, type hoặc reserved sai, payload size
+không khớp, version mismatch với negotiated version) trả error envelope
+`veetee_invalid_input` và đóng close 1002. Frame vượt `VEETEE_BINARY_MAX_BYTES` (tổng độ
+dài hoặc `payload_size` khai báo) trả `veetee_invalid_input` và đóng close 1009.
+
+#### Native Opus (hoãn lại - M1.5)
+
+M1.5 chưa decode Opus thật. Binary frame được parse, validate và đưa vào **bounded
+ingress queue** của session; `veetee_server.audio` cung cấp sẵn:
+
+- `FakeOpusEncoder`/`FakeOpusDecoder`: fake deterministic để test pipeline khi chưa có
+  libopus.
+- `DeferredNativeAudioDecoder`/`DeferredNativeAudioEncoder`/`DeferredNativeAudioResampler`:
+  boundary production raise `DeferredNativeCodecError`/`DeferredNativeResamplerError` cho
+  tới khi native libopus được tích hợp; riêng resampler cho phép passthrough khi
+  source_format == target_format sau khi validate PCM buffer.
+
+#### Queue policy (M1.5)
+
+Mỗi session có hai queue giới hạn đồng thời theo 3 chiều (items, bytes, duration_ms):
+
+- `ingress_queue` (uplink từ device): policy `drop_oldest` — khi đầy, item cũ nhất bị bỏ
+  để giữ session sống, kết hợp `VEETEE_AUDIO_MAX_*`.
+- `egress_queue` (downlink tới device): policy `fail_session` — khi đầy do client chậm,
+  raise `SlowClientQueueOverflowError` và đóng session (1009).
+- Mỗi item mang `generation`; `abort` tăng generation và purge toàn bộ frame cũ đang
+  trong queue, chặn stale audio chảy vào lượt mới.
+- `get()`/`close()` là cancellation-aware; `close()` đánh thức mọi waiter đang chờ.
+
+Golden vector cho v1/v2/v3 hợp lệ và malformed/truncated/oversized nằm tại
+`../contracts/device/audio_v{1,2,3}_golden.json` và `audio_malformed_golden.json`.
 
 ---
 

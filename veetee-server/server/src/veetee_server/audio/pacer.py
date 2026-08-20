@@ -1,0 +1,88 @@
+"""Monotonic clock audio packet pacer with drift prevention and cancellation awareness."""
+
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from .protocol import AudioError
+
+# Minimum meaningful sleep duration in seconds; anything below this is treated
+# as zero to avoid float-precision no-op sleeps.
+_MIN_SLEEP_SECONDS = 1e-6
+
+
+class PacerError(AudioError):
+    """Base exception for audio pacer errors."""
+
+
+class PacketPacer:
+    """Paces downlink audio packets based on monotonic clock time without accumulating drift.
+
+    Features:
+    - Monotonic time tracking.
+    - Prevents negative sleep.
+    - Prevents accumulation of drift under backpressure or delays by resetting timing anchor.
+    - Injectable clock and sleeper for deterministic testing with fake clocks.
+    """
+
+    def __init__(
+        self,
+        max_drift_seconds: float = 0.1,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], Awaitable[Any]] | None = None,
+    ) -> None:
+        if max_drift_seconds <= 0:
+            raise ValueError("max_drift_seconds must be positive")
+
+        self.max_drift_seconds = max_drift_seconds
+        self.clock = clock
+        self.sleeper = sleeper or asyncio.sleep
+
+        self._next_send_time: float | None = None
+
+    def reset(self) -> None:
+        """Resets pacing anchor state."""
+        self._next_send_time = None
+
+    async def pace(self, frame_duration_seconds: float) -> float:
+        """Paces next frame based on duration in seconds.
+
+        Returns actual sleep duration executed (in seconds).
+        Raises asyncio.CancelledError if sleeping task is cancelled.
+        """
+        if frame_duration_seconds < 0:
+            raise ValueError("frame_duration_seconds cannot be negative")
+        if frame_duration_seconds == 0:
+            return 0.0
+
+        now = self.clock()
+
+        if self._next_send_time is None:
+            self._next_send_time = now + frame_duration_seconds
+            return 0.0
+
+        target_time = self._next_send_time
+        sleep_time = target_time - now
+
+        # Clamp sub-microsecond sleeps to zero: float accumulation across a long
+        # stream can produce meaningless positive deltas (e.g. 5.5e-17 s) that
+        # would otherwise trigger a no-op sleep every frame.
+        if 0.0 < sleep_time < _MIN_SLEEP_SECONDS:
+            sleep_time = 0.0
+
+        if sleep_time < -self.max_drift_seconds:
+            # Accumulated drift exceeds max limit -> reset anchor to now
+            self._next_send_time = now + frame_duration_seconds
+            sleep_time = 0.0
+        elif sleep_time < 0.0:
+            # Slightly behind schedule -> no sleep, schedule next frame relative to target
+            sleep_time = 0.0
+            self._next_send_time = target_time + frame_duration_seconds
+        else:
+            self._next_send_time = target_time + frame_duration_seconds
+
+        if sleep_time > 0.0:
+            await self.sleeper(sleep_time)
+
+        return max(0.0, sleep_time)

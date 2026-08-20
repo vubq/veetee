@@ -2,9 +2,10 @@
 
 ## Trạng thái hiện tại
 
-`veetee-server` là không gian phát triển server và web console của Veetee. Source đầu
-tiên hiện có là bộ UX/UI frontend Vue 3 + Vite responsive trong `web/`; backend, database
-schema, deployment manifest và API chính thức chưa được triển khai.
+`veetee-server` là không gian phát triển server và web console của Veetee. Backend FastAPI
+hiện có nền tảng M1, state machine, Device WebSocket, OTA discovery và audio primitives;
+frontend Vue 3 + Vite nằm trong `web/`. Database, provider AI production và deployment
+manifest chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model
@@ -21,16 +22,15 @@ veetee-server/
 |-- README.md       # Điểm bắt đầu cho người dùng
 |-- AGENTS.md       # Hướng dẫn thao tác cho AI/contributor
 |-- docs/           # Ghi chú kỹ thuật rút ra từ source tham khảo
-|-- server/         # Khung backend Python, chưa triển khai
+|-- server/         # Backend FastAPI và test M1
 |-- web/            # Veetee Console Vue 3 + Vite
-|-- contracts/      # Khung contract device/web, chưa triển khai
+|-- contracts/      # Golden vectors device/web
 |-- deploy/         # Khung vận hành local, chưa triển khai
 `-- references/     # Upstream chỉ dùng để đọc, đối chiếu và thử nghiệm riêng
 ```
 
-Frontend được triển khai từng bước theo yêu cầu UI. Các phần backend, contract và vận
-hành vẫn chỉ là khung thư mục cho đến khi có yêu cầu cụ thể. Không có service nào trong
-`references/` được mặc định coi là service của Veetee.
+Backend và contract đang được triển khai theo các mốc trong kế hoạch chính thức. Không có
+service nào trong `references/` được mặc định coi là service của Veetee.
 
 ## Bắt đầu từ đâu
 
@@ -80,8 +80,8 @@ yêu cầu
   -> cập nhật tài liệu và cách vận hành
 ```
 
-Lệnh frontend local nằm trong [web/README.md](web/README.md). Backend chưa có lệnh
-run/build/test. Lệnh upstream chỉ được dùng để chạy test harness theo
+Lệnh frontend local nằm trong [web/README.md](web/README.md); lệnh backend nằm trong
+[server/README.md](server/README.md). Lệnh upstream chỉ được dùng để chạy test harness theo
 `../docs/server-first-development.md`, không mặc nhiên trở thành quy trình build/deploy
 của Veetee.
 

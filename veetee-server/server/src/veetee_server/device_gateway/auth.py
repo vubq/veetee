@@ -11,6 +11,7 @@ class AuthResult(NamedTuple):
     error_message: str | None
     device_id: str | None
     client_id: str | None
+    protocol_version: int = 1
 
 
 def validate_handshake_headers(
@@ -54,14 +55,16 @@ def validate_handshake_headers(
 
     # 2. Protocol-Version header
     proto_ver = normalized_headers.get("protocol-version")
-    if proto_ver != "1":
+    if proto_ver not in ("1", "2", "3"):
         return AuthResult(
             False,
             "veetee_invalid_input",
-            "Unsupported or missing Protocol-Version header (expected 1)",
+            "Unsupported or missing Protocol-Version header (expected 1, 2, or 3)",
             None,
             None,
+            1,
         )
+    version = int(proto_ver)
 
     # 3. Device-Id header
     device_id = normalized_headers.get("device-id")
@@ -91,4 +94,5 @@ def validate_handshake_headers(
         None,
         device_id.strip(),
         client_id.strip(),
+        version,
     )

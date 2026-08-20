@@ -1,7 +1,8 @@
 # Veetee Server backend
 
-M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm device WebSocket; M1.4 thêm OTA/config
-discovery responder. Chưa có database, migration hoặc AI provider.
+M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4 thêm OTA/config
+discovery responder; M1.5 thêm wire parser v1/v2/v3, PCM/codec boundary, bounded audio
+queue và packet pacer. Native Opus/resampler, database và provider AI chưa được tích hợp.
 
 ## Local commands
 
@@ -21,6 +22,11 @@ Endpoints hiện có:
   (server time, WebSocket URL/token, firmware no-update). Contract chi tiết ở
   `../docs/protocols-and-apis.md`; golden vector ở `../contracts/device/`.
 - `WS /api/v1/devices/ws`: device gateway (hello/listen/abort/ping/pong/goodbye).
+
+Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format contract,
+bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.
+Các biến `VEETEE_AUDIO_*` trong `.env.example` giới hạn queue và pacing; chúng không chứa
+credential.
 
 Runtime config dùng biến `VEETEE_` (xem `.env.example`). Không đặt secret vào
 `.env.example` hoặc log.

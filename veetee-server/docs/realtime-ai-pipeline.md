@@ -102,6 +102,34 @@ Những điểm cần đo riêng:
 Cần giới hạn queue theo byte/thời gian, drop theo policy rõ ràng và cancellation xuyên
 suốt pipeline. Queue không giới hạn sẽ biến kết nối chậm thành memory leak.
 
+## Audio primitives (M1.5 - Quyết định Veetee)
+
+`veetee_server.audio` cung cấp các primitives được dùng bởi device gateway và sẽ được
+dùng bởi pipeline M1.6 trở đi:
+
+- **Bounded queue** (`BoundedAudioQueue`): giới hạn đồng thời theo item count, tổng bytes
+  và tổng thời lượng (ms). Overflow policy:
+  - `DROP_OLDEST`: ingress — đánh rơi item cũ nhất khi đầy.
+  - `REJECT_NEW`: từ chối item mới (trả `False`).
+  - `FAIL_SESSION`: egress — client chậm khiến queue đầy sẽ ném
+    `SlowClientQueueOverflowError` để server đóng session.
+  - Item quá lớn hơn capacity tổng bị drop/reject/raise tùy policy.
+- **Generation filtering**: mỗi item mang generation của queue; `set_generation` purge
+  ngay frame cũ (abort/barge-in), `get`/`drain` tự bỏ item stale.
+- **Cancellation awareness**: `get` chờ trên `asyncio.Condition` và bị `CancelledError`
+  sạch khi task bị hủy; `close()` đánh thức mọi waiter.
+- **Packet pacer** (`PacketPacer`): paced downlink theo monotonic clock, không sleep âm,
+  drift vượt `VEETEE_AUDIO_PACING_MAX_DRIFT_MS` thì reset anchor thay vì tích lũy;
+  `reset()` được gọi khi abort để stream TTS kế tiếp không kế thừa drift. Sleep dưới
+  1 microsecond được clamp về 0 tránh float no-op.
+- **Codec boundaries**: fake encoder/decoder deterministic cho test; deferred native
+  boundary raise khi chưa có libopus; resampler passthrough khi cùng format, cấm
+  interpolation giả khi khác format.
+
+Các settings áp dụng: `VEETEE_AUDIO_MAX_QUEUE_ITEMS`, `VEETEE_AUDIO_MAX_QUEUE_BYTES`,
+`VEETEE_AUDIO_MAX_QUEUE_DURATION_MS`, `VEETEE_AUDIO_PACING_MAX_DRIFT_MS` (validator bảo
+đảm duration >= 60ms và drift < duration).
+
 ## Cleanup và failure mode
 
 - Device chưa bind: drop message và phát bind prompt theo interval.

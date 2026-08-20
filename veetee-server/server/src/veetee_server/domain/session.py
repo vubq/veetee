@@ -11,6 +11,9 @@ from types import MappingProxyType
 from typing import Any
 from uuid import UUID, uuid4
 
+from veetee_server.audio.pacer import PacketPacer
+from veetee_server.audio.queue import BoundedAudioQueue, OverflowPolicy
+
 from .errors import CleanupTimeoutError, InvalidTransitionError, StaleGenerationError
 
 
@@ -194,6 +197,14 @@ class DeviceSession:
     created_at: datetime = field(default_factory=_now)
     cancellation: CancellationScope = field(default_factory=CancellationScope)
     cleanup_timeout_seconds: float = 2.0
+    protocol_version: int = 1
+    pacer: PacketPacer = field(default_factory=PacketPacer)
+    ingress_queue: BoundedAudioQueue = field(
+        default_factory=lambda: BoundedAudioQueue(overflow_policy=OverflowPolicy.DROP_OLDEST)
+    )
+    egress_queue: BoundedAudioQueue = field(
+        default_factory=lambda: BoundedAudioQueue(overflow_policy=OverflowPolicy.FAIL_SESSION)
+    )
     _state: SessionState = field(default=SessionState.CONNECTING, init=False, repr=False)
     _current_turn: ConversationTurn | None = field(default=None, init=False, repr=False)
     _generations: dict[UUID, Generation] = field(default_factory=dict, init=False, repr=False)
@@ -249,6 +260,13 @@ class DeviceSession:
 
     async def abort_turn(self) -> None:
         turn = self._current_turn
+        # Increment queue generation to drop any stale packets in flight
+        new_gen = self.ingress_queue.generation + 1
+        self.ingress_queue.set_generation(new_gen)
+        self.egress_queue.set_generation(new_gen)
+        # Reset the downlink pacing anchor so the next TTS stream starts fresh
+        # instead of inheriting drift from the aborted stream.
+        self.pacer.reset()
         if turn is None:
             if self._state not in {SessionState.CLOSING, SessionState.CLOSED}:
                 self._transition_to_idle()
@@ -282,6 +300,8 @@ class DeviceSession:
             except CleanupTimeoutError as error:
                 cleanup_error = cleanup_error or error
         finally:
+            self.ingress_queue.close()
+            self.egress_queue.close()
             self._current_turn = None
             self._generations.clear()
             self._transition(SessionState.CLOSED)

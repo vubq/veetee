@@ -108,7 +108,9 @@ def test_happy_path_handshake_and_hello(
     [
         ({"Authorization": "Bearer wrong-token"}, "veetee_auth_failed"),
         ({"Authorization": "Basic wrong-token"}, "veetee_auth_failed"),
-        ({"Protocol-Version": "2"}, "veetee_invalid_input"),
+        ({"Protocol-Version": "0"}, "veetee_invalid_input"),
+        ({"Protocol-Version": "4"}, "veetee_invalid_input"),
+        ({"Protocol-Version": "abc"}, "veetee_invalid_input"),
         ({"Device-Id": ""}, "veetee_invalid_input"),
         ({"Client-Id": ""}, "veetee_invalid_input"),
         ({"Device-Id": "a" * 129}, "veetee_invalid_input"),
@@ -636,3 +638,235 @@ def test_readiness_reflects_gateway_token_configuration() -> None:
         resp = client.get("/readyz")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ready"
+
+
+# --- M1.5 Audio binary frame integration ---
+
+V1_FRAME = bytes.fromhex("f8fffe0102030405")
+V2_FRAME = bytes.fromhex("0002000000000000000003e800000008f8fffe0102030405")
+V3_FRAME = bytes.fromhex("00000008f8fffe0102030405")
+
+
+def _headers_with_version(version: int) -> dict[str, str]:
+    return {
+        "Authorization": "Bearer secret-gateway-token",
+        "Protocol-Version": str(version),
+        "Device-Id": "test-device-001",
+        "Client-Id": "test-client-001",
+    }
+
+
+def _sync_with_ping(ws: Any, session_id: str) -> None:
+    """Round-trips a ping so the server has processed prior frames."""
+    ws.send_json({"type": "ping", "session_id": session_id})
+    assert ws.receive_json() == {"type": "pong", "session_id": session_id}
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_protocol_negotiation_binary_roundtrip(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+    version: int,
+) -> None:
+    """Handshake with Protocol-Version 1/2/3 must accept valid binary frames."""
+    app = create_app(test_settings)
+    frames = {1: V1_FRAME, 2: V2_FRAME, 3: V3_FRAME}
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/v1/devices/ws", headers=_headers_with_version(version)
+        ) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+
+            ws.send_bytes(frames[version])
+            _sync_with_ping(ws, session_id)
+
+            session = _first_registered_session(app)
+            assert session is not None
+            assert session.protocol_version == version
+            assert session.ingress_queue.item_count == 1
+
+
+@pytest.mark.parametrize(
+    "version, frame",
+    [(1, V1_FRAME), (2, V2_FRAME), (3, V3_FRAME)],
+)
+def test_valid_binary_frame_queued_with_metadata(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+    version: int,
+    frame: bytes,
+) -> None:
+    """Valid binary frames are parsed and queued with the right payload/timestamp."""
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/v1/devices/ws", headers=_headers_with_version(version)
+        ) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+
+            ws.send_bytes(frame)
+            _sync_with_ping(ws, session_id)
+
+            session = _first_registered_session(app)
+            assert session is not None
+            item = session.ingress_queue.drain()[0]
+            assert item.payload == bytes.fromhex("f8fffe0102030405")
+            assert item.duration_ms == 60.0
+            if version == 2:
+                assert item.timestamp_ms == 1000
+            else:
+                assert item.timestamp_ms is None
+
+
+def test_malformed_binary_frame_closes_1002(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """Truncated/structurally invalid frames raise protocol error and close 1002."""
+    app = create_app(test_settings)
+    # Negotiated v2 but the header is truncated (2 bytes only).
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(2)) as ws:
+            ws.send_json(valid_hello_payload)
+            ws.receive_json()
+
+            ws.send_bytes(b"\x00\x02")
+            err = ws.receive_json()
+            assert err["code"] == "veetee_invalid_input"
+            assert "Malformed" in err["message"]
+
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1002
+
+
+def test_protocol_version_mismatch_binary_closes_1002(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """Negotiated v2 receiving a v3 header version is a protocol mismatch -> 1002."""
+    app = create_app(test_settings)
+    v3_header_frame = bytes.fromhex("0003000000000000000003e800000008f8fffe0102030405")
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(2)) as ws:
+            ws.send_json(valid_hello_payload)
+            ws.receive_json()
+
+            ws.send_bytes(v3_header_frame)
+            err = ws.receive_json()
+            assert err["code"] == "veetee_invalid_input"
+
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1002
+
+
+def test_oversized_binary_frame_closes_1009(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """Frame length above binary_max_bytes closes with 1009 (message too big)."""
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(1)) as ws:
+            ws.send_json(valid_hello_payload)
+            ws.receive_json()
+
+            ws.send_bytes(b"\x00" * 2000)  # binary_max_bytes=1024 in fixture
+            err = ws.receive_json()
+            assert err["code"] == "veetee_invalid_input"
+            assert "size limit" in err["message"]
+
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1009
+
+
+def test_oversized_declared_payload_closes_1009(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """Declared V2 payload size above the max is rejected even if the frame is short."""
+    app = create_app(test_settings)
+    # Header declares payload_size = 0x00010001 (65537) > binary_max_bytes=1024.
+    oversized_v2 = bytes.fromhex("0002000000000000000003e800010001f8")
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(2)) as ws:
+            ws.send_json(valid_hello_payload)
+            ws.receive_json()
+
+            ws.send_bytes(oversized_v2)
+            err = ws.receive_json()
+            assert err["code"] == "veetee_invalid_input"
+            assert "size limit" in err["message"]
+
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1009
+
+
+def test_abort_purges_stale_audio_from_queue(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """Abort bumps queue generation so in-flight frames are dropped immediately."""
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(1)) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+
+            ws.send_json(
+                {"type": "listen", "state": "start", "mode": "auto", "session_id": session_id}
+            )
+            _sync_with_ping(ws, session_id)
+
+            ws.send_bytes(V1_FRAME)
+            _sync_with_ping(ws, session_id)
+
+            session = _first_registered_session(app)
+            assert session is not None
+            assert session.ingress_queue.item_count == 1
+            assert session.ingress_queue.generation == 0
+
+            ws.send_json({"type": "abort", "session_id": session_id})
+            _sync_with_ping(ws, session_id)
+
+            # Generation advanced and stale frames were purged.
+            assert session.ingress_queue.generation == 1
+            assert session.ingress_queue.item_count == 0
+            assert session.egress_queue.generation == 1
+            assert session.state is SessionState.IDLE
+
+
+def test_session_close_cleans_up_queues_and_websocket(
+    test_settings: Settings,
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    """A closed session must leave both audio queues closed and unregister."""
+    app = create_app(test_settings)
+    registry = app.state.device_session_registry
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers_with_version(3)) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+            ws.send_bytes(V3_FRAME)
+            _sync_with_ping(ws, session_id)
+
+            session = _first_registered_session(app)
+            assert session is not None
+            assert registry.active_count == 1
+
+            ws.send_json({"type": "goodbye", "session_id": session_id})
+            assert ws.receive_json() == {"type": "goodbye", "session_id": session_id}
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1000
+
+        # Context exit guarantees the handler finished cleanup.
+        assert session.state is SessionState.CLOSED
+        assert session.ingress_queue.is_closed
+        assert session.egress_queue.is_closed
+        assert registry.active_count == 0

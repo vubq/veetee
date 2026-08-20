@@ -1,0 +1,92 @@
+{
+  "description": "Golden test vectors for malformed/invalid Veetee Device Audio Binary frames",
+  "vectors": [
+    {
+      "name": "empty_frame",
+      "version": 1,
+      "hex_payload": "",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v1_oversized_raw_opus",
+      "version": 1,
+      "max_payload_bytes": 4,
+      "hex_payload": "f8fffe0102030405",
+      "expected_error": "OversizedAudioFrameError"
+    },
+    {
+      "name": "v2_truncated_header",
+      "version": 2,
+      "hex_payload": "0002000000000000",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v2_truncated_payload",
+      "version": 2,
+      "hex_payload": "0002000000000000000003e800000008f8ff",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v2_version_mismatch",
+      "version": 2,
+      "hex_payload": "0003000000000000000003e800000008f8fffe0102030405",
+      "expected_error": "ProtocolVersionMismatchError"
+    },
+    {
+      "name": "v2_invalid_type",
+      "version": 2,
+      "hex_payload": "0002000100000000000003e800000008f8fffe0102030405",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v2_nonzero_reserved",
+      "version": 2,
+      "hex_payload": "0002000000000001000003e800000008f8fffe0102030405",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v2_oversized_declared_len",
+      "version": 2,
+      "hex_payload": "0002000000000000000003e800010001f8",
+      "expected_error": "OversizedAudioFrameError"
+    },
+    {
+      "name": "v2_oversized_declared_exact_boundary",
+      "version": 2,
+      "max_payload_bytes": 8,
+      "hex_payload": "0002000000000000000003e800000009f8fffe0102030405",
+      "expected_error": "OversizedAudioFrameError"
+    },
+    {
+      "name": "v3_truncated_header",
+      "version": 3,
+      "hex_payload": "000000",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v3_truncated_payload",
+      "version": 3,
+      "hex_payload": "00000008f8ff",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v3_invalid_type",
+      "version": 3,
+      "hex_payload": "01000008f8fffe0102030405",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v3_nonzero_reserved",
+      "version": 3,
+      "hex_payload": "00010008f8fffe0102030405",
+      "expected_error": "MalformedAudioFrameError"
+    },
+    {
+      "name": "v3_oversized_declared_len",
+      "version": 3,
+      "max_payload_bytes": 4,
+      "hex_payload": "00000008f8fffe0102030405",
+      "expected_error": "OversizedAudioFrameError"
+    }
+  ]
+}
