@@ -1,137 +1,137 @@
-# Huong dan AI - Du an Veetee
+# Hướng dẫn AI - Dự án Veetee
 
-## Pham vi
+## Phạm vi
 
-File nay ap dung cho toan bo workspace `veetee/`. Cac file `AGENTS.md` trong
-`veetee-firmware/` va `veetee-server/` bo sung quy tac chuyen biet cho tung pham vi.
-Khi co nhieu file huong dan, phai tuan theo ca quy tac cap goc va quy tac gan file dang
-thao tac nhat.
+File này áp dụng cho toàn bộ workspace `veetee/`. Các file `AGENTS.md` trong
+`veetee-firmware/` và `veetee-server/` bổ sung quy tắc chuyên biệt cho từng phạm vi.
+Khi có nhiều file hướng dẫn, phải tuân theo cả quy tắc cấp gốc và quy tắc gần file đang
+thao tác nhất.
 
-Du an hien dang o giai doan nghien cuu. Chua co source hay kien truc chinh thuc cua
-Veetee; `references/` chi chua upstream de tham khao.
+Dự án hiện đang ở giai đoạn nghiên cứu. Chưa có source hay kiến trúc chính thức của
+Veetee; `references/` chỉ chứa upstream để tham khảo.
 
-## Thu tu doc bat buoc
+## Thứ tự đọc bắt buộc
 
-Truoc khi thuc hien cong viec:
+Trước khi thực hiện công việc:
 
-1. Doc `README.md` tai goc.
-2. Phan loai cong viec: firmware, server hay contract dung chung.
-3. Doc `README.md` va `AGENTS.md` trong pham vi lien quan.
-4. Doc tai lieu chuyen de can thiet trong `docs/`.
-5. Chi sau do moi doc file cu the trong `references/` neu can doi chieu.
+1. Đọc `README.md` tại gốc.
+2. Phân loại công việc: firmware, server hay contract dùng chung.
+3. Đọc `README.md` và `AGENTS.md` trong phạm vi liên quan.
+4. Đọc tài liệu chuyên đề cần thiết trong `docs/`.
+5. Chỉ sau đó mới đọc file cụ thể trong `references/` nếu cần đối chiếu.
 
-Neu cong viec anh huong ca hai pham vi, phai doc ca:
+Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 
 - `veetee-firmware/AGENTS.md`
 - `veetee-server/AGENTS.md`
 - `veetee-firmware/docs/device-server-protocol.md`
 - `veetee-server/docs/protocols-and-apis.md`
 
-## Ban do ownership
+## Bản đồ ownership
 
-| Vi tri | Ownership | Thao tac mac dinh |
+| Vị trí | Ownership | Thao tác mặc định |
 | --- | --- | --- |
-| `README.md`, `AGENTS.md` tai goc | Tong quan toan du an | Cap nhat khi trang thai/quy trinh chung doi |
-| `veetee-firmware/` | Firmware va tai lieu thiet bi | Theo AGENTS cua firmware |
-| `veetee-server/` | Server va tai lieu backend | Theo AGENTS cua server |
-| `*/docs/` | Khao sat/quyet dinh ky thuat | Duoc cap nhat trong dung pham vi |
-| `*/references/` | Upstream ngoai du an | Chi doc; cam sua va cam thao tac Git ghi |
+| `README.md`, `AGENTS.md` tại gốc | Tổng quan toàn dự án | Cập nhật khi trạng thái/quy trình chung đổi |
+| `veetee-firmware/` | Firmware và tài liệu thiết bị | Theo AGENTS của firmware |
+| `veetee-server/` | Server và tài liệu backend | Theo AGENTS của server |
+| `*/docs/` | Khảo sát/quyết định kỹ thuật | Được cập nhật trong đúng phạm vi |
+| `*/references/` | Upstream ngoài dự án | Chỉ đọc; cấm sửa và cấm thao tác Git ghi |
 
-## Quyen Git
+## Quyền Git
 
-- AI duoc phep su dung Git cho code va tai lieu Veetee nam ngoai `references/`, bao gom
-  khoi tao repo, tao/chuyen branch, stage, commit, fetch, pull, merge, rebase va push khi
-  can de hoan thanh cong viec.
-- Truoc khi commit, phai kiem tra status/diff va chi dua thay doi dung pham vi vao commit.
-- Truoc khi push, phai xac minh branch, remote va cac commit se duoc day len.
-- Khong force-push, xoa branch remote, sua lich su da chia se hoac day secret neu khong
-  co yeu cau ro rang.
-- Quyen Git tren khong ap dung cho hai repo trong `references/`. Tai do chi duoc chay
-  lenh Git read-only de xem status, log, diff, branch, remote va commit.
-- Moc upstream duoc luu tai `docs/reference-baselines.md`. Moi lan doi chieu/cap nhat
-  upstream phai giu lai moc cu, ghi moc moi va tom tat sai khac; khong pull, checkout,
-  reset, merge, rebase, commit hay push truc tiep trong repo tham khao.
+- AI được phép sử dụng Git cho code và tài liệu Veetee nằm ngoài `references/`, bao gồm
+  khởi tạo repo, tạo/chuyển branch, stage, commit, fetch, pull, merge, rebase và push khi
+  cần để hoàn thành công việc.
+- Trước khi commit, phải kiểm tra status/diff và chỉ đưa thay đổi đúng phạm vi vào commit.
+- Trước khi push, phải xác minh branch, remote và các commit sẽ được đẩy lên.
+- Không force-push, xóa branch remote, sửa lịch sử đã chia sẻ hoặc đẩy secret nếu không
+  có yêu cầu rõ ràng.
+- Quyền Git trên không áp dụng cho hai repo trong `references/`. Tại đó chỉ được chạy
+  lệnh Git read-only để xem status, log, diff, branch, remote và commit.
+- Mốc upstream được lưu tại `docs/reference-baselines.md`. Mỗi lần đối chiếu/cập nhật
+  upstream phải giữ lại mốc cũ, ghi mốc mới và tóm tắt sai khác; không pull, checkout,
+  reset, merge, rebase, commit hay push trực tiếp trong repo tham khảo.
 
-## Quy tac bat buoc
+## Quy tắc bắt buộc
 
-- Khong goi repo upstream la source, kien truc, API hay quy trinh chinh thuc cua Veetee.
-- Khong sua code/tai lieu, format, cai dependency, tao artifact hoac thuc hien thao tac
+- Không gọi repo upstream là source, kiến trúc, API hay quy trình chính thức của Veetee.
+- Không sửa code/tài liệu, format, cài dependency, tạo artifact hoặc thực hiện thao tác
   Git ghi trong hai repo `references/`.
-- Source Veetee moi phai nam ngoai `references/`.
-- Khong tu chot lua chon anh huong lon nhu board/chip, framework, ngon ngu, database,
-  broker, cloud provider, deployment topology hoac backward compatibility khi chua co
-  yeu cau/bang chung day du.
-- Khong tao bo khung lon chi de du phong. Uu tien thay doi nho nhat dap ung cong viec.
-- Bao ve thay doi cua nguoi dung va agent khac; khong revert file khong thuoc pham vi.
-- Khong chay thao tac external co anh huong lon nhu deploy, migration production, push
-  image, OTA fleet hay goi API ton phi neu chua duoc uy quyen.
-- Khong dua secret, credential, token, private key hoac du lieu nhay cam vao output.
+- Source Veetee mới phải nằm ngoài `references/`.
+- Không tự chốt lựa chọn ảnh hưởng lớn như board/chip, framework, ngôn ngữ, database,
+  broker, cloud provider, deployment topology hoặc backward compatibility khi chưa có
+  yêu cầu/bằng chứng đầy đủ.
+- Không tạo bộ khung lớn chỉ để dự phòng. Ưu tiên thay đổi nhỏ nhất đáp ứng công việc.
+- Bảo vệ thay đổi của người dùng và agent khác; không revert file không thuộc phạm vi.
+- Không chạy thao tác external có ảnh hưởng lớn như deploy, migration production, push
+  image, OTA fleet hay gọi API tốn phí nếu chưa được ủy quyền.
+- Không đưa secret, credential, token, private key hoặc dữ liệu nhạy cảm vào output.
 
-## Phan loai cong viec
+## Phân loại công việc
 
-### Chi firmware
+### Chỉ firmware
 
-Lam viec trong `veetee-firmware/`, tuan theo `veetee-firmware/AGENTS.md`. Neu thay doi
-wire format, identity, activation, OTA metadata hoac MCP thi chuyen thanh cong viec
-contract dung chung.
+Làm việc trong `veetee-firmware/`, tuân theo `veetee-firmware/AGENTS.md`. Nếu thay đổi
+wire format, identity, activation, OTA metadata hoặc MCP thì chuyển thành công việc
+contract dùng chung.
 
-### Chi server
+### Chỉ server
 
-Lam viec trong `veetee-server/`, tuan theo `veetee-server/AGENTS.md`. Neu thay doi
-device-facing protocol, audio parameters, session lifecycle hoac device command thi
-chuyen thanh cong viec contract dung chung.
+Làm việc trong `veetee-server/`, tuân theo `veetee-server/AGENTS.md`. Nếu thay đổi
+device-facing protocol, audio parameters, session lifecycle hoặc device command thì
+chuyển thành công việc contract dùng chung.
 
-### Contract dung chung
+### Contract dùng chung
 
-Phai xem ca hai dau, khong chi sua mot phia. Tai lieu toi thieu can cap nhat:
+Phải xem cả hai đầu, không chỉ sửa một phía. Tài liệu tối thiểu cần cập nhật:
 
 - `veetee-firmware/docs/device-server-protocol.md`
 - `veetee-server/docs/protocols-and-apis.md`
 
-Neu lien quan activation/OTA/security, cap nhat them tai lieu tuong ung. Them test vector
-chung khi source Veetee da ton tai.
+Nếu liên quan activation/OTA/security, cập nhật thêm tài liệu tương ứng. Thêm test vector
+chung khi source Veetee đã tồn tại.
 
-### Nghien cuu upstream
+### Nghiên cứu upstream
 
-- Neu ro upstream/commit/file duoc khao sat.
-- Doi chieu voi moc trong `docs/reference-baselines.md`.
-- Phan biet `hanh vi quan sat`, `de xuat Veetee` va `chua quyet dinh`.
-- Khong bien chi tiet implementation upstream thanh yeu cau san pham.
-- Khong sua upstream chi de minh hoa ket qua nghien cuu.
+- Nêu rõ upstream/commit/file được khảo sát.
+- Đối chiếu với mốc trong `docs/reference-baselines.md`.
+- Phân biệt `hành vi quan sát`, `đề xuất Veetee` và `chưa quyết định`.
+- Không biến chi tiết implementation upstream thành yêu cầu sản phẩm.
+- Không sửa upstream chỉ để minh họa kết quả nghiên cứu.
 
-### Tao source moi
+### Tạo source mới
 
-- Xac dinh pham vi va ownership truoc.
-- Tao cau truc toi thieu cho yeu cau hien tai.
-- Kem README hoac huong dan build/run/test gan source.
-- Them test theo rui ro: unit, contract, integration, hardware hoac end-to-end.
-- Cap nhat tai lieu khi tao contract hoac quyet dinh lau dai.
+- Xác định phạm vi và ownership trước.
+- Tạo cấu trúc tối thiểu cho yêu cầu hiện tại.
+- Kèm README hoặc hướng dẫn build/run/test gần source.
+- Thêm test theo rủi ro: unit, contract, integration, hardware hoặc end-to-end.
+- Cập nhật tài liệu khi tạo contract hoặc quyết định lâu dài.
 
-## Quy trinh thuc hien
+## Quy trình thực hiện
 
 ```text
-doc yeu cau
-  -> phan loai ownership
-  -> doc huong dan va docs lien quan
-  -> doi chieu upstream neu can
-  -> xac dinh diem chua duoc quyet dinh
-  -> trien khai ngoai references
-  -> test theo rui ro
-  -> cap nhat tai lieu
-  -> bao cao ket qua va gioi han xac minh
+đọc yêu cầu
+  -> phân loại ownership
+  -> đọc hướng dẫn và docs liên quan
+  -> đối chiếu upstream nếu cần
+  -> xác định điểm chưa được quyết định
+  -> triển khai ngoài references
+  -> test theo rủi ro
+  -> cập nhật tài liệu
+  -> báo cáo kết quả và giới hạn xác minh
 ```
 
-Chi hoi nguoi dung khi mot lua chon con thieu co the lam thay doi dang ke ket qua. Voi
-chi tiet nho, co the dua ra gia dinh an toan, ghi ro va tiep tuc.
+Chỉ hỏi người dùng khi một lựa chọn còn thiếu có thể làm thay đổi đáng kể kết quả. Với
+chi tiết nhỏ, có thể đưa ra giả định an toàn, ghi rõ và tiếp tục.
 
-## Kiem tra truoc khi ban giao
+## Kiểm tra trước khi bàn giao
 
-- Da doc dung AGENTS theo pham vi.
-- File moi khong nam trong `references/` ngoai y muon.
-- Khong co thay doi worktree, commit hay Git history trong hai repo tham khao.
-- Khong gan nhan chi tiet upstream thanh quyet dinh Veetee.
-- Contract dung chung da duoc xem xet o ca firmware va server.
-- Test/build phu hop da chay; phan chua xac minh duoc neu ro.
-- Hardware-dependent behavior khong duoc ket luan chi tu build.
-- Security, secret, malformed input, timeout va cleanup da duoc xem xet theo rui ro.
-- README, AGENTS va docs van phan anh dung trang thai sau thay doi.
+- Đã đọc đúng AGENTS theo phạm vi.
+- File mới không nằm trong `references/` ngoài ý muốn.
+- Không có thay đổi worktree, commit hay Git history trong hai repo tham khảo.
+- Không gán nhãn chi tiết upstream thành quyết định Veetee.
+- Contract dùng chung đã được xem xét ở cả firmware và server.
+- Test/build phù hợp đã chạy; phần chưa xác minh được nêu rõ.
+- Hardware-dependent behavior không được kết luận chỉ từ build.
+- Security, secret, malformed input, timeout và cleanup đã được xem xét theo rủi ro.
+- README, AGENTS và docs vẫn phản ánh đúng trạng thái sau thay đổi.

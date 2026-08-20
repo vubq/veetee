@@ -1,89 +1,89 @@
-# Huong dan AI - Veetee Firmware
+# Hướng dẫn AI - Veetee Firmware
 
-## Pham vi
+## Phạm vi
 
-File nay ap dung cho moi thao tac trong `veetee-firmware/`. Day la workspace firmware
-Veetee dang o giai doan nghien cuu; chua co source chinh thuc.
+File này áp dụng cho mọi thao tác trong `veetee-firmware/`. Đây là workspace firmware
+Veetee đang ở giai đoạn nghiên cứu; chưa có source chính thức.
 
-## Thu tu doc bat buoc
+## Thứ tự đọc bắt buộc
 
-Truoc khi thuc hien cong viec firmware:
+Trước khi thực hiện công việc firmware:
 
-1. Doc `README.md` de nam trang thai va ranh gioi workspace.
-2. Doc `docs/README.md` va tai lieu chuyen de lien quan.
-3. Chi doc cac file can thiet trong `references/xiaozhi-esp32` de xac minh chi tiet.
-4. Neu cong viec anh huong wire protocol, doc them
-   `../veetee-server/README.md` va `../veetee-server/docs/protocols-and-apis.md`.
+1. Đọc `README.md` để nắm trạng thái và ranh giới workspace.
+2. Đọc `docs/README.md` và tài liệu chuyên đề liên quan.
+3. Chỉ đọc các file cần thiết trong `references/xiaozhi-esp32` để xác minh chi tiết.
+4. Nếu công việc ảnh hưởng wire protocol, đọc thêm
+   `../veetee-server/README.md` và `../veetee-server/docs/protocols-and-apis.md`.
 
-## Phan loai noi dung
+## Phân loại nội dung
 
-| Vi tri | Vai tro | Quyen thao tac mac dinh |
+| Vị trí | Vai trò | Quyền thao tác mặc định |
 | --- | --- | --- |
-| `README.md` | Tong quan cho nguoi dung | Cap nhat khi trang thai/quy trinh doi |
-| `AGENTS.md` | Quy tac cho AI/contributor | Cap nhat khi ranh gioi thao tac doi |
-| `docs/` | Ghi chu va quyet dinh ky thuat | Duoc bo sung/cap nhat |
-| `references/` | Source upstream tham khao | Chi doc; cam sua va cam Git ghi |
-| Source Veetee tuong lai | San pham chinh thuc | Tao ngoai `references/` theo yeu cau |
+| `README.md` | Tổng quan cho người dùng | Cập nhật khi trạng thái/quy trình đổi |
+| `AGENTS.md` | Quy tắc cho AI/contributor | Cập nhật khi ranh giới thao tác đổi |
+| `docs/` | Ghi chú và quyết định kỹ thuật | Được bổ sung/cập nhật |
+| `references/` | Source upstream tham khảo | Chỉ đọc; cấm sửa và cấm Git ghi |
+| Source Veetee tương lai | Sản phẩm chính thức | Tạo ngoài `references/` theo yêu cầu |
 
-## Quy tac bat buoc
+## Quy tắc bắt buộc
 
-- Khong mo ta `references/xiaozhi-esp32` la cau truc hay source chinh thuc cua Veetee.
-- Khong sua, format, tao build artifact, commit, checkout, pull, merge, rebase, reset
+- Không mô tả `references/xiaozhi-esp32` là cấu trúc hay source chính thức của Veetee.
+- Không sửa, format, tạo build artifact, commit, checkout, pull, merge, rebase, reset
   hay push trong `references/xiaozhi-esp32`.
-- Chi duoc dung Git read-only trong upstream va doi chieu commit voi
+- Chỉ được dùng Git read-only trong upstream và đối chiếu commit với
   `../docs/reference-baselines.md`.
-- Duoc phep commit/push va thao tac Git cho source/tai lieu firmware Veetee nam ngoai
-  `references/`, theo quy tac Git tai `../AGENTS.md`.
-- Khong tu tao kien truc firmware day du chi tu source tham khao. Neu lua chon chip,
-  board, framework, transport hoac AEC lam thay doi huong san pham, phai neu ro va xin
-  quyet dinh.
-- Moi source moi phai nam ngoai `references/` va co ownership ro rang.
-- Thay doi protocol phai kiem tra ca firmware va server, bao gom backward compatibility,
-  version, malformed input va timeout.
-- Khong coi build thanh cong la hardware validation. Bao cao ro phan nao can test tren
-  board, codec, display hoac network that.
-- Khong dua secret, token, Wi-Fi credential, key OTA hoac endpoint noi bo vao source va
-  tai lieu mau.
+- Được phép commit/push và thao tác Git cho source/tài liệu firmware Veetee nằm ngoài
+  `references/`, theo quy tắc Git tại `../AGENTS.md`.
+- Không tự tạo kiến trúc firmware đầy đủ chỉ từ source tham khảo. Nếu lựa chọn chip,
+  board, framework, transport hoặc AEC làm thay đổi hướng sản phẩm, phải nêu rõ và xin
+  quyết định.
+- Mọi source mới phải nằm ngoài `references/` và có ownership rõ ràng.
+- Thay đổi protocol phải kiểm tra cả firmware và server, bao gồm backward compatibility,
+  version, malformed input và timeout.
+- Không coi build thành công là hardware validation. Báo cáo rõ phần nào cần test trên
+  board, codec, display hoặc network thật.
+- Không đưa secret, token, Wi-Fi credential, key OTA hoặc endpoint nội bộ vào source và
+  tài liệu mẫu.
 
-## Cach xu ly theo loai cong viec
+## Cách xử lý theo loại công việc
 
-### Nghien cuu
+### Nghiên cứu
 
-- Doc tai lieu Veetee truoc, source upstream sau.
-- Tra ve ket luan kem file/line upstream quan trong.
-- Tach ro ba nhom: hanh vi quan sat, de xuat cho Veetee, diem chua duoc quyet dinh.
+- Đọc tài liệu Veetee trước, source upstream sau.
+- Trả về kết luận kèm file/line upstream quan trọng.
+- Tách rõ ba nhóm: hành vi quan sát, đề xuất cho Veetee, điểm chưa được quyết định.
 
-### Tao kien truc/source moi
+### Tạo kiến trúc/source mới
 
-- Xac nhan target chip/board va yeu cau san pham lien quan.
-- Chon thay doi nho nhat giai quyet dung yeu cau.
-- Tao source, build config va test ngoai `references/`.
-- Tao README gan source voi lenh build/flash/test co the lap lai.
-- Cap nhat `docs/` khi xuat hien contract hoac quyet dinh lau dai.
+- Xác nhận target chip/board và yêu cầu sản phẩm liên quan.
+- Chọn thay đổi nhỏ nhất giải quyết đúng yêu cầu.
+- Tạo source, build config và test ngoài `references/`.
+- Tạo README gần source với lệnh build/flash/test có thể lặp lại.
+- Cập nhật `docs/` khi xuất hiện contract hoặc quyết định lâu dài.
 
-### Port tu upstream
+### Port từ upstream
 
-- Ghi ro file/module nguon va commit tham khao.
-- Kiem tra license va dependency truoc khi copy.
-- Chi port phan can thiet; khong mang theo board/provider/feature khong dung.
-- Doi ten, abstraction va config theo Veetee khi da co quyet dinh, khong duy tri vo boc
-  tuong thich neu khong co nhu cau cu the.
-- Them test cho hanh vi da port va ghi sai khac voi upstream.
+- Ghi rõ file/module nguồn và commit tham khảo.
+- Kiểm tra license và dependency trước khi copy.
+- Chỉ port phần cần thiết; không mang theo board/provider/feature không dùng.
+- Đổi tên, abstraction và config theo Veetee khi đã có quyết định, không duy trì vỏ bọc
+  tương thích nếu không có nhu cầu cụ thể.
+- Thêm test cho hành vi đã port và ghi sai khác với upstream.
 
-### Sua tai lieu
+### Sửa tài liệu
 
-- Giu nhan `tham khao` cho thong tin rut ra tu upstream.
-- Danh dau ro `quyet dinh Veetee` khi mot lua chon da duoc chot.
-- Cap nhat lien ket tu `README.md` neu them tai lieu cap cao.
-- Doi chieu tai lieu server neu sua giao thuc chung.
+- Giữ nhãn `tham khảo` cho thông tin rút ra từ upstream.
+- Đánh dấu rõ `quyết định Veetee` khi một lựa chọn đã được chốt.
+- Cập nhật liên kết từ `README.md` nếu thêm tài liệu cấp cao.
+- Đối chiếu tài liệu server nếu sửa giao thức chung.
 
-## Kiem tra truoc khi ban giao
+## Kiểm tra trước khi bàn giao
 
-- File moi nam dung pham vi, khong nam trong `references/` ngoai y muon.
-- Worktree va history cua repo `references/xiaozhi-esp32` khong bi thay doi.
-- Khong ghi thong so upstream thanh yeu cau Veetee neu chua duoc chot.
-- Build/test phu hop da chay; neu chua chay, noi ro ly do.
-- Thay doi audio da xem xet queue, latency, interruption, reconnect va AEC.
-- Thay doi board da xem xet pin, flash, partition, optional capability va OTA identity.
-- Thay doi protocol da dong bo tai lieu/test server.
-- Tai lieu va lenh thao tac van con dung sau thay doi.
+- File mới nằm đúng phạm vi, không nằm trong `references/` ngoài ý muốn.
+- Worktree và history của repo `references/xiaozhi-esp32` không bị thay đổi.
+- Không ghi thông số upstream thành yêu cầu Veetee nếu chưa được chốt.
+- Build/test phù hợp đã chạy; nếu chưa chạy, nói rõ lý do.
+- Thay đổi audio đã xem xét queue, latency, interruption, reconnect và AEC.
+- Thay đổi board đã xem xét pin, flash, partition, optional capability và OTA identity.
+- Thay đổi protocol đã đồng bộ tài liệu/test server.
+- Tài liệu và lệnh thao tác vẫn còn đúng sau thay đổi.

@@ -1,82 +1,82 @@
 # Veetee Server
 
-## Trang thai hien tai
+## Trạng thái hiện tại
 
-`veetee-server` la khong gian chuan bi cho server cua Veetee. Hien tai chua co source,
-service, database schema, deployment manifest hay API chinh thuc cua Veetee. Thu muc
-moi chi gom tai lieu khao sat va source tham khao.
+`veetee-server` là không gian chuẩn bị cho server của Veetee. Hiện tại chưa có source,
+service, database schema, deployment manifest hay API chính thức của Veetee. Thư mục
+mới chỉ gồm tài liệu khảo sát và source tham khảo.
 
-Source trong `references/xiaozhi-esp32-server` la upstream de nghien cuu, khong phai
-backend dang van hanh cua Veetee va khong ap dat Python, Java, Vue hay deployment model
-cho du an.
+Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
+backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model
+cho dự án.
 
-## Cau truc
+## Cấu trúc
 
 ```text
 veetee-server/
-|-- README.md       # Diem bat dau cho nguoi dung
-|-- AGENTS.md       # Huong dan thao tac cho AI/contributor
-|-- docs/           # Ghi chu ky thuat rut ra tu source tham khao
-`-- references/     # Upstream chi dung de doc, doi chieu va thu nghiem rieng
+|-- README.md       # Điểm bắt đầu cho người dùng
+|-- AGENTS.md       # Hướng dẫn thao tác cho AI/contributor
+|-- docs/           # Ghi chú kỹ thuật rút ra từ source tham khảo
+`-- references/     # Upstream chỉ dùng để đọc, đối chiếu và thử nghiệm riêng
 ```
 
-Source va thu muc van hanh se chi duoc tao khi co yeu cau va quyet dinh cu the. Khong
-co service nao trong `references/` duoc mac dinh coi la service cua Veetee.
+Source và thư mục vận hành sẽ chỉ được tạo khi có yêu cầu và quyết định cụ thể. Không
+có service nào trong `references/` được mặc định coi là service của Veetee.
 
-## Bat dau tu dau
+## Bắt đầu từ đâu
 
-1. Doc [muc luc tai lieu](docs/README.md).
-2. Doc [tong quan kien truc tham khao](docs/architecture.md).
-3. Chon tai lieu theo cong viec:
+1. Đọc [mục lục tài liệu](docs/README.md).
+2. Đọc [tổng quan kiến trúc tham khảo](docs/architecture.md).
+3. Chọn tài liệu theo công việc:
 
-| Cong viec | Tai lieu nen doc |
+| Công việc | Tài liệu nên đọc |
 | --- | --- |
-| Service boundary, deployment | [Tong quan kien truc](docs/architecture.md) |
+| Service boundary, deployment | [Tổng quan kiến trúc](docs/architecture.md) |
 | WebSocket, audio session, AI flow | [Realtime AI pipeline](docs/realtime-ai-pipeline.md) |
-| Device protocol, HTTP, manager API | [Giao thuc va API](docs/protocols-and-apis.md) |
-| Model/provider/config | [Provider va cau hinh](docs/providers-and-configuration.md) |
-| Auth, van hanh, scale, test | [Bao mat va kiem thu](docs/security-operations-testing.md) |
+| Device protocol, HTTP, manager API | [Giao thức và API](docs/protocols-and-apis.md) |
+| Model/provider/config | [Provider và cấu hình](docs/providers-and-configuration.md) |
+| Auth, vận hành, scale, test | [Bảo mật và kiểm thử](docs/security-operations-testing.md) |
 
-4. Doi chieu source trong `references/xiaozhi-esp32-server` neu can xac minh.
-5. Truoc khi viet code, chot ro pham vi service, du lieu, giao thuc va cach trien khai
-   ma Veetee thuc su can.
+4. Đối chiếu source trong `references/xiaozhi-esp32-server` nếu cần xác minh.
+5. Trước khi viết code, chốt rõ phạm vi service, dữ liệu, giao thức và cách triển khai
+   mà Veetee thực sự cần.
 
-## Nguyen tac thao tac
+## Nguyên tắc thao tác
 
-- Code moi cua Veetee phai nam ngoai `references/`.
-- Chi sua `references/` khi co yeu cau ro rang ve patch/fork upstream.
-- Khong mac dinh copy monorepo hay chay full stack tham khao.
-- Thay doi device protocol phai duoc doi chieu dong thoi voi `../veetee-firmware`.
-- API key, token, database password va service secret khong duoc ghi vao source/tai lieu.
-- Endpoint, port va provider trong `docs/` la gia tri quan sat, chua phai contract Veetee.
-- Moi API/service chinh thuc can co ownership, cau hinh, migration, test va cach van
-  hanh duoc tai lieu hoa.
+- Code mới của Veetee phải nằm ngoài `references/`.
+- Chỉ sửa `references/` khi có yêu cầu rõ ràng về patch/fork upstream.
+- Không mặc định copy monorepo hay chạy full stack tham khảo.
+- Thay đổi device protocol phải được đối chiếu đồng thời với `../veetee-firmware`.
+- API key, token, database password và service secret không được ghi vào source/tài liệu.
+- Endpoint, port và provider trong `docs/` là giá trị quan sát, chưa phải contract Veetee.
+- Mỗi API/service chính thức cần có ownership, cấu hình, migration, test và cách vận
+  hành được tài liệu hóa.
 
-## Quy trinh cho mot cong viec moi
+## Quy trình cho một công việc mới
 
 ```text
-yeu cau
-  -> xac dinh domain/service bi anh huong
-  -> doc docs lien quan
-  -> doi chieu upstream neu can
-  -> chot contract va du lieu Veetee
-  -> tao source ngoai references
+yêu cầu
+  -> xác định domain/service bị ảnh hưởng
+  -> đọc docs liên quan
+  -> đối chiếu upstream nếu cần
+  -> chốt contract và dữ liệu Veetee
+  -> tạo source ngoài references
   -> test contract/integration/security
-  -> cap nhat tai lieu va cach van hanh
+  -> cập nhật tài liệu và cách vận hành
 ```
 
-Hien chua co lenh run/build/test cua Veetee. Docker Compose, Maven, npm, pnpm va Python
-command trong upstream chi dung de nghien cuu upstream, khong phai quy trinh Veetee.
+Hiện chưa có lệnh run/build/test của Veetee. Docker Compose, Maven, npm, pnpm và Python
+command trong upstream chỉ dùng để nghiên cứu upstream, không phải quy trình Veetee.
 
-## Quan he voi firmware
+## Quan hệ với firmware
 
-Server va firmware cung so huu cac contract:
+Server và firmware cùng sở hữu các contract:
 
-- Device identity, binding va authentication.
-- WebSocket/MQTT session va reconnect.
-- JSON control message va binary audio frame.
-- Opus parameters, AEC timestamp va backpressure.
+- Device identity, binding và authentication.
+- WebSocket/MQTT session và reconnect.
+- JSON control message và binary audio frame.
+- Opus parameters, AEC timestamp và backpressure.
 - MCP capability/tool authorization.
-- Activation, OTA discovery, rollout va reporting.
+- Activation, OTA discovery, rollout và reporting.
 
-Thay doi contract chung can co version, test vector va cap nhat tai lieu o ca hai muc.
+Thay đổi contract chung cần có version, test vector và cập nhật tài liệu ở cả hai mục.

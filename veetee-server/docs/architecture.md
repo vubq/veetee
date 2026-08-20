@@ -1,97 +1,97 @@
-# Tong quan kien truc server tham khao
+# Tổng quan kiến trúc server tham khảo
 
-## Thanh phan
+## Thành phần
 
 ```text
 ESP32 / test client
-  -> WebSocket truc tiep hoac MQTT gateway
+  -> WebSocket trực tiếp hoặc MQTT gateway
   -> Python xiaozhi-server
        -> VAD -> ASR -> intent/LLM -> tool/MCP -> TTS
-       -> HTTP OTA va vision
-       -> tuy chon goi manager-api
+        -> HTTP OTA và vision
+        -> tùy chọn gọi manager-api
 
 Web/mobile console
   -> Java manager-api
        -> MySQL
        -> Redis
-       -> cau hinh agent/device/model/OTA
+        -> cấu hình agent/device/model/OTA
 ```
 
-| Thanh phan | Vai tro quan sat duoc |
+| Thành phần | Vai trò quan sát được |
 | --- | --- |
-| `xiaozhi-server` | Duong realtime, session thiet bi, AI pipeline va streaming audio |
-| `manager-api` | Quan tri user, device, agent, model, OTA va cau hinh tap trung |
-| `manager-web` | Console Vue 2 cho trinh duyet |
+| `xiaozhi-server` | Đường realtime, session thiết bị, AI pipeline và streaming audio |
+| `manager-api` | Quản trị user, device, agent, model, OTA và cấu hình tập trung |
+| `manager-web` | Console Vue 2 cho trình duyệt |
 | `manager-mobile` | Console Vue 3/uni-app cho H5/app/mini-program |
-| `digital-human` | Test/browser client va wake-word runtime, khong bat buoc production |
+| `digital-human` | Test/browser client và wake-word runtime, không bắt buộc production |
 
-## Hai che do van hanh
+## Hai chế độ vận hành
 
-### Toi gian
+### Tối giản
 
-Chi chay Python realtime server. Cau hinh doc tu YAML local, khong can MySQL/Redis.
-HTTP server Python tu cung cap OTA discovery/download don gian va vision endpoint.
+Chỉ chạy Python realtime server. Cấu hình đọc từ YAML local, không cần MySQL/Redis.
+HTTP server Python tự cung cấp OTA discovery/download đơn giản và vision endpoint.
 
-### Day du
+### Đầy đủ
 
-Python realtime server goi Java manager API de lay cau hinh chung va cau hinh rieng theo
-device/agent. Java API dung MySQL, Redis va phuc vu web/mobile console. Cach nay tang
-kha nang quan tri nhung them coupling, failure mode va yeu cau bao mat noi bo.
+Python realtime server gọi Java manager API để lấy cấu hình chung và cấu hình riêng theo
+device/agent. Java API dùng MySQL, Redis và phục vụ web/mobile console. Cách này tăng
+khả năng quản trị nhưng thêm coupling, failure mode và yêu cầu bảo mật nội bộ.
 
 ## Entry point
 
 Python `app.py`:
 
-1. Kiem tra FFmpeg.
-2. Load config va auth key.
-3. Khoi dong GC manager.
-4. Chay WebSocket server va HTTP server dong thoi.
-5. Bat SIGINT/SIGTERM, huy task va cleanup.
+1. Kiểm tra FFmpeg.
+2. Load config và auth key.
+3. Khởi động GC manager.
+4. Chạy WebSocket server và HTTP server đồng thời.
+5. Bắt SIGINT/SIGTERM, hủy task và cleanup.
 
-Spring Boot `AdminApplication.java` la entry point manager API. Web va mobile co entry
-point rieng (`src/main.js`, `src/main.ts`) va chi giao tiep qua HTTP API.
+Spring Boot `AdminApplication.java` là entry point manager API. Web và mobile có entry
+point riêng (`src/main.js`, `src/main.ts`) và chỉ giao tiếp qua HTTP API.
 
 ## Session boundary
 
-`WebSocketServer` giu provider co the dung chung va tao `ConnectionHandler` cho moi
-device. `ConnectionHandler` so huu state rieng:
+`WebSocketServer` giữ provider có thể dùng chung và tạo `ConnectionHandler` cho mỗi
+device. `ConnectionHandler` sở hữu state riêng:
 
-- `session_id`, socket, header, device ID va IP.
-- Trang thai bind, listen, speaking, abort va AEC.
-- Audio buffer, VAD window, ASR queue va speaker identity.
-- Dialogue, prompt, memory va agent config.
-- TTS sentence, IoT descriptors, MCP client va tool handler.
-- Timeout task, executor va reporting queue.
+- `session_id`, socket, header, device ID và IP.
+- Trạng thái bind, listen, speaking, abort và AEC.
+- Audio buffer, VAD window, ASR queue và speaker identity.
+- Dialogue, prompt, memory và agent config.
+- TTS sentence, IoT descriptors, MCP client và tool handler.
+- Timeout task, executor và reporting queue.
 
-Provider local nang co the dung chung de tiet kiem bo nho; provider co stream/session
-state phai duoc tao rieng. Boundary nay can duoc ghi ro khi viet provider moi.
+Provider local nặng có thể dùng chung để tiết kiệm bộ nhớ; provider có stream/session
+state phải được tạo riêng. Boundary này cần được ghi rõ khi viết provider mới.
 
 ## Concurrency
 
-- `asyncio` xu ly socket va orchestration I/O.
-- `ThreadPoolExecutor`/thread xu ly SDK hoac model blocking.
-- Queue noi audio/reporting voi worker.
-- Cleanup memory/title duoc day sang daemon thread trong implementation tham khao.
+- `asyncio` xử lý socket và orchestration I/O.
+- `ThreadPoolExecutor`/thread xử lý SDK hoặc model blocking.
+- Queue nối audio/reporting với worker.
+- Cleanup memory/title được đẩy sang daemon thread trong implementation tham khảo.
 
-Can tranh goi blocking model/API trong event loop. Thread khong duoc sua session state
-ma khong co co che dong bo; khi scale nhieu process, state trong memory khong con dung
+Cần tránh gọi blocking model/API trong event loop. Thread không được sửa session state
+mà không có cơ chế đồng bộ; khi scale nhiều process, state trong memory không còn dùng
 chung.
 
-## Boundary de xuat cho Veetee
+## Boundary đề xuất cho Veetee
 
-Source tham khao goi y bon boundary nghiep vu, nhung Veetee can quyet dinh lai:
+Source tham khảo gợi ý bốn boundary nghiệp vụ, nhưng Veetee cần quyết định lại:
 
-| Boundary | Trach nhiem |
+| Boundary | Trách nhiệm |
 | --- | --- |
-| Device gateway | Auth, protocol, session, backpressure va reconnect |
-| Conversation engine | VAD/ASR, dialogue, LLM, intent, tool va TTS |
+| Device gateway | Auth, protocol, session, backpressure và reconnect |
+| Conversation engine | VAD/ASR, dialogue, LLM, intent, tool và TTS |
 | Control plane | User/device/agent/model/config/OTA management |
-| Client applications | Web/mobile UX, khong chua business secret |
+| Client applications | Web/mobile UX, không chứa business secret |
 
-Khong bat buoc moi boundary la mot service rieng. Ban dau co the cung mot deployable
-nhung can tach hop dong va ownership de de test va scale sau nay.
+Không bắt buộc mỗi boundary là một service riêng. Ban đầu có thể cùng một deployable
+nhưng cần tách hợp đồng và ownership để dễ test và scale sau này.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/app.py`
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/websocket_server.py`

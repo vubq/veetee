@@ -1,19 +1,19 @@
 # Veetee
 
-## Tong quan
+## Tổng quan
 
-Veetee la du an thiet bi tro ly giong noi gom hai pham vi chinh:
+Veetee là dự án thiết bị trợ lý giọng nói gồm hai phạm vi chính:
 
-| Pham vi | Trach nhiem du kien | Diem bat dau |
+| Phạm vi | Trách nhiệm dự kiến | Điểm bắt đầu |
 | --- | --- | --- |
-| Firmware | Phan cung, audio, ket noi, giao dien thiet bi va OTA | [veetee-firmware](veetee-firmware/README.md) |
-| Server | Phien thiet bi, xu ly AI, API, quan tri va van hanh | [veetee-server](veetee-server/README.md) |
+| Firmware | Phần cứng, audio, kết nối, giao diện thiết bị và OTA | [veetee-firmware](veetee-firmware/README.md) |
+| Server | Phiên thiết bị, xử lý AI, API, quản trị và vận hành | [veetee-server](veetee-server/README.md) |
 
-Hien tai du an dang o giai doan nghien cuu va chuan bi. Chua co source chinh thuc,
-kien truc da chot, build system, database schema, deployment hay ban phat hanh Veetee.
-Hai pham vi moi gom tai lieu tong hop va source upstream de tham khao.
+Hiện tại dự án đang ở giai đoạn nghiên cứu và chuẩn bị. Chưa có source chính thức,
+kiến trúc đã chốt, build system, database schema, deployment hay bản phát hành Veetee.
+Hai phạm vi mới gồm tài liệu tổng hợp và source upstream để tham khảo.
 
-## Cau truc hien tai
+## Cấu trúc hiện tại
 
 ```text
 veetee/
@@ -31,71 +31,71 @@ veetee/
     `-- references/
 ```
 
-| Loai noi dung | Y nghia |
+| Loại nội dung | Ý nghĩa |
 | --- | --- |
-| `README.md` | Diem bat dau va huong dan cho nguoi dung |
-| `AGENTS.md` | Ranh gioi va quy trinh thao tac cho AI/contributor |
-| `docs/` | Ghi chu ky thuat rut ra tu source tham khao |
-| `references/` | Repo upstream chi dung de nghien cuu va doi chieu |
+| `README.md` | Điểm bắt đầu và hướng dẫn cho người dùng |
+| `AGENTS.md` | Ranh giới và quy trình thao tác cho AI/contributor |
+| `docs/` | Ghi chú kỹ thuật rút ra từ source tham khảo |
+| `references/` | Repo upstream chỉ dùng để nghiên cứu và đối chiếu |
 
-Khong coi source trong `references/` la source Veetee. Cau truc source san pham se duoc
-tao sau khi co yeu cau va quyet dinh ky thuat cu the.
+Không coi source trong `references/` là source Veetee. Cấu trúc source sản phẩm sẽ được
+tạo sau khi có yêu cầu và quyết định kỹ thuật cụ thể.
 
-## Cach bat dau
+## Cách bắt đầu
 
-1. Doc tai lieu tong quan nay.
-2. Xac dinh cong viec thuoc firmware, server hay contract dung chung.
-3. Doc README va AGENTS cua pham vi tuong ung.
-4. Doc tai lieu chuyen de trong `docs/`.
-5. Chi doi chieu `references/` khi can xac minh implementation upstream.
-6. Tao source Veetee ngoai `references/`, kem test va tai lieu phu hop.
+1. Đọc tài liệu tổng quan này.
+2. Xác định công việc thuộc firmware, server hay contract dùng chung.
+3. Đọc README và AGENTS của phạm vi tương ứng.
+4. Đọc tài liệu chuyên đề trong `docs/`.
+5. Chỉ đối chiếu `references/` khi cần xác minh implementation upstream.
+6. Tạo source Veetee ngoài `references/`, kèm test và tài liệu phù hợp.
 
-## Dieu huong theo cong viec
+## Điều hướng theo công việc
 
-| Cong viec | Tai lieu bat dau |
+| Công việc | Tài liệu bắt đầu |
 | --- | --- |
 | Board, audio, state, provisioning | [Firmware](veetee-firmware/README.md) |
 | WebSocket, AI pipeline, provider, API | [Server](veetee-server/README.md) |
-| Giao thuc thiet bi-server | [Firmware protocol](veetee-firmware/docs/device-server-protocol.md) va [Server API](veetee-server/docs/protocols-and-apis.md) |
-| Activation va OTA | [Firmware OTA](veetee-firmware/docs/provisioning-ota-config.md) va [Server security/operations](veetee-server/docs/security-operations-testing.md) |
-| Bao mat dau cuoi | [Server security](veetee-server/docs/security-operations-testing.md) cung cac tai lieu protocol/OTA firmware |
+| Giao thức thiết bị-server | [Firmware protocol](veetee-firmware/docs/device-server-protocol.md) và [Server API](veetee-server/docs/protocols-and-apis.md) |
+| Activation và OTA | [Firmware OTA](veetee-firmware/docs/provisioning-ota-config.md) và [Server security/operations](veetee-server/docs/security-operations-testing.md) |
+| Bảo mật đầu cuối | [Server security](veetee-server/docs/security-operations-testing.md) cùng các tài liệu protocol/OTA firmware |
 
-## Contract dung chung
+## Contract dùng chung
 
-Firmware va server cung so huu cac contract sau:
+Firmware và server cùng sở hữu các contract sau:
 
-- Danh tinh thiet bi, binding, authentication va credential rotation.
-- Feature negotiation, session lifecycle, heartbeat, timeout va reconnect.
-- JSON control message va binary audio frame.
-- Opus format, sample rate, frame duration, timestamp va backpressure.
-- Wake word, listening mode, interruption va AEC.
-- MCP capability discovery, tool invocation va authorization.
-- Provisioning, activation, endpoint discovery, OTA va rollout reporting.
+- Danh tính thiết bị, binding, authentication và credential rotation.
+- Feature negotiation, session lifecycle, heartbeat, timeout và reconnect.
+- JSON control message và binary audio frame.
+- Opus format, sample rate, frame duration, timestamp và backpressure.
+- Wake word, listening mode, interruption và AEC.
+- MCP capability discovery, tool invocation và authorization.
+- Provisioning, activation, endpoint discovery, OTA và rollout reporting.
 
-Thay doi mot contract dung chung phai:
+Thay đổi một contract dùng chung phải:
 
-1. Xac dinh producer va consumer bi anh huong.
-2. Co version va quy tac tuong thich ro rang.
-3. Cap nhat tai lieu o ca firmware va server.
-4. Co contract test hoac golden test vector cho hai dau.
-5. Kiem tra malformed input, timeout, reconnect va security boundary.
+1. Xác định producer và consumer bị ảnh hưởng.
+2. Có version và quy tắc tương thích rõ ràng.
+3. Cập nhật tài liệu ở cả firmware và server.
+4. Có contract test hoặc golden test vector cho hai đầu.
+5. Kiểm tra malformed input, timeout, reconnect và security boundary.
 
-## Nguyen tac du an
+## Nguyên tắc dự án
 
-- Lua chon upstream chi la du lieu tham khao, khong phai quyet dinh Veetee.
-- AI duoc phep commit, push va thuc hien cac thao tac Git can thiet cho phan Veetee nam
-  ngoai `references/`, voi dieu kien kiem tra dung thay doi, branch va remote.
-- Cam sua code/tai lieu va cam thao tac Git ghi trong hai repo `references/`.
-- Moc commit cua hai upstream duoc luu tai
-  [reference baselines](docs/reference-baselines.md) de doi chieu update sau nay.
-- Khong tao kien truc rong hoac boilerplate lon truoc khi co nhu cau cu the.
-- Source moi can co ownership, cach build/run/test va tai lieu ngan gon.
-- Khong dua secret that vao source, log, fixture, tai lieu hay cau hinh mau.
-- Moi quyet dinh chinh thuc can duoc phan biet voi ghi chu khao sat upstream.
-- Build phan mem khong thay the test phan cung va test dau cuoi.
+- Lựa chọn upstream chỉ là dữ liệu tham khảo, không phải quyết định Veetee.
+- AI được phép commit, push và thực hiện các thao tác Git cần thiết cho phần Veetee nằm
+  ngoài `references/`, với điều kiện kiểm tra đúng thay đổi, branch và remote.
+- Cấm sửa code/tài liệu và cấm thao tác Git ghi trong hai repo `references/`.
+- Mốc commit của hai upstream được lưu tại
+  [reference baselines](docs/reference-baselines.md) để đối chiếu update sau này.
+- Không tạo kiến trúc rộng hoặc boilerplate lớn trước khi có nhu cầu cụ thể.
+- Source mới cần có ownership, cách build/run/test và tài liệu ngắn gọn.
+- Không đưa secret thật vào source, log, fixture, tài liệu hay cấu hình mẫu.
+- Mỗi quyết định chính thức cần được phân biệt với ghi chú khảo sát upstream.
+- Build phần mềm không thay thế test phần cứng và test đầu cuối.
 
-## Trang thai build va van hanh
+## Trạng thái build và vận hành
 
-Hien chua co lenh build, test, flash, run hay deploy chung cho Veetee. Cac lenh ben
-trong hai repo tham khao chi ap dung cho upstream. Khi source chinh thuc duoc tao, muc
-nay can duoc cap nhat bang cac lenh co the lap lai cho moi pham vi va cho test dau cuoi.
+Hiện chưa có lệnh build, test, flash, run hay deploy chung cho Veetee. Các lệnh bên
+trong hai repo tham khảo chỉ áp dụng cho upstream. Khi source chính thức được tạo, mục
+này cần được cập nhật bằng các lệnh có thể lặp lại cho mỗi phạm vi và cho test đầu cuối.

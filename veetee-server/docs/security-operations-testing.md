@@ -1,92 +1,92 @@
-# Bao mat, van hanh va kiem thu
+# Bảo mật, vận hành và kiểm thử
 
-## Trang thai upstream
+## Trạng thái upstream
 
-Source tham khao huu ich cho nghien cuu nhung khong nen dua thang len production ma
-khong threat model va hardening. CI quan sat chu yeu build Docker image; Python core
-khong co unit/integration suite ro rang, Java co test nhung Maven mac dinh skip test.
+Source tham khảo hữu ích cho nghiên cứu nhưng không nên đưa thẳng lên production mà
+không threat model và hardening. CI quan sát chủ yếu build Docker image; Python core
+không có unit/integration suite rõ ràng, Java có test nhưng Maven mặc định skip test.
 
-## Xac thuc va danh tinh thiet bi
+## Xác thực và danh tính thiết bị
 
-WebSocket dung `Authorization`, `Device-Id`, `Client-Id`. Utility tham khao tao token:
+WebSocket dùng `Authorization`, `Device-Id`, `Client-Id`. Utility tham khảo tạo token:
 
 - Outer JWT HS256.
-- Inner payload co `device_id` va expiry, ma hoa AES-GCM.
-- AES key derive tu auth secret bang PBKDF2 va fixed salt.
-- Token het han sau mot gio.
+- Inner payload có `device_id` và expiry, mã hóa AES-GCM.
+- AES key derive từ auth secret bằng PBKDF2 và fixed salt.
+- Token hết hạn sau một giờ.
 
-Fixed salt va mot shared symmetric secret khong phai thiet ke identity toi uu cho fleet.
-Veetee nen xem xet credential rieng tung device, rotation/revocation, bind flow, key
-storage tren device va rang buoc token voi audience/issuer/session.
+Fixed salt và một shared symmetric secret không phải thiết kế identity tối ưu cho fleet.
+Veetee nên xem xét credential riêng từng device, rotation/revocation, bind flow, key
+storage trên device và ràng buộc token với audience/issuer/session.
 
 ## Trust boundaries
 
-| Boundary | Moi nguy chinh |
+| Boundary | Mối nguy chính |
 | --- | --- |
-| Device -> gateway | Device gia, replay, oversized frame, protocol confusion |
+| Device -> gateway | Device giả, replay, oversized frame, protocol confusion |
 | Gateway -> AI provider | Prompt/tool injection, data leak, cost abuse |
 | Runtime -> manager API | Service secret leak, config tampering, lateral movement |
 | Web/mobile -> manager API | Broken access control, tenant escape, token theft |
-| OTA -> device | Firmware gia, downgrade, rollout sai |
-| Plugin/MCP tool | Command injection, SSRF, quyen qua rong |
+| OTA -> device | Firmware giả, downgrade, rollout sai |
+| Plugin/MCP tool | Command injection, SSRF, quyền quá rộng |
 
-## Kiem soat toi thieu
+## Kiểm soát tối thiểu
 
-- TLS/WSS/MQTTS moi noi; khong chap nhan credential qua plaintext network.
-- Gioi han frame, JSON depth, upload size, audio rate va concurrent connection.
-- Schema validation truoc khi dispatch handler/tool.
-- RBAC/tenant ownership o service layer, khong chi an nut tren UI.
-- Allowlist tool theo agent/device/user; confirmation cho hanh dong vat ly nhay cam.
-- Signed OTA, anti-rollback, phased rollout va kill switch.
-- Secret manager, rotation, redaction va khong commit key mau dung duoc.
-- Audit event cho login, bind, config, tool call, OTA va admin command.
+- TLS/WSS/MQTTS mọi nơi; không chấp nhận credential qua plaintext network.
+- Giới hạn frame, JSON depth, upload size, audio rate và concurrent connection.
+- Schema validation trước khi dispatch handler/tool.
+- RBAC/tenant ownership ở service layer, không chỉ ẩn nút trên UI.
+- Allowlist tool theo agent/device/user; confirmation cho hành động vật lý nhạy cảm.
+- Signed OTA, anti-rollback, phased rollout và kill switch.
+- Secret manager, rotation, redaction và không commit key mẫu dùng được.
+- Audit event cho login, bind, config, tool call, OTA và admin command.
 
-## Van hanh va observability
+## Vận hành và observability
 
-Metric nen co:
+Metric nên có:
 
-- Active/accepted/rejected connection va ly do disconnect.
-- Audio ingress/egress bytes, packet drop va queue depth.
+- Active/accepted/rejected connection và lý do disconnect.
+- Audio ingress/egress bytes, packet drop và queue depth.
 - VAD utterance duration, ASR/LLM/TTS latency percentile.
-- Provider error/rate-limit/timeout va token/audio usage.
-- Tool call count, duration, error va authorization denial.
-- Event loop lag, thread pool saturation, memory va CPU/GPU.
+- Provider error/rate-limit/timeout và token/audio usage.
+- Tool call count, duration, error và authorization denial.
+- Event loop lag, thread pool saturation, memory và CPU/GPU.
 - OTA check/download/success/rollback theo firmware/board cohort.
 
-Log can co correlation `session_id`, device ID da hash/redact va request ID. Khong log
-raw token, API key, Wi-Fi/MQTT secret, audio hay transcript neu chua co privacy policy.
+Log cần có correlation `session_id`, device ID đã hash/redact và request ID. Không log
+raw token, API key, Wi-Fi/MQTT secret, audio hay transcript nếu chưa có privacy policy.
 
-## Scale va resilience
+## Scale và resilience
 
-- WebSocket can sticky session hoac session state nam tron trong mot worker.
-- Redis/database khong nen nam tren hot audio path neu khong co timeout/cache.
-- Shared local model can co concurrency limiter va admission control.
-- Graceful shutdown dung nhan connection moi, cho/cancel stream, flush metric va dong
+- WebSocket cần sticky session hoặc session state nằm trọn trong một worker.
+- Redis/database không nên nằm trên hot audio path nếu không có timeout/cache.
+- Shared local model cần có concurrency limiter và admission control.
+- Graceful shutdown dừng nhận connection mới, chờ/cancel stream, flush metric và đóng
   provider theo deadline.
-- Manager API outage khong nen lam roi tat ca session dang chay neu cache con hop le.
-- Provider outage can fallback co policy; khong loop retry lam tang chi phi.
+- Manager API outage không nên làm rơi tất cả session đang chạy nếu cache còn hợp lệ.
+- Provider outage cần fallback có policy; không loop retry làm tăng chi phí.
 
-## Chien luoc kiem thu Veetee
+## Chiến lược kiểm thử Veetee
 
-| Lop | Kiem thu |
+| Lớp | Kiểm thử |
 | --- | --- |
 | Protocol | Golden JSON/binary vectors, malformed/oversized/fuzz, version compatibility |
-| Session | Hello, bind, listen, abort, reconnect, timeout va cleanup |
+| Session | Hello, bind, listen, abort, reconnect, timeout và cleanup |
 | Audio | Opus fixtures, VAD boundaries, sample-rate conversion, backpressure |
-| Provider | Contract tests bang fake server, timeout/retry/cancel/error mapping |
-| Conversation | Deterministic fake ASR/LLM/TTS, tool routing va session isolation |
-| API | OpenAPI contract, auth/RBAC/tenant, validation va idempotency |
-| OTA | Signature, downgrade, power loss, staged rollout va rollback |
-| Load | Nhieu WebSocket, slow client, provider saturation va event-loop lag |
+| Provider | Contract tests bằng fake server, timeout/retry/cancel/error mapping |
+| Conversation | Deterministic fake ASR/LLM/TTS, tool routing và session isolation |
+| API | OpenAPI contract, auth/RBAC/tenant, validation và idempotency |
+| OTA | Signature, downgrade, power loss, staged rollout và rollback |
+| Load | Nhiều WebSocket, slow client, provider saturation và event-loop lag |
 | E2E | Firmware simulator -> server -> fake AI -> Opus response |
 
-## Lenh upstream de tham khao
+## Lệnh upstream để tham khảo
 
 ```bash
-# Python runtime, khong phai test suite
+# Python runtime, không phải test suite
 python app.py
 
-# Java: can override cau hinh skipTests cua pom khi muon chay test
+# Java: cần override cấu hình skipTests của pom khi muốn chạy test
 mvn test -DskipTests=false
 
 # Web console
@@ -100,7 +100,7 @@ pnpm lint
 pnpm test:snapshot
 ```
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/utils/auth.py`
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/websocket_server.py`

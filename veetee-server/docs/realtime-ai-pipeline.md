@@ -1,43 +1,43 @@
 # Realtime AI pipeline
 
-## Ket noi va routing
+## Kết nối và routing
 
-Khi co WebSocket connection, `ConnectionHandler.handle_connection()`:
+Khi có WebSocket connection, `ConnectionHandler.handle_connection()`:
 
-1. Lay event loop va request headers.
-2. Xac dinh client IP va `device-id`.
-3. Phat hien ket noi tu MQTT gateway qua query string.
-4. Khoi dong task timeout va AEC cache cleanup.
-5. Khoi tao config/provider rieng o background.
-6. Lap `async for` nhan text hoac bytes.
-7. Save memory/title va cleanup khi dong.
+1. Lấy event loop và request headers.
+2. Xác định client IP và `device-id`.
+3. Phát hiện kết nối từ MQTT gateway qua query string.
+4. Khởi động task timeout và AEC cache cleanup.
+5. Khởi tạo config/provider riêng ở background.
+6. Lặp `async for` nhận text hoặc bytes.
+7. Save memory/title và cleanup khi đóng.
 
-Message text duoc dispatch theo `type`. Registry hien co:
+Message text được dispatch theo `type`. Registry hiện có:
 
 | Type | Handler semantic |
 | --- | --- |
 | `hello` | Audio params, feature MCP/AEC, hello response |
-| `listen` | Start/stop/detect va listen mode |
-| `abort` | Dung generation/TTS hien tai |
+| `listen` | Start/stop/detect và listen mode |
+| `abort` | Dừng generation/TTS hiện tại |
 | `iot` | Descriptor/state IoT legacy |
-| `mcp` | Response/tool data tu MCP device |
-| `server` | Message noi bo/gateway |
+| `mcp` | Response/tool data từ MCP device |
+| `server` | Message nội bộ/gateway |
 | `ping` | Heartbeat |
 
-Binary message duoc decode Opus mot lan thanh PCM de VAD va ASR dung chung. Ket noi
-qua MQTT gateway co binary envelope rieng va duoc tach truoc khi decode.
+Binary message được decode Opus một lần thành PCM để VAD và ASR dùng chung. Kết nối
+qua MQTT gateway có binary envelope riêng và được tách trước khi decode.
 
-## Hello va feature negotiation
+## Hello và feature negotiation
 
-Client hello co `audio_params` va `features`. Server cap nhat audio format/session params,
-khoi tao `MCPClient` neu `mcp=true`, bat server-side AEC neu `aec=true`, sau do tra
-`welcome_msg` co `session_id` va audio params.
+Client hello có `audio_params` và `features`. Server cập nhật audio format/session params,
+khởi tạo `MCPClient` nếu `mcp=true`, bật server-side AEC nếu `aec=true`, sau đó trả
+`welcome_msg` có `session_id` và audio params.
 
-Viec server ghi de `welcome_msg.audio_params` bang tham so client trong source tham
-khao can duoc danh gia ky: production nen validate format, sample rate, channels va
-frame duration theo danh sach server ho tro, khong tin truc tiep input.
+Việc server ghi đè `welcome_msg.audio_params` bằng tham số client trong source tham
+khảo cần được đánh giá kỹ: production nên validate format, sample rate, channels và
+frame duration theo danh sách server hỗ trợ, không tin trực tiếp input.
 
-## Audio den text
+## Audio đến text
 
 ```text
 Opus bytes
@@ -46,72 +46,72 @@ Opus bytes
   -> gom utterance
   -> ASR
   -> correction/normalization
-  -> voiceprint (tuy chon)
+  -> voiceprint (tùy chọn)
   -> dialogue user message
 ```
 
-VAD theo doi activity time, last voice time va voice-stop. ASR audio/session variable
-nam trong `ConnectionHandler` de provider dung chung khong lam tron state giua device.
-Streaming ASR va batch ASR co lifecycle khac nhau; adapter can khai bao ro reset/close.
+VAD theo dõi activity time, last voice time và voice-stop. ASR audio/session variable
+nằm trong `ConnectionHandler` để provider dùng chung không làm trộn state giữa device.
+Streaming ASR và batch ASR có lifecycle khác nhau; adapter cần khai báo rõ reset/close.
 
-## Text den hanh dong/phan hoi
+## Text đến hành động/phản hồi
 
 ```text
 recognized text
-  -> wake-word shortcut (tuy chon)
+  -> wake-word shortcut (tùy chọn)
   -> exit command
   -> intent strategy
-       -> no-intent: vao LLM
-       -> intent LLM: phan loai truoc
+        -> no-intent: vào LLM
+        -> intent LLM: phân loại trước
        -> function calling: tool schema trong LLM
   -> local plugin / MCP device tool / external MCP / IoT
   -> LLM response stream
-  -> tach cau
+  -> tách câu
   -> TTS
 ```
 
-Tool co the la plugin Python (`plugins_func`), device MCP, Home Assistant, search,
-weather, music hoac service ngoai. Moi tool can timeout, cancellation, authorization va
-output size limit; khong dua output tool chua sanitize vao prompt/system command.
+Tool có thể là plugin Python (`plugins_func`), device MCP, Home Assistant, search,
+weather, music hoặc service ngoài. Mỗi tool cần timeout, cancellation, authorization và
+output size limit; không đưa output tool chưa sanitize vào prompt/system command.
 
-## Text den audio
+## Text đến audio
 
-TTS co provider batch va streaming. Server gui control message song song audio:
+TTS có provider batch và streaming. Server gửi control message song song audio:
 
-| Su kien | Tac dung thiet bi |
+| Sự kiện | Tác dụng thiết bị |
 | --- | --- |
-| `tts/start` | Chuyen sang speaking |
-| `tts/sentence_start` | Hien subtitle hien tai |
-| Opus binary packets | Decode va playback |
-| `tts/stop` | Ket thuc response |
+| `tts/start` | Chuyển sang speaking |
+| `tts/sentence_start` | Hiện subtitle hiện tại |
+| Opus binary packets | Decode và playback |
+| `tts/stop` | Kết thúc response |
 
-`sentence_id` phan biet luot TTS va reset flow controller. Khi client abort, worker can
-dung sinh cau/audio cu va khong gui packet tre vao luot moi.
+`sentence_id` phân biệt lượt TTS và reset flow controller. Khi client abort, worker cần
+dừng sinh câu/audio cũ và không gửi packet trễ vào lượt mới.
 
-## Backpressure va latency budget
+## Backpressure và latency budget
 
-Nhung diem can do rieng:
+Những điểm cần đo riêng:
 
 - Device frame -> server decode.
 - VAD end-of-speech delay.
 - ASR first/final token.
 - LLM time-to-first-token.
 - TTS time-to-first-audio.
-- Queue/network jitter va device playback buffer.
+- Queue/network jitter và device playback buffer.
 
-Can gioi han queue theo byte/thoi gian, drop theo policy ro rang va cancellation xuyen
-suot pipeline. Queue khong gioi han se bien ket noi cham thanh memory leak.
+Cần giới hạn queue theo byte/thời gian, drop theo policy rõ ràng và cancellation xuyên
+suốt pipeline. Queue không giới hạn sẽ biến kết nối chậm thành memory leak.
 
-## Cleanup va failure mode
+## Cleanup và failure mode
 
-- Device chua bind: drop message va phat bind prompt theo interval.
-- Provider chua initialize: binary audio bi bo qua.
-- Socket close: cancel task, dong TTS/ASR va giai phong executor/queue.
-- Memory/reporting loi khong duoc ngan viec dong socket.
-- Provider timeout phai chuyen thanh loi co the recover, khong treo event loop.
-- Reconnect tao session moi; packet/result session cu phai bi loai.
+- Device chưa bind: drop message và phát bind prompt theo interval.
+- Provider chưa initialize: binary audio bị bỏ qua.
+- Socket close: cancel task, đóng TTS/ASR và giải phóng executor/queue.
+- Memory/reporting lỗi không được ngăn việc đóng socket.
+- Provider timeout phải chuyển thành lỗi có thể recover, không treo event loop.
+- Reconnect tạo session mới; packet/result session cũ phải bị loại.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/connection.py`
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/handle/`

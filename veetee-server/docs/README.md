@@ -1,28 +1,28 @@
-# Ghi chu ky thuat server
+# Ghi chú kỹ thuật server
 
-## Muc dich
+## Mục đích
 
-Thu muc nay tong hop cac thanh phan, phuong thuc va giao thuc dang co trong source
-tham khao `../references/xiaozhi-esp32-server`. Tai lieu dung de nghien cuu va lap ke
-hoach cho Veetee; no khong dinh nghia kien truc chinh thuc cua server Veetee.
+Thư mục này tổng hợp các thành phần, phương thức và giao thức đang có trong source
+tham khảo `../references/xiaozhi-esp32-server`. Tài liệu dùng để nghiên cứu và lập kế
+hoạch cho Veetee; nó không định nghĩa kiến trúc chính thức của server Veetee.
 
-Source tham khao la monorepo gom Python realtime server, Java management API, Vue web,
-uni-app mobile va digital-human test client. Veetee khong mac dinh phai su dung tat ca
-cac thanh phan hoac cung cong nghe.
+Source tham khảo là monorepo gồm Python realtime server, Java management API, Vue web,
+uni-app mobile và digital-human test client. Veetee không mặc định phải sử dụng tất cả
+các thành phần hoặc cùng công nghệ.
 
-## Danh muc
+## Danh mục
 
-| Tai lieu | Noi dung |
+| Tài liệu | Nội dung |
 | --- | --- |
-| [Tong quan kien truc](architecture.md) | Thanh phan, boundary va deployment mode |
-| [Realtime AI pipeline](realtime-ai-pipeline.md) | Connection, audio, VAD, ASR, LLM, tool va TTS |
-| [Giao thuc va API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP va manager API |
-| [Provider va cau hinh](providers-and-configuration.md) | Plugin factory, selected modules va config precedence |
-| [Bao mat, van hanh va kiem thu](security-operations-testing.md) | Auth, secret, scale, observability va test gap |
+| [Tổng quan kiến trúc](architecture.md) | Thành phần, boundary và deployment mode |
+| [Realtime AI pipeline](realtime-ai-pipeline.md) | Connection, audio, VAD, ASR, LLM, tool và TTS |
+| [Giao thức và API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP và manager API |
+| [Provider và cấu hình](providers-and-configuration.md) | Plugin factory, selected modules và config precedence |
+| [Bảo mật, vận hành và kiểm thử](security-operations-testing.md) | Auth, secret, scale, observability và test gap |
 
-## Ban do source tham khao
+## Bản đồ source tham khảo
 
-| Thanh phan | Vi tri upstream |
+| Thành phần | Vị trí upstream |
 | --- | --- |
 | Python realtime server | `../references/xiaozhi-esp32-server/main/xiaozhi-server/` |
 | Java management API | `../references/xiaozhi-esp32-server/main/manager-api/` |
@@ -31,10 +31,10 @@ cac thanh phan hoac cung cong nghe.
 | Browser test client | `../references/xiaozhi-esp32-server/main/digital-human/` |
 | Deployment/integration docs | `../references/xiaozhi-esp32-server/docs/` |
 
-## Cach doc
+## Cách đọc
 
-- Dung `architecture.md` de xac dinh subsystem nao can tham khao.
-- Dung `realtime-ai-pipeline.md` khi lam audio/session/AI orchestration.
-- Dung `protocols-and-apis.md` cung tai lieu firmware khi thay doi contract thiet bi.
-- Dung `providers-and-configuration.md` khi them model/provider.
-- Kiem tra source tai commit dang pin truoc khi trien khai wire format hoac endpoint.
+- Dùng `architecture.md` để xác định subsystem nào cần tham khảo.
+- Dùng `realtime-ai-pipeline.md` khi làm audio/session/AI orchestration.
+- Dùng `protocols-and-apis.md` cùng tài liệu firmware khi thay đổi contract thiết bị.
+- Dùng `providers-and-configuration.md` khi thêm model/provider.
+- Kiểm tra source tại commit đang pin trước khi triển khai wire format hoặc endpoint.

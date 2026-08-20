@@ -1,37 +1,37 @@
-# Moc Git source tham khao
+# Mốc Git source tham khảo
 
-## Muc dich
+## Mục đích
 
-File nay pin trang thai cua hai upstream dang duoc dung de nghien cuu Veetee. Moc Git
-giup AI va contributor biet tai lieu da duoc khao sat tren commit nao, so sanh voi
-upstream moi va danh gia thay doi truoc khi cap nhat tai lieu hoac port code.
+File này pin trạng thái của hai upstream đang được dùng để nghiên cứu Veetee. Mốc Git
+giúp AI và contributor biết tài liệu đã được khảo sát trên commit nào, so sánh với
+upstream mới và đánh giá thay đổi trước khi cập nhật tài liệu hoặc port code.
 
-Hai repo tham khao la read-only trong workspace Veetee. Khong sua code/tai lieu, khong
-tao artifact va khong thuc hien thao tac Git ghi trong cac repo nay.
+Hai repo tham khảo là read-only trong workspace Veetee. Không sửa code/tài liệu, không
+tạo artifact và không thực hiện thao tác Git ghi trong các repo này.
 
-## Moc hien tai
+## Mốc hiện tại
 
-Moc duoc ghi nhan ngay 2026-08-20. Ca hai worktree deu sach tai thoi diem ghi nhan.
+Mốc được ghi nhận ngày 2026-08-20. Cả hai worktree đều sạch tại thời điểm ghi nhận.
 
-| Pham vi | Remote | Branch | Commit | Commit time | Tieu de |
+| Phạm vi | Remote | Branch | Commit | Commit time | Tiêu đề |
 | --- | --- | --- | --- | --- | --- |
 | Firmware | `https://github.com/78/xiaozhi-esp32.git` | `main` | `d6f6b642977940b862f6f3026c3915df75d388b6` | `2026-08-19T14:04:52+08:00` | `feat(m5stack-stopwatch): support display brightness control (#2189)` |
 | Server | `https://github.com/xinnan-tech/xiaozhi-esp32-server.git` | `main` | `e1876f1ce19cad6e7bfd7c80e41dc56b2e858dd5` | `2026-08-18T16:31:48+08:00` | `Merge pull request #3315 from xinnan-tech/fix-model-name` |
 
-## Quy trinh doi chieu update
+## Quy trình đối chiếu update
 
-1. Doc moc hien tai trong file nay.
-2. Dung lenh read-only de ghi nhan `HEAD`, branch, remote, status va commit time tai
+1. Đọc mốc hiện tại trong file này.
+2. Dùng lệnh read-only để ghi nhận `HEAD`, branch, remote, status và commit time tại
    local reference.
-3. Neu can biet upstream moi, truy van remote bang `git ls-remote` hoac GitHub API ma
-   khong fetch/pull vao repo tham khao.
-4. So sanh commit range bang API, clone tam o ngoai workspace hoac mot noi duoc phep;
-   khong checkout/reset/pull repo tham khao.
-5. Danh gia thay doi theo firmware, server va contract dung chung.
-6. Neu chap nhan moc tham khao moi, giu lich su moc cu trong muc nhat ky ben duoi, cap
-   nhat bang moc hien tai va cap nhat cac tai lieu bi anh huong.
+3. Nếu cần biết upstream mới, truy vấn remote bằng `git ls-remote` hoặc GitHub API mà
+   không fetch/pull vào repo tham khảo.
+4. So sánh commit range bằng API, clone tạm ở ngoài workspace hoặc một nơi được phép;
+   không checkout/reset/pull repo tham khảo.
+5. Đánh giá thay đổi theo firmware, server và contract dùng chung.
+6. Nếu chấp nhận mốc tham khảo mới, giữ lịch sử mốc cũ trong mục nhật ký bên dưới, cập
+   nhật bảng mốc hiện tại và cập nhật các tài liệu bị ảnh hưởng.
 
-## Lenh read-only cho phep
+## Lệnh read-only cho phép
 
 ```bash
 git status --short
@@ -44,11 +44,11 @@ git show <commit>:<path>
 git ls-remote <remote-url> refs/heads/main
 ```
 
-`git diff` va `git show` chi hop le khi cac object da ton tai local. Khong fetch object
-vao hai repo tham khao; neu can, dung clone tam ben ngoai workspace.
+`git diff` và `git show` chỉ hợp lệ khi các object đã tồn tại local. Không fetch object
+vào hai repo tham khảo; nếu cần, dùng clone tạm bên ngoài workspace.
 
-## Nhat ky moc
+## Nhật ký mốc
 
-| Ngay ghi nhan | Firmware | Server | Ghi chu |
+| Ngày ghi nhận | Firmware | Server | Ghi chú |
 | --- | --- | --- | --- |
-| 2026-08-20 | `d6f6b642977940b862f6f3026c3915df75d388b6` | `e1876f1ce19cad6e7bfd7c80e41dc56b2e858dd5` | Moc ban dau; hai worktree sach |
+| 2026-08-20 | `d6f6b642977940b862f6f3026c3915df75d388b6` | `e1876f1ce19cad6e7bfd7c80e41dc56b2e858dd5` | Mốc ban đầu; hai worktree sạch |

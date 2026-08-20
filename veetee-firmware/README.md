@@ -1,83 +1,83 @@
 # Veetee Firmware
 
-## Trang thai hien tai
+## Trạng thái hiện tại
 
-`veetee-firmware` la khong gian chuan bi cho firmware cua Veetee. Hien tai chua co
-source firmware chinh thuc, board target, build system hay release artifact cua Veetee.
-Thu muc moi chi gom tai lieu khao sat va source tham khao.
+`veetee-firmware` là không gian chuẩn bị cho firmware của Veetee. Hiện tại chưa có
+source firmware chính thức, board target, build system hay release artifact của Veetee.
+Thư mục mới chỉ gồm tài liệu khảo sát và source tham khảo.
 
-Khong coi code trong `references/` la code cua Veetee va khong mac dinh kien truc
-Veetee se giong upstream.
+Không coi code trong `references/` là code của Veetee và không mặc định kiến trúc
+Veetee sẽ giống upstream.
 
-## Cau truc
+## Cấu trúc
 
 ```text
 veetee-firmware/
-|-- README.md       # Diem bat dau cho nguoi dung
-|-- AGENTS.md       # Huong dan thao tac cho AI/contributor
-|-- docs/           # Ghi chu ky thuat rut ra tu source tham khao
-`-- references/     # Upstream chi dung de doc, doi chieu va thu nghiem rieng
+|-- README.md       # Điểm bắt đầu cho người dùng
+|-- AGENTS.md       # Hướng dẫn thao tác cho AI/contributor
+|-- docs/           # Ghi chú kỹ thuật rút ra từ source tham khảo
+`-- references/     # Upstream chỉ dùng để đọc, đối chiếu và thử nghiệm riêng
 ```
 
-Khi source Veetee duoc tao, cau truc source, test, tool va build se duoc bo sung theo
-quyet dinh ky thuat cu the. Khong tao san cac thu muc rong de ap dat kien truc som.
+Khi source Veetee được tạo, cấu trúc source, test, tool và build sẽ được bổ sung theo
+quyết định kỹ thuật cụ thể. Không tạo sẵn các thư mục rỗng để áp đặt kiến trúc sớm.
 
-## Bat dau tu dau
+## Bắt đầu từ đâu
 
-1. Doc [muc luc tai lieu](docs/README.md).
-2. Doc [tong quan kien truc tham khao](docs/architecture.md).
-3. Chon tai lieu theo cong viec:
+1. Đọc [mục lục tài liệu](docs/README.md).
+2. Đọc [tổng quan kiến trúc tham khảo](docs/architecture.md).
+3. Chọn tài liệu theo công việc:
 
-| Cong viec | Tai lieu nen doc |
+| Công việc | Tài liệu nên đọc |
 | --- | --- |
-| Board, lifecycle, task | [Tong quan kien truc](docs/architecture.md) |
-| Class, interface, callback | [Giao dien va phuong thuc](docs/interfaces.md) |
-| Microphone, speaker, VAD, AEC | [Am thanh va trang thai](docs/audio-and-state.md) |
-| Ket noi voi server | [Giao thuc thiet bi-server](docs/device-server-protocol.md) |
-| Provisioning, activation, OTA | [Khoi tao, OTA va cau hinh](docs/provisioning-ota-config.md) |
+| Board, lifecycle, task | [Tổng quan kiến trúc](docs/architecture.md) |
+| Class, interface, callback | [Giao diện và phương thức](docs/interfaces.md) |
+| Microphone, speaker, VAD, AEC | [Âm thanh và trạng thái](docs/audio-and-state.md) |
+| Kết nối với server | [Giao thức thiết bị-server](docs/device-server-protocol.md) |
+| Provisioning, activation, OTA | [Khởi tạo, OTA và cấu hình](docs/provisioning-ota-config.md) |
 
-4. Doi chieu source trong `references/xiaozhi-esp32` neu can xac minh implementation.
-5. Truoc khi viet code, xac dinh ro yeu cau Veetee, target chip/board va pham vi can
-   ke thua hay viet lai.
+4. Đối chiếu source trong `references/xiaozhi-esp32` nếu cần xác minh implementation.
+5. Trước khi viết code, xác định rõ yêu cầu Veetee, target chip/board và phạm vi cần
+   kế thừa hay viết lại.
 
-## Nguyen tac thao tac
+## Nguyên tắc thao tác
 
-- Code moi cua Veetee phai nam ngoai `references/`.
-- Chi sua `references/` khi co yeu cau ro rang ve viec patch/fork source tham khao.
-- Khong copy nguyen module upstream neu chua danh gia license, dependency, bo nho va
-  kha nang tuong thich phan cung.
-- Thay doi giao thuc thiet bi-server phai duoc doi chieu dong thoi voi
+- Code mới của Veetee phải nằm ngoài `references/`.
+- Chỉ sửa `references/` khi có yêu cầu rõ ràng về việc patch/fork source tham khảo.
+- Không copy nguyên module upstream nếu chưa đánh giá license, dependency, bộ nhớ và
+  khả năng tương thích phần cứng.
+- Thay đổi giao thức thiết bị-server phải được đối chiếu đồng thời với
   `../veetee-server`.
-- Thong so trong `docs/` la gia tri quan sat tu upstream, khong phai yeu cau san pham.
-- Khi co quyet dinh chinh thuc, cap nhat README/tai lieu Veetee va ghi ro phan nao la
-  quyet dinh, phan nao chi la tham khao.
+- Thông số trong `docs/` là giá trị quan sát từ upstream, không phải yêu cầu sản phẩm.
+- Khi có quyết định chính thức, cập nhật README/tài liệu Veetee và ghi rõ phần nào là
+  quyết định, phần nào chỉ là tham khảo.
 
-## Quy trinh cho mot cong viec moi
+## Quy trình cho một công việc mới
 
 ```text
-yeu cau
-  -> xac dinh pham vi firmware
-  -> doc docs lien quan
-  -> doi chieu implementation upstream neu can
-  -> de xuat/chot quyet dinh Veetee
-  -> tao source ngoai references
+yêu cầu
+  -> xác định phạm vi firmware
+  -> đọc docs liên quan
+  -> đối chiếu implementation upstream nếu cần
+  -> đề xuất/chốt quyết định Veetee
+  -> tạo source ngoài references
   -> build/test
-  -> cap nhat tai lieu
+  -> cập nhật tài liệu
 ```
 
-Hien chua co lenh build/test cua Veetee. Lenh trong source tham khao chi co gia tri khi
-chay ben trong repo upstream va khong duoc ghi nhan la quy trinh build cua Veetee.
+Hiện chưa có lệnh build/test của Veetee. Lệnh trong source tham khảo chỉ có giá trị khi
+chạy bên trong repo upstream và không được ghi nhận là quy trình build của Veetee.
 
-## Quan he voi server
+## Quan hệ với server
 
-Firmware va server dung chung cac contract sau:
+Firmware và server dùng chung các contract sau:
 
-- Device identity va authentication.
-- Session lifecycle va feature negotiation.
-- JSON control messages va binary audio.
-- Opus format, sample rate, frame duration va timestamp.
+- Device identity và authentication.
+- Session lifecycle và feature negotiation.
+- JSON control messages và binary audio.
+- Opus format, sample rate, frame duration và timestamp.
 - MCP tool discovery/invocation.
-- Activation, endpoint discovery va OTA metadata.
+- Activation, endpoint discovery và OTA metadata.
 
-Bat ky thay doi nao o cac diem nay can cap nhat tai lieu cua ca hai muc va kiem thu hai
-dau cua contract.
+Bất kỳ thay đổi nào ở các điểm này cần cập nhật tài liệu của cả hai mục và kiểm thử hai
+đầu của contract.

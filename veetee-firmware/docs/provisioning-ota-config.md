@@ -1,88 +1,88 @@
-# Khoi tao mang, activation, OTA va cau hinh
+# Khởi tạo mạng, activation, OTA và cấu hình
 
-## Chuoi activation tham khao
+## Chuỗi activation tham khảo
 
 ```text
 network connected
   -> background ActivationTask
-  -> kiem tra asset version
+  -> kiểm tra asset version
   -> Ota::CheckVersion
-  -> xu ly server time / activation challenge / activation code
-  -> Ota::Activate neu can
-  -> chon MQTT config hoac WebSocket config
-  -> kiem tra firmware moi
+  -> xử lý server time / activation challenge / activation code
+  -> Ota::Activate nếu cần
+  -> chọn MQTT config hoặc WebSocket config
+  -> kiểm tra firmware mới
   -> idle
 ```
 
-`Ota` khong chi download firmware; response cua version endpoint con co the phan phoi
-transport config, server time, serial number va activation data. Day la coupling quan
-trong can tach ro trong thiet ke Veetee: provisioning/config discovery va firmware OTA
-co the can lifecycle, quyen va tan suat khac nhau.
+`Ota` không chỉ download firmware; response của version endpoint còn có thể phân phối
+transport config, server time, serial number và activation data. Đây là coupling quan
+trọng cần tách rõ trong thiết kế Veetee: provisioning/config discovery và firmware OTA
+có thể cần lifecycle, quyền và tần suất khác nhau.
 
-## API `Ota` quan trong
+## API `Ota` quan trọng
 
-| Phuong thuc | Vai tro |
+| Phương thức | Vai trò |
 | --- | --- |
-| `CheckVersion()` | Goi endpoint, parse version/config/activation |
-| `Activate()` | Hoan tat challenge/activation |
-| `HasNewVersion()` | Co firmware moi hay khong |
-| `HasMqttConfig()` / `HasWebsocketConfig()` | Transport config da nhan |
-| `HasActivationCode/Challenge()` | Trang thai bind/activate |
-| `StartUpgrade(callback)` | Download va flash version da discover |
-| `Upgrade(url, callback)` | Nang cap truc tiep tu URL |
-| `MarkCurrentVersionValid()` | Xac nhan image boot thanh cong |
-| `GetCheckVersionUrl()` | Tao URL version check |
+| `CheckVersion()` | Gọi endpoint, parse version/config/activation |
+| `Activate()` | Hoàn tất challenge/activation |
+| `HasNewVersion()` | Có firmware mới hay không |
+| `HasMqttConfig()` / `HasWebsocketConfig()` | Transport config đã nhận |
+| `HasActivationCode/Challenge()` | Trạng thái bind/activate |
+| `StartUpgrade(callback)` | Download và flash version đã discover |
+| `Upgrade(url, callback)` | Nâng cấp trực tiếp từ URL |
+| `MarkCurrentVersionValid()` | Xác nhận image boot thành công |
+| `GetCheckVersionUrl()` | Tạo URL version check |
 
-Callback upgrade nhan phan tram progress va toc do byte/giay. Image moi can duoc xac
-thuc truoc khi danh dau hop le; production nen co secure boot, signed image, anti-
-rollback va rollback khi boot health check that bai.
+Callback upgrade nhận phần trăm progress và tốc độ byte/giây. Image mới cần được xác
+thực trước khi đánh dấu hợp lệ; production nên có secure boot, signed image, anti-
+rollback và rollback khi boot health check thất bại.
 
 ## Network provisioning
 
-Board phat event chung cho scanning, connecting, connected, disconnected va che do
-cau hinh Wi-Fi. Cellular implementation co them no-SIM, registration denied, init
-failure va timeout. Core khong nen biet driver cu the.
+Board phát event chung cho scanning, connecting, connected, disconnected và chế độ
+cấu hình Wi-Fi. Cellular implementation có thêm no-SIM, registration denied, init
+failure và timeout. Core không nên biết driver cụ thể.
 
-Source tham khao co BluFi va cac board/network helper khac. Veetee can chot:
+Source tham khảo có BluFi và các board/network helper khác. Veetee cần chốt:
 
-- Kenh provisioning: BLE, SoftAP, USB, app companion hay pre-provisioned.
-- Cach bao ve credential khi pairing.
-- Factory reset xoa gi va co lam doi `Client-Id` hay khong.
-- Retry/backoff va UI khi mat mang.
+- Kênh provisioning: BLE, SoftAP, USB, app companion hay pre-provisioned.
+- Cách bảo vệ credential khi pairing.
+- Factory reset xóa gì và có làm đổi `Client-Id` hay không.
+- Retry/backoff và UI khi mất mạng.
 
-## Settings va NVS
+## Settings và NVS
 
-`Settings` boc NVS theo namespace/key va luu chuoi, integer, boolean. Key da phat hanh
-la persistent API; doi ten/key/type can migration. Khong nen luu access token hoac Wi-Fi
-credential dang plaintext neu hardware co the dung flash encryption/NVS encryption.
+`Settings` bọc NVS theo namespace/key và lưu chuỗi, integer, boolean. Key đã phát hành
+là persistent API; đổi tên/key/type cần migration. Không nên lưu access token hoặc Wi-Fi
+credential dạng plaintext nếu hardware có thể dùng flash encryption/NVS encryption.
 
-Cac nhom data nen duoc phan loai rieng:
+Các nhóm data nên được phân loại riêng:
 
-| Nhom | Vi du | Policy de xuat |
+| Nhóm | Ví dụ | Policy đề xuất |
 | --- | --- | --- |
-| Identity | device ID, client ID, serial | On dinh, co quy tac reset ro |
-| Secret | Wi-Fi, token, MQTT password | Encrypt, khong log |
+| Identity | device ID, client ID, serial | Ổn định, có quy tắc reset rõ |
+| Secret | Wi-Fi, token, MQTT password | Encrypt, không log |
 | Runtime config | endpoint, volume, locale | Versioned schema, validate |
-| OTA state | active/pending version, rollback | Atomic va chiu mat dien |
-| Cache | asset metadata, temporary state | Co the tai tao/xoa |
+| OTA state | active/pending version, rollback | Atomic và chịu mất điện |
+| Cache | asset metadata, temporary state | Có thể tái tạo/xóa |
 
 ## Asset partition
 
-Upstream co partition rieng cho model/font/image/audio asset va kiem tra version khi
-khoi dong. Asset co the duoc download doc lap firmware. Can kiem tra kich thuoc partition,
-hash, atomic switch va kha nang rollback; khong ghi de asset dang su dung.
+Upstream có partition riêng cho model/font/image/audio asset và kiểm tra version khi
+khởi động. Asset có thể được download độc lập firmware. Cần kiểm tra kích thước partition,
+hash, atomic switch và khả năng rollback; không ghi đè asset đang sử dụng.
 
 ## Checklist production
 
-- HTTPS/TLS va pin/trust policy cho endpoint provisioning, activation va OTA.
-- Chu ky firmware/asset va kiem tra hash truoc khi switch partition.
-- Power-loss test o moi giai doan erase/write/activate.
-- Rate limit activation va khong hien secret trong log/man hinh.
-- Version schema cho response config va kha nang bo qua field moi.
-- Recovery path khi endpoint tra config sai hoac ca hai transport deu that bai.
-- Telemetry toi thieu cho ly do rollback, download error va boot loop.
+- HTTPS/TLS và pin/trust policy cho endpoint provisioning, activation và OTA.
+- Chữ ký firmware/asset và kiểm tra hash trước khi switch partition.
+- Power-loss test ở mỗi giai đoạn erase/write/activate.
+- Rate limit activation và không hiện secret trong log/màn hình.
+- Version schema cho response config và khả năng bỏ qua field mới.
+- Recovery path khi endpoint trả config sai hoặc cả hai transport đều thất bại.
+- Telemetry tối thiểu cho lý do rollback, download error và boot loop.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32/main/ota.h`
 - `../references/xiaozhi-esp32/main/ota.cc`

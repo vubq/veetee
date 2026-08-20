@@ -1,77 +1,77 @@
-# Giao thuc va API
+# Giao thức và API
 
 ## Device WebSocket
 
-Endpoint mac dinh quan sat:
+Endpoint mặc định quan sát:
 
 ```text
 ws://<host>:8000/xiaozhi/v1/
 ```
 
-Handshake header gom `Authorization`, `Protocol-Version`, `Device-Id`, `Client-Id`.
-Text frame la JSON control; binary frame la Opus hoac binary envelope theo protocol
-version. Dac ta message chi tiet nam o `../../veetee-firmware/docs/device-server-protocol.md`.
+Handshake header gồm `Authorization`, `Protocol-Version`, `Device-Id`, `Client-Id`.
+Text frame là JSON control; binary frame là Opus hoặc binary envelope theo protocol
+version. Đặc tả message chi tiết nằm ở `../../veetee-firmware/docs/device-server-protocol.md`.
 
-Server nhan `hello`, `listen`, `abort`, `iot`, `mcp`, `server`, `ping`. Server gui
-`hello`, `stt`, `llm`, `tts`, `mcp`, `system`, `alert` va binary audio. Hai dau phai
-kiem tra `session_id` va feature negotiation.
+Server nhận `hello`, `listen`, `abort`, `iot`, `mcp`, `server`, `ping`. Server gửi
+`hello`, `stt`, `llm`, `tts`, `mcp`, `system`, `alert` và binary audio. Hai đầu phải
+kiểm tra `session_id` và feature negotiation.
 
 ## MQTT gateway
 
-Python server co the nhan ket noi bridge qua WebSocket path co `?from=mqtt_gateway`.
-Gateway chuyen MQTT control va UDP audio thanh hop dong noi bo cho `ConnectionHandler`.
-Day la implementation detail upstream; Veetee can quyet dinh gateway la process rieng,
-protocol noi bo nao va trust boundary o dau.
+Python server có thể nhận kết nối bridge qua WebSocket path có `?from=mqtt_gateway`.
+Gateway chuyển MQTT control và UDP audio thành hợp đồng nội bộ cho `ConnectionHandler`.
+Đây là implementation detail upstream; Veetee cần quyết định gateway là process riêng,
+protocol nội bộ nào và trust boundary ở đâu.
 
 ## Python HTTP service
 
-Cong mac dinh quan sat la `8003`.
+Cổng mặc định quan sát là `8003`.
 
-| Method | Path | Khi nao co | Vai tro |
+| Method | Path | Khi nào có | Vai trò |
 | --- | --- | --- | --- |
-| GET/POST/OPTIONS | `/xiaozhi/ota/` | Local mode | Tra WebSocket/OTA config cho device |
-| GET/OPTIONS | `/xiaozhi/ota/download/{filename}` | Local mode | Chi download file trong `data/bin` |
-| GET/POST/OPTIONS | `/mcp/vision/explain` | Luon dang ky | Nhan anh/cau hoi cho vision model |
+| GET/POST/OPTIONS | `/xiaozhi/ota/` | Local mode | Trả WebSocket/OTA config cho device |
+| GET/OPTIONS | `/xiaozhi/ota/download/{filename}` | Local mode | Chỉ download file trong `data/bin` |
+| GET/POST/OPTIONS | `/mcp/vision/explain` | Luôn đăng ký | Nhận ảnh/câu hỏi cho vision model |
 
-Khi `read_config_from_api=true`, OTA route local khong duoc dang ky; control plane dam
-nhan OTA/config. Download handler phai chong path traversal va gioi han file/content.
-Vision endpoint can gioi han upload, MIME, timeout, token va chong SSRF neu goi URL ngoai.
+Khi `read_config_from_api=true`, OTA route local không được đăng ký; control plane đảm
+nhận OTA/config. Download handler phải chống path traversal và giới hạn file/content.
+Vision endpoint cần giới hạn upload, MIME, timeout, token và chống SSRF nếu gọi URL ngoài.
 
 ## MCP device protocol
 
-Server dong vai MCP client doi voi ESP32. Flow:
+Server đóng vai MCP client đối với ESP32. Flow:
 
 ```text
 device hello features.mcp=true
   -> server initialize
   -> device capabilities/serverInfo
-  -> server tools/list (co pagination)
-  -> LLM/backend chon tool
+  -> server tools/list (có pagination)
+  -> LLM/backend chọn tool
   -> server tools/call
   -> device result/error
 ```
 
-MCP payload la JSON-RPC 2.0 boc trong message `type=mcp`. Tool invocation can duoc rang
-buoc vao dung session/device va authorization policy. Khong de model tu dong goi
-user-only tool nhu reboot/upgrade.
+MCP payload là JSON-RPC 2.0 bọc trong message `type=mcp`. Tool invocation cần được ràng
+buộc vào đúng session/device và authorization policy. Không để model tự động gọi
+user-only tool như reboot/upgrade.
 
 ## Manager API
 
-Spring Boot context quan sat la `/xiaozhi`, thuong o cong `8002`. OpenAPI/Knife4j co
-the co tai `/xiaozhi/doc.html`. API day du rat lon; cac nhom quan trong:
+Spring Boot context quan sát là `/xiaozhi`, thường ở cổng `8002`. OpenAPI/Knife4j có
+thể có tại `/xiaozhi/doc.html`. API đầy đủ rất lớn; các nhóm quan trọng:
 
-| Nhom | Base path vi du | Vai tro |
+| Nhóm | Base path ví dụ | Vai trò |
 | --- | --- | --- |
 | Runtime config | `/config` | Server base, agent models, correction words |
 | Authentication | `/user` | Login, register, info, password, public config |
-| Device/agent | Theo controller `device`, `agent` | Bind va cau hinh tro ly |
+| Device/agent | Theo controller `device`, `agent` | Bind và cấu hình trợ lý |
 | Model/provider | `/models`, `/models/provider` | CRUD provider/model/voice |
-| OTA | Controller trong module OTA | Firmware, version va rollout |
-| Voice | `/ttsVoice`, `/voiceClone`, `/voiceResource` | Timbre va clone voice |
+| OTA | Controller trong module OTA | Firmware, version và rollout |
+| Voice | `/ttsVoice`, `/voiceClone`, `/voiceResource` | Timbre và clone voice |
 | Knowledge | `/datasets` | Dataset/document cho RAG |
 | Administration | `/admin/...` | User, role, parameter, dictionary, server action |
 
-Ba API noi bo ma Python runtime phu thuoc truc tiep:
+Ba API nội bộ mà Python runtime phụ thuộc trực tiếp:
 
 ```text
 POST /xiaozhi/config/server-base
@@ -79,21 +79,21 @@ POST /xiaozhi/config/agent-models
 POST /xiaozhi/config/correct-words
 ```
 
-Can doc `ConfigController.java` va DTO tuong ung de lay body/response chinh xac tai
-commit dang pin. Khong nen coi bang tong hop nay la OpenAPI contract.
+Cần đọc `ConfigController.java` và DTO tương ứng để lấy body/response chính xác tại
+commit đang pin. Không nên coi bảng tổng hợp này là OpenAPI contract.
 
-## API design neu xay Veetee
+## API design nếu xây Veetee
 
-- Tach public device API, user API, admin API va service-to-service API.
-- Version endpoint/path hoac media type.
-- Dung OpenAPI sinh tu source va contract test cho client.
-- Idempotency cho activation, bind, OTA report va command.
-- Pagination/filter/sort nhat quan.
-- Error envelope co machine code, message an toan va correlation ID.
-- RBAC tenant-aware; admin action co audit log.
-- Rate limit login, activation, upload va AI-cost endpoint.
+- Tách public device API, user API, admin API và service-to-service API.
+- Version endpoint/path hoặc media type.
+- Dùng OpenAPI sinh từ source và contract test cho client.
+- Idempotency cho activation, bind, OTA report và command.
+- Pagination/filter/sort nhất quán.
+- Error envelope có machine code, message an toàn và correlation ID.
+- RBAC tenant-aware; admin action có audit log.
+- Rate limit login, activation, upload và AI-cost endpoint.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/http_server.py`
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/api/`

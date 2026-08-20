@@ -1,56 +1,56 @@
-# Tong quan kien truc firmware tham khao
+# Tổng quan kiến trúc firmware tham khảo
 
-## Pham vi
+## Phạm vi
 
-Tai lieu nay mo ta kien truc dang ton tai trong `xiaozhi-esp32` de lam du lieu dau vao
-cho thiet ke Veetee. No khong dinh nghia cau truc thu muc tuong lai cua Veetee.
+Tài liệu này mô tả kiến trúc đang tồn tại trong `xiaozhi-esp32` để làm dữ liệu đầu vào
+cho thiết kế Veetee. Nó không định nghĩa cấu trúc thư mục tương lai của Veetee.
 
-## Thanh phan chinh
+## Thành phần chính
 
-| Thanh phan | Trach nhiem quan sat duoc |
+| Thành phần | Trách nhiệm quan sát được |
 | --- | --- |
-| `app_main()` | Khoi tao NVS, tao `Application`, goi `Initialize()` va `Run()` |
-| `Application` | Dieu phoi lifecycle, event loop, protocol, audio, UI va activation |
-| `DeviceStateMachine` | Kiem tra transition va phat callback khi state thay doi |
-| `AudioService` | Input/output audio, wake word, VAD, AEC, Opus va cac queue |
-| `Protocol` | Hop dong transport-neutral cho JSON va audio |
-| `WebsocketProtocol` | JSON text frame va Opus binary frame tren mot ket noi |
-| `MqttProtocol` | MQTT control va UDP audio ma hoa |
-| `Board` | Bien hardware/network cu the thanh mot interface chung |
-| `McpServer` | Cong bo va thuc thi tool tren thiet bi bang JSON-RPC 2.0 |
-| `Ota`, `Assets`, `Settings` | Nang cap firmware, asset partition va luu cau hinh NVS |
+| `app_main()` | Khởi tạo NVS, tạo `Application`, gọi `Initialize()` và `Run()` |
+| `Application` | Điều phối lifecycle, event loop, protocol, audio, UI và activation |
+| `DeviceStateMachine` | Kiểm tra transition và phát callback khi state thay đổi |
+| `AudioService` | Input/output audio, wake word, VAD, AEC, Opus và các queue |
+| `Protocol` | Hợp đồng transport-neutral cho JSON và audio |
+| `WebsocketProtocol` | JSON text frame và Opus binary frame trên một kết nối |
+| `MqttProtocol` | MQTT control và UDP audio mã hóa |
+| `Board` | Biến hardware/network cụ thể thành một interface chung |
+| `McpServer` | Công bố và thực thi tool trên thiết bị bằng JSON-RPC 2.0 |
+| `Ota`, `Assets`, `Settings` | Nâng cấp firmware, asset partition và lưu cấu hình NVS |
 
-## Vong doi khoi dong
+## Vòng đời khởi động
 
 ```text
 app_main
-  -> khoi tao NVS
+  -> khởi tạo NVS
   -> Application::Initialize
        -> Board / Display / AudioService
-       -> callback audio va state
+       -> callback audio và state
        -> MCP tools
        -> callback network
-       -> StartNetwork (bat dong bo)
+       -> StartNetwork (bất đồng bộ)
   -> Application::Run
-       -> cho event bits
-       -> xu ly callback da Schedule
+       -> chờ event bits
+       -> xử lý callback đã Schedule
        -> activation / OTA / asset
-       -> khoi tao transport
-       -> idle va cac phien hoi thoai
+       -> khởi tạo transport
+       -> idle và các phiên hội thoại
 ```
 
-`Application::Run()` la vong lap chinh va khong tra ve. Callback tu network, audio hoac
-task khac khong nen sua truc tiep state ung dung; upstream dua chung ve main task qua
-`Application::Schedule()` hoac event bits.
+`Application::Run()` là vòng lặp chính và không trả về. Callback từ network, audio hoặc
+task khác không nên sửa trực tiếp state ứng dụng; upstream đưa chúng về main task qua
+`Application::Schedule()` hoặc event bits.
 
-## Ranh gioi core va board
+## Ranh giới core và board
 
-Core chi truy cap phan cung qua `Board::GetInstance()` va cac interface nhu
-`AudioCodec`, `Display`, `Led`, `Camera`, `Backlight`, `NetworkInterface`. Cac kha nang
-camera, man hinh, pin va backlight co the khong ton tai; getter mac dinh co the tra ve
-`nullptr` hoac gia tri khong ho tro.
+Core chỉ truy cập phần cứng qua `Board::GetInstance()` và các interface như
+`AudioCodec`, `Display`, `Led`, `Camera`, `Backlight`, `NetworkInterface`. Các khả năng
+camera, màn hình, pin và backlight có thể không tồn tại; getter mặc định có thể trả về
+`nullptr` hoặc giá trị không hỗ trợ.
 
-Moi ban build upstream chon dung mot board factory:
+Mỗi bản build upstream chọn đúng một board factory:
 
 ```text
 boards/**/config.json
@@ -61,32 +61,32 @@ boards/**/config.json
   -> DECLARE_BOARD(BoardClass)
 ```
 
-`DECLARE_BOARD` tao ham `create_board()`. Neu nhieu implementation cung duoc link vao
-mot binary thi hop dong singleton bi pha vo. Danh tinh board cung lien quan OTA, vi vay
-mot pinout moi nen la board/variant moi thay vi sua am tham board cu.
+`DECLARE_BOARD` tạo hàm `create_board()`. Nếu nhiều implementation cùng được link vào
+một binary thì hợp đồng singleton bị phá vỡ. Danh tính board cũng liên quan OTA, vì vậy
+một pinout mới nên là board/variant mới thay vì sửa âm thầm board cũ.
 
-## Mo hinh dong thoi
+## Mô hình đồng thời
 
-- Main task xu ly state va lifecycle.
-- Audio input, audio output va Opus codec chay o cac task rieng.
-- Network callback co the den tu task/driver khac.
-- Queue audio deu co gioi han de tranh tang bo nho khong kiem soat.
-- Callback state duoc copy ra ngoai mutex truoc khi invoke, tranh giu lock trong code
-  cua listener.
+- Main task xử lý state và lifecycle.
+- Audio input, audio output và Opus codec chạy ở các task riêng.
+- Network callback có thể đến từ task/driver khác.
+- Queue audio đều có giới hạn để tránh tăng bộ nhớ không kiểm soát.
+- Callback state được copy ra ngoài mutex trước khi invoke, tránh giữ lock trong code
+  của listener.
 
-He qua thiet ke: logic tren duong audio va main loop khong nen block; thao tac I/O dai,
-download hoac model processing can duoc tach task va dua ket qua ve bang event.
+Hệ quả thiết kế: logic trên đường audio và main loop không nên block; thao tác I/O dài,
+download hoặc model processing cần được tách task và đưa kết quả về bằng event.
 
-## Cac diem mo can quyet dinh cho Veetee
+## Các điểm mở cần quyết định cho Veetee
 
-- Chon mot hay nhieu transport, va hop dong chung giua chung.
-- Board abstraction co can ho tro da chip/da man hinh ngay tu dau hay khong.
-- Wake word, VAD va AEC nam tren thiet bi hay server.
-- Co can asset partition rieng va dynamic glyph hay khong.
-- State machine nao la toi thieu cho san pham Veetee.
-- MCP tool nao duoc phep cho AI, tool nao chi nguoi dung duoc phep goi.
+- Chọn một hay nhiều transport, và hợp đồng chung giữa chúng.
+- Board abstraction có cần hỗ trợ đa chip/đa màn hình ngay từ đầu hay không.
+- Wake word, VAD và AEC nằm trên thiết bị hay server.
+- Có cần asset partition riêng và dynamic glyph hay không.
+- State machine nào là tối thiểu cho sản phẩm Veetee.
+- MCP tool nào được phép cho AI, tool nào chỉ người dùng được phép gọi.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32/main/main.cc`
 - `../references/xiaozhi-esp32/main/application.h`

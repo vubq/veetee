@@ -1,6 +1,6 @@
-# Am thanh va trang thai thiet bi
+# Âm thanh và trạng thái thiết bị
 
-## Hai huong audio
+## Hai hướng audio
 
 ```text
 MIC
@@ -19,46 +19,46 @@ Server
   -> Speaker
 ```
 
-Upstream dung task rieng cho input, output va Opus codec. Queue PCM ngan, queue Opus co
-the dai hon vi packet nho hon. Gioi han quan sat:
+Upstream dùng task riêng cho input, output và Opus codec. Queue PCM ngắn, queue Opus có
+thể dài hơn vì packet nhỏ hơn. Giới hạn quan sát:
 
-| Queue/cong viec | Gioi han upstream |
+| Queue/công việc | Giới hạn upstream |
 | --- | --- |
-| Encode task dang cho | 2 |
-| Playback task dang cho | 2 |
+| Encode task đang chờ | 2 |
+| Playback task đang chờ | 2 |
 | Decode Opus | 2400 ms / 60 ms = 40 packet |
 | Send Opus | 2400 ms / 60 ms = 40 packet |
 | Timestamp cho server AEC | 3 |
 
-Day la tham so can benchmark lai theo RAM, jitter va latency cua phan cung Veetee.
+Đây là tham số cần benchmark lại theo RAM, jitter và latency của phần cứng Veetee.
 
-## Dinh dang quan sat
+## Định dạng quan sát
 
-- Microphone uplink: PCM mono 16-bit, encode Opus thuong o 16 kHz.
-- Server downlink: Opus, hello upstream thuong cong bo 24 kHz.
-- Frame duration: thuong 60 ms.
-- Opus: VBR va DTX bat, FEC tat trong cau hinh encoder tham khao.
-- Decoder co the doi sample rate theo tham so server va resample ve codec.
+- Microphone uplink: PCM mono 16-bit, encode Opus thường ở 16 kHz.
+- Server downlink: Opus, hello upstream thường công bố 24 kHz.
+- Frame duration: thường 60 ms.
+- Opus: VBR và DTX bật, FEC tắt trong cấu hình encoder tham khảo.
+- Decoder có thể đổi sample rate theo tham số server và resample về codec.
 
-## Engine theo kha nang chip
+## Engine theo khả năng chip
 
-Source tham khao co AFE engine cho nhom chip manh hon va lite engine cho nhom gioi han.
-AFE co the ket hop wake word, VAD va device AEC; lite engine giam phu thuoc va RAM/CPU.
-Veetee can chot target chip va bai toan acoustics truoc khi ke thua phan chia nay.
+Source tham khảo có AFE engine cho nhóm chip mạnh hơn và lite engine cho nhóm giới hạn.
+AFE có thể kết hợp wake word, VAD và device AEC; lite engine giảm phụ thuộc và RAM/CPU.
+Veetee cần chốt target chip và bài toán acoustics trước khi kế thừa phân chia này.
 
-## AEC va listening mode
+## AEC và listening mode
 
-`AecMode` co ba lua chon: tat, tren thiet bi, tren server.
+`AecMode` có ba lựa chọn: tắt, trên thiết bị, trên server.
 
 | Listening mode | Semantic |
 | --- | --- |
-| `auto` | Server/VAD tu ket thuc utterance |
-| `manual` | Nguoi dung hoac thiet bi gui stop |
-| `realtime` | Full-duplex, yeu cau AEC phu hop |
+| `auto` | Server/VAD tự kết thúc utterance |
+| `manual` | Người dùng hoặc thiết bị gửi stop |
+| `realtime` | Full-duplex, yêu cầu AEC phù hợp |
 
-Server-side AEC can timestamp trong binary protocol de can chinh uplink va downlink.
-Device-side AEC tang tai xu ly. Neu khong co AEC, can tranh thu microphone trong khi
-speaker dang phat de han che loopback.
+Server-side AEC cần timestamp trong binary protocol để căn chỉnh uplink và downlink.
+Device-side AEC tăng tải xử lý. Nếu không có AEC, cần tránh thu microphone trong khi
+speaker đang phát để hạn chế loopback.
 
 ## State machine
 
@@ -73,13 +73,13 @@ idle -> connecting | listening | speaking | activating | upgrading | wifi_config
 connecting -> listening | idle
 listening -> speaking | idle
 speaking -> listening | idle
-fatal_error -> (khong thoat)
+fatal_error -> (không thoát)
 ```
 
-Transition cung state la no-op hop le. Transition sai bi tu choi va ghi warning. Tat ca
-code cap ung dung nen di qua state machine thay vi gan state truc tiep.
+Transition cùng state là no-op hợp lệ. Transition sai bị từ chối và ghi warning. Tất cả
+code cấp ứng dụng nên đi qua state machine thay vì gán state trực tiếp.
 
-## Luong hoi thoai dien hinh
+## Luồng hội thoại điển hình
 
 ```text
 wake word / button
@@ -91,23 +91,23 @@ wake word / button
   -> TTS start + Opus downlink
   -> speaking
   -> TTS stop/playback drained
-  -> listening hoac idle
+  -> listening hoặc idle
 ```
 
-Khi wake word xuat hien trong luc speaking, thiet bi co the gui abort voi reason
-`wake_word_detected`, dung playback va mo luot noi moi.
+Khi wake word xuất hiện trong lúc speaking, thiết bị có thể gửi abort với reason
+`wake_word_detected`, dừng playback và mở lượt nói mới.
 
-## Rui ro can test tren phan cung
+## Rủi ro cần test trên phần cứng
 
-- Queue overflow va mat packet khi Wi-Fi jitter.
-- Click/pop khi chuyen sample rate hoac reset decoder.
-- Wake word false-positive do am thanh loa.
-- VAD cat dau/cuoi cau va timeout trong moi truong on.
-- Reconnect trong luc encode/decode dang chay.
-- Playback drain, interruption va race khi state thay doi.
-- AEC delay calibration theo codec, DMA va frame size.
+- Queue overflow và mất packet khi Wi-Fi jitter.
+- Click/pop khi chuyển sample rate hoặc reset decoder.
+- Wake word false-positive do âm thanh loa.
+- VAD cắt đầu/cuối câu và timeout trong môi trường ồn.
+- Reconnect trong lúc encode/decode đang chạy.
+- Playback drain, interruption và race khi state thay đổi.
+- AEC delay calibration theo codec, DMA và frame size.
 
-## Source doi chieu
+## Source đối chiếu
 
 - `../references/xiaozhi-esp32/main/audio/README.md`
 - `../references/xiaozhi-esp32/main/audio/audio_service.h`

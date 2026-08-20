@@ -1,45 +1,45 @@
-# Ghi chu ky thuat firmware
+# Ghi chú kỹ thuật firmware
 
-## Muc dich
+## Mục đích
 
-Thu muc nay tong hop cac y tuong va giao dien quan trong tu source tham khao
-`../references/xiaozhi-esp32`. Day la tai lieu nghien cuu de ho tro thiet ke firmware
-Veetee, khong phai dac ta kien truc chinh thuc va khong khang dinh Veetee se ke thua
-toan bo cach trien khai cua upstream.
+Thư mục này tổng hợp các ý tưởng và giao diện quan trọng từ source tham khảo
+`../references/xiaozhi-esp32`. Đây là tài liệu nghiên cứu để hỗ trợ thiết kế firmware
+Veetee, không phải đặc tả kiến trúc chính thức và không khẳng định Veetee sẽ kế thừa
+toàn bộ cách triển khai của upstream.
 
-Khi source tham khao va tai lieu nay khac nhau, source tham khao la can cu cho hanh vi
-upstream. Khi Veetee co quyet dinh kien truc rieng, can ghi quyet dinh do trong tai lieu
-Veetee va khong sua lai lich su khao sat de bien no thanh dac ta.
+Khi source tham khảo và tài liệu này khác nhau, source tham khảo là căn cứ cho hành vi
+upstream. Khi Veetee có quyết định kiến trúc riêng, cần ghi quyết định đó trong tài liệu
+Veetee và không sửa lại lịch sử khảo sát để biến nó thành đặc tả.
 
-## Danh muc
+## Danh mục
 
-| Tai lieu | Noi dung |
+| Tài liệu | Nội dung |
 | --- | --- |
-| [Tong quan kien truc](architecture.md) | Thanh phan, vong doi, phan tach core va phan cung |
-| [Giao dien va phuong thuc](interfaces.md) | Cac class, callback va hop dong quan trong |
-| [Am thanh va trang thai](audio-and-state.md) | Audio pipeline, task, queue, state machine va AEC |
-| [Giao thuc thiet bi-server](device-server-protocol.md) | WebSocket, MQTT/UDP, JSON, Opus va MCP |
-| [Khoi tao, OTA va cau hinh](provisioning-ota-config.md) | Network provisioning, activation, OTA, asset va NVS |
+| [Tổng quan kiến trúc](architecture.md) | Thành phần, vòng đời, phân tách core và phần cứng |
+| [Giao diện và phương thức](interfaces.md) | Các class, callback và hợp đồng quan trọng |
+| [Âm thanh và trạng thái](audio-and-state.md) | Audio pipeline, task, queue, state machine và AEC |
+| [Giao thức thiết bị-server](device-server-protocol.md) | WebSocket, MQTT/UDP, JSON, Opus và MCP |
+| [Khởi tạo, OTA và cấu hình](provisioning-ota-config.md) | Network provisioning, activation, OTA, asset và NVS |
 
-## Ban do source tham khao
+## Bản đồ source tham khảo
 
-| Pham vi | Vi tri upstream |
+| Phạm vi | Vị trí upstream |
 | --- | --- |
-| Dieu phoi ung dung | `../references/xiaozhi-esp32/main/application.*` |
-| Trang thai thiet bi | `../references/xiaozhi-esp32/main/device_state*` |
+| Điều phối ứng dụng | `../references/xiaozhi-esp32/main/application.*` |
+| Trạng thái thiết bị | `../references/xiaozhi-esp32/main/device_state*` |
 | Audio | `../references/xiaozhi-esp32/main/audio/` |
-| Giao thuc mang | `../references/xiaozhi-esp32/main/protocols/` |
+| Giao thức mạng | `../references/xiaozhi-esp32/main/protocols/` |
 | Board abstraction | `../references/xiaozhi-esp32/main/boards/common/` |
-| Board cu the | `../references/xiaozhi-esp32/main/boards/` |
-| MCP tren thiet bi | `../references/xiaozhi-esp32/main/mcp_server.*` |
+| Board cụ thể | `../references/xiaozhi-esp32/main/boards/` |
+| MCP trên thiết bị | `../references/xiaozhi-esp32/main/mcp_server.*` |
 | OTA, asset, NVS | `../references/xiaozhi-esp32/main/ota.*`, `assets.*`, `settings.*` |
-| Tai lieu giao thuc goc | `../references/xiaozhi-esp32/docs/` |
+| Tài liệu giao thức gốc | `../references/xiaozhi-esp32/docs/` |
 
-## Nguyen tac su dung
+## Nguyên tắc sử dụng
 
-- Dung tai lieu nay de tim nhanh diem vao va hop dong can doi chieu.
-- Kiem tra source thuc te truoc khi port mot chi tiet nhay cam nhu wire format, bo nho,
-  ownership, timeout hoac transition trang thai.
-- Khong sua code trong `references/` khi phat trien Veetee, tru khi co yeu cau ro rang.
-- Cac gia tri 16 kHz, 24 kHz, Opus 60 ms, timeout va kich thuoc queue la gia tri quan
-  sat tu upstream hien tai, chua phai chuan bat buoc cua Veetee.
+- Dùng tài liệu này để tìm nhanh điểm vào và hợp đồng cần đối chiếu.
+- Kiểm tra source thực tế trước khi port một chi tiết nhạy cảm như wire format, bộ nhớ,
+  ownership, timeout hoặc transition trạng thái.
+- Không sửa code trong `references/` khi phát triển Veetee, trừ khi có yêu cầu rõ ràng.
+- Các giá trị 16 kHz, 24 kHz, Opus 60 ms, timeout và kích thước queue là giá trị quan
+  sát từ upstream hiện tại, chưa phải chuẩn bắt buộc của Veetee.
