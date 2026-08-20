@@ -7,6 +7,15 @@ veetee-server/web/node_modules/
 veetee-server/web/dist/
 veetee-server/web/*.tsbuildinfo
 
+# Local backend environment and build artifacts.
+veetee-server/server/.venv/
+veetee-server/server/.env
+veetee-server/server/.pytest_cache/
+veetee-server/server/.ruff_cache/
+veetee-server/server/src/*.egg-info/
+veetee-server/server/src/**/__pycache__/
+veetee-server/server/tests/**/__pycache__/
+
 # Browser automation artifacts.
 .playwright-mcp/
 
