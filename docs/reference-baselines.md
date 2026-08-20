@@ -6,8 +6,10 @@ File này pin trạng thái của hai upstream đang được dùng để nghiê
 giúp AI và contributor biết tài liệu đã được khảo sát trên commit nào, so sánh với
 upstream mới và đánh giá thay đổi trước khi cập nhật tài liệu hoặc port code.
 
-Hai repo tham khảo là read-only trong workspace Veetee. Không sửa code/tài liệu, không
-tạo artifact và không thực hiện thao tác Git ghi trong các repo này.
+Hai repo tham khảo là read-only đối với source tracked và Git history. Không sửa
+code/tài liệu tracked và không thực hiện thao tác Git ghi trong các repo này. Build,
+flash và runtime artifact được phép theo `server-first-development.md`, nhưng phải được
+ignore và không được commit.
 
 ## Mốc hiện tại
 

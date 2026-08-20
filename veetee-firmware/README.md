@@ -6,6 +6,10 @@
 source firmware chính thức, board target, build system hay release artifact của Veetee.
 Thư mục mới chỉ gồm tài liệu khảo sát và source tham khảo.
 
+Trong giai đoạn server-first, thiết bị thật dùng firmware upstream với board build
+`bread-compact-wifi-lcd`, LCD ST7789 240 x 280 và locale `vi-VN`; xem
+`../docs/server-first-development.md` trước khi build/flash.
+
 Không coi code trong `references/` là code của Veetee và không mặc định kiến trúc
 Veetee sẽ giống upstream.
 
@@ -43,7 +47,8 @@ quyết định kỹ thuật cụ thể. Không tạo sẵn các thư mục rỗ
 ## Nguyên tắc thao tác
 
 - Code mới của Veetee phải nằm ngoài `references/`.
-- Chỉ sửa `references/` khi có yêu cầu rõ ràng về việc patch/fork source tham khảo.
+- Không sửa source tracked trong `references/`; được build/flash upstream làm client
+  tham chiếu theo `../docs/server-first-development.md`.
 - Không copy nguyên module upstream nếu chưa đánh giá license, dependency, bộ nhớ và
   khả năng tương thích phần cứng.
 - Thay đổi giao thức thiết bị-server phải được đối chiếu đồng thời với

@@ -2,13 +2,17 @@
 
 ## Trạng thái hiện tại
 
-`veetee-server` là không gian chuẩn bị cho server của Veetee. Hiện tại chưa có source,
-service, database schema, deployment manifest hay API chính thức của Veetee. Thư mục
-mới chỉ gồm tài liệu khảo sát và source tham khảo.
+`veetee-server` là không gian phát triển server và web console của Veetee. Source đầu
+tiên hiện có là bộ UX/UI frontend Vue 3 + Vite responsive trong `web/`; backend, database
+schema, deployment manifest và API chính thức chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model
 cho dự án.
+
+Giai đoạn hiện tại ưu tiên phát triển server. Server được test trước với thiết bị ESP32
+thật chạy firmware tham khảo; khi không có thiết bị, dùng `digital-human` làm client thay
+thế. Xem [quy trình server-first](../docs/server-first-development.md).
 
 ## Cấu trúc
 
@@ -17,11 +21,16 @@ veetee-server/
 |-- README.md       # Điểm bắt đầu cho người dùng
 |-- AGENTS.md       # Hướng dẫn thao tác cho AI/contributor
 |-- docs/           # Ghi chú kỹ thuật rút ra từ source tham khảo
+|-- server/         # Khung backend Python, chưa triển khai
+|-- web/            # Veetee Console Vue 3 + Vite
+|-- contracts/      # Khung contract device/web, chưa triển khai
+|-- deploy/         # Khung vận hành local, chưa triển khai
 `-- references/     # Upstream chỉ dùng để đọc, đối chiếu và thử nghiệm riêng
 ```
 
-Source và thư mục vận hành sẽ chỉ được tạo khi có yêu cầu và quyết định cụ thể. Không
-có service nào trong `references/` được mặc định coi là service của Veetee.
+Frontend được triển khai từng bước theo yêu cầu UI. Các phần backend, contract và vận
+hành vẫn chỉ là khung thư mục cho đến khi có yêu cầu cụ thể. Không có service nào trong
+`references/` được mặc định coi là service của Veetee.
 
 ## Bắt đầu từ đâu
 
@@ -36,6 +45,7 @@ có service nào trong `references/` được mặc định coi là service củ
 | Device protocol, HTTP, manager API | [Giao thức và API](docs/protocols-and-apis.md) |
 | Model/provider/config | [Provider và cấu hình](docs/providers-and-configuration.md) |
 | Auth, vận hành, scale, test | [Bảo mật và kiểm thử](docs/security-operations-testing.md) |
+| Thiết bị thật và client thay thế | [Quy trình server-first](../docs/server-first-development.md) |
 
 4. Đối chiếu source trong `references/xiaozhi-esp32-server` nếu cần xác minh.
 5. Trước khi viết code, chốt rõ phạm vi service, dữ liệu, giao thức và cách triển khai
@@ -44,7 +54,7 @@ có service nào trong `references/` được mặc định coi là service củ
 ## Nguyên tắc thao tác
 
 - Code mới của Veetee phải nằm ngoài `references/`.
-- Chỉ sửa `references/` khi có yêu cầu rõ ràng về patch/fork upstream.
+- Không sửa source tracked trong `references/`; được build/run upstream làm test harness.
 - Không mặc định copy monorepo hay chạy full stack tham khảo.
 - Thay đổi device protocol phải được đối chiếu đồng thời với `../veetee-firmware`.
 - API key, token, database password và service secret không được ghi vào source/tài liệu.
@@ -65,8 +75,10 @@ yêu cầu
   -> cập nhật tài liệu và cách vận hành
 ```
 
-Hiện chưa có lệnh run/build/test của Veetee. Docker Compose, Maven, npm, pnpm và Python
-command trong upstream chỉ dùng để nghiên cứu upstream, không phải quy trình Veetee.
+Lệnh frontend local nằm trong [web/README.md](web/README.md). Backend chưa có lệnh
+run/build/test. Lệnh upstream chỉ được dùng để chạy test harness theo
+`../docs/server-first-development.md`, không mặc nhiên trở thành quy trình build/deploy
+của Veetee.
 
 ## Quan hệ với firmware
 

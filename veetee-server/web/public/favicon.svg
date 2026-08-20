@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="shell" x1="7" y1="6" x2="41" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#335e62" />
+      <stop offset="1" stop-color="#17383f" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="5" width="40" height="38" rx="9" fill="url(#shell)" />
+  <rect x="8" y="9" width="32" height="30" rx="6" fill="#0d292f" stroke="#41676a" />
+  <ellipse cx="18" cy="23" rx="3.5" ry="5.25" fill="#c8f474" />
+  <ellipse cx="30" cy="23" rx="3.5" ry="5.25" fill="#c8f474" />
+</svg>

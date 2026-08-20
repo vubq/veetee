@@ -14,6 +14,8 @@ Trước khi thực hiện công việc firmware:
 3. Chỉ đọc các file cần thiết trong `references/xiaozhi-esp32` để xác minh chi tiết.
 4. Nếu công việc ảnh hưởng wire protocol, đọc thêm
    `../veetee-server/README.md` và `../veetee-server/docs/protocols-and-apis.md`.
+5. Nếu build/flash firmware tham khảo hoặc test thiết bị thật, đọc
+   `../docs/server-first-development.md`.
 
 ## Phân loại nội dung
 
@@ -22,14 +24,17 @@ Trước khi thực hiện công việc firmware:
 | `README.md` | Tổng quan cho người dùng | Cập nhật khi trạng thái/quy trình đổi |
 | `AGENTS.md` | Quy tắc cho AI/contributor | Cập nhật khi ranh giới thao tác đổi |
 | `docs/` | Ghi chú và quyết định kỹ thuật | Được bổ sung/cập nhật |
-| `references/` | Source upstream tham khảo | Chỉ đọc; cấm sửa và cấm Git ghi |
+| `references/` | Source upstream tham khảo | Cấm sửa/Git ghi; được build và flash để test server |
 | Source Veetee tương lai | Sản phẩm chính thức | Tạo ngoài `references/` theo yêu cầu |
 
 ## Quy tắc bắt buộc
 
 - Không mô tả `references/xiaozhi-esp32` là cấu trúc hay source chính thức của Veetee.
-- Không sửa, format, tạo build artifact, commit, checkout, pull, merge, rebase, reset
-  hay push trong `references/xiaozhi-esp32`.
+- Không sửa hoặc format source tracked; không commit, checkout, pull, merge, rebase,
+  reset hay push trong `references/xiaozhi-esp32`.
+- Được chọn Kconfig, build, flash và monitor firmware upstream để test server. Các thay
+  đổi generated/runtime như `sdkconfig`, `build/` và artifact phải được upstream ignore,
+  không stage/commit và phải được báo cáo khi bàn giao.
 - Chỉ được dùng Git read-only trong upstream và đối chiếu commit với
   `../docs/reference-baselines.md`.
 - Được phép commit/push và thao tác Git cho source/tài liệu firmware Veetee nằm ngoài
@@ -37,6 +42,10 @@ Trước khi thực hiện công việc firmware:
 - Không tự tạo kiến trúc firmware đầy đủ chỉ từ source tham khảo. Nếu lựa chọn chip,
   board, framework, transport hoặc AEC làm thay đổi hướng sản phẩm, phải nêu rõ và xin
   quyết định.
+- Trong giai đoạn server-first, build thiết bị thật bằng board upstream
+  `bread-compact-wifi-lcd`, bắt buộc override LCD mặc định 240 x 320 thành
+  `CONFIG_LCD_ST7789_240X280=y`, chọn `CONFIG_LANGUAGE_VI_VN=y` và dùng wake-word
+  model `wn9_hiesp` với câu đánh thức “Hi, ESP”.
 - Mọi source mới phải nằm ngoài `references/` và có ownership rõ ràng.
 - Thay đổi protocol phải kiểm tra cả firmware và server, bao gồm backward compatibility,
   version, malformed input và timeout.
@@ -44,6 +53,10 @@ Trước khi thực hiện công việc firmware:
   board, codec, display hoặc network thật.
 - Không đưa secret, token, Wi-Fi credential, key OTA hoặc endpoint nội bộ vào source và
   tài liệu mẫu.
+- Không xóa NVS, không erase flash và không thay đổi Wi-Fi credential của thiết bị test.
+- Tuyệt đối không tự kết nối vào access point cấu hình Wi-Fi do ESP32 phát. Nếu access
+  point xuất hiện, reboot thiết bị và chờ thiết bị kết nối lại mạng đã lưu theo quy trình
+  `../docs/server-first-development.md`.
 
 ## Cách xử lý theo loại công việc
 

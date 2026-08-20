@@ -13,6 +13,10 @@ Hiện tại dự án đang ở giai đoạn nghiên cứu và chuẩn bị. Ch�
 kiến trúc đã chốt, build system, database schema, deployment hay bản phát hành Veetee.
 Hai phạm vi mới gồm tài liệu tổng hợp và source upstream để tham khảo.
 
+Giai đoạn triển khai đầu tiên ưu tiên server. Việc phát triển và test server dùng firmware
+upstream trên thiết bị thật hoặc `digital-human` làm client tham chiếu theo
+[quy trình server-first](docs/server-first-development.md).
+
 ## Cấu trúc hiện tại
 
 ```text
@@ -36,7 +40,7 @@ veetee/
 | `README.md` | Điểm bắt đầu và hướng dẫn cho người dùng |
 | `AGENTS.md` | Ranh giới và quy trình thao tác cho AI/contributor |
 | `docs/` | Ghi chú kỹ thuật rút ra từ source tham khảo |
-| `references/` | Repo upstream chỉ dùng để nghiên cứu và đối chiếu |
+| `references/` | Repo upstream để nghiên cứu và làm test harness; cấm sửa source/Git history |
 
 Không coi source trong `references/` là source Veetee. Cấu trúc source sản phẩm sẽ được
 tạo sau khi có yêu cầu và quyết định kỹ thuật cụ thể.
@@ -59,6 +63,7 @@ tạo sau khi có yêu cầu và quyết định kỹ thuật cụ thể.
 | Giao thức thiết bị-server | [Firmware protocol](veetee-firmware/docs/device-server-protocol.md) và [Server API](veetee-server/docs/protocols-and-apis.md) |
 | Activation và OTA | [Firmware OTA](veetee-firmware/docs/provisioning-ota-config.md) và [Server security/operations](veetee-server/docs/security-operations-testing.md) |
 | Bảo mật đầu cuối | [Server security](veetee-server/docs/security-operations-testing.md) cùng các tài liệu protocol/OTA firmware |
+| Quy trình phát triển và test hiện tại | [Server-first development](docs/server-first-development.md) |
 
 ## Contract dùng chung
 

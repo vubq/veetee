@@ -15,6 +15,7 @@ Trước khi thực hiện công việc server:
 4. Nếu công việc ảnh hưởng thiết bị, đọc thêm
    `../veetee-firmware/README.md` và
    `../veetee-firmware/docs/device-server-protocol.md`.
+5. Luôn đọc `../docs/server-first-development.md` trong giai đoạn phát triển server-first.
 
 ## Phân loại nội dung
 
@@ -23,14 +24,18 @@ Trước khi thực hiện công việc server:
 | `README.md` | Tổng quan cho người dùng | Cập nhật khi trạng thái/quy trình đổi |
 | `AGENTS.md` | Quy tắc cho AI/contributor | Cập nhật khi ranh giới thao tác đổi |
 | `docs/` | Ghi chú và quyết định kỹ thuật | Được bổ sung/cập nhật |
-| `references/` | Source upstream tham khảo | Chỉ đọc; cấm sửa và cấm Git ghi |
+| `references/` | Source upstream tham khảo | Cấm sửa/Git ghi; được run/build làm test harness |
 | Source Veetee tương lai | Sản phẩm chính thức | Tạo ngoài `references/` theo yêu cầu |
 
 ## Quy tắc bắt buộc
 
 - Không mô tả monorepo upstream là cấu trúc chính thức của Veetee.
-- Không sửa, format, cài dependency, tạo build artifact, commit, checkout, pull, merge,
-  rebase, reset hay push trong `references/xiaozhi-esp32-server`.
+- Không sửa hoặc format source tracked; không commit, checkout, pull, merge, rebase,
+  reset hay push trong `references/xiaozhi-esp32-server`.
+- Được cài dependency trong môi trường cô lập và build/run `main/digital-human` làm client
+  test khi không có thiết bị thật. Generated artifact, model và runtime config không
+  được stage/commit; mọi cài đặt phần mềm hoặc đổi cấu hình máy phải tuân theo quy tắc
+  hồ sơ môi trường toàn máy.
 - Chỉ được dùng Git read-only trong upstream và đối chiếu commit với
   `../docs/reference-baselines.md`.
 - Được phép commit/push và thao tác Git cho source/tài liệu server Veetee nằm ngoài
@@ -45,6 +50,8 @@ Trước khi thực hiện công việc server:
 - Không đưa secret thật vào source, fixture, log, Docker Compose hay tài liệu.
 - Không chạy migration, deploy, push image hoặc gọi dịch vụ production nếu không có yêu
   cầu và phạm vi rõ ràng.
+- Khi test server, ưu tiên thiết bị thật nếu đang cắm; nếu không có thì dùng
+  `references/xiaozhi-esp32-server/main/digital-human` và kiểm thử cùng luồng giao thức.
 
 ## Cách xử lý theo loại công việc
 

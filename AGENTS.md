@@ -20,6 +20,9 @@ Trước khi thực hiện công việc:
 4. Đọc tài liệu chuyên đề cần thiết trong `docs/`.
 5. Chỉ sau đó mới đọc file cụ thể trong `references/` nếu cần đối chiếu.
 
+Trong giai đoạn phát triển server-first hiện tại, mọi công việc server hoặc test tích hợp
+thiết bị phải đọc thêm `docs/server-first-development.md`.
+
 Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 
 - `veetee-firmware/AGENTS.md`
@@ -35,7 +38,7 @@ Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 | `veetee-firmware/` | Firmware và tài liệu thiết bị | Theo AGENTS của firmware |
 | `veetee-server/` | Server và tài liệu backend | Theo AGENTS của server |
 | `*/docs/` | Khảo sát/quyết định kỹ thuật | Được cập nhật trong đúng phạm vi |
-| `*/references/` | Upstream ngoài dự án | Chỉ đọc; cấm sửa và cấm thao tác Git ghi |
+| `*/references/` | Upstream ngoài dự án | Cấm sửa source và Git ghi; được build/run làm test harness theo quy trình server-first |
 
 ## Quyền Git
 
@@ -54,13 +57,19 @@ Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 
 ## Quy tắc bắt buộc
 
+- Tài liệu Veetee và giao tiếp với người dùng phải dùng tiếng Việt có dấu, trừ tên riêng,
+  identifier, lệnh, log và thuật ngữ kỹ thuật cần giữ nguyên để bảo đảm chính xác.
 - Không gọi repo upstream là source, kiến trúc, API hay quy trình chính thức của Veetee.
-- Không sửa code/tài liệu, format, cài dependency, tạo artifact hoặc thực hiện thao tác
-  Git ghi trong hai repo `references/`.
+- Không sửa code/tài liệu tracked, format source hoặc thực hiện thao tác Git ghi trong
+  hai repo `references/`. Được build, flash và chạy upstream để phục vụ test tích hợp;
+  artifact/runtime state phải được ignore và không được commit.
 - Source Veetee mới phải nằm ngoài `references/`.
 - Không tự chốt lựa chọn ảnh hưởng lớn như board/chip, framework, ngôn ngữ, database,
   broker, cloud provider, deployment topology hoặc backward compatibility khi chưa có
   yêu cầu/bằng chứng đầy đủ.
+- Trong giai đoạn phát triển hiện tại, không dùng Docker hoặc Docker Compose. Backend,
+  frontend, cơ sở dữ liệu và dịch vụ phụ trợ phải chạy trực tiếp trên máy local này;
+  không tự thêm container manifest hoặc quy trình vận hành bằng container.
 - Không tạo bộ khung lớn chỉ để dự phòng. Ưu tiên thay đổi nhỏ nhất đáp ứng công việc.
 - Bảo vệ thay đổi của người dùng và agent khác; không revert file không thuộc phạm vi.
 - Không chạy thao tác external có ảnh hưởng lớn như deploy, migration production, push
@@ -80,6 +89,9 @@ contract dùng chung.
 Làm việc trong `veetee-server/`, tuân theo `veetee-server/AGENTS.md`. Nếu thay đổi
 device-facing protocol, audio parameters, session lifecycle hoặc device command thì
 chuyển thành công việc contract dùng chung.
+
+Giai đoạn hiện tại ưu tiên phát triển server. Firmware upstream được dùng như client
+tham chiếu cho tới khi Veetee có firmware riêng.
 
 ### Contract dùng chung
 

@@ -1,3 +1,11 @@
 # Upstream repositories are local, read-only research inputs.
 veetee-firmware/references/
 veetee-server/references/
+
+# Local frontend artifacts.
+veetee-server/web/node_modules/
+veetee-server/web/dist/
+veetee-server/web/*.tsbuildinfo
+
+# Browser automation artifacts.
+.playwright-mcp/
