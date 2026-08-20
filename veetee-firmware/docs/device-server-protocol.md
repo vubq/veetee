@@ -131,6 +131,9 @@ object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quy
 
 ## Yêu cầu contract nếu áp dụng cho Veetee
 
+- Giữ wire behavior cần cho firmware tham khảo nhưng dùng endpoint và namespace Veetee;
+  cấm đưa tên/path/metadata upstream vào public contract sản phẩm. URL WebSocket Veetee
+  được phân phối qua OTA/config discovery.
 - Version mới wire format và policy tương thích rõ ràng.
 - Giới hạn kích thước JSON, binary frame, MCP arguments và image base64.
 - Xác thực device, ràng buộc token với `Device-Id`/`Client-Id`.

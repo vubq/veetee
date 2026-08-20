@@ -19,6 +19,7 @@ các thành phần hoặc cùng công nghệ.
 | [Giao thức và API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP và manager API |
 | [Provider và cấu hình](providers-and-configuration.md) | Plugin factory, selected modules và config precedence |
 | [Bảo mật, vận hành và kiểm thử](security-operations-testing.md) | Auth, secret, scale, observability và test gap |
+| [Kế hoạch triển khai Veetee Server](server-implementation-plan.md) | Kiến trúc mục tiêu, provider đã chốt, task và cổng duyệt từng mốc |
 
 ## Bản đồ source tham khảo
 
@@ -37,4 +38,6 @@ các thành phần hoặc cùng công nghệ.
 - Dùng `realtime-ai-pipeline.md` khi làm audio/session/AI orchestration.
 - Dùng `protocols-and-apis.md` cùng tài liệu firmware khi thay đổi contract thiết bị.
 - Dùng `providers-and-configuration.md` khi thêm model/provider.
+- Dùng `server-implementation-plan.md` làm thứ tự thực thi chính thức; AI phải dừng ở
+  cổng duyệt cuối mỗi mốc.
 - Kiểm tra source tại commit đang pin trước khi triển khai wire format hoặc endpoint.

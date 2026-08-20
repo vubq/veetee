@@ -46,6 +46,7 @@ hành vẫn chỉ là khung thư mục cho đến khi có yêu cầu cụ thể.
 | Model/provider/config | [Provider và cấu hình](docs/providers-and-configuration.md) |
 | Auth, vận hành, scale, test | [Bảo mật và kiểm thử](docs/security-operations-testing.md) |
 | Thiết bị thật và client thay thế | [Quy trình server-first](../docs/server-first-development.md) |
+| Kế hoạch xây server theo mốc | [Kế hoạch triển khai Veetee Server](docs/server-implementation-plan.md) |
 
 4. Đối chiếu source trong `references/xiaozhi-esp32-server` nếu cần xác minh.
 5. Trước khi viết code, chốt rõ phạm vi service, dữ liệu, giao thức và cách triển khai
@@ -59,6 +60,8 @@ hành vẫn chỉ là khung thư mục cho đến khi có yêu cầu cụ thể.
 - Thay đổi device protocol phải được đối chiếu đồng thời với `../veetee-firmware`.
 - API key, token, database password và service secret không được ghi vào source/tài liệu.
 - Endpoint, port và provider trong `docs/` là giá trị quan sát, chưa phải contract Veetee.
+- Public contract Veetee không được dùng tên/namespace upstream. Tương thích firmware
+  được thực hiện bằng wire behavior và endpoint Veetee do OTA/config discovery trả về.
 - Mỗi API/service chính thức cần có ownership, cấu hình, migration, test và cách vận
   hành được tài liệu hóa.
 

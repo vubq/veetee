@@ -84,6 +84,10 @@ commit đang pin. Không nên coi bảng tổng hợp này là OpenAPI contract.
 
 ## API design nếu xây Veetee
 
+- Không dùng namespace, path, package hoặc response metadata chứa tên upstream. Firmware
+  tham khảo phải nhận endpoint Veetee qua OTA/config discovery thay vì server giữ URL
+  upstream. Path đề xuất để khóa tại Mốc 0 là `/api/v1/devices/ws` và
+  `/api/v1/devices/ota/check`.
 - Tách public device API, user API, admin API và service-to-service API.
 - Version endpoint/path hoặc media type.
 - Dùng OpenAPI sinh từ source và contract test cho client.
