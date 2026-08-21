@@ -64,12 +64,14 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
     vad_runtime = getattr(app_state, "vad_runtime", None)
     asr_runtime = getattr(app_state, "asr_runtime", None)
     llm_runtime = getattr(app_state, "llm_runtime", None)
+    tts_runtime = getattr(app_state, "tts_runtime", None)
     return build_fake_pipeline(
         session,
         settings,
         vad_runtime=vad_runtime,
         asr_runtime=asr_runtime,
         llm_runtime=llm_runtime,
+        tts_runtime=tts_runtime,
     )
 
 

@@ -94,5 +94,19 @@ rơi về fake LLM. Adapter không tự fallback sang Qwen; có thể đổi mod
 M2.4 chuyển text delta trực tiếp qua token-to-TTS segmenter và bắt đầu TTS khi đoạn đầu
 sẵn sàng, không chờ LLM hoàn tất. Các ngưỡng mặc định là 24 ký tự cho đoạn đầu, 48 ký tự
 cho đoạn sau, hard bound 220 ký tự và max wait 0,35 giây; xem `.env.example` để cấu hình.
-Normalization bỏ Markdown, URL thô và ký hiệu không phù hợp để đọc thành tiếng. TTS ở mốc
-này vẫn là fake provider; Gemini TTS thuộc M2.5.
+Normalization bỏ Markdown, URL thô và ký hiệu không phù hợp để đọc thành tiếng.
+
+Gemini native TTS M2.5 được bật bằng key pool local:
+
+```bash
+VEETEE_TTS_PROVIDER=gemini \
+VEETEE_TTS_GEMINI_API_KEYS='<key-1>,<key-2>' \
+VEETEE_TTS_GEMINI_MAIN_MODEL=gemini-3.1-flash-tts-preview \
+uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
+```
+
+Key chỉ đọc từ environment/secret local và không xuất hiện trong log hay response.
+Adapter stream PCM 24 kHz mono s16le từ model 3.1 vào encoder theo frame 60 ms, không tạo
+file tạm. Model 2.5 buffered chỉ được thử khi đặt
+`VEETEE_TTS_ENABLE_FALLBACK_MODEL=true`; mặc định không fallback. Thiếu key hoặc runtime
+không sẵn sàng làm startup/config hoặc `/readyz` fail-closed.

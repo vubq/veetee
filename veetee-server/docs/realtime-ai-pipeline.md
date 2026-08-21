@@ -258,8 +258,29 @@ delta mới từ HTTP stream thay vì tăng bộ nhớ không giới hạn.
 - Cancellation hủy đúng một pending read, đóng LLM stream và ngăn segment/chunk thuộc turn
   cũ. Lỗi provider được truyền lên supervisor, không bị đổi thành completion rỗng.
 
-Giới hạn M2.4: TTS vẫn là deterministic fake provider. Native Gemini streaming, key pool,
-resample và Opus production thuộc M2.5.
+## Native Gemini TTS và key pool (M2.5 - Quyết định Veetee)
+
+`GeminiTTSRuntime` giữ một `httpx.AsyncClient`, global concurrency limiter và key pool ở
+scope application. Adapter chính gọi native `streamGenerateContent?alt=sse` bằng model
+`gemini-3.1-flash-tts-preview`, nhận PCM 24 kHz mono s16le và rechunk thành frame 60 ms
+trước encoder; không tạo file tạm hoặc buffer toàn bộ audio.
+
+- Key được chọn least-in-flight với round-robin khi hòa; alias chỉ chứa SHA-256 prefix,
+  không chứa ký tự secret. `in_flight` luôn giảm trong `finally`.
+- `401/403` disable key; `429` cooldown theo `Retry-After` có cap; lỗi transient mở circuit
+  sau ngưỡng và chỉ cho một half-open probe. Global limiter chặn burst vượt cấu hình.
+- Failover key/model chỉ xảy ra trước PCM frame đầu tiên được phát. Lỗi sau audio đầu được
+  trả lên supervisor và không replay segment bằng key khác.
+- Admission, connect, first-audio và total deadline là lỗi typed. Cancellation đóng HTTP
+  response, trả semaphore/key lease và generation check của pipeline loại chunk turn cũ.
+- SSE được decode incremental với giới hạn byte; JSON, base64, MIME/rate và sample alignment
+  đều được validate. Response rỗng không được coi là thành công.
+- Fallback `gemini-2.5-flash-preview-tts` dùng `generateContent` buffered và mặc định tắt;
+  chỉ bật bằng policy config rõ ràng.
+
+Giới hạn M2.5: encoder hiện vẫn là deterministic fake boundary của M1 trong test/server
+local; native libopus production và subjective listening trên loa thiết bị cần được xác
+minh ở M2.7/M2.8. Không có resampler nội suy chất lượng thấp trên production path.
 
 ## Device simulator (M1.7 - Quyết định Veetee)
 

@@ -111,6 +111,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await llm_runtime.shutdown()
                 llm_runtime = None
 
+    tts_runtime = getattr(app.state, "tts_runtime", None)
+    if settings.tts_provider == "gemini" and tts_runtime is None:
+        try:
+            from .pipeline.tts import GeminiTTSConfig, GeminiTTSRuntime
+
+            tts_cfg = GeminiTTSConfig(
+                api_keys=settings.tts_gemini_api_keys,
+                main_model=settings.tts_gemini_main_model,
+                fallback_model=settings.tts_gemini_fallback_model,
+                enable_fallback_model=settings.tts_enable_fallback_model,
+                voice=settings.tts_gemini_voice,
+                prompt_prefix=settings.tts_gemini_prompt_prefix,
+                connect_timeout_seconds=settings.tts_connect_timeout_seconds,
+                first_audio_timeout_seconds=settings.tts_first_audio_timeout_seconds,
+                total_timeout_seconds=settings.tts_total_timeout_seconds,
+                max_concurrency=settings.tts_max_concurrency,
+                admission_timeout_seconds=settings.tts_admission_timeout_seconds,
+                circuit_breaker_failure_threshold=settings.tts_circuit_breaker_failure_threshold,
+                circuit_breaker_cooldown_seconds=settings.tts_circuit_breaker_cooldown_seconds,
+                max_retry_after_seconds=settings.tts_max_retry_after_seconds,
+                max_response_bytes=settings.tts_max_response_bytes,
+            )
+            tts_runtime = GeminiTTSRuntime(config=tts_cfg)
+            await tts_runtime.startup()
+            app.state.tts_runtime = tts_runtime
+        except Exception as exc:
+            logger.error("Failed to start TTS runtime: %s", exc)
+            if tts_runtime is not None:
+                await tts_runtime.shutdown()
+                tts_runtime = None
+
     app.state.ready = True
     try:
         yield
@@ -127,6 +158,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await asr_runtime.shutdown()
         if llm_runtime is not None:
             await llm_runtime.shutdown()
+        if tts_runtime is not None:
+            await tts_runtime.shutdown()
         logger.info("server_stopped")
 
 
@@ -206,6 +239,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "reason": "llm_runtime_not_ready"},
+                )
+        if runtime_settings.tts_provider == "gemini":
+            tts_runtime = getattr(app.state, "tts_runtime", None)
+            if tts_runtime is None or not tts_runtime.is_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "tts_runtime_not_ready"},
                 )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 

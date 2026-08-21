@@ -23,7 +23,7 @@ from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
 from .llm import FakeLLM, LLMNotReadyError, OmniRouteLLMAdapter, OmniRouteLLMRuntime
 from .orchestrator import FakePipeline
 from .segmenter import TTSSegmenterConfig, TTSTokenSegmenter
-from .tts import FakeTTS
+from .tts import FakeTTS, GeminiTTSAdapter, GeminiTTSRuntime, TTSNotReadyError
 from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
 PipelineFactory = Callable[[DeviceSession, Settings], FakePipeline]
@@ -36,6 +36,7 @@ def build_fake_pipeline(
     vad_runtime: SileroVADRuntime | None = None,
     asr_runtime: PhoWhisperRuntime | None = None,
     llm_runtime: OmniRouteLLMRuntime | None = None,
+    tts_runtime: GeminiTTSRuntime | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad: FakeVAD | BaseVADStream
@@ -67,6 +68,14 @@ def build_fake_pipeline(
     else:
         llm = FakeLLM()
 
+    tts: FakeTTS | GeminiTTSAdapter
+    if settings.tts_provider == "gemini":
+        if tts_runtime is None or not tts_runtime.is_ready:
+            raise TTSNotReadyError("Gemini TTS is configured but its runtime is not ready")
+        tts = tts_runtime.create_adapter()
+    else:
+        tts = FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence)
+
     segmenter_config = TTSSegmenterConfig(
         first_min_chars=settings.tts_segment_first_min_chars,
         min_chars=settings.tts_segment_min_chars,
@@ -82,7 +91,7 @@ def build_fake_pipeline(
         vad=vad,
         asr=asr,
         llm=llm,
-        tts=FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence),
+        tts=tts,
         segmenter=segmenter,
     )
 

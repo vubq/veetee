@@ -1,10 +1,4 @@
-"""Deterministic fake Text-to-Speech for the M1.6 pipeline harness.
-
-Every sentence is expanded into ``chunks_per_sentence`` PCM chunks whose bytes
-are derived from the SHA-256 of the sentence text, so the same sentence always
-produces the exact same downlink stream. An optional ``delay_seconds`` lets
-tests open a deterministic window for cancellation/abort scenarios.
-"""
+"""Deterministic fake Text-to-Speech for testing and pipeline harness (M1.6)."""
 
 from __future__ import annotations
 

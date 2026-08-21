@@ -1,11 +1,13 @@
 """Validated runtime configuration for the Veetee Server foundation."""
 
+import json
+import re
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Veetee audio contract frame duration used in device hello negotiation.
 # Audio queue duration settings must always be able to hold at least one frame.
@@ -146,10 +148,51 @@ class Settings(BaseSettings):
     llm_circuit_breaker_cooldown_seconds: float = Field(default=10.0, gt=0)
     llm_max_response_bytes: int = Field(default=1048576, gt=0)
 
+    # TTS Provider & Gemini Native TTS Settings (M2.5)
+    tts_provider: Literal["fake", "gemini"] = Field(default="fake")
+    tts_gemini_api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    tts_gemini_main_model: str = Field(default="gemini-3.1-flash-tts-preview", min_length=1)
+    tts_gemini_fallback_model: str = Field(default="gemini-2.5-flash-preview-tts", min_length=1)
+    tts_enable_fallback_model: bool = Field(default=False)
+    tts_gemini_voice: str = Field(default="Kore", min_length=1)
+    tts_gemini_prompt_prefix: str = Field(default="")
+    tts_connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    tts_first_audio_timeout_seconds: float = Field(default=5.0, gt=0)
+    tts_total_timeout_seconds: float = Field(default=30.0, gt=0)
+    tts_max_concurrency: int = Field(default=4, gt=0)
+    tts_admission_timeout_seconds: float = Field(default=2.0, gt=0)
+    tts_circuit_breaker_failure_threshold: int = Field(default=3, gt=0)
+    tts_circuit_breaker_cooldown_seconds: float = Field(default=10.0, gt=0)
+    tts_max_retry_after_seconds: float = Field(default=60.0, gt=0)
+    tts_max_response_bytes: int = Field(default=8388608, gt=0)
+
     tts_segment_first_min_chars: int = Field(default=24, gt=0)
     tts_segment_min_chars: int = Field(default=48, gt=0)
     tts_segment_max_chars: int = Field(default=220, gt=0)
     tts_segment_max_wait_seconds: float = Field(default=0.35, gt=0.0)
+
+    @field_validator("tts_gemini_api_keys", mode="before")
+    @classmethod
+    def _parse_api_keys(cls, v: object) -> list[str]:
+        values: list[str]
+        if isinstance(v, str):
+            v_str = v.strip()
+            if not v_str:
+                return []
+            if v_str.startswith("[") and v_str.endswith("]"):
+                try:
+                    parsed = json.loads(v_str)
+                    if isinstance(parsed, list):
+                        values = [str(key).strip() for key in parsed if str(key).strip()]
+                        return list(dict.fromkeys(values))
+                except json.JSONDecodeError:
+                    pass
+            values = [key.strip() for key in re.split(r"[,; \n\t]+", v_str) if key.strip()]
+            return list(dict.fromkeys(values))
+        if isinstance(v, list):
+            values = [str(key).strip() for key in v if str(key).strip()]
+            return list(dict.fromkeys(values))
+        return []
 
     @field_validator("device_websocket_public_url")
     @classmethod
@@ -206,6 +249,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "llm_total_timeout_seconds must be strictly greater than "
                 "llm_first_token_timeout_seconds"
+            )
+        if self.tts_provider == "gemini" and not self.tts_gemini_api_keys:
+            raise ValueError("tts_gemini_api_keys must be specified when tts_provider is gemini")
+        if self.tts_total_timeout_seconds <= self.tts_connect_timeout_seconds:
+            raise ValueError(
+                "tts_total_timeout_seconds must be greater than tts_connect_timeout_seconds"
+            )
+        if self.tts_total_timeout_seconds <= self.tts_first_audio_timeout_seconds:
+            raise ValueError(
+                "tts_total_timeout_seconds must be greater than tts_first_audio_timeout_seconds"
             )
         if self.tts_segment_max_chars < max(
             self.tts_segment_first_min_chars, self.tts_segment_min_chars

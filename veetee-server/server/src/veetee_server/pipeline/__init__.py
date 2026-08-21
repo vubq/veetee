@@ -27,7 +27,14 @@ from .factory import (
 from .framing import build_downlink_frame
 from .llm import FakeLLM
 from .orchestrator import FakePipeline, PipelineOutcome
-from .tts import FakeTTS
+from .tts import (
+    FakeTTS,
+    GeminiTTSAdapter,
+    GeminiTTSConfig,
+    GeminiTTSRuntime,
+    TTSError,
+    TTSNotReadyError,
+)
 from .vad import FakeVAD, VadEvent, VadEventKind
 
 __all__ = [
@@ -40,11 +47,16 @@ __all__ = [
     "FakePipeline",
     "FakeTTS",
     "FakeVAD",
+    "GeminiTTSAdapter",
+    "GeminiTTSConfig",
+    "GeminiTTSRuntime",
     "PacerFactory",
     "PipelineEvent",
     "PipelineFactory",
     "PipelineOutcome",
     "SttEvent",
+    "TTSError",
+    "TTSNotReadyError",
     "TtsChunkEvent",
     "TtsSentenceStartEvent",
     "TtsStartEvent",
