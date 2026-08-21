@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 from veetee_server.audio.pacer import PacketPacer
@@ -218,15 +218,45 @@ class DeviceSession:
     # Downlink queue carries ordered control + audio items toward the device.
     # It must stay a fail-session queue: a slow client must not buffer forever.
     egress_queue: DownlinkQueue = field(default_factory=_default_egress_queue)
+    features: Mapping[str, bool] = field(default_factory=dict)
+    listen_mode: Literal["auto", "manual", "realtime"] | None = None
     _state: SessionState = field(default=SessionState.CONNECTING, init=False, repr=False)
     _current_turn: ConversationTurn | None = field(default=None, init=False, repr=False)
     _generations: dict[UUID, Generation] = field(default_factory=dict, init=False, repr=False)
+    _barge_in_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.device_id or not self.client_id:
             raise ValueError("device_id and client_id must be non-empty")
         if self.cleanup_timeout_seconds <= 0:
             raise ValueError("cleanup timeout must be positive")
+
+    @property
+    def aec_enabled(self) -> bool:
+        return bool(self.features.get("aec", False))
+
+    @property
+    def is_barge_in_eligible(self) -> bool:
+        return self.aec_enabled and self.listen_mode == "realtime"
+
+    def negotiate_features(self, features: Mapping[str, bool] | None) -> None:
+        self.features = MappingProxyType(dict(features or {}))
+
+    async def begin_barge_in(self, expected_turn: ConversationTurn) -> ConversationTurn | None:
+        """Atomically replaces a streaming turn without advancing its fresh I/O epoch twice."""
+        async with self._barge_in_lock:
+            if (
+                self._state is not SessionState.SPEAKING
+                or self._current_turn is not expected_turn
+                or not self.is_barge_in_eligible
+            ):
+                return None
+            await self.abort_turn()
+            turn = ConversationTurn()
+            turn._start_capture()
+            self._current_turn = turn
+            self._transition(SessionState.LISTENING)
+            return turn
 
     @property
     def state(self) -> SessionState:

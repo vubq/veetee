@@ -22,6 +22,8 @@ Endpoint chính thức: `/api/v1/devices/ws`
 - **Hello Negotiation**:
   - Uplink: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`
   - Downlink response: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque_uuid>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`
+  - Thiết bị chỉ yêu cầu full-duplex detector khi công bố `features.aec=true` và gửi
+    `listen/start` với `mode="realtime"`.
 - **Close Codes & Errors**:
   - `1008`: Auth / missing header / hello timeout / schema error / session mismatch
   - `1009`: Oversized JSON (>16 KiB), binary (>64 KiB) hoặc payload khai báo vượt giới hạn
@@ -68,6 +70,16 @@ Trong implementation Veetee M1.6, thiết bị gửi binary audio hợp lệ tro
 `stt`, `tts/start`, `tts/sentence_start`, binary audio, `tts/stop`. Binary hợp lệ ngoài
 trạng thái listening bị bỏ; malformed/oversized vẫn bị đóng bằng `1002`/`1009` để không
 làm yếu validation giao thức.
+
+Từ M2.6, thiết bị có thể tiếp tục gửi uplink khi server đang phát TTS chỉ khi hello đã
+công bố `features.aec=true` và mode hiện hành là `realtime`. Với `auto`, `manual`, thiếu
+mode hoặc không có AEC, server bỏ frame hợp lệ trong trạng thái speaking. Khi server xác
+nhận người dùng chen lời bằng VAD riêng, server purge generation TTS cũ, hủy/chờ pipeline
+cũ và gửi đúng một `{"type":"tts","state":"stop"}` thuộc generation mới trước khi thu
+turn mới; một lượng pre-roll bounded được giữ để không mất đầu câu. Firmware phải dừng
+playback khi nhận `tts/stop`, tiếp tục uplink realtime và không giả định frame TTS cũ còn
+hợp lệ sau stop. `listen/start` explicit vẫn là control path tương thích để chủ động thay
+turn đang chạy.
 
 ## WebSocket
 

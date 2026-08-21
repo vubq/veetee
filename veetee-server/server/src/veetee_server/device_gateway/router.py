@@ -9,9 +9,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from veetee_server.audio import (
+    UPLINK_PCM_FORMAT,
     AudioProtocolError,
     AudioQueueItem,
     BoundedAudioQueue,
+    FakeOpusDecoder,
     OverflowPolicy,
     OversizedAudioFrameError,
     PacketPacer,
@@ -27,10 +29,12 @@ from veetee_server.pipeline.factory import (
     PipelineFactory,
     build_downlink_pacer,
     build_fake_pipeline,
+    build_vad_stream,
 )
 from veetee_server.pipeline.orchestrator import FakePipeline
 
 from .auth import validate_handshake_headers
+from .barge_in import BargeInCoordinator, BargeInDetector
 from .downlink import GatewayEventSink, run_downlink_sender, supervise_pipeline
 from .ota import ota_router
 from .protocol import (
@@ -186,7 +190,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
 
         # Validate Hello schema
         try:
-            HelloMessage.model_validate(payload)
+            hello_msg = HelloMessage.model_validate(payload)
         except ValidationError:
             env = make_error_envelope(
                 "veetee_invalid_input", "Invalid hello schema or audio params", session_id=None
@@ -215,6 +219,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 overflow_policy=OverflowPolicy.FAIL_SESSION,
             ),
         )
+        session.negotiate_features(hello_msg.features)
         session.accept()
         if registry is not None:
             await registry.register(session, websocket)
@@ -236,6 +241,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
         # One downlink sender per session drains the egress queue (stt/tts
         # control messages + paced audio frames) in FIFO order.
         session.cancellation.create_task(run_downlink_sender(session, websocket))
+        barge_in: BargeInCoordinator | None = None
 
         # 3. Message Loop
         last_activity = monotonic()
@@ -316,6 +322,31 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.close(code=1002)
                     break
 
+                item = AudioQueueItem(
+                    payload=packet.payload,
+                    duration_ms=60.0,
+                    generation=session.ingress_queue.generation,
+                    timestamp_ms=packet.timestamp_ms,
+                )
+                if session.state is SessionState.SPEAKING and session.is_barge_in_eligible:
+                    if barge_in is None:
+                        barge_in = BargeInCoordinator(
+                            session,
+                            BargeInDetector(
+                                FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+                                build_vad_stream(
+                                    settings,
+                                    vad_runtime=getattr(
+                                        websocket.app.state, "vad_runtime", None
+                                    ),
+                                ),
+                                max_pre_roll_frames=settings.barge_in_pre_roll_frames,
+                            ),
+                        )
+                    expected_turn = session.current_turn
+                    if expected_turn is not None and await barge_in.process(item, expected_turn):
+                        barge_in = None
+                    continue
                 if session.state is not SessionState.LISTENING:
                     # Audio frames are only accepted while capturing; anything
                     # arriving during processing/streaming is dropped.
@@ -331,12 +362,6 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     continue
 
                 try:
-                    item = AudioQueueItem(
-                        payload=packet.payload,
-                        duration_ms=60.0,
-                        generation=session.ingress_queue.generation,
-                        timestamp_ms=packet.timestamp_ms,
-                    )
                     await session.ingress_queue.put(item)
                 except SlowClientQueueOverflowError:
                     env = make_error_envelope(
@@ -487,6 +512,8 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
 
                 try:
                     if listen_msg.state == "start":
+                        session.listen_mode = listen_msg.mode or session.listen_mode or "auto"
+                        barge_in = None
                         # Barge-in: a start while speaking or while the
                         # previous turn is still processing aborts it inside
                         # start_turn and begins a fresh capture.

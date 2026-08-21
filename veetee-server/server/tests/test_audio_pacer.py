@@ -149,3 +149,78 @@ async def test_injectable_clock_is_used() -> None:
     clock.advance(0.03)
     assert await pacer.pace(0.06) == pytest.approx(0.03)
     assert sleeper.sleeps == [pytest.approx(0.03)]
+
+
+@pytest.mark.asyncio
+async def test_pacer_metrics_drift_tracking() -> None:
+    clock = FakeClock(start=0.0)
+    sleeper = RecordingSleeper()
+    pacer = PacketPacer(max_drift_seconds=0.1, clock=clock, sleeper=sleeper)
+
+    # Frame 1: Initial frame anchors send time
+    assert await pacer.pace(0.06) == 0.0
+    metrics = pacer.metrics
+    assert metrics.frames == 1
+    assert metrics.drift_resets == 0
+    assert metrics.max_lag_seconds == 0.0
+
+    # Frame 2: Lag of 0.02s (within max_drift_seconds of 0.1)
+    clock.advance(0.08)
+    assert await pacer.pace(0.06) == 0.0
+    metrics = pacer.metrics
+    assert metrics.frames == 2
+    assert metrics.drift_resets == 0
+    assert metrics.max_lag_seconds == pytest.approx(0.02)
+
+    # Frame 3: Lag of 0.46s (exceeds 0.1s -> triggers drift reset)
+    clock.advance(0.5)
+    assert await pacer.pace(0.06) == 0.0
+    metrics = pacer.metrics
+    assert metrics.frames == 3
+    assert metrics.drift_resets == 1
+    assert metrics.max_lag_seconds == pytest.approx(0.46)
+
+
+@pytest.mark.asyncio
+async def test_pacer_reset_interrupts_in_progress_sleep() -> None:
+    sleep_started = asyncio.Event()
+    sleep_cancelled = asyncio.Event()
+
+    async def blocking_sleep(_: float) -> None:
+        sleep_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            sleep_cancelled.set()
+
+    pacer = PacketPacer(max_drift_seconds=0.1, clock=lambda: 0.0, sleeper=blocking_sleep)
+    await pacer.pace(0.06)
+    task = asyncio.create_task(pacer.pace(0.06))
+    await sleep_started.wait()
+    pacer.reset()
+
+    assert await task == 0.0
+    assert sleep_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_pacer_pace_cancellation_cleans_up_subtasks() -> None:
+    sleep_started = asyncio.Event()
+    sleep_cancelled = asyncio.Event()
+
+    async def blocking_sleep(_: float) -> None:
+        sleep_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            sleep_cancelled.set()
+
+    pacer = PacketPacer(max_drift_seconds=0.1, clock=lambda: 0.0, sleeper=blocking_sleep)
+    await pacer.pace(0.06)
+    task = asyncio.create_task(pacer.pace(0.06))
+    await sleep_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sleep_cancelled.is_set()

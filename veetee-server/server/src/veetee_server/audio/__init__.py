@@ -17,7 +17,7 @@ from .codec import (
     InvalidPCMFormatError,
     PCMFormat,
 )
-from .pacer import PacerError, PacketPacer
+from .pacer import PacerError, PacerMetrics, PacketPacer
 from .protocol import (
     AudioError,
     AudioPacketMetadata,
@@ -64,6 +64,7 @@ __all__ = [
     "PCMFormat",
     "PacketPacer",
     "PacerError",
+    "PacerMetrics",
     "ProtocolVersionMismatchError",
     "QueueClosedError",
     "QueueError",

@@ -457,6 +457,8 @@ simulator.
 - Chạy server và digital-human local theo quy trình server-first.
 - Test hello, auto/manual/realtime listen, audio hai chiều, abort, reconnect và timeout.
 - Ghi latency waterfall, không chỉ đánh giá “nghe nhanh”.
+- Ma trận QA E2E digital-human phải đạt 100% scenario đủ điều kiện, không có `fail` hoặc
+  flaky case chưa xử lý, theo quy trình server-first.
 
 ### M2.8 E2E thiết bị thật
 
@@ -464,6 +466,8 @@ simulator.
 - OTA response trỏ tới endpoint Veetee, không chứa path/branding upstream.
 - Test wake -> nói tiếng Việt -> phản hồi -> chen lời -> nói tiếp.
 - Smoke-test màn hình, microphone, loa, nút và Wi-Fi reconnect.
+- Ma trận QA E2E thiết bị thật phải đạt 100%; scenario `blocked` chưa được coi là hoàn tất
+  Mốc 2 và phải có bằng chứng sau khi gỡ blocker.
 
 **Bàn giao Mốc 2:** video/demo nghe được, metric p50/p95, log đã redact, test report và
 danh sách SLO đạt/chưa đạt.
@@ -748,7 +752,9 @@ evidence và checklist ký duyệt.
 Một mốc chỉ được báo hoàn tất khi:
 
 - Tất cả task bắt buộc của mốc có acceptance evidence.
-- Test unit, contract, integration và E2E theo scope đều chạy; phần không chạy nêu lý do.
+- Test unit, contract và integration theo scope đều pass. Ma trận QA E2E theo scope phải
+  pass 100%, không có fail/flaky; scenario blocked phải có lý do/evidence và ngăn bàn giao
+  mốc cho tới khi được gỡ và chạy pass.
 - Không có thay đổi tracked/Git history trong hai repo `references/`.
 - Không có secret hoặc namespace cấm trong source/public contract Veetee.
 - Docs, OpenAPI, migration và sample config phản ánh đúng implementation.

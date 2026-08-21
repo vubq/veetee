@@ -30,6 +30,23 @@ PipelineFactory = Callable[[DeviceSession, Settings], FakePipeline]
 PacerFactory = Callable[[Settings], PacketPacer]
 
 
+def build_vad_stream(
+    settings: Settings,
+    vad_runtime: SileroVADRuntime | None = None,
+) -> BaseVADStream | FakeVAD:
+    """Builds a fresh VAD stream instance according to configured VAD provider."""
+    if settings.vad_provider == "silero_onnx":
+        if vad_runtime is None or not vad_runtime.is_ready:
+            raise VADNotReadyError("Silero VAD is configured but its runtime is not ready")
+        return vad_runtime.create_stream()
+    return FakeVAD(
+        speech_threshold=settings.pipeline_vad_speech_threshold,
+        start_frames=settings.pipeline_vad_start_frames,
+        end_silence_frames=settings.pipeline_vad_end_silence_frames,
+        max_utterance_frames=settings.pipeline_max_utterance_frames,
+    )
+
+
 def build_fake_pipeline(
     session: DeviceSession,
     settings: Settings,
@@ -39,18 +56,7 @@ def build_fake_pipeline(
     tts_runtime: GeminiTTSRuntime | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
-    vad: FakeVAD | BaseVADStream
-    if settings.vad_provider == "silero_onnx":
-        if vad_runtime is None or not vad_runtime.is_ready:
-            raise VADNotReadyError("Silero VAD is configured but its runtime is not ready")
-        vad = vad_runtime.create_stream()
-    else:
-        vad = FakeVAD(
-            speech_threshold=settings.pipeline_vad_speech_threshold,
-            start_frames=settings.pipeline_vad_start_frames,
-            end_silence_frames=settings.pipeline_vad_end_silence_frames,
-            max_utterance_frames=settings.pipeline_max_utterance_frames,
-        )
+    vad = build_vad_stream(settings, vad_runtime=vad_runtime)
 
     asr: FakeASR | PhoWhisperRuntime
     if settings.asr_provider == "pho_whisper":

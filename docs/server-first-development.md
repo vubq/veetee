@@ -182,3 +182,26 @@ Mỗi công việc server liên quan device flow phải báo cáo tối thiểu:
 - Các bước và luồng đã qua/thất bại.
 - Trích log cần thiết đã loại bỏ credential/token.
 - Giới hạn chưa xác minh, đặc biệt hardware, Wi-Fi yếu, audio/AEC và OTA rollback.
+
+## Cổng chất lượng QA E2E
+
+Mọi mốc có phạm vi E2E chỉ được bàn giao khi ma trận QA E2E đã khai báo đạt **100%**:
+
+- Mỗi scenario bắt buộc phải có trạng thái `pass`, `fail` hoặc `blocked` kèm lý do và bằng
+  chứng. Không được bỏ qua im lặng, đổi `fail` thành warning hoặc dùng tỷ lệ trung bình để
+  che một scenario đỏ.
+- Tỷ lệ pass được tính trên toàn bộ scenario đủ điều kiện chạy: `pass / (pass + fail)`.
+  Điều kiện bàn giao là `fail=0` và tỷ lệ bằng `100%`.
+- Scenario phụ thuộc hardware, credential, provider hoặc quyền external chưa có phải được
+  xác định `blocked` trước lượt chạy, ghi owner/điều kiện gỡ blocker và không được báo mốc
+  hoàn tất. Khi blocker được gỡ, phải chạy lại scenario và đạt `pass`.
+- Flaky test không được rerun chỉ để lấy lần xanh. Phải lưu lần lỗi, tìm root cause, sửa
+  và chạy lại toàn bộ ma trận liên quan; kết quả cuối phải lặp lại được.
+- QA phải chạy trên artifact/commit dự kiến bàn giao, không chỉ trên worktree hoặc một
+  component giả lập khác với client thuộc scope.
+- Với luồng thiết bị, evidence tối thiểu gồm hello, listen mode, audio hai chiều, barge-in,
+  abort, reconnect, timeout, cleanup và stale-output suppression; M2.7 dùng digital-human,
+  M2.8 dùng thiết bị thật theo cấu hình đã khóa.
+
+Unit, contract và integration test vẫn là gate riêng bắt buộc; QA E2E 100% không thay thế
+các lớp test này và các lớp test xanh cũng không thay thế E2E.

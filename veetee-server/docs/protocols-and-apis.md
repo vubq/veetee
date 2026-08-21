@@ -35,6 +35,8 @@ Protocol version xác định wire format cho toàn bộ binary audio frame củ
   phải >= 60ms (một audio frame) theo validator config.
 - `VEETEE_AUDIO_PACING_MAX_DRIFT_MS`: 100.0 — drift tối đa của downlink pacer trước khi reset
   anchor; phải nhỏ hơn `audio_max_queue_duration_ms` theo validator config.
+- `VEETEE_BARGE_IN_PRE_ROLL_FRAMES`: 5 — số frame uplink 60 ms tối đa giữ lại cho
+  barge-in; phải nằm trong khoảng 1..20.
 
 ### Error Envelope Format
 
@@ -76,12 +78,31 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
    - Device -> Server `abort` -> Idempotent abort active turn/generation.
 5. `listen`:
    - Device -> Server `listen`: `state` (`start`, `stop`, `detect`), `mode` (`auto`, `manual`, `realtime`). Quản lý state machine `DeviceSession`.
-   - Binary audio hợp lệ chỉ được enqueue từ `listen/start` tới `listen/stop`. Ngoài
-     `LISTENING`, frame hợp lệ bị drop; frame malformed/oversized vẫn đóng `1002`/`1009`.
+   - Binary audio hợp lệ được enqueue từ `listen/start` tới `listen/stop`. Ngoài
+     `LISTENING`, frame hợp lệ mặc định bị drop; ngoại lệ M2.6 là khi session đang
+     `SPEAKING`, hello đã công bố `features.aec=true` và mode hiện hành là `realtime`.
+     Frame malformed/oversized vẫn đóng `1002`/`1009` trước khi áp state gate.
    - Từ M1.6, `listen/stop` chạy fake pipeline deterministic và server phát theo thứ tự
      `stt` -> `tts/start` -> `tts/sentence_start` -> binary audio* -> `tts/stop`.
 6. `mcp` và unsupported frames:
    - Trả safe typed error envelope `veetee_invalid_input`. Tích hợp MCP pipeline hoãn lại M3.
+
+### Full-duplex và barge-in (M2.6)
+
+- Server chỉ chạy detector chen lời trong khi `SPEAKING` nếu đồng thời có
+  `hello.features.aec=true` và `listen.mode="realtime"`. Mode `auto`, `manual`, mode chưa
+  được thiết lập hoặc thiết bị không công bố AEC tiếp tục drop uplink khi phát TTS.
+- Detector dùng decoder/VAD stream riêng với turn cũ và giữ bounded pre-roll theo
+  `VEETEE_BARGE_IN_PRE_ROLL_FRAMES`; trigger frame chỉ xuất hiện một lần trong pre-roll.
+- Khi VAD xác nhận `SPEECH_START`, server tăng queue generation đúng một lần, purge output
+  cũ, reset/đánh thức pacer, cancel và chờ cleanup pipeline/provider cũ, rồi phát đúng một
+  `tts/stop` thuộc generation mới. Server mở turn `LISTENING` mới và retag pre-roll vào
+  ingress generation mới.
+- Expected-turn guard làm trigger đến trễ sau abort/completion hoặc trigger đồng thời trở
+  thành no-op; frame audio đã dequeue nhưng còn chờ pacer được kiểm tra generation lại và
+  không được gửi sau barge-in.
+- `listen/start` explicit vẫn tương thích và tiếp tục thay thế turn đang xử lý/phát. Đây là
+  control path chủ động, không phụ thuộc điều kiện AEC/realtime của detector tự động.
 
 ### Binary Frames
 

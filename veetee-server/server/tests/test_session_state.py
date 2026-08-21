@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 import pytest
@@ -276,3 +276,143 @@ def test_state_and_generation_mapping_are_read_only() -> None:
         session.state = SessionState.CLOSED  # type: ignore[misc]
     with pytest.raises(TypeError):
         session.generations[UUID(int=0)] = None  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "aec_enabled, listen_mode, expected_eligible",
+    [
+        (True, "realtime", True),
+        (True, "auto", False),
+        (True, "manual", False),
+        (True, None, False),
+        (False, "realtime", False),
+        (False, "auto", False),
+        (False, "manual", False),
+        (False, None, False),
+    ],
+)
+def test_barge_in_eligibility_matrix(
+    aec_enabled: bool,
+    listen_mode: Literal["auto", "manual", "realtime"] | None,
+    expected_eligible: bool,
+) -> None:
+    session = make_session()
+    session.negotiate_features({"aec": aec_enabled})
+    session.listen_mode = listen_mode
+
+    assert session.aec_enabled is aec_enabled
+    assert session.is_barge_in_eligible is expected_eligible
+
+
+@pytest.mark.asyncio
+async def test_begin_barge_in_expected_turn_guard() -> None:
+    session = make_session()
+    session.negotiate_features({"aec": True})
+    session.listen_mode = "realtime"
+
+    turn, _ = await stream_turn(session)
+    wrong_turn = ConversationTurn()
+
+    # Wrong expected turn -> guard rejects barge in
+    res = await session.begin_barge_in(wrong_turn)
+    assert res is None
+    assert session.state is SessionState.SPEAKING
+    assert session.current_turn is turn
+
+
+@pytest.mark.asyncio
+async def test_begin_barge_in_state_and_eligibility_guards() -> None:
+    session = make_session()
+
+    # Case 1: Session not in SPEAKING (e.g. IDLE or LISTENING)
+    dummy_turn = ConversationTurn()
+    assert await session.begin_barge_in(dummy_turn) is None
+
+    # Case 2: Session in SPEAKING but not eligible (e.g. aec=False)
+    session.negotiate_features({"aec": False})
+    session.listen_mode = "realtime"
+    turn, _ = await stream_turn(session)
+    assert await session.begin_barge_in(turn) is None
+    assert session.state is SessionState.SPEAKING
+    assert session.current_turn is turn
+
+
+@pytest.mark.asyncio
+async def test_begin_barge_in_single_epoch_advance_and_turn_capture() -> None:
+    session = make_session()
+    session.negotiate_features({"aec": True})
+    session.listen_mode = "realtime"
+
+    turn1, gen1 = await stream_turn(session)
+    old_ingress_gen = session.ingress_queue.generation
+    old_egress_gen = session.egress_queue.generation
+    assert old_ingress_gen == old_egress_gen
+
+    new_turn = await session.begin_barge_in(turn1)
+    assert new_turn is not None
+    assert new_turn is not turn1
+
+    # Exactly one epoch advance
+    assert session.ingress_queue.generation == old_ingress_gen + 1
+    assert session.egress_queue.generation == old_egress_gen + 1
+
+    # Stale generation check
+    assert gen1.state is GenerationState.STALE
+    with pytest.raises(StaleGenerationError):
+        session.ensure_current_generation(gen1)
+
+    # Capture turn state & session state
+    assert new_turn.state is TurnState.CAPTURING
+    assert session.state is SessionState.LISTENING
+    assert session.current_turn is new_turn
+
+
+@pytest.mark.asyncio
+async def test_begin_barge_in_noop_on_completed_or_aborted_turn_race() -> None:
+    # Race condition 1: old turn completed before begin_barge_in
+    session1 = make_session()
+    session1.negotiate_features({"aec": True})
+    session1.listen_mode = "realtime"
+    turn1, _ = await stream_turn(session1)
+    session1.complete_turn()
+    assert await session1.begin_barge_in(turn1) is None
+    assert session1.state is SessionState.IDLE
+
+    # Race condition 2: old turn aborted before begin_barge_in
+    session2 = make_session()
+    session2.negotiate_features({"aec": True})
+    session2.listen_mode = "realtime"
+    turn2, _ = await stream_turn(session2)
+    await session2.abort_turn()
+    assert await session2.begin_barge_in(turn2) is None
+    assert session2.state is SessionState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_concurrent_barge_in_advances_epoch_once() -> None:
+    session = make_session()
+    session.negotiate_features({"aec": True})
+    session.listen_mode = "realtime"
+    old_turn, _ = await stream_turn(session)
+    old_epoch = session.egress_queue.generation
+    cleanup_started = asyncio.Event()
+
+    async def child() -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            cleanup_started.set()
+            await asyncio.sleep(0)
+
+    old_turn.cancellation.create_task(child())
+    await asyncio.sleep(0)
+
+    first, second = await asyncio.gather(
+        session.begin_barge_in(old_turn),
+        session.begin_barge_in(old_turn),
+    )
+
+    assert cleanup_started.is_set()
+    assert (first is None) != (second is None)
+    assert session.egress_queue.generation == old_epoch + 1
+    assert session.state is SessionState.LISTENING

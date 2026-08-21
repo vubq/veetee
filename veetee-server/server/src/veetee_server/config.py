@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     pipeline_vad_end_silence_frames: int = Field(default=3, gt=0)
     pipeline_max_utterance_frames: int = Field(default=200, gt=0)
     pipeline_tts_chunks_per_sentence: int = Field(default=3, gt=0)
+    barge_in_pre_roll_frames: int = Field(default=5, gt=0, le=20)
 
     # VAD Provider & Silero VAD Settings (M2.1)
     vad_provider: Literal["fake", "silero_onnx"] = Field(default="fake")

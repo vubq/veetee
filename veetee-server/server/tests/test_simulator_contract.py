@@ -173,6 +173,39 @@ def test_reconnect_gets_fresh_session(simulator_settings: Settings) -> None:
     assert session_ids[0] != session_ids[1]
 
 
+def test_reconnect_while_audio_is_streaming_cleans_old_session(
+    simulator_settings: Settings,
+) -> None:
+    app = create_app(simulator_settings.model_copy(update={"idle_timeout_seconds": 10.0}))
+    app.state.pacer_factory = lambda _settings: BlockingPacer()
+    registry = app.state.device_session_registry
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers()) as ws:
+            simulator = _simulator(ws)
+            asyncio.run(simulator.send_hello())
+            old_session_id = simulator.session_id
+            asyncio.run(simulator.send_listen("start"))
+            asyncio.run(simulator.send_audio_frame(_golden_frame(1)))
+            asyncio.run(simulator.send_audio_frame(_golden_frame(1)))
+            asyncio.run(simulator.send_listen("stop", None))
+            assert asyncio.run(simulator.receive_json())["type"] == "stt"
+            assert asyncio.run(simulator.receive_json())["state"] == "start"
+            assert asyncio.run(simulator.receive_json())["state"] == "sentence_start"
+
+        assert registry.active_count == 0
+
+        app.state.pacer_factory = lambda settings: PacketPacer(
+            max_drift_seconds=settings.audio_pacing_max_drift_ms / 1000.0
+        )
+        with client.websocket_connect("/api/v1/devices/ws", headers=_headers()) as ws:
+            simulator = _simulator(ws)
+            asyncio.run(simulator.send_hello())
+            assert simulator.session_id != old_session_id
+            events = asyncio.run(simulator.run_turn(_golden_frame(1)))
+            assert any(isinstance(event, AudioPacketMetadata) for event in events)
+
+
 def test_hello_and_idle_timeouts(simulator_settings: Settings) -> None:
     app = create_app(
         simulator_settings.model_copy(

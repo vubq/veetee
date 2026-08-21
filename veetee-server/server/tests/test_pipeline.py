@@ -11,6 +11,7 @@ from veetee_server.audio.codec import (
     FakeOpusDecoder,
     FakeOpusEncoder,
 )
+from veetee_server.audio.pacer import PacketPacer
 from veetee_server.audio.protocol import AudioError, parse_audio_frame
 from veetee_server.audio.queue import (
     AudioQueueItem,
@@ -18,7 +19,7 @@ from veetee_server.audio.queue import (
     QueueClosedError,
     SlowClientQueueOverflowError,
 )
-from veetee_server.device_gateway.downlink import GatewayEventSink
+from veetee_server.device_gateway.downlink import GatewayEventSink, run_downlink_sender
 from veetee_server.domain.session import DeviceSession, SessionState, TurnState
 from veetee_server.pipeline.asr import FakeASR
 from veetee_server.pipeline.downlink import DownlinkItem, DownlinkKind, DownlinkQueue
@@ -282,6 +283,49 @@ async def test_gateway_sink_never_relabels_stale_events() -> None:
     await sink.emit(SttEvent(text="stale", session_id=str(session.id)))
 
     assert session.egress_queue.item_count == 0
+
+
+@pytest.mark.asyncio
+async def test_sender_drops_dequeued_audio_when_barge_in_resets_pacer() -> None:
+    sleep_started = asyncio.Event()
+
+    async def blocking_sleep(_: float) -> None:
+        sleep_started.set()
+        await asyncio.Future()
+
+    class RecordingWebSocket:
+        def __init__(self) -> None:
+            self.binary: list[bytes] = []
+
+        async def send_bytes(self, payload: bytes) -> None:
+            self.binary.append(payload)
+
+        async def send_text(self, payload: str) -> None:
+            pass
+
+    session = DeviceSession(device_id="d1", client_id="c1")
+    session.accept()
+    session.pacer = PacketPacer(clock=lambda: 0.0, sleeper=blocking_sleep)
+    generation = session.egress_queue.generation
+    for payload in (b"first", b"stale"):
+        await session.egress_queue.put(
+            DownlinkItem(
+                kind=DownlinkKind.AUDIO,
+                payload=payload,
+                generation=generation,
+                duration_ms=60.0,
+            )
+        )
+    websocket = RecordingWebSocket()
+    sender = asyncio.create_task(run_downlink_sender(session, websocket))  # type: ignore[arg-type]
+    await sleep_started.wait()
+
+    await session.abort_turn()
+    await asyncio.sleep(0)
+    session.egress_queue.close()
+    await sender
+
+    assert websocket.binary == [b"first"]
 
 
 @pytest.mark.asyncio

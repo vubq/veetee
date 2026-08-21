@@ -282,6 +282,31 @@ Giới hạn M2.5: encoder hiện vẫn là deterministic fake boundary của M1
 local; native libopus production và subjective listening trên loa thiết bị cần được xác
 minh ở M2.7/M2.8. Không có resampler nội suy chất lượng thấp trên production path.
 
+## Full-duplex, barge-in và flow control (M2.6 - Quyết định Veetee)
+
+Gateway lưu capability từ hello và listen mode hiện hành. Uplink trong lúc `SPEAKING` chỉ
+được đưa vào detector nếu `features.aec=true` và mode là `realtime`; mọi tổ hợp khác tiếp
+tục drop để tránh nhận nhầm tiếng loa vọng về làm lời người dùng.
+
+Detector barge-in có decoder và VAD stream riêng, không tái sử dụng recurrent/buffer state
+của VAD turn cũ. Nó giữ `VEETEE_BARGE_IN_PRE_ROLL_FRAMES` frame gần nhất (mặc định 5,
+hard bound 1..20). Khi nhận `SPEECH_START`:
+
+1. expected-turn guard xác nhận session vẫn đang phát đúng turn đã quan sát;
+2. ingress/egress generation tăng đúng một lần và purge item cũ;
+3. pacer reset, đánh thức sleep đang chờ và sender re-check generation trước write;
+4. cancellation scope hủy và chờ cleanup pipeline/provider cũ;
+5. server mở capture turn mới, enqueue đúng một `tts/stop` ở epoch mới và retag pre-roll.
+
+Lock turn-scoped làm hai trigger đồng thời hoặc trigger đến sau abort/completion thành
+no-op. Downlink vẫn dùng một sender FIFO duy nhất; không có concurrent WebSocket write hay
+sleep rải rác. `PacketPacer.metrics` cung cấp tổng frame, số drift reset và max lag để M2.7
+đo/tune pacing dựa số liệu. Queue bounded hiện hữu vẫn là flow-control authority:
+uplink `DROP_OLDEST`, downlink `FAIL_SESSION`; reconnect tạo session/queue/detector mới.
+
+M2.6 xác minh state, race, bounded pre-roll và stale-output suppression bằng harness
+deterministic. Native Opus và chất lượng AEC/audio thực tế vẫn cần M2.7/M2.8.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc
