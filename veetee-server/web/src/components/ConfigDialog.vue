@@ -24,8 +24,10 @@ import { ref } from 'vue'
 import UiDialog from '@/components/UiDialog.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import UiSwitch from '@/components/UiSwitch.vue'
+import { updateAgent } from '@/api/controlPlane'
+import type { AgentSummary } from '@/types/agent'
 
-defineProps<{ open: boolean; agentName: string }>()
+const props = defineProps<{ open: boolean; agentName: string; agent: AgentSummary | null }>()
 const emit = defineEmits<{ close: [] }>()
 
 type TabValue = 'role' | 'model' | 'speaker' | 'extension'
@@ -34,7 +36,7 @@ const activeTab = ref<TabValue>('role')
 const language = ref('vi')
 const voice = ref('female-warm')
 const customRole = ref(false)
-const rolePrompt = ref(`# Vai trò: Người bạn đồng hành ấm áp và chân thành
+const rolePrompt = ref(props.agent?.rolePrompt ?? `# Vai trò: Người bạn đồng hành ấm áp và chân thành
 
 ## Đặc điểm nhân vật
 Giọng nói trẻ trung, truyền cảm và gần gũi. Luôn lắng nghe, phản hồi tinh tế và mang lại năng lượng tích cực.
@@ -70,6 +72,8 @@ const mcpOpen = ref(false)
 const mcpEnabled = ref(false)
 const mcpEndpoint = ref('')
 const saved = ref(false)
+const saving = ref(false)
+const saveError = ref('')
 
 const tabs: Array<{ value: TabValue; label: string }> = [
   { value: 'role', label: 'Vai trò' },
@@ -128,8 +132,23 @@ function addSpeaker() {
   addingSpeaker.value = false
 }
 
-function save() {
-  saved.value = true
+async function save() {
+  if (!props.agent) return
+  saving.value = true
+  saveError.value = ''
+  try {
+    const updated = await updateAgent({
+      ...props.agent,
+      rolePrompt: rolePrompt.value,
+      responseStyle: responseStyle.value,
+    })
+    Object.assign(props.agent, updated)
+    saved.value = true
+  } catch (error) {
+    saveError.value = error instanceof Error ? error.message : 'Không lưu được cấu hình.'
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 
@@ -290,12 +309,13 @@ function save() {
         </div>
       </section>
 
-      <p v-if="saved" class="save-status" role="status">Đã lưu cấu hình giao diện mẫu.</p>
+      <p v-if="saved" class="save-status" role="status">Đã lưu cấu hình.</p>
+      <p v-if="saveError" class="field-help">{{ saveError }}</p>
     </form>
 
     <template #footer>
       <button class="button button-ghost" type="button" @click="emit('close')">Hủy</button>
-      <button class="button button-primary" type="button" @click="save">Lưu</button>
+      <button class="button button-primary" type="button" :disabled="saving" @click="save">{{ saving ? 'Đang lưu...' : 'Lưu' }}</button>
     </template>
   </UiDialog>
 </template>

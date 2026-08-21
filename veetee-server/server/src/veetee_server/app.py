@@ -16,6 +16,10 @@ from .config import (
     get_settings,
     validate_device_websocket_url,
 )
+from .control_plane.memory_router import router as memory_control_plane_router
+from .control_plane.provider_router import router as provider_control_plane_router
+from .control_plane.router import router as control_plane_router
+from .control_plane.runtime_router import router as runtime_control_plane_router
 from .device_gateway import DeviceSessionRegistry
 from .device_gateway import router as device_gateway_router
 from .logging import configure_logging
@@ -191,6 +195,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         app.state.intent_router = IntentRouter(default_strategy=settings.intent_strategy)
 
+    if settings.persistence_enabled:
+        from .persistence import AgentRepository, DatabaseConfig, PostgresDatabase, UserRepository
+
+        database = PostgresDatabase(DatabaseConfig(dsn=settings.database_dsn))
+        if not database.check():
+            raise RuntimeError("Configured persistence database is not ready")
+        if not settings.bootstrap_admin_email or not settings.bootstrap_admin_password:
+            raise RuntimeError(
+                "Bootstrap admin credentials are required when persistence is enabled"
+            )
+        app.state.database = database
+        app.state.user_repository = UserRepository(database)
+        app.state.user_repository.ensure_bootstrap(
+            settings.bootstrap_admin_email, settings.bootstrap_admin_password
+        )
+        app.state.agent_repository = AgentRepository(database)
+
     app.state.ready = True
     try:
         yield
@@ -221,6 +242,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.ready = False
     app.state.device_session_registry = DeviceSessionRegistry()
     app.include_router(device_gateway_router)
+    app.include_router(control_plane_router)
+    app.include_router(memory_control_plane_router)
+    app.include_router(runtime_control_plane_router)
+    app.include_router(provider_control_plane_router)
 
     @app.middleware("http")
     async def correlation_middleware(

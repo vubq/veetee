@@ -1,0 +1,10 @@
+BEGIN;
+DROP TABLE IF EXISTS veetee_audit_events;
+DROP TABLE IF EXISTS veetee_memories;
+DROP TABLE IF EXISTS veetee_devices;
+DROP TABLE IF EXISTS veetee_agents;
+DROP TABLE IF EXISTS veetee_sessions;
+DROP TABLE IF EXISTS veetee_users;
+DELETE FROM veetee_schema_migrations WHERE version = '001_control_plane';
+DROP TABLE IF EXISTS veetee_schema_migrations;
+COMMIT;
