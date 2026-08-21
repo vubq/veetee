@@ -61,7 +61,8 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
     factory: PipelineFactory | None = getattr(app_state, "pipeline_factory", None)
     if factory is not None:
         return factory(session, settings)
-    return build_fake_pipeline(session, settings)
+    vad_runtime = getattr(app_state, "vad_runtime", None)
+    return build_fake_pipeline(session, settings, vad_runtime=vad_runtime)
 
 
 def _start_pipeline(

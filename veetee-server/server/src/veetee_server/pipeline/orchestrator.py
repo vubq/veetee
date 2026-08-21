@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from enum import StrEnum
+from typing import Any
 
 from veetee_server.audio.codec import AudioDecoder, AudioEncoder
 from veetee_server.domain.errors import InvalidTransitionError, StaleGenerationError
@@ -42,7 +43,7 @@ from .events import (
 from .framing import build_downlink_frame
 from .llm import FakeLLM
 from .tts import FakeTTS
-from .vad import FakeVAD
+from .vad import BaseVADStream, FakeVAD
 
 logger = logging.getLogger("veetee.pipeline")
 
@@ -59,7 +60,7 @@ class PipelineOutcome(StrEnum):
 
 
 class FakePipeline:
-    """Turn-scoped orchestrator over deterministic fake AI components."""
+    """Turn-scoped orchestrator over AI components."""
 
     def __init__(
         self,
@@ -67,7 +68,7 @@ class FakePipeline:
         decoder: AudioDecoder,
         encoder: AudioEncoder,
         protocol_version: int,
-        vad: FakeVAD,
+        vad: FakeVAD | BaseVADStream | Any,
         asr: FakeASR,
         llm: FakeLLM,
         tts: FakeTTS,
@@ -98,7 +99,7 @@ class FakePipeline:
 
         expected_queue_gen = session.egress_queue.generation
 
-        utterance = self._collect_utterance(session, turn)
+        utterance = await self._collect_utterance(session, turn)
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
         if utterance is None:
@@ -163,12 +164,13 @@ class FakePipeline:
             return PipelineOutcome.CANCELLED
         return PipelineOutcome.COMPLETED
 
-    def _collect_utterance(self, session: DeviceSession, turn: ConversationTurn) -> bytes | None:
+    async def _collect_utterance(
+        self, session: DeviceSession, turn: ConversationTurn
+    ) -> bytes | None:
         """Drains captured frames and returns the VAD speech segment PCM.
 
-        Synchronous by design: after ``listen/stop`` the gateway drops any
-        further audio, so the whole utterance is already buffered. Returning
-        ``None`` means no usable speech was found.
+        After ``listen/stop`` the gateway drops any further audio, so the whole
+        utterance is already buffered. Returning ``None`` means no usable speech was found.
         """
         items = session.ingress_queue.drain()
         if not items:
@@ -176,12 +178,26 @@ class FakePipeline:
         self.vad.reset()
         frames: list[bytes] = []
         for item in items:
-            frames.append(self.decoder.decode(item.payload))
-            self.vad.process_frame(frames[-1])
+            pcm = self.decoder.decode(item.payload)
+            frames.append(pcm)
+            if hasattr(self.vad, "process_pcm_async"):
+                await self.vad.process_pcm_async(pcm)
+            else:
+                self.vad.process_frame(pcm)
+
         segment = self.vad.finish()
-        if segment is None or segment.end_frame_index <= segment.start_frame_index:
+        if segment is None:
             return None
-        return b"".join(frames[segment.start_frame_index : segment.end_frame_index])
+
+        if hasattr(segment, "end_frame_index") and hasattr(segment, "start_frame_index"):
+            if segment.end_frame_index <= segment.start_frame_index:
+                return None
+            return b"".join(frames[segment.start_frame_index : segment.end_frame_index])
+
+        if hasattr(segment, "pcm_data"):
+            return segment.pcm_data if segment.pcm_data else None
+
+        return None
 
     @staticmethod
     def _alive(

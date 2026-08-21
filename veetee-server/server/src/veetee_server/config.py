@@ -105,6 +105,18 @@ class Settings(BaseSettings):
     pipeline_max_utterance_frames: int = Field(default=200, gt=0)
     pipeline_tts_chunks_per_sentence: int = Field(default=3, gt=0)
 
+    # VAD Provider & Silero VAD Settings (M2.1)
+    vad_provider: Literal["fake", "silero_onnx"] = Field(default="fake")
+    vad_model_path: str = Field(default="")
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    vad_neg_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    vad_pre_roll_ms: int = Field(default=80, ge=0)
+    vad_min_speech_ms: int = Field(default=250, ge=0)
+    vad_end_silence_ms: int = Field(default=150, ge=0)
+    vad_max_utterance_ms: int = Field(default=12000, gt=0)
+    vad_max_concurrency: int = Field(default=4, gt=0)
+    vad_admission_timeout_seconds: float = Field(default=2.0, gt=0)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -136,6 +148,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "pipeline_max_utterance_frames must be at least pipeline_vad_start_frames"
             )
+        if self.vad_neg_threshold > self.vad_threshold:
+            raise ValueError("vad_neg_threshold must not exceed vad_threshold")
+        if self.vad_max_utterance_ms < self.vad_min_speech_ms:
+            raise ValueError("vad_max_utterance_ms must be at least vad_min_speech_ms")
+        if self.vad_provider == "silero_onnx" and not self.vad_model_path.strip():
+            raise ValueError("vad_model_path must be specified when vad_provider is silero_onnx")
         return self
 
 

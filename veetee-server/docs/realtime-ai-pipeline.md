@@ -161,6 +161,36 @@ Config fake pipeline: `VEETEE_PIPELINE_VAD_SPEECH_THRESHOLD`,
 `VEETEE_PIPELINE_MAX_UTTERANCE_FRAMES` và `VEETEE_PIPELINE_TTS_CHUNKS_PER_SENTENCE`.
 `pipeline_max_utterance_frames` phải không nhỏ hơn `pipeline_vad_start_frames`.
 
+## Silero VAD adapter (M2.1 - Quyết định Veetee)
+
+`veetee_server.pipeline.vad` cung cấp VAD contract typed độc lập với transport và engine:
+
+- **Contract typed**: `VADUtterance`, `VADSampleOffset`, `VADEndReason`, `SileroVADConfig` sử dụng sample offset và ms timestamp chuẩn hóa (16 kHz s16le mono).
+- **Runtime application-scoped** (`SileroVADRuntime`): load model ONNX, warmup 1 lần tại startup lifespan khi `VEETEE_VAD_PROVIDER=silero_onnx`, quản lý readiness (`/readyz`) và shutdown giải phóng tài nguyên.
+- **Per-stream isolation** (`SileroVADStream`): mỗi session/turn nhận 1 stream instance riêng chứa `_recurrent_state`, `_pcm_buffer`, `_pre_roll_buffer`, không chia sẻ mutable state giữa các session.
+- **Rechunking & Remainder**: tự động gom/tách frame PCM có kích thước bất kỳ (như 960 samples / 60 ms Opus) sang window 512 samples (32 ms) để nạp vào Silero; remainder < 512 samples được giữ lại cho frame kế tiếp không gây đứt/trùng sample.
+- **Boundary Detector**:
+  - Hysteresis: `threshold` (0.5) và `neg_threshold` (0.35).
+  - Pre-roll 80 ms (`pre_roll_ms=80`): tự động prepend audio buffer trước thời điểm bắt đầu nói vào `VADUtterance.pcm_data`.
+  - Noise / Short burst rejection: đoạn nói ngắn dưới 250 ms (`min_speech_ms=250`) bị hủy và stream chuyển về trạng thái idle.
+  - End silence 150 ms (`end_silence_ms=150`): xác định kết thúc nói khi im lặng đủ 150 ms.
+  - Max utterance 12.000 ms (`max_utterance_ms=12000`): ngắt và chốt utterance khi nói liên tục vượt quá thời lượng tối đa.
+- **Concurrency & Cancellation safety**:
+  - Inference chạy bất đồng bộ qua thread pool executor để không block event loop.
+  - Quản lý giới hạn đồng thời bằng `asyncio.Semaphore` (`VEETEE_VAD_MAX_CONCURRENCY=4`) và admission timeout (`VEETEE_VAD_ADMISSION_TIMEOUT_SECONDS=2.0`), ném `VADAdmissionTimeoutError` khi quá tải.
+  - Khi coroutine bị hủy, permit chỉ được giải phóng sau khi native worker thực sự kết thúc; cancellation không dừng cưỡng bức ONNX thread. Kết quả suy luận chậm từ stream đã bị hủy/reset không được phát thành event.
+- **Config typed**: `VEETEE_VAD_PROVIDER` (`fake` | `silero_onnx`), `VEETEE_VAD_MODEL_PATH`, `VEETEE_VAD_THRESHOLD`, `VEETEE_VAD_NEG_THRESHOLD`, `VEETEE_VAD_PRE_ROLL_MS`, `VEETEE_VAD_MIN_SPEECH_MS`, `VEETEE_VAD_END_SILENCE_MS`, `VEETEE_VAD_MAX_UTTERANCE_MS`, `VEETEE_VAD_MAX_CONCURRENCY`, `VEETEE_VAD_ADMISSION_TIMEOUT_SECONDS`.
+
+Runtime dùng `numpy` và `onnxruntime` trực tiếp, không kéo Torch/Torchaudio vào server.
+Model đã smoke-test là `silero_vad.onnx` từ package PyPI `silero-vad 6.2.1`, giấy phép
+MIT, SHA-256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`.
+Binary model không nằm trong repository; operator phải cung cấp artifact đã kiểm checksum
+qua `VEETEE_VAD_MODEL_PATH`. Wrapper chỉ nhận contract ONNX v5 `input/state/sr` và giữ
+64 context samples cùng recurrent state riêng cho từng stream.
+
+Giới hạn M2.1: VAD thật hiện chạy trên batch đã thu sau `listen/stop`; inference trên
+audio uplink liên tục, tự kết thúc lượt và barge-in realtime thuộc M2.6.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc

@@ -51,3 +51,14 @@ trên command line.
 
 Runtime config dùng biến `VEETEE_` (xem `.env.example`). Không đặt secret vào
 `.env.example` hoặc log.
+
+Để bật Silero VAD M2.1, cung cấp model ONNX v5 đã kiểm checksum theo tài liệu pipeline:
+
+```bash
+VEETEE_VAD_PROVIDER=silero_onnx \
+VEETEE_VAD_MODEL_PATH=/absolute/path/to/silero_vad.onnx \
+uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
+```
+
+Model không được tự tải khi startup; thiếu dependency/artifact hoặc warmup lỗi làm
+`/readyz` trả `503` thay vì âm thầm rơi về fake VAD.

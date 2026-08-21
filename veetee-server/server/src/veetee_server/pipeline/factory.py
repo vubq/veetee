@@ -23,24 +23,36 @@ from .asr import FakeASR
 from .llm import FakeLLM
 from .orchestrator import FakePipeline
 from .tts import FakeTTS
-from .vad import FakeVAD
+from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
 PipelineFactory = Callable[[DeviceSession, Settings], FakePipeline]
 PacerFactory = Callable[[Settings], PacketPacer]
 
 
-def build_fake_pipeline(session: DeviceSession, settings: Settings) -> FakePipeline:
-    """Builds the default deterministic pipeline for a session."""
-    return FakePipeline(
-        decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
-        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
-        protocol_version=session.protocol_version,
-        vad=FakeVAD(
+def build_fake_pipeline(
+    session: DeviceSession,
+    settings: Settings,
+    vad_runtime: SileroVADRuntime | None = None,
+) -> FakePipeline:
+    """Builds the default pipeline for a session."""
+    vad: FakeVAD | BaseVADStream
+    if settings.vad_provider == "silero_onnx":
+        if vad_runtime is None or not vad_runtime.is_ready:
+            raise VADNotReadyError("Silero VAD is configured but its runtime is not ready")
+        vad = vad_runtime.create_stream()
+    else:
+        vad = FakeVAD(
             speech_threshold=settings.pipeline_vad_speech_threshold,
             start_frames=settings.pipeline_vad_start_frames,
             end_silence_frames=settings.pipeline_vad_end_silence_frames,
             max_utterance_frames=settings.pipeline_max_utterance_frames,
-        ),
+        )
+
+    return FakePipeline(
+        decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=session.protocol_version,
+        vad=vad,
         asr=FakeASR(),
         llm=FakeLLM(),
         tts=FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence),

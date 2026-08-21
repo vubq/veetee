@@ -66,6 +66,9 @@ Nếu công việc ảnh hưởng cả hai phạm vi, phải đọc cả:
 - Tài liệu Veetee và giao tiếp với người dùng phải dùng tiếng Việt có dấu, trừ tên riêng,
   identifier, lệnh, log và thuật ngữ kỹ thuật cần giữ nguyên để bảo đảm chính xác.
 - Không gọi repo upstream là source, kiến trúc, API hay quy trình chính thức của Veetee.
+- Không tìm, đọc, tham khảo, sao chép hoặc kết nối code, config, schema, database hay dữ
+  liệu của bất kỳ dự án cũ nào khác cũng mang tên Veetee. Chỉ workspace hiện tại và các
+  `references/` đã pin trong workspace này được phép dùng theo đúng ownership bên dưới.
 - Không sửa code/tài liệu tracked, format source hoặc thực hiện thao tác Git ghi trong
   hai repo `references/`. Được build, flash và chạy upstream để phục vụ test tích hợp;
   artifact/runtime state phải được ignore và không được commit.

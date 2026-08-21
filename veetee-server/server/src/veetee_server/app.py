@@ -36,14 +36,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging(settings.log_level)
     logger.info("server_started", extra={"context": {"environment": settings.environment}})
+
+    vad_runtime = getattr(app.state, "vad_runtime", None)
+    if settings.vad_provider == "silero_onnx" and vad_runtime is None:
+        try:
+            from .pipeline.vad import SileroVADConfig, SileroVADRuntime
+
+            cfg = SileroVADConfig(
+                threshold=settings.vad_threshold,
+                neg_threshold=settings.vad_neg_threshold,
+                pre_roll_ms=settings.vad_pre_roll_ms,
+                min_speech_ms=settings.vad_min_speech_ms,
+                end_silence_ms=settings.vad_end_silence_ms,
+                max_utterance_ms=settings.vad_max_utterance_ms,
+                max_concurrency=settings.vad_max_concurrency,
+                admission_timeout_seconds=settings.vad_admission_timeout_seconds,
+            )
+            vad_runtime = SileroVADRuntime(config=cfg, model_path=settings.vad_model_path)
+            await vad_runtime.startup()
+            app.state.vad_runtime = vad_runtime
+        except Exception as exc:
+            logger.error("Failed to start VAD runtime: %s", exc)
+
     app.state.ready = True
     try:
         yield
     finally:
         app.state.ready = False
-        registry: DeviceSessionRegistry | None = getattr(app.state, "device_session_registry", None)
+        registry: DeviceSessionRegistry | None = getattr(
+            app.state, "device_session_registry", None
+        )
         if registry is not None:
             await registry.close_all(code=1012, reason="Server shutdown")
+        if vad_runtime is not None:
+            await vad_runtime.shutdown()
         logger.info("server_stopped")
 
 
@@ -103,6 +129,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 content={"status": "not_ready", "reason": "invalid_websocket_public_url"},
             )
+        if runtime_settings.vad_provider == "silero_onnx":
+            vad_runtime = getattr(app.state, "vad_runtime", None)
+            if vad_runtime is None or not vad_runtime.is_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "vad_runtime_not_ready"},
+                )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 
     return app
