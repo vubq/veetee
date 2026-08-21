@@ -1,5 +1,6 @@
 """PostgreSQL-backed control-plane integration tests."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,18 @@ from veetee_server.app import create_app
 from veetee_server.config import Settings
 from veetee_server.persistence import DatabaseConfig, PostgresDatabase
 
+TEST_DATABASE_DSN = os.environ.get("VEETEE_TEST_DATABASE_DSN", "dbname=veetee_test")
+
+
+def isolated_database() -> PostgresDatabase:
+    if "veetee_test" not in TEST_DATABASE_DSN:
+        raise RuntimeError("Control-plane tests require an isolated veetee_test database")
+    return PostgresDatabase(DatabaseConfig(TEST_DATABASE_DSN))
+
 
 @pytest.fixture
 def persisted_client() -> TestClient:
-    database = PostgresDatabase(DatabaseConfig())
+    database = isolated_database()
     if not database.check():
         pytest.skip("PostgreSQL is unavailable")
     with database.connection() as connection:
@@ -22,7 +31,7 @@ def persisted_client() -> TestClient:
         app_name="test-control-plane",
         environment="test",
         persistence_enabled=True,
-        database_dsn="dbname=veetee",
+        database_dsn=TEST_DATABASE_DSN,
         bootstrap_admin_email="owner@example.test",
         bootstrap_admin_password="a-test-password-long-enough",
     )
@@ -83,7 +92,7 @@ def test_agent_crud_auth_and_optimistic_concurrency(persisted_client: TestClient
 def test_migration_is_idempotent() -> None:
     migration = Path(__file__).parents[1] / "migrations/001_control_plane.sql"
     assert migration.exists()
-    database = PostgresDatabase(DatabaseConfig())
+    database = isolated_database()
     with database.connection() as connection:
         connection.execute(migration.read_text(encoding="utf-8"))
         assert connection.execute(
@@ -113,7 +122,7 @@ def test_memory_crud_and_audit_are_tenant_scoped(persisted_client: TestClient) -
     assert persisted_client.delete(
         f"/api/v1/control/memories/{memory_id}", headers=headers
     ).status_code == 204
-    with PostgresDatabase(DatabaseConfig()).connection() as connection:
+    with isolated_database().connection() as connection:
         actions = connection.execute(
             "SELECT action FROM veetee_audit_events ORDER BY created_at"
         ).fetchall()

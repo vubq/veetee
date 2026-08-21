@@ -7,6 +7,7 @@ export interface DropdownItem {
   value: string
   checked?: boolean
   danger?: boolean
+  disabled?: boolean
   icon?: Component
 }
 
@@ -48,6 +49,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeOnOutside
           :key="item.value"
           class="dropdown-item"
           :class="{ danger: item.danger }"
+          :disabled="item.disabled"
           type="button"
           role="menuitem"
           @click="select(item.value)"

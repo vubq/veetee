@@ -107,6 +107,13 @@ export function updateAgent(agent: AgentSummary): Promise<AgentSummary> {
   }).then(toAgentSummary)
 }
 
+export function createAgent(name: string, rolePrompt: string): Promise<AgentSummary> {
+  return request<AgentWire>('/api/v1/control/agents', {
+    method: 'POST',
+    body: JSON.stringify({ name, role_prompt: rolePrompt }),
+  }).then(toAgentSummary)
+}
+
 export type DeviceSummary = {
   id: string
   device_id: string

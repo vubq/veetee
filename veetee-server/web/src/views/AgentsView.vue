@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import AgentCard from '@/components/AgentCard.vue'
 import AddDeviceDialog from '@/components/AddDeviceDialog.vue'
 import ConfigDialog from '@/components/ConfigDialog.vue'
+import CreateAgentDialog from '@/components/CreateAgentDialog.vue'
 import DeviceDialog from '@/components/DeviceDialog.vue'
 import HistoryDialog from '@/components/HistoryDialog.vue'
 import PageToolbar from '@/components/PageToolbar.vue'
@@ -11,7 +12,7 @@ import type { AgentSummary } from '@/types/agent'
 import { listAgents, login } from '@/api/controlPlane'
 
 const query = ref('')
-const dialog = ref<'add-device' | 'config' | 'history' | 'devices' | null>(null)
+const dialog = ref<'add-device' | 'create-agent' | 'config' | 'history' | 'devices' | null>(null)
 const selectedAgent = ref<AgentSummary | null>(null)
 
 function show(type: 'config' | 'history' | 'devices', agent: AgentSummary) {
@@ -19,26 +20,7 @@ function show(type: 'config' | 'history' | 'devices', agent: AgentSummary) {
   dialog.value = type
 }
 
-const agents = ref<AgentSummary[]>([
-  {
-    id: 'VT-A7F2',
-    name: 'Trợ lý chưa đặt tên',
-    role: 'Giọng nữ (Female Voice)',
-    model: 'Veetee Lite',
-    lastConversation: '20 ngày trước',
-    deviceCount: 1,
-    online: false,
-  },
-  {
-    id: 'VT-C9D4',
-    name: 'Trợ lý chưa đặt tên',
-    role: 'Giọng nữ (Female Voice)',
-    model: 'Veetee Lite',
-    lastConversation: '15 giờ trước',
-    deviceCount: 1,
-    online: true,
-  },
-])
+const agents = ref<AgentSummary[]>([])
 const loading = ref(true)
 const loadError = ref('')
 const email = ref('')
@@ -63,15 +45,11 @@ async function signIn() {
   }
 }
 
-onMounted(async () => {
-  try {
-    await loadAgents()
-  } catch (error) {
-    loadError.value = error instanceof Error ? error.message : 'Cần đăng nhập để tải danh sách trợ lý.'
-  } finally {
-    loading.value = false
-  }
-})
+loading.value = false
+
+function addCreatedAgent(agent: AgentSummary) {
+  agents.value.push(agent)
+}
 
 const filteredAgents = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase('vi')
@@ -86,7 +64,7 @@ const filteredAgents = computed(() => {
 
 <template>
   <main class="page-container main-content">
-    <PageToolbar v-model:query="query" :count="filteredAgents.length" @add-device="dialog = 'add-device'" />
+    <PageToolbar v-model:query="query" :count="filteredAgents.length" @add-device="dialog = 'add-device'" @create-agent="dialog = 'create-agent'" />
     <form v-if="!authenticated" class="empty-state" @submit.prevent="signIn">
       <h2>Đăng nhập Console</h2>
       <p>Phiên đăng nhập chỉ được giữ trong bộ nhớ trình duyệt.</p>
@@ -105,6 +83,7 @@ const filteredAgents = computed(() => {
       </div>
     </section>
     <AddDeviceDialog :open="dialog === 'add-device'" @close="dialog = null" />
+    <CreateAgentDialog :open="dialog === 'create-agent'" @close="dialog = null" @created="addCreatedAgent" />
     <ConfigDialog :open="dialog === 'config'" :agent="selectedAgent" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />
     <HistoryDialog :open="dialog === 'history'" :agent-id="selectedAgent?.id" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />
     <DeviceDialog :open="dialog === 'devices'" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />

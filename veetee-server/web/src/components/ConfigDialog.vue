@@ -19,7 +19,7 @@ import {
   Volume2,
   WandSparkles,
 } from '@lucide/vue'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import UiDialog from '@/components/UiDialog.vue'
 import UiSelect from '@/components/UiSelect.vue'
@@ -75,11 +75,28 @@ const saved = ref(false)
 const saving = ref(false)
 const saveError = ref('')
 
-const tabs: Array<{ value: TabValue; label: string }> = [
+watch(
+  () => [props.open, props.agent] as const,
+  ([open, agent]) => {
+    if (!open || !agent) return
+    activeTab.value = 'role'
+    language.value = agent.language?.split('-')[0] ?? 'vi'
+    voice.value = agent.voiceId || 'female-warm'
+    rolePrompt.value = agent.rolePrompt ?? ''
+    customRole.value = Boolean(agent.rolePrompt)
+    responseStyle.value = agent.responseStyle || 'balanced'
+    model.value = agent.modelId || 'veetee-lite'
+    memoryEnabled.value = agent.memoryEnabled ?? true
+    saved.value = false
+    saveError.value = ''
+  },
+)
+
+const tabs: Array<{ value: TabValue; label: string; disabled?: boolean }> = [
   { value: 'role', label: 'Vai trò' },
   { value: 'model', label: 'Mô hình & bộ nhớ' },
-  { value: 'speaker', label: 'Nhận dạng người nói' },
-  { value: 'extension', label: 'Mở rộng' },
+  { value: 'speaker', label: 'Nhận dạng người nói · Sắp có', disabled: true },
+  { value: 'extension', label: 'Mở rộng · Sắp có', disabled: true },
 ]
 
 const languages = [
@@ -141,6 +158,10 @@ async function save() {
       ...props.agent,
       rolePrompt: rolePrompt.value,
       responseStyle: responseStyle.value,
+      language: language.value === 'vi' ? 'vi-VN' : language.value,
+      voiceId: voice.value,
+      modelId: model.value,
+      memoryEnabled: memoryEnabled.value,
     })
     Object.assign(props.agent, updated)
     saved.value = true
@@ -172,6 +193,7 @@ async function save() {
           :aria-selected="activeTab === tab.value"
           :tabindex="activeTab === tab.value ? 0 : -1"
           :class="{ active: activeTab === tab.value }"
+          :disabled="tab.disabled"
           @click="selectTab(tab.value)"
         >{{ tab.label }}</button>
       </div>

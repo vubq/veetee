@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { Link2Off } from '@lucide/vue'
-import { onMounted, ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import { listDevices, type DeviceSummary } from '@/api/controlPlane'
 import UiDialog from '@/components/UiDialog.vue'
 import UiSwitch from '@/components/UiSwitch.vue'
 
-defineProps<{ open: boolean; agentName: string }>()
+const props = defineProps<{ open: boolean; agentName: string }>()
 defineEmits<{ close: [] }>()
 const ota = ref(true)
 const devices = ref<DeviceSummary[]>([])
 const loading = ref(false)
 const error = ref('')
-onMounted(async () => {
+async function loadDevices() {
   loading.value = true
+  error.value = ''
   try {
     devices.value = await listDevices()
   } catch (reason) {
@@ -21,6 +22,9 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+}
+watch(() => props.open, (open) => {
+  if (open) void loadDevices()
 })
 </script>
 
@@ -35,6 +39,6 @@ onMounted(async () => {
         <tbody><tr v-for="device in devices" :key="device.id"><td><button class="inline-edit">{{ device.alias || device.device_id }}</button></td><td><span>{{ device.device_id }}</span></td><td>Chưa có dữ liệu</td><td><span class="neutral-badge">Veetee</span></td><td>{{ device.last_seen_at || 'Chưa có' }}</td><td><UiSwitch v-model="ota" label="Cập nhật OTA" /></td><td><button class="danger-action"><Link2Off :size="15" />Hủy liên kết</button></td></tr></tbody>
       </table>
     </div>
-    <template #footer><button class="button button-outline" type="button">Liên kết thiết bị mới</button><button class="button button-ghost" type="button" @click="$emit('close')">Đóng</button></template>
+    <template #footer><button class="button button-outline" type="button" disabled title="Activation thiết bị thuộc Mốc 5">Liên kết thiết bị · M5</button><button class="button button-ghost" type="button" @click="$emit('close')">Đóng</button></template>
   </UiDialog>
 </template>

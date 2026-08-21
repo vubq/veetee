@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MessageSquareText } from '@lucide/vue'
-import { onMounted, ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import UiDialog from '@/components/UiDialog.vue'
 import { listConversations, type ConversationSummary } from '@/api/controlPlane'
@@ -9,12 +9,16 @@ const props = defineProps<{ open: boolean; agentName: string; agentId?: string }
 defineEmits<{ close: [] }>()
 const conversations = ref<ConversationSummary[]>([])
 const error = ref('')
-onMounted(async () => {
+async function loadConversations() {
+  error.value = ''
   try {
     conversations.value = await listConversations(props.agentId)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Không tải được lịch sử.'
   }
+}
+watch(() => props.open, (open) => {
+  if (open) void loadConversations()
 })
 </script>
 

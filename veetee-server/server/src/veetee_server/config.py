@@ -191,6 +191,9 @@ class Settings(BaseSettings):
     database_dsn: str = Field(default="dbname=veetee", min_length=1)
     bootstrap_admin_email: str = Field(default="")
     bootstrap_admin_password: str = Field(default="", repr=False)
+    cors_allowed_origins: str = Field(
+        default="http://127.0.0.1:5173,http://localhost:5173"
+    )
 
     @field_validator("tts_gemini_api_keys", mode="before")
     @classmethod

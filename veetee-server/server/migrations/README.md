@@ -26,3 +26,7 @@ Local control plane smoke test uses `VEETEE_PERSISTENCE_ENABLED=true`,
 `VEETEE_DATABASE_DSN=dbname=veetee`, and bootstrap credentials supplied only through the
 process environment. The default application keeps persistence disabled for existing local
 device tests.
+
+Control-plane integration tests must use a separate database named `veetee_test` (or a
+DSN containing that name through `VEETEE_TEST_DATABASE_DSN`). Tests fail closed instead
+of truncating the runtime `veetee` database.

@@ -33,6 +33,11 @@ psql -d veetee -f server/migrations/002_runtime_control_plane.sql
   optimistic conflict, memory CRUD/audit và backup/restore schema pass.
 - Console `npm run type-check`: pass.
 - Console `npm run build`: pass.
+- Browser E2E thật trên Console local: login, API CORS, tạo agent, tải agent, cập nhật
+  role prompt, optimistic version, reload persistence, History empty state, Device empty
+  state và mobile viewport 390x844 pass; 0 console error sau login flow sạch.
+- Test PostgreSQL dùng database riêng `veetee_test`; full suite xác nhận số user/agent
+  trong runtime database `veetee` không đổi trước và sau test.
 - Không có thay đổi trong hai repo `references`.
 
 ## Giới hạn còn lại
@@ -41,6 +46,9 @@ psql -d veetee -f server/migrations/002_runtime_control_plane.sql
   rotation, CSRF/CORS policy đầy đủ và rate limit cần harden tiếp trước production.
 - Device online state cần adapter đọc `DeviceSessionRegistry` thay vì placeholder false.
 - History hiện lưu metadata conversation; raw transcript/audio không được lưu mặc định.
-- Console History/Device dialog vẫn cần nối các read API tương ứng ở bước hoàn thiện UI.
+- Console History/Device đã nối read API; thao tác mutation tương ứng chưa thuộc phạm vi
+  Mốc 4.
+- Activation/link thiết bị thuộc Mốc 5; các control liên quan được disabled và ghi rõ,
+  không giả lập thao tác thành công.
 - Agent config đã persistence nhưng runtime conversation chưa reload immutable snapshot
   theo agent ở mỗi generation; cần hoàn thiện consistency hook trước khi coi production-ready.
