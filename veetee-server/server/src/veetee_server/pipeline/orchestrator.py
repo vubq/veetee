@@ -100,6 +100,16 @@ class FakePipeline:
         under the fail-session policy; the gateway supervisor handles that as
         a slow-client close.
         """
+        try:
+            return await self._run(session, sink)
+        finally:
+            for codec in (self.decoder, self.encoder):
+                close = getattr(codec, "close", None)
+                if close is not None:
+                    close()
+
+    async def _run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
+        """Runs one turn while ``run`` owns codec cleanup."""
         turn = session.current_turn
         if turn is None or turn.state is not TurnState.PROCESSING:
             return PipelineOutcome.INVALID_START

@@ -317,7 +317,9 @@ async def test_sender_drops_dequeued_audio_when_barge_in_resets_pacer() -> None:
             )
         )
     websocket = RecordingWebSocket()
-    sender = asyncio.create_task(run_downlink_sender(session, websocket))  # type: ignore[arg-type]
+    sender = asyncio.create_task(
+        run_downlink_sender(session, websocket, playback_grace_seconds=3.0)  # type: ignore[arg-type]
+    )
     await sleep_started.wait()
 
     await session.abort_turn()
@@ -335,6 +337,30 @@ async def test_downlink_queue_overflow_fail_session() -> None:
 
     with pytest.raises(SlowClientQueueOverflowError):
         await q.put(DownlinkItem(kind=DownlinkKind.CONTROL, payload=b"item2", generation=0))
+
+
+@pytest.mark.asyncio
+async def test_tts_stop_marks_activity_when_sent() -> None:
+    class RecordingWebSocket:
+        async def send_text(self, payload: str) -> None:
+            self.payload = payload
+
+    session = DeviceSession(device_id="d1", client_id="c1")
+    before = session.last_conversation_activity
+    payload = b'{"type":"tts","state":"stop"}'
+    await session.egress_queue.put(
+        DownlinkItem(kind=DownlinkKind.CONTROL, payload=payload, generation=0)
+    )
+    websocket = RecordingWebSocket()
+    sender = asyncio.create_task(
+        run_downlink_sender(session, websocket, playback_grace_seconds=3.0)  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(0)
+    session.egress_queue.close()
+    await sender
+
+    assert websocket.payload == payload.decode()
+    assert session.last_conversation_activity >= before + 3.0
 
 
 @pytest.mark.asyncio

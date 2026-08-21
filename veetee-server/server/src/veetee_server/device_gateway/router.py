@@ -13,11 +13,11 @@ from veetee_server.audio import (
     AudioProtocolError,
     AudioQueueItem,
     BoundedAudioQueue,
-    FakeOpusDecoder,
     OverflowPolicy,
     OversizedAudioFrameError,
     PacketPacer,
     SlowClientQueueOverflowError,
+    build_opus_decoder,
     parse_audio_frame,
 )
 from veetee_server.config import Settings, get_settings
@@ -34,10 +34,11 @@ from veetee_server.pipeline.factory import (
 from veetee_server.pipeline.orchestrator import FakePipeline
 
 from .auth import validate_handshake_headers
-from .barge_in import BargeInCoordinator, BargeInDetector
+from .barge_in import AutoEndpointDetector, BargeInCoordinator, BargeInDetector
 from .downlink import GatewayEventSink, run_downlink_sender, supervise_pipeline
 from .ota import ota_router
 from .protocol import (
+    AbortMessage,
     HelloMessage,
     ListenMessage,
     SessionMessage,
@@ -69,6 +70,7 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
     asr_runtime = getattr(app_state, "asr_runtime", None)
     llm_runtime = getattr(app_state, "llm_runtime", None)
     tts_runtime = getattr(app_state, "tts_runtime", None)
+    vieneu_runtime = getattr(app_state, "vieneu_runtime", None)
     return build_fake_pipeline(
         session,
         settings,
@@ -76,6 +78,7 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
         asr_runtime=asr_runtime,
         llm_runtime=llm_runtime,
         tts_runtime=tts_runtime,
+        vieneu_runtime=vieneu_runtime,
     )
 
 
@@ -98,6 +101,18 @@ def _start_pipeline(
     sink = GatewayEventSink(session, generation=session.egress_queue.generation)
     pipeline_task = turn.cancellation.create_task(pipeline.run(session, sink))
     session.cancellation.create_task(supervise_pipeline(session, websocket, pipeline_task, turn))
+
+
+async def _cleanup_session(
+    session: DeviceSession, registry: DeviceSessionRegistry | None
+) -> None:
+    """Stops advertising a disconnected session before draining its tasks."""
+    if registry is not None:
+        await registry.unregister(str(session.id))
+    try:
+        await session.close()
+    except Exception:
+        pass
 
 
 @router.websocket("/ws")
@@ -240,13 +255,31 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
 
         # One downlink sender per session drains the egress queue (stt/tts
         # control messages + paced audio frames) in FIFO order.
-        session.cancellation.create_task(run_downlink_sender(session, websocket))
+        session.cancellation.create_task(
+            run_downlink_sender(
+                session,
+                websocket,
+                playback_grace_seconds=settings.conversation_playback_drain_seconds,
+            )
+        )
         barge_in: BargeInCoordinator | None = None
+        auto_endpoint: AutoEndpointDetector | None = None
 
         # 3. Message Loop
         last_activity = monotonic()
+        session.mark_conversation_activity()
         while True:
+            conversation_idle = monotonic() - session.last_conversation_activity
+            if (
+                session.state is SessionState.LISTENING
+                and conversation_idle >= settings.conversation_idle_timeout_seconds
+            ):
+                await websocket.close(code=1000, reason="conversation_idle_timeout")
+                break
             idle_remaining = settings.idle_timeout_seconds - (monotonic() - last_activity)
+            conversation_remaining = (
+                settings.conversation_idle_timeout_seconds - conversation_idle
+            )
             if idle_remaining <= 0:
                 env = make_error_envelope(
                     "veetee_timeout", "Idle timeout", session_id=str(session.id)
@@ -257,7 +290,11 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             try:
                 frame = await asyncio.wait_for(
                     websocket.receive(),
-                    timeout=min(settings.ping_interval_seconds, idle_remaining),
+                    timeout=min(
+                        settings.ping_interval_seconds,
+                        idle_remaining,
+                        max(0.001, conversation_remaining),
+                    ),
                 )
             except TimeoutError:
                 if monotonic() - last_activity >= settings.idle_timeout_seconds:
@@ -267,18 +304,10 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json(env)
                     await websocket.close(code=1001)
                     break
-                await websocket.send_json({"type": "ping", "session_id": str(session.id)})
-                try:
-                    frame = await asyncio.wait_for(
-                        websocket.receive(), timeout=settings.pong_timeout_seconds
-                    )
-                except TimeoutError:
-                    env = make_error_envelope(
-                        "veetee_timeout", "Pong timeout", session_id=str(session.id)
-                    )
-                    await websocket.send_json(env)
-                    await websocket.close(code=1001)
-                    break
+                # Do not send an application-level JSON ping here. The ESP32
+                # client accepts WebSocket control frames, not this optional
+                # JSON heartbeat, and would disconnect on an unknown message.
+                continue
 
             if frame.get("type") == "websocket.disconnect":
                 break
@@ -333,7 +362,9 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         barge_in = BargeInCoordinator(
                             session,
                             BargeInDetector(
-                                FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+                                build_opus_decoder(
+                                    settings, pcm_format=UPLINK_PCM_FORMAT
+                                ),
                                 build_vad_stream(
                                     settings,
                                     vad_runtime=getattr(
@@ -345,6 +376,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         )
                     expected_turn = session.current_turn
                     if expected_turn is not None and await barge_in.process(item, expected_turn):
+                        barge_in.close()
                         barge_in = None
                     continue
                 if session.state is not SessionState.LISTENING:
@@ -372,6 +404,20 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json(env)
                     await websocket.close(code=1009)
                     break
+                if auto_endpoint is not None:
+                    speech_was_started = auto_endpoint.speech_started
+                    endpoint_reached = await auto_endpoint.process(item)
+                    if auto_endpoint.speech_started and not speech_was_started:
+                        session.mark_conversation_activity()
+                else:
+                    endpoint_reached = False
+                if auto_endpoint is not None and endpoint_reached:
+                    session.mark_conversation_activity()
+                    auto_endpoint.close()
+                    auto_endpoint = None
+                    if session.state is SessionState.LISTENING:
+                        session.begin_processing()
+                        _start_pipeline(session, settings, websocket, websocket.app.state)
                 continue
 
             # Text Frame Processing
@@ -473,7 +519,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
 
             elif msg_type == "abort":
                 try:
-                    SessionMessage.model_validate(payload)
+                    AbortMessage.model_validate(payload)
                 except ValidationError:
                     await websocket.send_json(
                         make_error_envelope(
@@ -496,6 +542,9 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                             extra={"context": {"session_id": str(session.id)}},
                         )
                         raise
+                if auto_endpoint is not None:
+                    auto_endpoint.close()
+                    auto_endpoint = None
 
             elif msg_type == "listen":
                 try:
@@ -513,13 +562,33 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 try:
                     if listen_msg.state == "start":
                         session.listen_mode = listen_msg.mode or session.listen_mode or "auto"
+                        if barge_in is not None:
+                            barge_in.close()
                         barge_in = None
+                        if auto_endpoint is not None:
+                            auto_endpoint.close()
+                        auto_endpoint = None
                         # Barge-in: a start while speaking or while the
                         # previous turn is still processing aborts it inside
                         # start_turn and begins a fresh capture.
                         if session.state in {SessionState.IDLE, SessionState.SPEAKING}:
                             await session.start_turn()
+                            if session.listen_mode == "auto":
+                                auto_endpoint = AutoEndpointDetector(
+                                    build_opus_decoder(
+                                        settings, pcm_format=UPLINK_PCM_FORMAT
+                                    ),
+                                    build_vad_stream(
+                                        settings,
+                                        vad_runtime=getattr(
+                                            websocket.app.state, "vad_runtime", None
+                                        ),
+                                    ),
+                                )
                     elif listen_msg.state == "stop":
+                        if auto_endpoint is not None:
+                            auto_endpoint.close()
+                            auto_endpoint = None
                         if session.state is SessionState.LISTENING:
                             session.begin_processing()
                             _start_pipeline(session, settings, websocket, websocket.app.state)
@@ -556,10 +625,9 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
         except Exception:
             pass
     finally:
+        if "barge_in" in locals() and barge_in is not None:
+            barge_in.close()
+        if "auto_endpoint" in locals() and auto_endpoint is not None:
+            auto_endpoint.close()
         if session is not None:
-            try:
-                await session.close()
-            except Exception:
-                pass
-            if registry is not None:
-                await registry.unregister(str(session.id))
+            await _cleanup_session(session, registry)

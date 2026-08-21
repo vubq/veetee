@@ -13,6 +13,7 @@ from veetee_server.audio import (
 )
 from veetee_server.config import Settings
 from veetee_server.device_gateway.barge_in import (
+    AutoEndpointDetector,
     BargeInCoordinator,
     BargeInDetection,
     BargeInDetector,
@@ -91,6 +92,47 @@ async def test_barge_in_detector_trigger_once() -> None:
     # Second process while triggered returns None (holds trigger state once)
     detection2 = await detector.process(item2)
     assert detection2 is None
+
+
+@pytest.mark.asyncio
+async def test_auto_endpoint_detector_triggers_once_on_speech_end() -> None:
+    detector = AutoEndpointDetector(
+        FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+        MockVAD(
+            [
+                VadEventKind.SPEECH_START,
+                VadEventKind.PROCESSING,
+                VadEventKind.SPEECH_END,
+                VadEventKind.SPEECH_END,
+            ]
+        ),
+    )
+    items = [
+        AudioQueueItem(payload=f"frame-{index}".encode(), duration_ms=60.0, generation=1)
+        for index in range(4)
+    ]
+
+    assert not await detector.process(items[0])
+    assert detector.speech_started
+    assert not await detector.process(items[1])
+    assert await detector.process(items[2])
+    assert not await detector.process(items[3])
+
+
+@pytest.mark.asyncio
+async def test_auto_endpoint_detector_ignores_speech_end_without_speech_start() -> None:
+    detector = AutoEndpointDetector(
+        FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+        MockVAD([VadEventKind.SPEECH_END, VadEventKind.SILENCE]),
+    )
+    items = [
+        AudioQueueItem(payload=f"frame-{index}".encode(), duration_ms=60.0, generation=1)
+        for index in range(2)
+    ]
+
+    assert not await detector.process(items[0])
+    assert not detector.speech_started
+    assert not await detector.process(items[1])
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,10 @@ from .codec import (
     FakeOpusEncoder,
     InvalidPCMFormatError,
     PCMFormat,
+    build_opus_decoder,
+    build_opus_encoder,
 )
+from .native_opus import NativeOpusDecoder, NativeOpusEncoder, is_native_opus_available
 from .pacer import PacerError, PacerMetrics, PacketPacer
 from .protocol import (
     AudioError,
@@ -59,6 +62,8 @@ __all__ = [
     "FakeOpusEncoder",
     "InvalidPCMFormatError",
     "MalformedAudioFrameError",
+    "NativeOpusDecoder",
+    "NativeOpusEncoder",
     "OverflowPolicy",
     "OversizedAudioFrameError",
     "PCMFormat",
@@ -70,6 +75,9 @@ __all__ = [
     "QueueError",
     "QueueOverflowError",
     "SlowClientQueueOverflowError",
+    "build_opus_decoder",
+    "build_opus_encoder",
     "encode_audio_frame",
+    "is_native_opus_available",
     "parse_audio_frame",
 ]

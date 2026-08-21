@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     device_websocket_public_url: str = Field(default="")
     hello_timeout_seconds: float = Field(default=10.0, gt=0)
     idle_timeout_seconds: float = Field(default=60.0, gt=0)
+    conversation_idle_timeout_seconds: float = Field(default=180.0, gt=0)
+    conversation_playback_drain_seconds: float = Field(default=3.0, ge=0)
     ping_interval_seconds: float = Field(default=20.0, gt=0)
     pong_timeout_seconds: float = Field(default=10.0, gt=0)
     json_max_bytes: int = Field(default=16384, gt=0)
@@ -94,7 +96,8 @@ class Settings(BaseSettings):
     id_max_length: int = Field(default=128, gt=0)
     cleanup_timeout_seconds: float = Field(default=5.0, gt=0)
 
-    # Audio Primitives Settings (M1.5)
+    # Audio Primitives Settings (M1.5 & M2.7/M2.8)
+    audio_codec: Literal["fake", "native"] = Field(default="fake")
     audio_max_queue_items: int = Field(default=100, gt=0)
     audio_max_queue_bytes: int = Field(default=1048576, gt=0)
     audio_max_queue_duration_ms: float = Field(default=10000.0, gt=0)
@@ -150,7 +153,7 @@ class Settings(BaseSettings):
     llm_max_response_bytes: int = Field(default=1048576, gt=0)
 
     # TTS Provider & Gemini Native TTS Settings (M2.5)
-    tts_provider: Literal["fake", "gemini"] = Field(default="fake")
+    tts_provider: Literal["fake", "gemini", "vieneu"] = Field(default="fake")
     tts_gemini_api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
     tts_gemini_main_model: str = Field(default="gemini-3.1-flash-tts-preview", min_length=1)
     tts_gemini_fallback_model: str = Field(default="gemini-2.5-flash-preview-tts", min_length=1)
@@ -166,6 +169,8 @@ class Settings(BaseSettings):
     tts_circuit_breaker_cooldown_seconds: float = Field(default=10.0, gt=0)
     tts_max_retry_after_seconds: float = Field(default=60.0, gt=0)
     tts_max_response_bytes: int = Field(default=8388608, gt=0)
+    vieneu_base_url: str = Field(default="http://127.0.0.1:23999", min_length=1)
+    vieneu_timeout_seconds: float = Field(default=8.0, gt=0)
 
     tts_segment_first_min_chars: int = Field(default=24, gt=0)
     tts_segment_min_chars: int = Field(default=48, gt=0)

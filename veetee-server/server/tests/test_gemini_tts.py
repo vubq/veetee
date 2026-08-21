@@ -83,6 +83,53 @@ def test_extract_pcm_valid() -> None:
     assert extracted == pcm
 
 
+def test_extract_pcm_valid_l16_provider_mime() -> None:
+    pcm = make_24k_pcm_bytes(100)
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "audio/l16; rate=24000; channels=1",
+                                "data": base64.b64encode(pcm).decode("utf-8"),
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    assert extract_pcm_from_gemini_response(body) == pcm
+
+
+@pytest.mark.parametrize(
+    "mime_type",
+    ["audio/l16; rate=16000; channels=1", "audio/l16; rate=24000; channels=2"],
+)
+def test_extract_pcm_rejects_wrong_l16_contract(mime_type: str) -> None:
+    pcm = make_24k_pcm_bytes(100)
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": mime_type,
+                                "data": base64.b64encode(pcm).decode("utf-8"),
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    with pytest.raises(TTSFormatError, match="mono PCM at 24000 Hz"):
+        extract_pcm_from_gemini_response(body)
+
+
 def test_extract_pcm_invalid_mime() -> None:
     body = {
         "candidates": [

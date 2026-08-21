@@ -59,8 +59,10 @@ def extract_pcm_from_gemini_response(body: dict[str, Any]) -> bytes | None:
         if not isinstance(mime, str):
             raise TTSFormatError("Gemini audio is missing mimeType")
         normalized_mime = mime.lower().replace(" ", "")
-        if "audio/pcm" not in normalized_mime or "rate=24000" not in normalized_mime:
-            raise TTSFormatError("Gemini audio must be PCM at 24000 Hz")
+        is_pcm = normalized_mime.startswith(("audio/pcm", "audio/l16"))
+        is_mono = "channels=" not in normalized_mime or "channels=1" in normalized_mime
+        if not is_pcm or "rate=24000" not in normalized_mime or not is_mono:
+            raise TTSFormatError("Gemini audio must be mono PCM at 24000 Hz")
         encoded = inline.get("data")
         if not isinstance(encoded, str) or not encoded:
             raise TTSMalformedStreamError("Gemini audio is missing base64 data")

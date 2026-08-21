@@ -7,6 +7,7 @@ from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
@@ -224,6 +225,7 @@ class DeviceSession:
     _current_turn: ConversationTurn | None = field(default=None, init=False, repr=False)
     _generations: dict[UUID, Generation] = field(default_factory=dict, init=False, repr=False)
     _barge_in_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _last_conversation_activity: float = field(default_factory=monotonic, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.device_id or not self.client_id:
@@ -241,6 +243,13 @@ class DeviceSession:
 
     def negotiate_features(self, features: Mapping[str, bool] | None) -> None:
         self.features = MappingProxyType(dict(features or {}))
+
+    @property
+    def last_conversation_activity(self) -> float:
+        return self._last_conversation_activity
+
+    def mark_conversation_activity(self, *, playback_grace_seconds: float = 0.0) -> None:
+        self._last_conversation_activity = monotonic() + playback_grace_seconds
 
     async def begin_barge_in(self, expected_turn: ConversationTurn) -> ConversationTurn | None:
         """Atomically replaces a streaming turn without advancing its fresh I/O epoch twice."""

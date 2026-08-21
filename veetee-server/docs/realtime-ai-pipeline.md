@@ -122,9 +122,10 @@ dùng bởi pipeline M1.6 trở đi:
   drift vượt `VEETEE_AUDIO_PACING_MAX_DRIFT_MS` thì reset anchor thay vì tích lũy;
   `reset()` được gọi khi abort để stream TTS kế tiếp không kế thừa drift. Sleep dưới
   1 microsecond được clamp về 0 tránh float no-op.
-- **Codec boundaries**: fake encoder/decoder deterministic cho test; deferred native
-  boundary raise khi chưa có libopus; resampler passthrough khi cùng format, cấm
-  interpolation giả khi khác format.
+- **Codec boundaries**: `VEETEE_AUDIO_CODEC=fake|native`; fake encoder/decoder giữ test
+  deterministic, native dùng stateful `libopus` encoder/decoder theo turn và đóng khi
+  cleanup. Readiness fail-closed nếu thiếu thư viện; resampler passthrough khi cùng format,
+  cấm interpolation giả khi khác format.
 
 Các settings áp dụng: `VEETEE_AUDIO_MAX_QUEUE_ITEMS`, `VEETEE_AUDIO_MAX_QUEUE_BYTES`,
 `VEETEE_AUDIO_MAX_QUEUE_DURATION_MS`, `VEETEE_AUDIO_PACING_MAX_DRIFT_MS` (validator bảo
@@ -278,9 +279,10 @@ trước encoder; không tạo file tạm hoặc buffer toàn bộ audio.
 - Fallback `gemini-2.5-flash-preview-tts` dùng `generateContent` buffered và mặc định tắt;
   chỉ bật bằng policy config rõ ràng.
 
-Giới hạn M2.5: encoder hiện vẫn là deterministic fake boundary của M1 trong test/server
-local; native libopus production và subjective listening trên loa thiết bị cần được xác
-minh ở M2.7/M2.8. Không có resampler nội suy chất lượng thấp trên production path.
+Giới hạn M2.5 tại thời điểm triển khai là deterministic fake encoder. M2.7 đã nối native
+libopus vào pipeline local và xác minh browser Opus uplink/downlink; subjective listening
+trên loa thiết bị vẫn thuộc M2.8. Không có resampler nội suy chất lượng thấp trên
+production path.
 
 ## Full-duplex, barge-in và flow control (M2.6 - Quyết định Veetee)
 
@@ -305,7 +307,15 @@ sleep rải rác. `PacketPacer.metrics` cung cấp tổng frame, số drift rese
 uplink `DROP_OLDEST`, downlink `FAIL_SESSION`; reconnect tạo session/queue/detector mới.
 
 M2.6 xác minh state, race, bounded pre-roll và stale-output suppression bằng harness
-deterministic. Native Opus và chất lượng AEC/audio thực tế vẫn cần M2.7/M2.8.
+deterministic. M2.7 đã xác minh native Opus qua digital-human; chất lượng AEC/audio trên
+thiết bị thật vẫn cần M2.8.
+
+## Conversation idle lifecycle (M2.8)
+
+Mode `auto` cho phép hội thoại liên tục không giới hạn tổng thời lượng. Server reset timer
+khi nhận speech mới và sau khi gửi xong `tts/stop`. Sau 180 giây không có hoạt động hội thoại,
+server đóng WebSocket bình thường để firmware về `idle` và chờ WakeNet. Silence/noise frame
+không reset timer. Mặc định cộng 3 giây playback drain để bù audio còn trong buffer ESP32.
 
 ## Device simulator (M1.7 - Quyết định Veetee)
 

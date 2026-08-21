@@ -25,6 +25,7 @@ from .errors import (
 from .fake import FakeTTS
 from .gemini import GeminiTTSAdapter, GeminiTTSRuntime, extract_pcm_from_gemini_response
 from .key_pool import GeminiKeyPool, KeyEntry, KeyPoolState
+from .vieneu import VieNeuTTSAdapter, VieNeuTTSRuntime
 
 __all__ = [
     "FakeTTS",
@@ -32,6 +33,8 @@ __all__ = [
     "GeminiTTSAdapter",
     "GeminiTTSConfig",
     "GeminiTTSRuntime",
+    "VieNeuTTSAdapter",
+    "VieNeuTTSRuntime",
     "KeyEntry",
     "KeyPoolState",
     "TTSAdmissionTimeoutError",

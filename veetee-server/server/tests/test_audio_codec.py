@@ -1,5 +1,7 @@
 """Tests for Veetee audio PCM formats, fake Opus codec and deferred native boundaries (M1.5)."""
 
+import sys
+from array import array
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -16,8 +18,15 @@ from veetee_server.audio import (
     FakeOpusDecoder,
     FakeOpusEncoder,
     InvalidPCMFormatError,
+    NativeOpusDecoder,
+    NativeOpusEncoder,
     PCMFormat,
+    build_opus_decoder,
+    build_opus_encoder,
+    is_native_opus_available,
 )
+from veetee_server.audio.native_opus import MAX_OPUS_PAYLOAD_BYTES
+from veetee_server.config import Settings
 
 
 def test_pcm_format_expected_bytes() -> None:
@@ -100,3 +109,72 @@ def test_deferred_native_resampler_cross_rate_raises() -> None:
     pcm = b"\x00" * UPLINK_PCM_FORMAT.expected_bytes
     with pytest.raises(DeferredNativeResamplerError):
         resampler.resample(pcm, UPLINK_PCM_FORMAT, DOWNLINK_PCM_FORMAT)
+
+
+@pytest.mark.skipif(not is_native_opus_available(), reason="libopus is unavailable")
+@pytest.mark.parametrize("pcm_format", [UPLINK_PCM_FORMAT, DOWNLINK_PCM_FORMAT])
+def test_native_opus_roundtrip_silence(pcm_format: PCMFormat) -> None:
+    pcm = b"\x00" * pcm_format.expected_bytes
+    with NativeOpusEncoder(pcm_format) as encoder, NativeOpusDecoder(
+        pcm_format
+    ) as decoder:
+        packet = encoder.encode(pcm)
+        decoded = decoder.decode(packet)
+
+    assert packet
+    assert len(decoded) == pcm_format.expected_bytes
+    samples = array("h", decoded)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    assert max(abs(sample) for sample in samples) <= 2
+    assert encoder.is_closed
+    assert decoder.is_closed
+
+
+@pytest.mark.skipif(not is_native_opus_available(), reason="libopus is unavailable")
+def test_native_opus_rejects_invalid_input_and_double_close() -> None:
+    encoder = NativeOpusEncoder()
+    decoder = NativeOpusDecoder()
+
+    with pytest.raises(InvalidPCMFormatError):
+        encoder.encode(b"\x00")
+    with pytest.raises(CodecError):
+        decoder.decode(b"")
+    with pytest.raises(CodecError):
+        decoder.decode(b"not-an-opus-packet")
+    with pytest.raises(CodecError, match="maximum allowed size"):
+        decoder.decode(b"x" * (MAX_OPUS_PAYLOAD_BYTES + 1))
+
+    encoder.close()
+    encoder.close()
+    decoder.close()
+    decoder.close()
+    with pytest.raises(CodecError):
+        encoder.encode(b"\x00" * DOWNLINK_PCM_FORMAT.expected_bytes)
+    with pytest.raises(CodecError):
+        decoder.decode(b"packet")
+
+
+def test_codec_factory_defaults_to_fake() -> None:
+    settings = Settings(environment="test")
+
+    assert isinstance(build_opus_decoder(settings), FakeOpusDecoder)
+    assert isinstance(build_opus_encoder(settings), FakeOpusEncoder)
+
+
+@pytest.mark.skipif(not is_native_opus_available(), reason="libopus is unavailable")
+def test_codec_factory_builds_fresh_native_instances() -> None:
+    settings = Settings(environment="test", audio_codec="native")
+
+    first = build_opus_decoder(settings)
+    second = build_opus_decoder(settings)
+    encoder = build_opus_encoder(settings)
+    try:
+        assert isinstance(first, NativeOpusDecoder)
+        assert isinstance(second, NativeOpusDecoder)
+        assert isinstance(encoder, NativeOpusEncoder)
+        assert first is not second
+    finally:
+        first.close()  # type: ignore[attr-defined]
+        second.close()  # type: ignore[attr-defined]
+        encoder.close()  # type: ignore[attr-defined]

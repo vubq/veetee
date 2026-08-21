@@ -21,6 +21,9 @@ Endpoint chính thức: `/api/v1/devices/ws`
   - Binary max frame size: 64 KiB (65536 bytes) (`VEETEE_BINARY_MAX_BYTES=65536`)
 - **Hello Negotiation**:
   - Uplink: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`
+  - Firmware display có thể thêm `features.glyph_push` và capability bounded
+    `text_font: {bundle, charset, size, bpp}`; server chấp nhận đúng schema này và vẫn từ
+    chối field hello không xác định khác.
   - Downlink response: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque_uuid>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`
   - Thiết bị chỉ yêu cầu full-duplex detector khi công bố `features.aec=true` và gửi
     `listen/start` với `mode="realtime"`.
@@ -33,10 +36,11 @@ Endpoint chính thức: `/api/v1/devices/ws`
   - `1000`: Goodbye normal close
   - `1012`: Graceful server shutdown
   - Safe error envelope: `{"code": "veetee_*", "message": "...", "session_id": "..."}`
-- **Deferred**:
-  - Native Opus decode/encode thật và resampling hoãn tới khi tích hợp libopus
-    (`veetee_server.audio` chỉ có fake deterministic + deferred boundary).
-  - Device MCP integration full tool call hoãn lại M3.
+- **Codec**:
+  - Server chọn `VEETEE_AUDIO_CODEC=fake|native`; mode `native` dùng libopus stateful cho
+    đúng uplink/downlink 60 ms và readiness fail-closed nếu thư viện không sẵn sàng.
+  - Resampling khác sample rate vẫn deferred; Device MCP integration full tool call hoãn
+    lại M3.
 
 ---
 
@@ -64,12 +68,20 @@ Cả WebSocket và MQTT/UDP chia sẻ các semantic JSON:
 | Hai chiều | `goodbye` | Kết thúc audio channel, tùy transport |
 
 Mỗi message sau handshake nên mang `session_id` để tránh trộn phiên.
+`listen/detect` có thể mang wake phrase trong `text` bounded; `abort` do wake word có thể
+mang `reason="wake_word_detected"`. Server chấp nhận đúng hai field firmware này nhưng
+không log nội dung wake phrase.
 
 Trong implementation Veetee M1.6, thiết bị gửi binary audio hợp lệ trong khoảng
 `listen/start` đến `listen/stop`. Sau `listen/stop`, fake pipeline server phát theo thứ tự
 `stt`, `tts/start`, `tts/sentence_start`, binary audio, `tts/stop`. Binary hợp lệ ngoài
 trạng thái listening bị bỏ; malformed/oversized vẫn bị đóng bằng `1002`/`1009` để không
 làm yếu validation giao thức.
+
+Từ M2.8, mode `auto` có server-side endpointing: firmware tiếp tục stream sau
+`listen/start`, server dùng VAD turn-scoped phát hiện speech end và tự chuyển sang xử lý;
+firmware không cần gửi `listen/stop`. Mode `manual`/`realtime` vẫn theo control/lifecycle
+riêng và không bị auto detector chốt lượt.
 
 Từ M2.6, thiết bị có thể tiếp tục gửi uplink khi server đang phát TTS chỉ khi hello đã
 công bố `features.aec=true` và mode hiện hành là `realtime`. Với `auto`, `manual`, thiếu
@@ -139,8 +151,10 @@ Server giới hạn queue audio uplink/downlink theo items, bytes và thời lư
 (`VEETEE_AUDIO_MAX_QUEUE_*`): uplink dùng `drop_oldest`, downlink dùng `fail_session`
 (đóng 1009 khi client chậm). `abort`, barge-in và turn mới tăng generation, purge mọi
 control/audio cũ đang chờ; thiết bị phải gửi `abort` để hủy luồng cũ thay vì chỉ ngừng đọc.
-Native Opus decode/encode server hoãn tới khi tích hợp libopus; hiện tại dùng fake
-deterministic cho test pipeline.
+Từ M2.7, server có native libopus cho E2E và vẫn giữ fake deterministic cho test. Uplink
+giải mã thành PCM 16 kHz mono s16le, 960 sample/1920 byte; downlink mã hóa từ PCM 24 kHz
+mono s16le, 1440 sample/2880 byte. Packet Opus 60 ms tối đa 3825 byte; lifecycle codec là
+theo turn và phải được đóng khi cleanup.
 
 ## MQTT control và UDP audio
 

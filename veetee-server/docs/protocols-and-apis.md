@@ -21,7 +21,11 @@ Protocol version xác định wire format cho toàn bộ binary audio frame củ
 ### Quy định Frame & Payload Limits
 
 - `VEETEE_HELLO_TIMEOUT_SECONDS`: 10.0s (bắt buộc gửi frame text `hello` trong 10s đầu).
-- `VEETEE_IDLE_TIMEOUT_SECONDS`: 60.0s (idle connection timeout).
+- `VEETEE_IDLE_TIMEOUT_SECONDS`: 60.0s (transport activity timeout).
+- `VEETEE_CONVERSATION_IDLE_TIMEOUT_SECONDS`: 180.0s kể từ hoạt động hội thoại cuối cùng;
+  reset khi có speech mới và sau khi gửi xong `tts/stop`. Không giới hạn tổng thời lượng
+  hội thoại. `VEETEE_CONVERSATION_PLAYBACK_DRAIN_SECONDS` mặc định 3.0s bù audio còn trong
+  buffer phát của thiết bị.
 - `VEETEE_PING_INTERVAL_SECONDS`: 20.0s.
 - `VEETEE_PONG_TIMEOUT_SECONDS`: 10.0s.
 - `VEETEE_JSON_MAX_BYTES`: 16384 bytes (16 KiB).
@@ -67,7 +71,7 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
 ### Semantic JSON Control Frames (M1.3)
 
 1. `hello`:
-   - Device -> Server: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`. `features` là mapping boolean tùy chọn (tối đa 16 keys, key max 64 chars).
+   - Device -> Server: `type: "hello"`, `version: 1`, `transport: "websocket"`, `audio_params: {format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60}`. `features` là mapping boolean tùy chọn (tối đa 16 keys, key max 64 chars). Firmware có display được phép gửi `features.glyph_push` và `text_font: {bundle, charset, size, bpp}`; string tối đa 128 ký tự, `size` trong 1..256 và `bpp` thuộc 1/2/4/8, mọi field thừa bị từ chối.
    - Server -> Device: `type: "hello"`, `transport: "websocket"`, `session_id: "<opaque UUID>"`, `audio_params: {format: "opus", sample_rate: 24000, channels: 1, frame_duration: 60}`.
 2. `ping` / `pong`:
    - Device -> Server `ping` -> Server trả `{"type": "pong", "session_id": "..."}`.
@@ -75,13 +79,20 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
 3. `goodbye`:
    - Device -> Server `goodbye` -> Server trả `goodbye` và close websocket code 1000.
 4. `abort`:
-   - Device -> Server `abort` -> Idempotent abort active turn/generation.
+   - Device -> Server `abort` -> Idempotent abort active turn/generation. Firmware được
+     phép thêm `reason="wake_word_detected"`; reason khác bị từ chối.
 5. `listen`:
-   - Device -> Server `listen`: `state` (`start`, `stop`, `detect`), `mode` (`auto`, `manual`, `realtime`). Quản lý state machine `DeviceSession`.
-   - Binary audio hợp lệ được enqueue từ `listen/start` tới `listen/stop`. Ngoài
-     `LISTENING`, frame hợp lệ mặc định bị drop; ngoại lệ M2.6 là khi session đang
-     `SPEAKING`, hello đã công bố `features.aec=true` và mode hiện hành là `realtime`.
-     Frame malformed/oversized vẫn đóng `1002`/`1009` trước khi áp state gate.
+   - Device -> Server `listen`: `state` (`start`, `stop`, `detect`), `mode` (`auto`, `manual`, `realtime`). `detect` được phép mang wake phrase trong `text` dài 1..128 ký tự; `text` bị từ chối ở `start`/`stop`. Quản lý state machine `DeviceSession`.
+    - Binary audio hợp lệ được enqueue từ `listen/start` tới `listen/stop`. Ngoài
+      `LISTENING`, frame hợp lệ mặc định bị drop; ngoại lệ M2.6 là khi session đang
+      `SPEAKING`, hello đã công bố `features.aec=true` và mode hiện hành là `realtime`.
+      Frame malformed/oversized vẫn đóng `1002`/`1009` trước khi áp state gate.
+    - Với mode `auto`, server dùng decoder/VAD turn-scoped riêng để phát hiện
+      `SPEECH_END` trên stream liên tục và tự bắt đầu pipeline; firmware không bắt buộc gửi
+      `listen/stop`. `manual` và `realtime` không dùng auto endpoint detector này.
+    - Với mode `auto`, silence/noise uplink không reset conversation timeout; sau khi hết
+      thời gian không có hoạt động hội thoại, server đóng WebSocket bình thường để firmware
+      về `idle` và chờ WakeNet.
    - Từ M1.6, `listen/stop` chạy fake pipeline deterministic và server phát theo thứ tự
      `stt` -> `tts/start` -> `tts/sentence_start` -> binary audio* -> `tts/stop`.
 6. `mcp` và unsupported frames:
@@ -147,17 +158,20 @@ không khớp, version mismatch với negotiated version) trả error envelope
 `veetee_invalid_input` và đóng close 1002. Frame vượt `VEETEE_BINARY_MAX_BYTES` (tổng độ
 dài hoặc `payload_size` khai báo) trả `veetee_invalid_input` và đóng close 1009.
 
-#### Native Opus (hoãn lại - M1.5)
+#### Native Opus (Quyết định Veetee - M2.7)
 
-M1.5 chưa decode Opus thật. Binary frame được parse, validate và đưa vào **bounded
-ingress queue** của session; `veetee_server.audio` cung cấp sẵn:
+`VEETEE_AUDIO_CODEC=fake|native` chọn codec theo turn; mặc định `fake` giữ unit/integration
+test deterministic. Mode `native` dùng `libopus` qua stdlib `ctypes`, tạo encoder/decoder
+stateful riêng cho từng turn và barge-in detector, rồi đóng idempotent khi turn kết thúc.
+Readiness trả `503` với reason `native_opus_not_ready` nếu shared library không load được.
 
-- `FakeOpusEncoder`/`FakeOpusDecoder`: fake deterministic để test pipeline khi chưa có
-  libopus.
-- `DeferredNativeAudioDecoder`/`DeferredNativeAudioEncoder`/`DeferredNativeAudioResampler`:
-  boundary production raise `DeferredNativeCodecError`/`DeferredNativeResamplerError` cho
-  tới khi native libopus được tích hợp; riêng resampler cho phép passthrough khi
-  source_format == target_format sau khi validate PCM buffer.
+- Uplink: Opus -> PCM 16 kHz, mono, s16le, 60 ms, đúng 960 sample/1920 byte.
+- Downlink: PCM 24 kHz, mono, s16le, 60 ms, đúng 1440 sample/2880 byte -> Opus.
+- Packet Opus 60 ms bị giới hạn tối đa `3 * 1275 = 3825` byte theo ba frame 20 ms.
+- Payload rỗng, malformed, oversized hoặc PCM sai alignment/size bị từ chối bằng lỗi codec
+  typed; codec đã đóng không được tái sử dụng.
+- Resampler khác sample rate vẫn là deferred boundary; passthrough chỉ được phép khi hai
+  PCM format giống nhau sau validation.
 
 #### Queue policy (M1.5)
 

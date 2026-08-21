@@ -3,8 +3,9 @@
 M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4 thêm OTA/config
 discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TTS
 deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
-ASR và M2.3 thêm OmniRoute Groq LLM. Native Opus/resampler, database và TTS thật chưa
-được tích hợp.
+ASR, M2.3 thêm OmniRoute Groq LLM, M2.5 thêm Gemini TTS và M2.7 thêm native Opus cùng
+digital-human compatibility harness. Resampler khác sample rate và database chưa được
+tích hợp.
 
 ## Local commands
 
@@ -15,6 +16,28 @@ uv run ruff check src tests
 uv run mypy
 uv run uvicorn veetee_server.app:app --app-dir src --host 127.0.0.1 --port 8080
 ```
+
+Native Opus dùng `libopus` của hệ điều hành và fail-closed ở readiness khi thư viện không
+sẵn sàng:
+
+```bash
+VEETEE_AUDIO_CODEC=native uv run uvicorn veetee_server.app:app \
+  --app-dir src --host 127.0.0.1 --port 8080 --no-access-log
+```
+
+Để chạy browser client đã pin qua adapter local, khởi động compatibility harness ở một
+terminal khác. Harness chỉ phục vụ static asset read-only, proxy OTA và chuyển đổi wire
+message; token gateway được đổi thành ticket một lần, TTL ngắn:
+
+```bash
+VEETEE_HARNESS_SERVER_HTTP_URL=http://127.0.0.1:8080 \
+VEETEE_HARNESS_SERVER_WEBSOCKET_URL=ws://127.0.0.1:8080/api/v1/devices/ws \
+uv run uvicorn veetee_server.digital_human_harness.app:app \
+  --app-dir src --host 127.0.0.1 --port 8006 --no-access-log
+```
+
+Mở `http://127.0.0.1:8006/index.html`. Wake-word bridge của browser harness được báo rõ
+`enabled=false`; harness không giả lập wake detection và không thay endpoint/auth product.
 
 Endpoints hiện có:
 

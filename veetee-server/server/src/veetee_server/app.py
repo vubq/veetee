@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from .app_context import request_id_context
+from .audio import is_native_opus_available
 from .config import (
     Settings,
     get_effective_device_websocket_url,
@@ -142,6 +143,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await tts_runtime.shutdown()
                 tts_runtime = None
 
+    vieneu_runtime = getattr(app.state, "vieneu_runtime", None)
+    if settings.tts_provider == "vieneu" and vieneu_runtime is None:
+        from .pipeline.tts import VieNeuTTSRuntime
+
+        vieneu_runtime = VieNeuTTSRuntime(
+            settings.vieneu_base_url, settings.vieneu_timeout_seconds
+        )
+        await vieneu_runtime.startup()
+        app.state.vieneu_runtime = vieneu_runtime
+
     app.state.ready = True
     try:
         yield
@@ -160,6 +171,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await llm_runtime.shutdown()
         if tts_runtime is not None:
             await tts_runtime.shutdown()
+        if vieneu_runtime is not None:
+            await vieneu_runtime.shutdown()
         logger.info("server_stopped")
 
 
@@ -212,6 +225,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503,
                 content={"status": "not_ready", "reason": "gateway_token_not_configured"},
             )
+        if runtime_settings.audio_codec == "native" and not is_native_opus_available():
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "reason": "native_opus_not_ready"},
+            )
         eff_url = get_effective_device_websocket_url(runtime_settings)
         url_valid, _ = validate_device_websocket_url(eff_url)
         if not url_valid:
@@ -246,6 +264,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "reason": "tts_runtime_not_ready"},
+                )
+        if runtime_settings.tts_provider == "vieneu":
+            vieneu_runtime = getattr(app.state, "vieneu_runtime", None)
+            if vieneu_runtime is None or not vieneu_runtime.is_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "vieneu_runtime_not_ready"},
                 )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 

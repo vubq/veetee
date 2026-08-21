@@ -1,9 +1,14 @@
 """Opus codec primitives, strict PCM format contracts, and deferred native boundaries."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from .protocol import AudioError
+
+if TYPE_CHECKING:
+    from veetee_server.config import Settings
 
 
 class CodecError(AudioError):
@@ -148,3 +153,25 @@ class FakeOpusEncoder:
         self.pcm_format.validate_buffer(pcm_data)
         # Encodes with a deterministic header tag + sample prefix
         return b"\xf8\xff\xfe" + pcm_data[:8]
+
+
+def build_opus_decoder(
+    settings: Settings, pcm_format: PCMFormat = UPLINK_PCM_FORMAT
+) -> AudioDecoder:
+    """Factory helper creating fresh decoder instance based on VEETEE_AUDIO_CODEC selector."""
+    if settings.audio_codec == "native":
+        from .native_opus import NativeOpusDecoder
+
+        return NativeOpusDecoder(pcm_format=pcm_format)
+    return FakeOpusDecoder(pcm_format=pcm_format)
+
+
+def build_opus_encoder(
+    settings: Settings, pcm_format: PCMFormat = DOWNLINK_PCM_FORMAT
+) -> AudioEncoder:
+    """Factory helper creating fresh encoder instance based on VEETEE_AUDIO_CODEC selector."""
+    if settings.audio_codec == "native":
+        from .native_opus import NativeOpusEncoder
+
+        return NativeOpusEncoder(pcm_format=pcm_format)
+    return FakeOpusEncoder(pcm_format=pcm_format)

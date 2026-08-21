@@ -28,6 +28,17 @@ def test_readyz_after_lifespan(client: TestClient) -> None:
     assert response.json()["status"] == "ready"
 
 
+def test_readyz_rejects_unavailable_native_opus(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("veetee_server.app.is_native_opus_available", lambda: False)
+    app = create_app(Settings(environment="test", audio_codec="native"))
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "native_opus_not_ready"
+
+
 def test_valid_request_id_is_preserved(client: TestClient) -> None:
     request_id = "12345678-1234-5678-1234-567812345678"
 

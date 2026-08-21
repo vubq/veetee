@@ -93,7 +93,9 @@ class GatewayEventSink:
         )
 
 
-async def run_downlink_sender(session: DeviceSession, websocket: WebSocket) -> None:
+async def run_downlink_sender(
+    session: DeviceSession, websocket: WebSocket, *, playback_grace_seconds: float = 0.0
+) -> None:
     """Drains the session downlink queue and writes items to the device socket.
 
     Audio frames are paced through the session pacer; a generation re-check
@@ -110,7 +112,13 @@ async def run_downlink_sender(session: DeviceSession, websocket: WebSocket) -> N
             if item.kind is DownlinkKind.CONTROL:
                 if queue.is_closed or item.generation < queue.generation:
                     continue
-                await websocket.send_text(item.payload.decode("utf-8"))
+                control_text = item.payload.decode("utf-8")
+                await websocket.send_text(control_text)
+                control = json.loads(control_text)
+                if control.get("type") == "tts" and control.get("state") == "stop":
+                    session.mark_conversation_activity(
+                        playback_grace_seconds=playback_grace_seconds
+                    )
             else:
                 await session.pacer.pace(item.duration_ms / 1000.0)
                 if queue.is_closed or item.generation < queue.generation:

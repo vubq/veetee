@@ -1,5 +1,6 @@
 """Comprehensive tests for Veetee Device WebSocket Gateway (M1.3)."""
 
+import asyncio
 import json
 from typing import Any, cast
 from uuid import UUID
@@ -12,6 +13,7 @@ from veetee_server.app import create_app
 from veetee_server.audio import parse_audio_frame
 from veetee_server.config import Settings
 from veetee_server.device_gateway.registry import DeviceSessionRegistry
+from veetee_server.device_gateway.router import _cleanup_session
 from veetee_server.domain.session import DeviceSession, SessionState
 
 
@@ -102,6 +104,105 @@ def test_happy_path_handshake_and_hello(
             with pytest.raises(WebSocketDisconnect) as exc_info:
                 ws.receive_json()
             assert exc_info.value.code == 1000
+
+
+def test_hello_accepts_bounded_firmware_text_font_capability(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    app = create_app(test_settings)
+    payload = {
+        **valid_hello_payload,
+        "features": {"mcp": True, "glyph_push": True},
+        "text_font": {
+            "bundle": "font-bundle-v1",
+            "charset": "vi-VN",
+            "size": 16,
+            "bpp": 4,
+        },
+    }
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(payload)
+            hello = ws.receive_json()
+            assert hello["type"] == "hello"
+
+
+def test_firmware_detect_and_wake_word_abort_are_accepted(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+            ws.send_json(
+                {
+                    "type": "listen",
+                    "state": "detect",
+                    "text": "Hi,ESP",
+                    "session_id": session_id,
+                }
+            )
+            ws.send_json(
+                {
+                    "type": "abort",
+                    "reason": "wake_word_detected",
+                    "session_id": session_id,
+                }
+            )
+            ws.send_json({"type": "ping", "session_id": session_id})
+            assert ws.receive_json()["type"] == "pong"
+
+
+def test_listen_text_is_rejected_outside_detect(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+            ws.send_json(
+                {
+                    "type": "listen",
+                    "state": "start",
+                    "mode": "auto",
+                    "text": "not-valid-here",
+                    "session_id": session_id,
+                }
+            )
+            assert ws.receive_json()["code"] == "veetee_invalid_input"
+
+
+@pytest.mark.parametrize(
+    "text_font",
+    [
+        {"bundle": "", "charset": "vi-VN", "size": 16, "bpp": 4},
+        {"bundle": "font", "charset": "vi-VN", "size": 0, "bpp": 4},
+        {"bundle": "font", "charset": "vi-VN", "size": 16, "bpp": 3},
+        {"bundle": "font", "charset": "vi-VN", "size": 16, "bpp": 4, "extra": True},
+    ],
+)
+def test_hello_rejects_invalid_text_font_capability(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+    text_font: dict[str, Any],
+) -> None:
+    app = create_app(test_settings)
+    payload = {**valid_hello_payload, "text_font": text_font}
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(payload)
+            assert ws.receive_json()["code"] == "veetee_invalid_input"
 
 
 @pytest.mark.parametrize(
@@ -408,7 +509,7 @@ def test_idle_timeout(
             assert exc_info.value.code == 1001
 
 
-def test_server_heartbeat_requires_pong(
+def test_server_heartbeat_does_not_send_json_ping(
     test_settings: Settings,
     valid_headers: dict[str, str],
     valid_hello_payload: dict[str, Any],
@@ -426,13 +527,42 @@ def test_server_heartbeat_requires_pong(
             ws.send_json(valid_hello_payload)
             session_id = ws.receive_json()["session_id"]
 
-            assert ws.receive_json() == {"type": "ping", "session_id": session_id}
             timeout = ws.receive_json()
             assert timeout == {
                 "code": "veetee_timeout",
-                "message": "Pong timeout",
+                "message": "Idle timeout",
                 "session_id": session_id,
             }
+
+
+def test_auto_conversation_closes_after_speech_inactivity(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    settings = test_settings.model_copy(
+        update={
+            "idle_timeout_seconds": 10.0,
+            "conversation_idle_timeout_seconds": 0.05,
+            "ping_interval_seconds": 0.01,
+        }
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(valid_hello_payload)
+            hello = ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "listen",
+                    "session_id": hello["session_id"],
+                    "state": "start",
+                    "mode": "auto",
+                }
+            )
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 1000
 
 
 def test_strict_schema_rejects_extra_fields_without_echo(
@@ -585,6 +715,30 @@ def test_registry_cleanup_and_reconnect(
 
         assert second_sid != first_sid
         assert registry.active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unregisters_before_waiting_for_session_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = DeviceSessionRegistry()
+    session = DeviceSession(device_id="device-opaque", client_id="client-opaque")
+    session.accept()
+    await registry.register(session, cast(Any, StubWebSocket()))
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+
+    async def slow_close() -> None:
+        close_started.set()
+        await allow_close.wait()
+
+    monkeypatch.setattr(session, "close", slow_close)
+    cleanup = asyncio.create_task(_cleanup_session(session, registry))
+    await close_started.wait()
+
+    assert registry.active_count == 0
+    allow_close.set()
+    await cleanup
 
 
 class StubWebSocket:
@@ -946,3 +1100,35 @@ def test_fake_pipeline_end_to_end_for_each_wire_version(
             assert session is not None
             assert session.state is SessionState.IDLE
             assert session.current_turn is None
+
+
+def test_auto_mode_server_vad_starts_pipeline_without_listen_stop(
+    test_settings: Settings,
+    valid_headers: dict[str, str],
+    valid_hello_payload: dict[str, Any],
+) -> None:
+    app = create_app(
+        test_settings.model_copy(
+            update={
+                "pipeline_vad_start_frames": 1,
+                "pipeline_vad_end_silence_frames": 1,
+            }
+        )
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/devices/ws", headers=valid_headers) as ws:
+            ws.send_json(valid_hello_payload)
+            session_id = ws.receive_json()["session_id"]
+            ws.send_json(
+                {
+                    "type": "listen",
+                    "state": "start",
+                    "mode": "auto",
+                    "session_id": session_id,
+                }
+            )
+            ws.send_bytes(b"\x40")
+            ws.send_bytes(b"\x00")
+
+            assert ws.receive_json()["type"] == "stt"
+            assert ws.receive_json()["state"] == "start"

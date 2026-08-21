@@ -12,8 +12,8 @@ from collections.abc import Callable
 from veetee_server.audio.codec import (
     DOWNLINK_PCM_FORMAT,
     UPLINK_PCM_FORMAT,
-    FakeOpusDecoder,
-    FakeOpusEncoder,
+    build_opus_decoder,
+    build_opus_encoder,
 )
 from veetee_server.audio.pacer import PacketPacer
 from veetee_server.config import Settings
@@ -23,7 +23,14 @@ from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
 from .llm import FakeLLM, LLMNotReadyError, OmniRouteLLMAdapter, OmniRouteLLMRuntime
 from .orchestrator import FakePipeline
 from .segmenter import TTSSegmenterConfig, TTSTokenSegmenter
-from .tts import FakeTTS, GeminiTTSAdapter, GeminiTTSRuntime, TTSNotReadyError
+from .tts import (
+    FakeTTS,
+    GeminiTTSAdapter,
+    GeminiTTSRuntime,
+    TTSNotReadyError,
+    VieNeuTTSAdapter,
+    VieNeuTTSRuntime,
+)
 from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
 PipelineFactory = Callable[[DeviceSession, Settings], FakePipeline]
@@ -54,6 +61,7 @@ def build_fake_pipeline(
     asr_runtime: PhoWhisperRuntime | None = None,
     llm_runtime: OmniRouteLLMRuntime | None = None,
     tts_runtime: GeminiTTSRuntime | None = None,
+    vieneu_runtime: VieNeuTTSRuntime | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad = build_vad_stream(settings, vad_runtime=vad_runtime)
@@ -74,11 +82,15 @@ def build_fake_pipeline(
     else:
         llm = FakeLLM()
 
-    tts: FakeTTS | GeminiTTSAdapter
+    tts: FakeTTS | GeminiTTSAdapter | VieNeuTTSAdapter
     if settings.tts_provider == "gemini":
         if tts_runtime is None or not tts_runtime.is_ready:
             raise TTSNotReadyError("Gemini TTS is configured but its runtime is not ready")
         tts = tts_runtime.create_adapter()
+    elif settings.tts_provider == "vieneu":
+        if vieneu_runtime is None or not vieneu_runtime.is_ready:
+            raise TTSNotReadyError("VieNeu TTS is configured but its runtime is not ready")
+        tts = vieneu_runtime.create_adapter()
     else:
         tts = FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence)
 
@@ -91,8 +103,8 @@ def build_fake_pipeline(
     segmenter = TTSTokenSegmenter(config=segmenter_config)
 
     return FakePipeline(
-        decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
-        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        decoder=build_opus_decoder(settings, pcm_format=UPLINK_PCM_FORMAT),
+        encoder=build_opus_encoder(settings, pcm_format=DOWNLINK_PCM_FORMAT),
         protocol_version=session.protocol_version,
         vad=vad,
         asr=asr,

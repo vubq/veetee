@@ -64,6 +64,11 @@ class BargeInDetector:
         self._triggered = False
         self._vad.reset()
 
+    def close(self) -> None:
+        close = getattr(self._decoder, "close", None)
+        if close is not None:
+            close()
+
 
 class BargeInCoordinator:
     """Applies a detected interruption as one guarded session transition."""
@@ -93,3 +98,42 @@ class BargeInCoordinator:
                 )
             )
         return True
+
+    def close(self) -> None:
+        self._detector.close()
+
+
+class AutoEndpointDetector:
+    """Observes auto-mode ingress and triggers once when speech ends."""
+
+    def __init__(self, decoder: AudioDecoder, vad: BaseVADStream | SyncVADStream) -> None:
+        self._decoder = decoder
+        self._vad = vad
+        self._triggered = False
+        self._speech_started = False
+
+    @property
+    def speech_started(self) -> bool:
+        return self._speech_started
+
+    async def process(self, item: AudioQueueItem) -> bool:
+        if self._triggered:
+            return False
+        pcm = self._decoder.decode(item.payload)
+        if isinstance(self._vad, BaseVADStream):
+            events = await self._vad.process_pcm_async(pcm)
+        else:
+            events = [self._vad.process_frame(pcm)]
+        if any(event.kind is VadEventKind.SPEECH_START for event in events):
+            self._speech_started = True
+        if self._speech_started and any(
+            event.kind is VadEventKind.SPEECH_END for event in events
+        ):
+            self._triggered = True
+            return True
+        return False
+
+    def close(self) -> None:
+        close = getattr(self._decoder, "close", None)
+        if close is not None:
+            close()
