@@ -25,7 +25,7 @@ Ngày hoàn tất: 2026-08-21.
 
 ## Kiểm thử và bằng chứng
 
-- `uv run pytest -q`: 387/387 pass.
+- `uv run pytest -q`: 389/389 pass.
 - `uv run ruff check src tests`: pass.
 - `uv run mypy`: pass strict trên 75 source files.
 - Prompt: checksum/version, ordering và prompt-injection regression pass.
