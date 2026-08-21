@@ -2,8 +2,8 @@
 
 M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4 thêm OTA/config
 discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TTS
-deterministic thành luồng device hoàn chỉnh. Native Opus/resampler, database và provider
-AI thật chưa được tích hợp.
+deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
+ASR. Native Opus/resampler, database, LLM và TTS thật chưa được tích hợp.
 
 ## Local commands
 
@@ -62,3 +62,17 @@ uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
 
 Model không được tự tải khi startup; thiếu dependency/artifact hoặc warmup lỗi làm
 `/readyz` trả `503` thay vì âm thầm rơi về fake VAD.
+
+PhoWhisper M2.2 mặc định chỉ dùng model đã có trong local Hugging Face cache:
+
+```bash
+VEETEE_ASR_PROVIDER=pho_whisper \
+VEETEE_ASR_MODEL_ID=mad1999/pho-whisper-small-ct2 \
+VEETEE_ASR_LOCAL_FILES_ONLY=true \
+uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
+```
+
+Thiếu model local hoặc warmup lỗi làm `/readyz` trả `503`; server không tự tải model khi
+startup theo cấu hình mặc định. Dependency Linux x86_64 bao gồm CUDA 12 cuBLAS/cuDNN
+project-local để CTranslate2 không phụ thuộc vào venv khác. Không log PCM hay transcript
+trong runtime provider.

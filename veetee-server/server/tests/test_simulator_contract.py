@@ -224,6 +224,7 @@ def test_registry_shutdown_closes_active_simulator_1012(simulator_settings: Sett
         with client.websocket_connect("/api/v1/devices/ws", headers=_headers()) as ws:
             simulator = _simulator(ws)
             asyncio.run(simulator.send_hello())
+            assert client.portal is not None
             client.portal.call(
                 partial(
                     app.state.device_session_registry.close_all,

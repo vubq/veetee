@@ -31,7 +31,7 @@ from veetee_server.domain.session import (
     TurnState,
 )
 
-from .asr import FakeASR
+from .asr import ASRProvider
 from .events import (
     EventSink,
     SttEvent,
@@ -69,7 +69,7 @@ class FakePipeline:
         encoder: AudioEncoder,
         protocol_version: int,
         vad: FakeVAD | BaseVADStream | Any,
-        asr: FakeASR,
+        asr: ASRProvider,
         llm: FakeLLM,
         tts: FakeTTS,
         now_ms: Callable[[], int] | None = None,
@@ -105,9 +105,14 @@ class FakePipeline:
         if utterance is None:
             return PipelineOutcome.NO_UTTERANCE
 
-        transcript = self.asr.transcribe(utterance)
+        asr_result = await self.asr.transcribe_async(utterance)
+        transcript = asr_result.normalized_text or asr_result.raw_text
+
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
+        if not transcript or not transcript.strip():
+            return PipelineOutcome.NO_UTTERANCE
+
         await sink.emit(SttEvent(text=transcript, session_id=str(session.id)))
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED

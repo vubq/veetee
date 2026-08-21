@@ -5,7 +5,10 @@ description = "Veetee device assistant server"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
+  "faster-whisper>=1.2,<2",
   "httpx>=0.28,<1",
+  "nvidia-cublas-cu12>=12.8,<13; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "nvidia-cudnn-cu12>=9.10,<10; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "numpy>=2.2,<3",
   "onnxruntime>=1.22,<2",
   "pydantic-settings>=2.7,<3",

@@ -191,6 +191,30 @@ qua `VEETEE_VAD_MODEL_PATH`. Wrapper chỉ nhận contract ONNX v5 `input/state/
 Giới hạn M2.1: VAD thật hiện chạy trên batch đã thu sau `listen/stop`; inference trên
 audio uplink liên tục, tự kết thúc lượt và barge-in realtime thuộc M2.6.
 
+## PhoWhisper ASR adapter (M2.2 - Quyết định Veetee)
+
+`veetee_server.pipeline.asr` cung cấp ASR contract typed và PhoWhisper runtime application-scoped:
+
+- **Contract typed**: `ASRTranscribeRequest`, `ASRResult`, `ASRSegment`, `PhoWhisperConfig` với request nhận PCM 16 kHz s16le mono (tương thích `VADUtterance`), trả kết quả có `raw_text`, `normalized_text`, `language`, `duration_seconds`, `segments` và `provider_metadata`.
+- **Privacy Policy**: Không log PCM bytes hay transcript text trong log mặc định để bảo vệ dữ liệu người dùng.
+- **Normalization có kiểm soát**: `normalize_transcript` loại bỏ khoảng trắng thừa, chuẩn hóa khoảng trắng giữa các từ mà không tự động đổi từ hay sửa dấu câu sai lệch.
+- **Runtime application-scoped** (`PhoWhisperRuntime`): Quản lý CTranslate2 engine (`faster-whisper`), thực hiện model load và warmup 0,5s audio im lặng một lần khi khởi động lifespan (`startup()`) nếu `VEETEE_ASR_PROVIDER=pho_whisper`, quản lý readiness (`/readyz`) và shutdown giải phóng tài nguyên.
+- **Concurrency & Cancellation safety**:
+  - Inference sync chạy trong thread pool executor (`max_workers=max_concurrency`), không làm block asyncio event loop.
+  - Admission control qua `asyncio.Semaphore` (`VEETEE_ASR_MAX_CONCURRENCY=1`, đề xuất theo benchmark GPU serialized) và admission timeout (`VEETEE_ASR_ADMISSION_TIMEOUT_SECONDS=2.0`), ném `ASRAdmissionTimeoutError` khi hàng chờ quá hạn.
+  - Total timeout (`VEETEE_ASR_TOTAL_TIMEOUT_SECONDS=10.0`), ném `ASRTimeoutError` khi thời gian xử lý tổng vượt quá ngưỡng.
+  - Khi caller cancel coroutine, permit semaphore được giữ cho đến khi native compute thread thực sự kết thúc trong `finally` của background worker task, tránh rò rỉ permit/VRAM hay deadlock.
+  - Lifecycle lock & state check ngăn ngừa race condition giữa `shutdown()` và request mới (ném `ASRNotReadyError`).
+- **PCM Validation & Oversized Audio Rejection**:
+  - Bắt buộc audio 16k s16le mono, độ dài byte chẵn.
+  - Từ chối audio vượt thời lượng tối đa (`VEETEE_ASR_MAX_AUDIO_SECONDS=30.0`), ném `ASROversizedAudioError`.
+  - Audio im lặng / biên độ 0 trả về kết quả rỗng typed `ASRResult(raw_text="", normalized_text="", provider_metadata={"silence": True})` ngay lập tức mà không chạy inference.
+- **Config typed**: `VEETEE_ASR_PROVIDER` (`fake` | `pho_whisper`), `VEETEE_ASR_MODEL_ID` (mặc định `mad1999/pho-whisper-small-ct2`), `VEETEE_ASR_DEVICE` (`cuda`), `VEETEE_ASR_COMPUTE_TYPE` (`float16`), `VEETEE_ASR_MAX_CONCURRENCY`, `VEETEE_ASR_ADMISSION_TIMEOUT_SECONDS`, `VEETEE_ASR_TOTAL_TIMEOUT_SECONDS`, `VEETEE_ASR_MAX_AUDIO_SECONDS`, `VEETEE_ASR_LANGUAGE` (`vi`) và `VEETEE_ASR_LOCAL_FILES_ONLY` (mặc định `true`). Total timeout bao gồm cả thời gian chờ admission.
+
+Giới hạn M2.2:
+- Model thật (`mad1999/pho-whisper-small-ct2` / `medium`) cần artifact/cache local; mặc định server không tải model từ Hugging Face khi startup.
+- Không kết luận WER/CER nếu không có bộ test audio có ground truth.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc
@@ -209,7 +233,10 @@ không thay thế `digital-human`, native Opus hoặc hardware E2E của M2.
 - Provider chưa initialize: binary audio bị bỏ qua.
 - Socket close: cancel task, đóng TTS/ASR và giải phóng executor/queue.
 - Memory/reporting lỗi không được ngăn việc đóng socket.
-- Provider timeout phải chuyển thành lỗi có thể recover, không treo event loop.
+- Provider timeout phải fail turn hiện tại và không treo event loop. M2.2 đánh dấu ASR
+  runtime không ready sau total timeout vì native CTranslate2 worker không thể bị kill an
+  toàn; process cần restart để nhận lượt mới. Error envelope chuyên biệt cho device chưa
+  thuộc contract hiện tại.
 - Reconnect tạo session mới; packet/result session cũ phải bị loại.
 
 ## Source đối chiếu

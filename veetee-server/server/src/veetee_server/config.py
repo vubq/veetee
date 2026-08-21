@@ -117,6 +117,18 @@ class Settings(BaseSettings):
     vad_max_concurrency: int = Field(default=4, gt=0)
     vad_admission_timeout_seconds: float = Field(default=2.0, gt=0)
 
+    # ASR Provider & PhoWhisper Settings (M2.2)
+    asr_provider: Literal["fake", "pho_whisper"] = Field(default="fake")
+    asr_model_id: str = Field(default="mad1999/pho-whisper-small-ct2", min_length=1)
+    asr_device: str = Field(default="cuda", min_length=1)
+    asr_compute_type: str = Field(default="float16", min_length=1)
+    asr_max_concurrency: int = Field(default=1, gt=0)
+    asr_admission_timeout_seconds: float = Field(default=2.0, gt=0)
+    asr_total_timeout_seconds: float = Field(default=10.0, gt=0)
+    asr_max_audio_seconds: float = Field(default=30.0, gt=0)
+    asr_language: str = Field(default="vi", min_length=1)
+    asr_local_files_only: bool = Field(default=True)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -154,6 +166,11 @@ class Settings(BaseSettings):
             raise ValueError("vad_max_utterance_ms must be at least vad_min_speech_ms")
         if self.vad_provider == "silero_onnx" and not self.vad_model_path.strip():
             raise ValueError("vad_model_path must be specified when vad_provider is silero_onnx")
+        if self.asr_total_timeout_seconds <= self.asr_admission_timeout_seconds:
+            raise ValueError(
+                "asr_total_timeout_seconds must be strictly greater than "
+                "asr_admission_timeout_seconds"
+            )
         return self
 
 

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from typing import Any
+
+from .contract import ASRResult, normalize_transcript
 
 _DEFAULT_TRANSCRIPT = "Xin chào, đây là phản hồi mẫu từ Veetee."
 
@@ -31,3 +34,18 @@ class FakeASR:
         """Returns a deterministic transcript for a PCM utterance."""
         fingerprint = hashlib.sha256(pcm_data).hexdigest()
         return self.fingerprints.get(fingerprint, self.default_text)
+
+    async def transcribe_async(self, request: bytes | Any) -> ASRResult:
+        """Async transcription returning typed ASRResult."""
+        pcm_bytes = request.pcm_data if hasattr(request, "pcm_data") else request
+        raw_text = self.transcribe(pcm_bytes)
+        norm_text = normalize_transcript(raw_text)
+        duration = float(len(pcm_bytes) / 32000.0) if isinstance(pcm_bytes, bytes) else 0.0
+        return ASRResult(
+            raw_text=raw_text,
+            normalized_text=norm_text,
+            language="vi",
+            duration_seconds=duration,
+            segments=[],
+            provider_metadata={"fake": True},
+        )

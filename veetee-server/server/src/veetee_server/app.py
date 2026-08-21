@@ -58,6 +58,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception as exc:
             logger.error("Failed to start VAD runtime: %s", exc)
 
+    asr_runtime = getattr(app.state, "asr_runtime", None)
+    if settings.asr_provider == "pho_whisper" and asr_runtime is None:
+        try:
+            from .pipeline.asr import PhoWhisperConfig, PhoWhisperRuntime
+
+            asr_cfg = PhoWhisperConfig(
+                model_id=settings.asr_model_id,
+                device=settings.asr_device,
+                compute_type=settings.asr_compute_type,
+                max_concurrency=settings.asr_max_concurrency,
+                admission_timeout_seconds=settings.asr_admission_timeout_seconds,
+                total_timeout_seconds=settings.asr_total_timeout_seconds,
+                max_audio_seconds=settings.asr_max_audio_seconds,
+                language=settings.asr_language,
+                local_files_only=settings.asr_local_files_only,
+            )
+            asr_runtime = PhoWhisperRuntime(config=asr_cfg)
+            await asr_runtime.startup()
+            app.state.asr_runtime = asr_runtime
+        except Exception as exc:
+            logger.error("Failed to start ASR runtime: %s", exc)
+            if asr_runtime is not None:
+                await asr_runtime.shutdown()
+                asr_runtime = None
+
     app.state.ready = True
     try:
         yield
@@ -70,6 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await registry.close_all(code=1012, reason="Server shutdown")
         if vad_runtime is not None:
             await vad_runtime.shutdown()
+        if asr_runtime is not None:
+            await asr_runtime.shutdown()
         logger.info("server_stopped")
 
 
@@ -135,6 +162,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "reason": "vad_runtime_not_ready"},
+                )
+        if runtime_settings.asr_provider == "pho_whisper":
+            asr_runtime = getattr(app.state, "asr_runtime", None)
+            if asr_runtime is None or not asr_runtime.is_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "asr_runtime_not_ready"},
                 )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 

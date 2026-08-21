@@ -19,7 +19,7 @@ from veetee_server.audio.pacer import PacketPacer
 from veetee_server.config import Settings
 from veetee_server.domain.session import DeviceSession
 
-from .asr import FakeASR
+from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
 from .llm import FakeLLM
 from .orchestrator import FakePipeline
 from .tts import FakeTTS
@@ -33,6 +33,7 @@ def build_fake_pipeline(
     session: DeviceSession,
     settings: Settings,
     vad_runtime: SileroVADRuntime | None = None,
+    asr_runtime: PhoWhisperRuntime | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad: FakeVAD | BaseVADStream
@@ -48,12 +49,20 @@ def build_fake_pipeline(
             max_utterance_frames=settings.pipeline_max_utterance_frames,
         )
 
+    asr: FakeASR | PhoWhisperRuntime
+    if settings.asr_provider == "pho_whisper":
+        if asr_runtime is None or not asr_runtime.is_ready:
+            raise ASRNotReadyError("PhoWhisper ASR is configured but its runtime is not ready")
+        asr = asr_runtime
+    else:
+        asr = FakeASR()
+
     return FakePipeline(
         decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
         encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
         protocol_version=session.protocol_version,
         vad=vad,
-        asr=FakeASR(),
+        asr=asr,
         llm=FakeLLM(),
         tts=FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence),
     )
