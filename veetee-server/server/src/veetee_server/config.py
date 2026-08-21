@@ -177,6 +177,17 @@ class Settings(BaseSettings):
     tts_segment_max_chars: int = Field(default=220, gt=0)
     tts_segment_max_wait_seconds: float = Field(default=0.35, gt=0.0)
 
+    # Brain AI / Mốc 3 Settings (M3.1 - M3.8)
+    prompt_default_version: str = Field(default="v1.0.0", min_length=1)
+    context_budget_max_tokens: int = Field(default=4096, gt=0)
+    intent_strategy: Literal["direct_chat", "function_call", "intent_model"] = Field(
+        default="function_call"
+    )
+    tool_execution_timeout_seconds: float = Field(default=5.0, gt=0)
+    tool_max_output_chars: int = Field(default=2048, gt=0)
+    memory_min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    memory_recency_decay_half_life_hours: float = Field(default=24.0, gt=0)
+
     @field_validator("tts_gemini_api_keys", mode="before")
     @classmethod
     def _parse_api_keys(cls, v: object) -> list[str]:

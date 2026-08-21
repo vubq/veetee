@@ -317,6 +317,23 @@ khi nhận speech mới và sau khi gửi xong `tts/stop`. Sau 180 giây không 
 server đóng WebSocket bình thường để firmware về `idle` và chờ WakeNet. Silence/noise frame
 không reset timer. Mặc định cộng 3 giây playback drain để bù audio còn trong buffer ESP32.
 
+## AI brain lifecycle (M3 - Quyết định Veetee)
+
+M3 cung cấp các boundary mở rộng cho prompt, dialogue, intent, tool, MCP và memory. Prompt
+có version/checksum; context giữ thứ tự instruction cố định và đánh dấu memory/tool output
+là dữ liệu không tin cậy. Intent strategy được chọn qua config hoặc registry, không dùng
+keyword để giả lập hiểu ngôn ngữ và không fallback âm thầm khi strategy chưa đăng ký.
+
+Tool chỉ được gọi qua registry allowlist, schema, policy, confirmation, timeout,
+cancellation, giới hạn output và audit. MCP adapter kiểm tra JSON-RPC, pagination và
+session/generation để loại response trễ. Memory có tenant scope, provenance, confidence,
+recency, conflict resolution và quyền forget/delete; policy/rule có thể inject để thay đổi
+theo agent hoặc deployment, không rải hành vi nghiệp vụ trong gateway.
+
+Runtime mặc định chỉ khởi tạo registry và executor; tool/provider thật phải được đăng ký
+từ adapter có cấu hình. Các local tool deterministic trong test harness không được coi là
+provider sản phẩm thật.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc

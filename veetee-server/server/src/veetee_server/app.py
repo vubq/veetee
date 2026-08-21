@@ -153,6 +153,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await vieneu_runtime.startup()
         app.state.vieneu_runtime = vieneu_runtime
 
+    # Brain AI / Mốc 3 state initialization
+    if getattr(app.state, "prompt_registry", None) is None:
+        from .prompt import create_default_prompt_registry
+
+        app.state.prompt_registry = create_default_prompt_registry()
+
+    if getattr(app.state, "tool_registry", None) is None:
+        from .tools import ToolRegistry
+
+        tr = ToolRegistry()
+        app.state.tool_registry = tr
+
+    if getattr(app.state, "tool_executor", None) is None:
+        from .tools import ToolExecutor
+
+        app.state.tool_executor = ToolExecutor(
+            default_timeout_seconds=settings.tool_execution_timeout_seconds,
+            max_output_chars=settings.tool_max_output_chars,
+        )
+
+    if getattr(app.state, "memory_store", None) is None:
+        from .memory import InMemoryMemoryStore
+
+        app.state.memory_store = InMemoryMemoryStore()
+
+    if getattr(app.state, "mcp_adapter", None) is None:
+        from .mcp import MCPAdapter
+
+        app.state.mcp_adapter = MCPAdapter(
+            tool_registry=app.state.tool_registry,
+            tool_executor=app.state.tool_executor,
+        )
+
+    if getattr(app.state, "intent_router", None) is None:
+        from .intent import IntentRouter
+
+        app.state.intent_router = IntentRouter(default_strategy=settings.intent_strategy)
+
     app.state.ready = True
     try:
         yield

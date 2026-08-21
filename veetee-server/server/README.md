@@ -4,8 +4,8 @@ M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4
 discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TTS
 deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
 ASR, M2.3 thêm OmniRoute Groq LLM, M2.5 thêm Gemini TTS và M2.7 thêm native Opus cùng
-digital-human compatibility harness. Resampler khác sample rate và database chưa được
-tích hợp.
+digital-human compatibility harness. M3 thêm prompt/dialogue, intent strategy, tool/MCP
+và memory boundary mở rộng. Resampler khác sample rate và database chưa được tích hợp.
 
 ## Local commands
 
