@@ -1,12 +1,14 @@
-"""Fake AI pipeline orchestrator for the M1.6 milestone.
+"""Fake AI pipeline orchestrator for the M1.6 and M2.4 milestones.
 
-The orchestrator drives the deterministic VAD -> ASR -> LLM -> TTS chain for
+The orchestrator drives the real-time VAD -> ASR -> LLM -> Segmenter -> TTS chain for
 one capture turn:
 
 1. drain the session's ingress queue (all frames captured during LISTENING);
 2. run the VAD over the decoded frames to extract a single speech segment;
-3. transcribe (ASR), segment into sentences (LLM), and stream TTS chunks;
-4. emit typed events through an injected ``EventSink``.
+3. transcribe (ASR);
+4. stream tokens from LLM into a TTSTokenSegmenter in real time;
+5. start TTS and emit audio chunks as soon as the first segment is ready;
+6. emit typed events through an injected ``EventSink``.
 
 The pipeline is turn-scoped: it is started from a processing turn's
 cancellation scope, so an abort or a new (barge-in) turn cancels it at the
@@ -16,6 +18,7 @@ and stale-generation protection is enforced once streaming begins.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from enum import StrEnum
@@ -41,13 +44,15 @@ from .events import (
     TtsStopEvent,
 )
 from .framing import build_downlink_frame
-from .llm import ChatMessage, FakeLLM, LLMProvider, LLMTextDeltaEvent
+from .llm import ChatMessage, LLMProvider, LLMStreamEvent, LLMTextDeltaEvent
+from .segmenter import TTSTokenSegmenter
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD
 
 logger = logging.getLogger("veetee.pipeline")
 
 _DOWNLINK_FRAME_DURATION_MS = 60.0
+_STREAM_END = object()
 
 
 class PipelineOutcome(StrEnum):
@@ -70,8 +75,9 @@ class FakePipeline:
         protocol_version: int,
         vad: FakeVAD | BaseVADStream | Any,
         asr: ASRProvider,
-        llm: LLMProvider,
-        tts: FakeTTS,
+        llm: LLMProvider | Any,
+        tts: FakeTTS | Any,
+        segmenter: TTSTokenSegmenter | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         if protocol_version not in (1, 2, 3):
@@ -83,6 +89,7 @@ class FakePipeline:
         self.asr = asr
         self.llm = llm
         self.tts = tts
+        self.segmenter = segmenter or TTSTokenSegmenter()
         self._now_ms = now_ms
 
     async def run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
@@ -118,75 +125,168 @@ class FakePipeline:
             return PipelineOutcome.CANCELLED
 
         messages = [ChatMessage(role="user", content=transcript)]
-        text_deltas: list[str] = []
-        stream = self.llm.generate_stream(messages)
+        self.segmenter.reset()
+
+        segment_queue: asyncio.Queue[str | Exception | object] = asyncio.Queue(maxsize=2)
+
+        async def producer() -> None:
+            stream = self.llm.generate_stream(messages)
+            next_event: asyncio.Task[LLMStreamEvent] | None = None
+            cancelled = False
+
+            try:
+                while True:
+                    if not self._alive(
+                        session, turn, expected_queue_generation=expected_queue_gen
+                    ):
+                        break
+
+                    timeout = self.segmenter.seconds_until_due
+                    if timeout is not None and timeout <= 0.0:
+                        for seg in self.segmenter.flush_due():
+                            await segment_queue.put(seg)
+                        timeout = self.segmenter.seconds_until_due
+
+                    if next_event is None:
+                        next_event = asyncio.create_task(anext(stream))
+                    done, _ = await asyncio.wait(
+                        {next_event},
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        for seg in self.segmenter.flush_due():
+                            await segment_queue.put(seg)
+                        continue
+
+                    try:
+                        item = next_event.result()
+                    except StopAsyncIteration:
+                        for seg in self.segmenter.finish():
+                            await segment_queue.put(seg)
+                        break
+                    finally:
+                        next_event = None
+
+                    if isinstance(item, LLMTextDeltaEvent) and not item.reasoning:
+                        for seg in self.segmenter.feed(item.delta):
+                            await segment_queue.put(seg)
+            except Exception as exc:
+                logger.warning("LLM stream failed", extra={"error_type": type(exc).__name__})
+                await segment_queue.put(exc)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            finally:
+                if next_event is not None and not next_event.done():
+                    next_event.cancel()
+                    try:
+                        await next_event
+                    except BaseException:
+                        pass
+                await stream.aclose()
+                if not cancelled:
+                    await segment_queue.put(_STREAM_END)
+
+        producer_task = asyncio.create_task(producer())
+
         try:
-            async for event in stream:
+            first_segment = True
+            sentence_id = 0
+            generation: Generation | None = None
+
+            while True:
+                segment = await segment_queue.get()
+                if segment is _STREAM_END:
+                    break
+                if isinstance(segment, Exception):
+                    raise segment
+                if not isinstance(segment, str):
+                    raise TypeError("unexpected segment queue item")
+
+                if first_segment:
+                    first_segment = False
+                    try:
+                        generation = session.begin_streaming()
+                    except InvalidTransitionError:
+                        producer_task.cancel()
+                        return PipelineOutcome.CANCELLED
+
+                    if not self._alive(
+                        session,
+                        turn,
+                        generation,
+                        expected_queue_generation=expected_queue_gen,
+                    ):
+                        producer_task.cancel()
+                        return PipelineOutcome.CANCELLED
+
+                    await sink.emit(TtsStartEvent(session_id=str(session.id)))
+
                 if not self._alive(
-                    session, turn, expected_queue_generation=expected_queue_gen
+                    session,
+                    turn,
+                    generation,
+                    expected_queue_generation=expected_queue_gen,
                 ):
+                    producer_task.cancel()
                     return PipelineOutcome.CANCELLED
-                if isinstance(event, LLMTextDeltaEvent) and not event.reasoning:
-                    text_deltas.append(event.delta)
-        finally:
-            await stream.aclose()
 
-        full_text = "".join(text_deltas).strip()
-        if not full_text:
-            return PipelineOutcome.NO_UTTERANCE
-        sentences = FakeLLM().segments(full_text)
-
-        try:
-            generation = session.begin_streaming()
-        except InvalidTransitionError:
-            return PipelineOutcome.CANCELLED
-
-        if not self._alive(
-            session, turn, generation, expected_queue_generation=expected_queue_gen
-        ):
-            return PipelineOutcome.CANCELLED
-        await sink.emit(TtsStartEvent(session_id=str(session.id)))
-
-        sentence_id = 0
-        for sentence in sentences:
-            if not self._alive(
-                session, turn, generation, expected_queue_generation=expected_queue_gen
-            ):
-                return PipelineOutcome.CANCELLED
-            sentence_id += 1
-            await sink.emit(
-                TtsSentenceStartEvent(
-                    text=sentence,
-                    sentence_id=sentence_id,
-                    session_id=str(session.id),
-                )
-            )
-            async for pcm in self.tts.synthesize(sentence):
-                if not self._alive(
-                    session, turn, generation, expected_queue_generation=expected_queue_gen
-                ):
-                    return PipelineOutcome.CANCELLED
-                opus = self.encoder.encode(pcm)
-                frame = build_downlink_frame(self.protocol_version, opus, now_ms=self._now_ms)
+                sentence_id += 1
                 await sink.emit(
-                    TtsChunkEvent(
-                        pcm=pcm,
-                        frame=frame,
-                        duration_ms=_DOWNLINK_FRAME_DURATION_MS,
+                    TtsSentenceStartEvent(
+                        text=segment,
+                        sentence_id=sentence_id,
                         session_id=str(session.id),
                     )
                 )
 
-        if not self._alive(
-            session, turn, generation, expected_queue_generation=expected_queue_gen
-        ):
-            return PipelineOutcome.CANCELLED
-        await sink.emit(TtsStopEvent(session_id=str(session.id)))
-        try:
-            session.complete_turn()
-        except InvalidTransitionError:
-            return PipelineOutcome.CANCELLED
-        return PipelineOutcome.COMPLETED
+                async for pcm in self.tts.synthesize(segment):
+                    if not self._alive(
+                        session,
+                        turn,
+                        generation,
+                        expected_queue_generation=expected_queue_gen,
+                    ):
+                        producer_task.cancel()
+                        return PipelineOutcome.CANCELLED
+                    opus = self.encoder.encode(pcm)
+                    frame = build_downlink_frame(
+                        self.protocol_version, opus, now_ms=self._now_ms
+                    )
+                    await sink.emit(
+                        TtsChunkEvent(
+                            pcm=pcm,
+                            frame=frame,
+                            duration_ms=_DOWNLINK_FRAME_DURATION_MS,
+                            session_id=str(session.id),
+                        )
+                    )
+
+            if first_segment:
+                return PipelineOutcome.NO_UTTERANCE
+
+            if not self._alive(
+                session,
+                turn,
+                generation,
+                expected_queue_generation=expected_queue_gen,
+            ):
+                return PipelineOutcome.CANCELLED
+
+            await sink.emit(TtsStopEvent(session_id=str(session.id)))
+            try:
+                session.complete_turn()
+            except InvalidTransitionError:
+                return PipelineOutcome.CANCELLED
+            return PipelineOutcome.COMPLETED
+        finally:
+            if not producer_task.done():
+                producer_task.cancel()
+                try:
+                    await producer_task
+                except BaseException:
+                    pass
 
     async def _collect_utterance(
         self, session: DeviceSession, turn: ConversationTurn

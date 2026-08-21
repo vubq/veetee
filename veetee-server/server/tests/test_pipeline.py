@@ -438,3 +438,262 @@ async def test_fake_pipeline_cancellation_and_stale_suppression() -> None:
 
     assert outcome == PipelineOutcome.CANCELLED
     assert turn.state == TurnState.ABORTED
+
+
+class StreamingMockLLM:
+    """Mock LLM that streams custom deltas with delays to test pipeline timing."""
+
+    def __init__(self, deltas: list[tuple[float, str]]) -> None:
+        self.deltas = deltas
+        self.stream_closed = False
+
+    def generate_stream(
+        self,
+        messages: list[Any],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> Any:
+        class StreamIter:
+            def __init__(self, outer: StreamingMockLLM) -> None:
+                self.outer = outer
+                self.index = 0
+
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                if self.index >= len(self.outer.deltas):
+                    raise StopAsyncIteration
+                delay, text = self.outer.deltas[self.index]
+                self.index += 1
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                from veetee_server.pipeline.llm import LLMTextDeltaEvent
+                return LLMTextDeltaEvent(delta=text, index=self.index)
+
+            async def aclose(self) -> None:
+                self.outer.stream_closed = True
+
+        return StreamIter(self)
+
+
+class FailingStreamingMockLLM(StreamingMockLLM):
+    def generate_stream(
+        self,
+        messages: list[Any],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> Any:
+        outer = self
+
+        async def stream() -> Any:
+            try:
+                raise RuntimeError("provider unavailable")
+                yield
+            finally:
+                outer.stream_closed = True
+
+        return stream()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_first_audio_starts_before_llm_completion() -> None:
+    session = DeviceSession(device_id="d1", client_id="c1")
+    session.accept()
+    await session.start_turn()
+
+    encoder = FakeOpusEncoder(pcm_format=UPLINK_PCM_FORMAT)
+    decoder = FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT)
+    pcm = _make_speech_pcm(amplitude=1000)
+    opus = encoder.encode(pcm)
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(payload=opus, generation=session.ingress_queue.generation)
+        )
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(
+                payload=encoder.encode(_make_silence_pcm()),
+                generation=session.ingress_queue.generation,
+            )
+        )
+    session.begin_processing()
+
+    # LLM yields sentence 1, delays 0.15s, then yields sentence 2
+    mock_llm = StreamingMockLLM([
+        (0.0, "Xin chào quý khách, rất vui được gặp bạn! "),
+        (0.15, "Hôm nay tôi có thể giúp gì cho bạn?"),
+    ])
+
+    pipeline = FakePipeline(
+        decoder=decoder,
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=1,
+        vad=FakeVAD(start_frames=2, end_silence_frames=2),
+        asr=FakeASR(default_text="Alo"),
+        llm=mock_llm,
+        tts=FakeTTS(chunks_per_sentence=2, delay_seconds=0.01),
+    )
+
+    sink = RecordingSink()
+    pipeline_task = asyncio.create_task(pipeline.run(session, sink))
+    await asyncio.sleep(0.05)
+
+    assert not pipeline_task.done()
+    assert any(isinstance(event, TtsChunkEvent) for event in sink.events)
+
+    outcome = await pipeline_task
+
+    assert outcome == PipelineOutcome.COMPLETED
+    # Check that TtsStartEvent and first TtsSentenceStartEvent happened for sentence 1
+    tts_starts = [e for e in sink.events if isinstance(e, TtsSentenceStartEvent)]
+    assert len(tts_starts) == 2
+    assert tts_starts[0].text == "Xin chào quý khách, rất vui được gặp bạn!"
+    assert "giúp gì cho bạn" in tts_starts[1].text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_max_wait_flush_on_stalled_llm_delta() -> None:
+    session = DeviceSession(device_id="d1", client_id="c1")
+    session.accept()
+    await session.start_turn()
+
+    encoder = FakeOpusEncoder(pcm_format=UPLINK_PCM_FORMAT)
+    decoder = FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT)
+    pcm = _make_speech_pcm(amplitude=1000)
+    opus = encoder.encode(pcm)
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(payload=opus, generation=session.ingress_queue.generation)
+        )
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(
+                payload=encoder.encode(_make_silence_pcm()),
+                generation=session.ingress_queue.generation,
+            )
+        )
+    session.begin_processing()
+
+    # Delta 1 is incomplete (no terminal punct). Second delta stalls for 0.4s (> max_wait 0.35s)
+    mock_llm = StreamingMockLLM([
+        (0.0, "Hôm nay tôi muốn nói với bạn một điều rất quan trọng "),
+        (0.40, "đó là hãy giữ gìn sức khỏe."),
+    ])
+
+    from veetee_server.pipeline.segmenter import TTSSegmenterConfig, TTSTokenSegmenter
+    config = TTSSegmenterConfig(first_min_chars=20, min_chars=30, max_wait_seconds=0.15)
+
+    pipeline = FakePipeline(
+        decoder=decoder,
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=1,
+        vad=FakeVAD(start_frames=2, end_silence_frames=2),
+        asr=FakeASR(default_text="Alo"),
+        llm=mock_llm,
+        tts=FakeTTS(chunks_per_sentence=2, delay_seconds=0.01),
+        segmenter=TTSTokenSegmenter(config=config),
+    )
+
+    sink = RecordingSink()
+    outcome = await pipeline.run(session, sink)
+
+    assert outcome == PipelineOutcome.COMPLETED
+    tts_starts = [e for e in sink.events if isinstance(e, TtsSentenceStartEvent)]
+    assert len(tts_starts) == 2
+    assert "một điều rất quan trọng" in tts_starts[0].text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_stream_cancellation_closes_stream() -> None:
+    session = DeviceSession(device_id="d1", client_id="c1")
+    session.accept()
+    await session.start_turn()
+
+    encoder = FakeOpusEncoder(pcm_format=UPLINK_PCM_FORMAT)
+    decoder = FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT)
+    pcm = _make_speech_pcm(amplitude=1000)
+    opus = encoder.encode(pcm)
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(payload=opus, generation=session.ingress_queue.generation)
+        )
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(
+                payload=encoder.encode(_make_silence_pcm()),
+                generation=session.ingress_queue.generation,
+            )
+        )
+    session.begin_processing()
+
+    # Long streaming deltas with delay
+    mock_llm = StreamingMockLLM([
+        (0.0, "Câu thứ nhất dài để ngắt segment. "),
+        (0.05, "Câu thứ hai tiếp tục xuất hiện. "),
+        (0.05, "Câu thứ ba tiếp tục xuất hiện. "),
+    ])
+
+    pipeline = FakePipeline(
+        decoder=decoder,
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=1,
+        vad=FakeVAD(start_frames=2, end_silence_frames=2),
+        asr=FakeASR(default_text="Alo"),
+        llm=mock_llm,
+        tts=FakeTTS(chunks_per_sentence=5, delay_seconds=0.05),
+    )
+
+    sink = RecordingSink()
+
+    async def abort_task() -> None:
+        await asyncio.sleep(0.03)
+        await session.abort_turn()
+
+    task = asyncio.create_task(abort_task())
+    outcome = await pipeline.run(session, sink)
+    await task
+
+    assert outcome == PipelineOutcome.CANCELLED
+    assert mock_llm.stream_closed is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_propagates_llm_failure_and_closes_stream() -> None:
+    session = DeviceSession(device_id="d1", client_id="c1")
+    session.accept()
+    await session.start_turn()
+
+    encoder = FakeOpusEncoder(pcm_format=UPLINK_PCM_FORMAT)
+    opus = encoder.encode(_make_speech_pcm())
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(payload=opus, generation=session.ingress_queue.generation)
+        )
+    for _ in range(3):
+        await session.ingress_queue.put(
+            AudioQueueItem(
+                payload=encoder.encode(_make_silence_pcm()),
+                generation=session.ingress_queue.generation,
+            )
+        )
+    session.begin_processing()
+    mock_llm = FailingStreamingMockLLM([])
+    pipeline = FakePipeline(
+        decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=1,
+        vad=FakeVAD(start_frames=2, end_silence_frames=2),
+        asr=FakeASR(default_text="Alo"),
+        llm=mock_llm,
+        tts=FakeTTS(),
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await pipeline.run(session, RecordingSink())
+
+    assert mock_llm.stream_closed is True

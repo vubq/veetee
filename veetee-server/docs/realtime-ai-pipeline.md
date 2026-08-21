@@ -236,9 +236,30 @@ fallback khi chưa có policy.
 - Circuit breaker chỉ tính lỗi transient, dùng monotonic cooldown và chỉ cho một probe
   half-open. Readiness fail-closed khi OmniRoute được bật nhưng runtime/key chưa sẵn sàng.
 
-Giới hạn M2.3: pipeline hiện gom final text rồi tái dùng sentence splitter deterministic;
-token-to-TTS segmentation và first-audio streaming thuộc M2.4. Tool call được parse nhưng
-chưa execute vì prompt/tool registry thuộc M3.
+Tool call được parse nhưng chưa execute vì prompt/tool registry thuộc M3.
+
+## Bộ ghép token và tách đoạn TTS (M2.4 - Quyết định Veetee)
+
+`TTSTokenSegmenter` nhận text delta trực tiếp từ LLM và phát đoạn nói trước khi generation
+kết thúc. Pipeline giữ tối đa hai đoạn chờ TTS; khi TTS chậm, backpressure dừng việc kéo
+delta mới từ HTTP stream thay vì tăng bộ nhớ không giới hạn.
+
+- Đoạn đầu dùng ngưỡng ngắn hơn để giảm first-audio latency; đoạn sau ưu tiên dấu câu và
+  độ dài tự nhiên. `max_chars` là hard bound và `max_wait_seconds` flush câu không có dấu
+  chấm ngay cả khi provider tạm ngừng gửi delta.
+- Dấu câu trong số thập phân, ngày, viết tắt Việt/Anh, URL, quote và bracket không tạo
+  điểm cắt sớm. Fragment giữa các delta vẫn dùng cùng state.
+- Normalization chỉ áp dụng tại ranh giới TTS: bỏ Markdown/ký hiệu trực quan và emoji,
+  giữ label của Markdown link, thay URL thô bằng cụm `liên kết`. Transcript và LLM event
+  gốc không bị sửa.
+- Các ngưỡng được cấu hình bằng `VEETEE_TTS_SEGMENT_FIRST_MIN_CHARS`,
+  `VEETEE_TTS_SEGMENT_MIN_CHARS`, `VEETEE_TTS_SEGMENT_MAX_CHARS` và
+  `VEETEE_TTS_SEGMENT_MAX_WAIT_SECONDS`; cấu hình không hợp lệ fail startup.
+- Cancellation hủy đúng một pending read, đóng LLM stream và ngăn segment/chunk thuộc turn
+  cũ. Lỗi provider được truyền lên supervisor, không bị đổi thành completion rỗng.
+
+Giới hạn M2.4: TTS vẫn là deterministic fake provider. Native Gemini streaming, key pool,
+resample và Opus production thuộc M2.5.
 
 ## Device simulator (M1.7 - Quyết định Veetee)
 

@@ -22,6 +22,7 @@ from veetee_server.domain.session import DeviceSession
 from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
 from .llm import FakeLLM, LLMNotReadyError, OmniRouteLLMAdapter, OmniRouteLLMRuntime
 from .orchestrator import FakePipeline
+from .segmenter import TTSSegmenterConfig, TTSTokenSegmenter
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
@@ -66,6 +67,14 @@ def build_fake_pipeline(
     else:
         llm = FakeLLM()
 
+    segmenter_config = TTSSegmenterConfig(
+        first_min_chars=settings.tts_segment_first_min_chars,
+        min_chars=settings.tts_segment_min_chars,
+        max_chars=settings.tts_segment_max_chars,
+        max_wait_seconds=settings.tts_segment_max_wait_seconds,
+    )
+    segmenter = TTSTokenSegmenter(config=segmenter_config)
+
     return FakePipeline(
         decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
         encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
@@ -74,6 +83,7 @@ def build_fake_pipeline(
         asr=asr,
         llm=llm,
         tts=FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence),
+        segmenter=segmenter,
     )
 
 

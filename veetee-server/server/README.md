@@ -89,5 +89,10 @@ uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
 
 Key chỉ đọc từ environment và không được log. Thiếu key làm `/readyz` trả `503` thay vì
 rơi về fake LLM. Adapter không tự fallback sang Qwen; có thể đổi model bằng config sau khi
-đã duyệt policy. M2.3 buffer final text trước FakeLLM sentence splitter; token-to-TTS
-segmenter thích ứng thuộc M2.4.
+đã duyệt policy.
+
+M2.4 chuyển text delta trực tiếp qua token-to-TTS segmenter và bắt đầu TTS khi đoạn đầu
+sẵn sàng, không chờ LLM hoàn tất. Các ngưỡng mặc định là 24 ký tự cho đoạn đầu, 48 ký tự
+cho đoạn sau, hard bound 220 ký tự và max wait 0,35 giây; xem `.env.example` để cấu hình.
+Normalization bỏ Markdown, URL thô và ký hiệu không phù hợp để đọc thành tiếng. TTS ở mốc
+này vẫn là fake provider; Gemini TTS thuộc M2.5.

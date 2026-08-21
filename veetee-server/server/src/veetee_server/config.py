@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     llm_circuit_breaker_cooldown_seconds: float = Field(default=10.0, gt=0)
     llm_max_response_bytes: int = Field(default=1048576, gt=0)
 
+    tts_segment_first_min_chars: int = Field(default=24, gt=0)
+    tts_segment_min_chars: int = Field(default=48, gt=0)
+    tts_segment_max_chars: int = Field(default=220, gt=0)
+    tts_segment_max_wait_seconds: float = Field(default=0.35, gt=0.0)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -201,6 +206,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "llm_total_timeout_seconds must be strictly greater than "
                 "llm_first_token_timeout_seconds"
+            )
+        if self.tts_segment_max_chars < max(
+            self.tts_segment_first_min_chars, self.tts_segment_min_chars
+        ):
+            raise ValueError(
+                "tts_segment_max_chars must cover both tts_segment_first_min_chars and "
+                "tts_segment_min_chars"
             )
         return self
 
