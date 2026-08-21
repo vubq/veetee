@@ -66,6 +66,30 @@ class PromptVersion:
     description: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class AgentPromptProfile:
+    """User-configurable agent role without changing invariant platform policy."""
+
+    role_prompt: str = ""
+    personality: str = ""
+    address_style: str = ""
+    language: str = "vi-VN"
+    detail_level: str = "adaptive"
+    response_style: str = ""
+
+    def render(self) -> str:
+        """Renders configured fields as agent data for the prompt assembler."""
+        fields = (
+            ("Vai trò tổng quát", self.role_prompt),
+            ("Tính cách", self.personality),
+            ("Cách xưng hô", self.address_style),
+            ("Ngôn ngữ", self.language),
+            ("Mức độ chi tiết", self.detail_level),
+            ("Phong cách trả lời", self.response_style),
+        )
+        return "\n".join(f"{label}: {value.strip()}" for label, value in fields if value.strip())
+
+
 class PromptRegistry:
     """Registry for managing versioned prompt templates and eval snapshots."""
 

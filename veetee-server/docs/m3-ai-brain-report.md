@@ -5,6 +5,11 @@ Ngày hoàn tất: 2026-08-21.
 ## Phạm vi đã triển khai
 
 - Prompt registry typed với version, checksum, snapshot và base prompt tiếng Việt.
+- Response length policy thích ứng: không ép câu trả lời vào 1-3 câu hoặc số token
+  cố định; nội dung giải thích, tài liệu và kể chuyện dài được phép tiếp tục qua
+  nhiều đoạn phù hợp để phát giọng nói.
+- `AgentPromptProfile` cung cấp boundary cho role prompt, personality, cách xưng hô,
+  ngôn ngữ, mức độ chi tiết và response style.
 - Context assembler giữ thứ tự platform policy, agent role, conversation policy,
   runtime context, memory, tool contract, history và user turn.
 - Memory/tool output được đóng gói là untrusted data; dữ liệu không được nâng thành
@@ -49,6 +54,8 @@ Ngày hoàn tất: 2026-08-21.
   chưa được khóa.
 - Prompt/context boundary đã sẵn sàng để nối vào pipeline; việc thay thế toàn bộ
   pipeline fake bằng agent runtime và provider tool thật cần provider/config tương ứng.
+- Agent profile hiện là typed runtime boundary; CRUD, persistence, API và Console
+  binding để Mốc 4. Frontend ConfigDialog hiện vẫn là mock UI, chưa lưu cấu hình thật.
 
 ## Audit an toàn
 

@@ -11,7 +11,7 @@ from veetee_server.prompt.base_prompts import (
     DEFAULT_CONVERSATION_POLICY_V1,
     DEFAULT_PLATFORM_POLICY_V1,
 )
-from veetee_server.prompt.registry import compute_prompt_checksum
+from veetee_server.prompt.registry import AgentPromptProfile, compute_prompt_checksum
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,7 @@ class ContextAssembler:
         self,
         *,
         agent_role: str | None = None,
+        agent_profile: AgentPromptProfile | None = None,
         runtime_context: dict[str, Any] | None = None,
         memories: list[dict[str, Any]] | None = None,
         tools_schema: list[dict[str, Any]] | None = None,
@@ -78,8 +79,12 @@ class ContextAssembler:
         system_parts.append(f"=== PLATFORM POLICY ===\n{self.platform_policy.strip()}")
 
         # 2. Agent Role (Customizable)
-        if agent_role and agent_role.strip():
-            system_parts.append(f"=== AGENT ROLE ===\n{agent_role.strip()}")
+        rendered_profile = agent_profile.render() if agent_profile else ""
+        configured_role = "\n".join(
+            value for value in (rendered_profile, agent_role or "") if value.strip()
+        )
+        if configured_role:
+            system_parts.append(f"=== AGENT ROLE ===\n{configured_role.strip()}")
 
         # 3. Conversation Policy (Invariant)
         system_parts.append(

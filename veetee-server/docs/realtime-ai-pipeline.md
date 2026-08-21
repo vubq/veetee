@@ -323,6 +323,10 @@ M3 cung cấp các boundary mở rộng cho prompt, dialogue, intent, tool, MCP 
 có version/checksum; context giữ thứ tự instruction cố định và đánh dấu memory/tool output
 là dữ liệu không tin cậy. Intent strategy được chọn qua config hoặc registry, không dùng
 keyword để giả lập hiểu ngôn ngữ và không fallback âm thầm khi strategy chưa đăng ký.
+Độ dài phản hồi thích ứng theo yêu cầu: không có quy tắc ép mọi câu trả lời vào 1-3 câu;
+story, giải thích hoặc tài liệu dài được stream thành nhiều đoạn TTS. `AgentPromptProfile`
+cho phép boundary cấu hình role prompt, personality, cách xưng hô, ngôn ngữ, detail level
+và response style; Console/API/persistence thật thuộc Mốc 4.
 
 Tool chỉ được gọi qua registry allowlist, schema, policy, confirmation, timeout,
 cancellation, giới hạn output và audit. MCP adapter kiểm tra JSON-RPC, pagination và

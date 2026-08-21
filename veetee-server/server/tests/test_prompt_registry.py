@@ -4,6 +4,7 @@ import pytest
 
 from veetee_server.pipeline.llm.contract import ChatMessage
 from veetee_server.prompt import (
+    AgentPromptProfile,
     ContextAssembler,
     PromptComponent,
     PromptRegistry,
@@ -132,6 +133,24 @@ def test_context_assembler_ordering_1_to_8():
     assert messages[1].content == "Chào bạn"
     assert messages[2].role == "user"
     assert messages[2].content == "Mấy giờ rồi?"
+
+
+def test_agent_prompt_profile_renders_configurable_role_fields():
+    profile = AgentPromptProfile(
+        role_prompt="Bạn là người kể chuyện lịch sử.",
+        personality="Điềm tĩnh và giàu hình ảnh.",
+        detail_level="đầy đủ khi người dùng yêu cầu",
+    )
+    assembled = ContextAssembler().assemble(agent_profile=profile)
+    assert "Bạn là người kể chuyện lịch sử." in assembled.system_prompt
+    assert "Điềm tĩnh và giàu hình ảnh." in assembled.system_prompt
+    assert "đầy đủ khi người dùng yêu cầu" in assembled.system_prompt
+
+
+def test_conversation_policy_allows_adaptive_long_responses():
+    prompt = create_default_prompt_registry().get("conversation_policy").template
+    assert "Không ép mọi câu trả lời vào số câu hoặc số token cố định" in prompt
+    assert "kể chuyện nhiều phút" in prompt
 
 
 def test_context_assembler_prompt_injection_sanitization():
