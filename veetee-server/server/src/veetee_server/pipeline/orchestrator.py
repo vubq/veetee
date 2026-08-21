@@ -41,7 +41,7 @@ from .events import (
     TtsStopEvent,
 )
 from .framing import build_downlink_frame
-from .llm import FakeLLM
+from .llm import ChatMessage, FakeLLM, LLMProvider, LLMTextDeltaEvent
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD
 
@@ -70,7 +70,7 @@ class FakePipeline:
         protocol_version: int,
         vad: FakeVAD | BaseVADStream | Any,
         asr: ASRProvider,
-        llm: FakeLLM,
+        llm: LLMProvider,
         tts: FakeTTS,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
@@ -117,6 +117,25 @@ class FakePipeline:
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
 
+        messages = [ChatMessage(role="user", content=transcript)]
+        text_deltas: list[str] = []
+        stream = self.llm.generate_stream(messages)
+        try:
+            async for event in stream:
+                if not self._alive(
+                    session, turn, expected_queue_generation=expected_queue_gen
+                ):
+                    return PipelineOutcome.CANCELLED
+                if isinstance(event, LLMTextDeltaEvent) and not event.reasoning:
+                    text_deltas.append(event.delta)
+        finally:
+            await stream.aclose()
+
+        full_text = "".join(text_deltas).strip()
+        if not full_text:
+            return PipelineOutcome.NO_UTTERANCE
+        sentences = FakeLLM().segments(full_text)
+
         try:
             generation = session.begin_streaming()
         except InvalidTransitionError:
@@ -129,7 +148,7 @@ class FakePipeline:
         await sink.emit(TtsStartEvent(session_id=str(session.id)))
 
         sentence_id = 0
-        for sentence in self.llm.segments(transcript):
+        for sentence in sentences:
             if not self._alive(
                 session, turn, generation, expected_queue_generation=expected_queue_gen
             ):

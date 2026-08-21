@@ -129,6 +129,23 @@ class Settings(BaseSettings):
     asr_language: str = Field(default="vi", min_length=1)
     asr_local_files_only: bool = Field(default=True)
 
+    # LLM Provider & OmniRoute Groq Settings (M2.3)
+    llm_provider: Literal["fake", "omniroute"] = Field(default="fake")
+    llm_omniroute_base_url: str = Field(default="http://127.0.0.1:20128/v1", min_length=1)
+    llm_api_key: str = Field(default="")
+    llm_omniroute_model: str = Field(default="groq/openai/gpt-oss-120b", min_length=1)
+    llm_omniroute_reasoning_effort: Literal["none", "low", "medium", "high"] = Field(
+        default="low"
+    )
+    llm_connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    llm_first_token_timeout_seconds: float = Field(default=5.0, gt=0)
+    llm_total_timeout_seconds: float = Field(default=30.0, gt=0)
+    llm_max_concurrency: int = Field(default=4, gt=0)
+    llm_admission_timeout_seconds: float = Field(default=2.0, gt=0)
+    llm_circuit_breaker_failure_threshold: int = Field(default=3, gt=0)
+    llm_circuit_breaker_cooldown_seconds: float = Field(default=10.0, gt=0)
+    llm_max_response_bytes: int = Field(default=1048576, gt=0)
+
     @field_validator("device_websocket_public_url")
     @classmethod
     def _validate_public_url(cls, v: str) -> str:
@@ -170,6 +187,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "asr_total_timeout_seconds must be strictly greater than "
                 "asr_admission_timeout_seconds"
+            )
+        if self.llm_provider == "omniroute" and not self.llm_omniroute_base_url.strip():
+            raise ValueError(
+                "llm_omniroute_base_url must be specified when llm_provider is omniroute"
+            )
+        if self.llm_total_timeout_seconds <= self.llm_connect_timeout_seconds:
+            raise ValueError(
+                "llm_total_timeout_seconds must be strictly greater than "
+                "llm_connect_timeout_seconds"
+            )
+        if self.llm_total_timeout_seconds <= self.llm_first_token_timeout_seconds:
+            raise ValueError(
+                "llm_total_timeout_seconds must be strictly greater than "
+                "llm_first_token_timeout_seconds"
             )
         return self
 

@@ -83,6 +83,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await asr_runtime.shutdown()
                 asr_runtime = None
 
+    llm_runtime = getattr(app.state, "llm_runtime", None)
+    if settings.llm_provider == "omniroute" and llm_runtime is None:
+        try:
+            from .pipeline.llm import OmniRouteLLMConfig, OmniRouteLLMRuntime
+
+            llm_cfg = OmniRouteLLMConfig(
+                base_url=settings.llm_omniroute_base_url,
+                api_key=settings.llm_api_key,
+                model=settings.llm_omniroute_model,
+                reasoning_effort=settings.llm_omniroute_reasoning_effort,
+                connect_timeout_seconds=settings.llm_connect_timeout_seconds,
+                first_token_timeout_seconds=settings.llm_first_token_timeout_seconds,
+                total_timeout_seconds=settings.llm_total_timeout_seconds,
+                max_concurrency=settings.llm_max_concurrency,
+                admission_timeout_seconds=settings.llm_admission_timeout_seconds,
+                circuit_breaker_failure_threshold=settings.llm_circuit_breaker_failure_threshold,
+                circuit_breaker_cooldown_seconds=settings.llm_circuit_breaker_cooldown_seconds,
+                max_response_bytes=settings.llm_max_response_bytes,
+            )
+            llm_runtime = OmniRouteLLMRuntime(config=llm_cfg)
+            await llm_runtime.startup()
+            app.state.llm_runtime = llm_runtime
+        except Exception as exc:
+            logger.error("Failed to start LLM runtime: %s", exc)
+            if llm_runtime is not None:
+                await llm_runtime.shutdown()
+                llm_runtime = None
+
     app.state.ready = True
     try:
         yield
@@ -97,6 +125,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await vad_runtime.shutdown()
         if asr_runtime is not None:
             await asr_runtime.shutdown()
+        if llm_runtime is not None:
+            await llm_runtime.shutdown()
         logger.info("server_stopped")
 
 
@@ -169,6 +199,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "not_ready", "reason": "asr_runtime_not_ready"},
+                )
+        if runtime_settings.llm_provider == "omniroute":
+            llm_runtime = getattr(app.state, "llm_runtime", None)
+            if llm_runtime is None or not llm_runtime.is_ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "llm_runtime_not_ready"},
                 )
         return JSONResponse(content={"status": "ready", "service": runtime_settings.app_name})
 

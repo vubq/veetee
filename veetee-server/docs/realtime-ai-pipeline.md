@@ -215,6 +215,31 @@ Giới hạn M2.2:
 - Model thật (`mad1999/pho-whisper-small-ct2` / `medium`) cần artifact/cache local; mặc định server không tải model từ Hugging Face khi startup.
 - Không kết luận WER/CER nếu không có bộ test audio có ground truth.
 
+## OmniRoute Groq LLM adapter (M2.3 - Quyết định Veetee)
+
+`veetee_server.pipeline.llm` cung cấp typed streaming contract và runtime HTTP
+application-scoped. Model mặc định là `groq/openai/gpt-oss-120b` với
+`reasoning_effort=low`; `groq/qwen/qwen3.6-27b` chỉ là candidate cấu hình được, không tự
+fallback khi chưa có policy.
+
+- Gửi OpenAI-compatible `POST /chat/completions` với `stream=true`; key chỉ đến từ
+  `VEETEE_LLM_API_KEY` hoặc injected client trong test.
+- Decoder SSE incremental hỗ trợ UTF-8/HTTP chunk bị cắt, comment, multi-line `data`,
+  blank-line dispatch và `[DONE]`; giới hạn tổng byte response.
+- Text delta và tool-call delta được typed; tool fragment merge theo `index`, usage và
+  finish reason được giữ trong completion event. Reasoning content bị bỏ, không gửi TTS,
+  history hoặc log.
+- Admission, connect, first-output và total timeout là lỗi typed riêng. Cancellation đóng
+  HTTP response trong `finally` và trả semaphore permit.
+- HTTP `401/403`, `429` (`Retry-After` capped), `5xx`, malformed/oversized/empty response
+  được normalize mà không log response body, prompt, tool arguments hoặc key.
+- Circuit breaker chỉ tính lỗi transient, dùng monotonic cooldown và chỉ cho một probe
+  half-open. Readiness fail-closed khi OmniRoute được bật nhưng runtime/key chưa sẵn sàng.
+
+Giới hạn M2.3: pipeline hiện gom final text rồi tái dùng sentence splitter deterministic;
+token-to-TTS segmentation và first-audio streaming thuộc M2.4. Tool call được parse nhưng
+chưa execute vì prompt/tool registry thuộc M3.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc

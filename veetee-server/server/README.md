@@ -3,7 +3,8 @@
 M1.1 tạo nền tảng FastAPI tối thiểu; M1.3 thêm Device WebSocket; M1.4 thêm OTA/config
 discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TTS
 deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
-ASR. Native Opus/resampler, database, LLM và TTS thật chưa được tích hợp.
+ASR và M2.3 thêm OmniRoute Groq LLM. Native Opus/resampler, database và TTS thật chưa
+được tích hợp.
 
 ## Local commands
 
@@ -31,8 +32,8 @@ credential.
 
 M1.6 nhận audio hợp lệ trong khoảng `listen/start` đến `listen/stop`, rồi phát theo thứ
 tự `stt`, `tts/start`, `tts/sentence_start`, binary audio đã đóng frame theo protocol và
-`tts/stop`. Các biến `VEETEE_PIPELINE_*` chỉ cấu hình fake pipeline local; pipeline không
-gọi model, mạng hoặc secret. `abort` và `listen/start` mới tăng I/O generation, purge
+`tts/stop`. Các biến `VEETEE_PIPELINE_*` chỉ cấu hình pipeline local; với provider mặc
+định `fake`, pipeline không gọi model, mạng hoặc secret. `abort` và `listen/start` mới tăng I/O generation, purge
 control/audio cũ và reset pacer.
 
 M1.7 cung cấp simulator đọc golden vector tại `../contracts/device/`. Chạy server ở một
@@ -76,3 +77,17 @@ Thiếu model local hoặc warmup lỗi làm `/readyz` trả `503`; server khôn
 startup theo cấu hình mặc định. Dependency Linux x86_64 bao gồm CUDA 12 cuBLAS/cuDNN
 project-local để CTranslate2 không phụ thuộc vào venv khác. Không log PCM hay transcript
 trong runtime provider.
+
+OmniRoute Groq M2.3 dùng OpenAI-compatible streaming API tại local gateway:
+
+```bash
+VEETEE_LLM_PROVIDER=omniroute \
+VEETEE_LLM_API_KEY='<local-secret>' \
+VEETEE_LLM_OMNIROUTE_MODEL=groq/openai/gpt-oss-120b \
+uv run uvicorn veetee_server.app:app --host 127.0.0.1 --port 8080
+```
+
+Key chỉ đọc từ environment và không được log. Thiếu key làm `/readyz` trả `503` thay vì
+rơi về fake LLM. Adapter không tự fallback sang Qwen; có thể đổi model bằng config sau khi
+đã duyệt policy. M2.3 buffer final text trước FakeLLM sentence splitter; token-to-TTS
+segmenter thích ứng thuộc M2.4.

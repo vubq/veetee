@@ -20,7 +20,7 @@ from veetee_server.config import Settings
 from veetee_server.domain.session import DeviceSession
 
 from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
-from .llm import FakeLLM
+from .llm import FakeLLM, LLMNotReadyError, OmniRouteLLMAdapter, OmniRouteLLMRuntime
 from .orchestrator import FakePipeline
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
@@ -34,6 +34,7 @@ def build_fake_pipeline(
     settings: Settings,
     vad_runtime: SileroVADRuntime | None = None,
     asr_runtime: PhoWhisperRuntime | None = None,
+    llm_runtime: OmniRouteLLMRuntime | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad: FakeVAD | BaseVADStream
@@ -57,13 +58,21 @@ def build_fake_pipeline(
     else:
         asr = FakeASR()
 
+    llm: FakeLLM | OmniRouteLLMAdapter
+    if settings.llm_provider == "omniroute":
+        if llm_runtime is None or not llm_runtime.is_ready:
+            raise LLMNotReadyError("OmniRoute LLM is configured but its runtime is not ready")
+        llm = llm_runtime.create_adapter()
+    else:
+        llm = FakeLLM()
+
     return FakePipeline(
         decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
         encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
         protocol_version=session.protocol_version,
         vad=vad,
         asr=asr,
-        llm=FakeLLM(),
+        llm=llm,
         tts=FakeTTS(chunks_per_sentence=settings.pipeline_tts_chunks_per_sentence),
     )
 
