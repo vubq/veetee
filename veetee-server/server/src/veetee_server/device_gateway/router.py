@@ -103,6 +103,87 @@ def _start_pipeline(
     session.cancellation.create_task(supervise_pipeline(session, websocket, pipeline_task, turn))
 
 
+async def _resolve_session_binding(
+    app_state: Any, session: DeviceSession, timeout_seconds: float = 2.0
+) -> None:
+    """Resolves the tenant binding once per connection after a valid hello.
+
+    The lookup requires BOTH handshake ids to match one activated device row
+    and that row to carry an agent assignment. Any mismatch, unbound device,
+    disabled persistence or database error leaves the session unbound: the
+    connection continues with default server behavior and never reads another
+    tenant's profile. The result stays fixed until reconnect re-resolves it.
+    """
+    repository = getattr(app_state, "device_repository", None)
+    if repository is None:
+        return
+    try:
+        stored = await asyncio.wait_for(
+            asyncio.to_thread(
+                repository.get_by_device_and_client_id, session.device_id, session.client_id
+            ),
+            timeout=timeout_seconds,
+        )
+    except Exception:
+        logger.exception(
+            "binding_resolution_failed",
+            extra={"context": {"session_id": str(session.id)}},
+        )
+        return
+    if stored is None or stored.agent_id is None:
+        logger.debug(
+            "session_unbound_default_behavior",
+            extra={
+                "context": {
+                    "session_id": str(session.id),
+                    "device_id": session.device_id,
+                }
+            },
+        )
+        return
+    session.owner_user_id = stored.owner_user_id
+    session.agent_id = stored.agent_id
+
+
+async def _begin_processing_turn(
+    session: DeviceSession, app_state: Any, timeout_seconds: float = 2.0
+) -> None:
+    """Single LISTENING->PROCESSING boundary shared by manual stop and auto endpoint.
+
+    Transitions the current capture turn, then resolves the latest immutable
+    agent runtime snapshot for the bound owner+agent pair and attaches it to
+    the turn. Every failure mode is fail-safe (persistence disabled, binding
+    absent, database error, agent deleted between turns): the turn keeps
+    ``snapshot=None`` and the pipeline uses default server behavior instead of
+    raising into the receive loop. A new turn (including a fresh barge-in
+    capture) always resolves a fresh snapshot at this boundary.
+    """
+    session.begin_processing()
+    turn = session.current_turn
+    if turn is None or session.owner_user_id is None or session.agent_id is None:
+        return
+    repository = getattr(app_state, "agent_repository", None)
+    if repository is None:
+        return
+    try:
+        snapshot = await asyncio.wait_for(
+            asyncio.to_thread(
+                repository.snapshot,
+                session.owner_user_id,
+                session.agent_id,
+            ),
+            timeout=timeout_seconds,
+        )
+    except Exception:
+        logger.exception(
+            "agent_snapshot_resolution_failed",
+            extra={"context": {"session_id": str(session.id)}},
+        )
+        return
+    if snapshot is not None:
+        turn.snapshot = snapshot
+
+
 async def _cleanup_session(
     session: DeviceSession, registry: DeviceSessionRegistry | None
 ) -> None:
@@ -236,6 +317,14 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
         )
         session.negotiate_features(hello_msg.features)
         session.accept()
+
+        # The hello is valid: resolve the tenant binding for this connection
+        # from BOTH ids before the first turn can start. Failures fall back
+        # to default server behavior; the binding is fixed until reconnect.
+        await _resolve_session_binding(
+            websocket.app.state, session, settings.agent_snapshot_timeout_seconds
+        )
+
         if registry is not None:
             await registry.register(session, websocket)
 
@@ -416,7 +505,11 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     auto_endpoint.close()
                     auto_endpoint = None
                     if session.state is SessionState.LISTENING:
-                        session.begin_processing()
+                        await _begin_processing_turn(
+                            session,
+                            websocket.app.state,
+                            settings.agent_snapshot_timeout_seconds,
+                        )
                         _start_pipeline(session, settings, websocket, websocket.app.state)
                 continue
 
@@ -590,7 +683,11 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                             auto_endpoint.close()
                             auto_endpoint = None
                         if session.state is SessionState.LISTENING:
-                            session.begin_processing()
+                            await _begin_processing_turn(
+                                session,
+                                websocket.app.state,
+                                settings.agent_snapshot_timeout_seconds,
+                            )
                             _start_pipeline(session, settings, websocket, websocket.app.state)
                 except InvalidTransitionError:
                     # Out-of-sync listen frames (e.g. stop before a streamable

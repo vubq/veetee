@@ -55,6 +55,6 @@ psql -d veetee -f server/migrations/004_login_rate_limit.sql
   rotation và CSRF/CORS production policy vẫn cần harden trước production.
 - Device online state cần adapter đọc `DeviceSessionRegistry` thay vì placeholder false.
 - History hiện lưu metadata conversation; raw transcript/audio không được lưu mặc định.
-- Agent config đã persistence nhưng runtime conversation chưa reload immutable snapshot
-  theo agent ở mỗi generation. Console không hiển thị workflow cấu hình này cho tới khi
-  policy snapshot theo turn được duyệt và triển khai.
+- Prerequisite snapshot đã nối role/profile và LLM model vào runtime theo từng turn; lượt
+  đang chạy bất biến và lượt kế tiếp nhận version mới. Voice, memory, intent và tool policy
+  vẫn chưa expose vì realtime stage tương ứng chưa tiêu thụ các field này.

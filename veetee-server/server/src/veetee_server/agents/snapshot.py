@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -21,8 +23,18 @@ class AgentRuntimeSnapshot:
     intent_strategy: str
     memory_enabled: bool
     memory_min_confidence: float
-    tool_policy: dict[str, Any]
-    memory_policy: dict[str, Any]
+    tool_policy: Mapping[str, Any]
+    memory_policy: Mapping[str, Any]
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return value
 
 
 def snapshot_from_agent(agent: Any) -> AgentRuntimeSnapshot:
@@ -44,6 +56,6 @@ def snapshot_from_agent(agent: Any) -> AgentRuntimeSnapshot:
         intent_strategy=profile["intent_strategy"],
         memory_enabled=profile["memory_enabled"],
         memory_min_confidence=profile["memory_min_confidence"],
-        tool_policy=dict(profile["tool_policy"]),
-        memory_policy=dict(profile["memory_policy"]),
+        tool_policy=_freeze(profile["tool_policy"]),
+        memory_policy=_freeze(profile["memory_policy"]),
     )

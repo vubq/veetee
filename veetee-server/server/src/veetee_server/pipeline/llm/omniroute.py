@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -279,11 +279,23 @@ class OmniRouteLLMRuntime:
     def is_ready(self) -> bool:
         return self._started and not self._closed and self._client is not None
 
-    def create_adapter(self) -> OmniRouteLLMAdapter:
+    def create_adapter(self, model_override: str | None = None) -> OmniRouteLLMAdapter:
+        """Creates a turn-scoped adapter over the app-scoped shared resources.
+
+        ``model_override`` swaps only the request model on a copy of the
+        frozen config (per adapter/turn); the HTTP client, circuit breaker and
+        concurrency semaphore stay application-scoped and are never recreated.
+        An empty or ``None`` override keeps the runtime default model.
+        """
         if not self.is_ready or self._client is None:
             raise LLMNotReadyError("OmniRoute runtime is not ready")
+        config = (
+            replace(self.config, model=model_override)
+            if model_override and model_override.strip()
+            else self.config
+        )
         return OmniRouteLLMAdapter(
-            self.config,
+            config,
             self._client,
             self._breaker,
             self._semaphore,

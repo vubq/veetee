@@ -18,6 +18,7 @@ from veetee_server.audio.queue import BoundedAudioQueue, OverflowPolicy
 from .errors import CleanupTimeoutError, InvalidTransitionError, StaleGenerationError
 
 if TYPE_CHECKING:
+    from veetee_server.agents.snapshot import AgentRuntimeSnapshot
     from veetee_server.pipeline.downlink import DownlinkQueue
 
 
@@ -142,6 +143,10 @@ class ConversationTurn:
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=_now)
     cancellation: CancellationScope = field(default_factory=CancellationScope)
+    # Immutable agent config resolved once at the LISTENING->PROCESSING
+    # boundary. Later database changes must never affect this turn; the next
+    # turn resolves a fresh snapshot. ``None`` keeps default server behavior.
+    snapshot: AgentRuntimeSnapshot | None = None
     _state: TurnState = field(default=TurnState.CREATED, init=False, repr=False)
     _generation: Generation | None = field(default=None, init=False, repr=False)
 
@@ -207,6 +212,13 @@ class ConversationTurn:
 class DeviceSession:
     device_id: str
     client_id: str
+    # Tenant binding resolved once per connection right after a valid hello,
+    # using BOTH handshake ids. Both fields are set together or left None;
+    # a mismatched or unbound device keeps None so the session falls back to
+    # default server behavior and never reads another tenant's profile.
+    # The binding stays fixed until the connection ends; reconnect re-resolves.
+    owner_user_id: UUID | None = None
+    agent_id: UUID | None = None
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=_now)
     cancellation: CancellationScope = field(default_factory=CancellationScope)

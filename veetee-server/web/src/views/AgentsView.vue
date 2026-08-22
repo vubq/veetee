@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import AgentCard from '@/components/AgentCard.vue'
+import AgentConfigDialog from '@/components/AgentConfigDialog.vue'
 import AgentRenameDialog from '@/components/AgentRenameDialog.vue'
 import AddDeviceDialog from '@/components/AddDeviceDialog.vue'
 import CreateAgentDialog from '@/components/CreateAgentDialog.vue'
@@ -13,7 +14,7 @@ import type { AgentSummary } from '@/types/agent'
 import { deleteAgent, listAgents, listConversations, listDevices } from '@/api/controlPlane'
 
 const query = ref('')
-const dialog = ref<'add-device' | 'create-agent' | 'history' | 'devices' | null>(null)
+const dialog = ref<'add-device' | 'create-agent' | 'history' | 'devices' | 'config' | null>(null)
 const selectedAgent = ref<AgentSummary | null>(null)
 const addDeviceAgentId = ref<string | null>(null)
 
@@ -26,8 +27,7 @@ const deleteTarget = ref<AgentSummary | null>(null)
 const deleting = ref(false)
 const deleteError = ref('')
 
-async function loadAgents() {
-  loading.value = true
+async function fetchAgentsData() {
   loadError.value = ''
   try {
     // Lỗi /conversations chỉ được làm suy giảm metadata, không được xóa trắng agents/devices.
@@ -47,6 +47,13 @@ async function loadAgents() {
     }))
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : 'Không tải được danh sách trợ lý.'
+  }
+}
+
+async function loadAgents() {
+  loading.value = true
+  try {
+    await fetchAgentsData()
   } finally {
     loading.value = false
   }
@@ -72,7 +79,7 @@ async function deviceChanged() {
   }
 }
 
-function show(type: 'history' | 'devices', agent: AgentSummary) {
+function show(type: 'history' | 'devices' | 'config', agent: AgentSummary) {
   selectedAgent.value = agent
   dialog.value = type
 }
@@ -93,7 +100,21 @@ function addCreatedAgent(agent: AgentSummary) {
 
 function applyRenamed(updated: AgentSummary) {
   const index = agents.value.findIndex((agent) => agent.id === updated.id)
-  if (index >= 0) agents.value[index] = updated
+  if (index >= 0) {
+    const current = agents.value[index]
+    agents.value[index] = {
+      ...updated,
+      deviceCount: current.deviceCount,
+      online: current.online,
+      lastConversation: current.lastConversation,
+    }
+  }
+}
+
+// Xung đột phiên bản (409): tải lại danh sách từ máy chủ mà không bật trạng thái
+// loading toàn trang để người dùng thấy dữ liệu mới khi mở lại hộp thoại.
+async function reloadAgents() {
+  await fetchAgentsData()
 }
 
 async function confirmDelete() {
@@ -140,6 +161,7 @@ const filteredAgents = computed(() => {
           :agent="agent"
           @history="show('history', agent)"
           @devices="show('devices', agent)"
+          @configure="show('config', agent)"
           @rename="renameTarget = agent"
           @delete="deleteTarget = agent"
         />
@@ -156,6 +178,14 @@ const filteredAgents = computed(() => {
     <DeviceDialog :open="dialog === 'devices'" :agent="selectedAgent" @close="dialog = null" @changed="deviceChanged" />
 
     <AgentRenameDialog :open="Boolean(renameTarget)" :agent="renameTarget" @close="renameTarget = null" @renamed="applyRenamed" />
+
+    <AgentConfigDialog
+      :open="dialog === 'config'"
+      :agent="selectedAgent"
+      @close="dialog = null"
+      @saved="applyRenamed"
+      @reload="reloadAgents"
+    />
 
     <UiDialog
       :open="Boolean(deleteTarget)"

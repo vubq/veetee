@@ -33,6 +33,32 @@ class DeviceSessionRegistry:
         async with self._lock:
             return {session.device_id for session, _ in self._sessions.values()}
 
+    async def close_device(
+        self, device_id: str, code: int = 1008, reason: str = "Device unbound"
+    ) -> int:
+        """Revokes every active connection for a device after unbind."""
+        async with self._lock:
+            matched = [
+                (session_id, session, websocket)
+                for session_id, (session, websocket) in self._sessions.items()
+                if session.device_id == device_id
+            ]
+            for session_id, _, _ in matched:
+                self._sessions.pop(session_id, None)
+        for _, session, websocket in matched:
+            try:
+                await session.close()
+            except Exception:
+                logger.exception(
+                    "error_closing_unbound_device_session",
+                    extra={"context": {"session_id": str(session.id)}},
+                )
+            try:
+                await websocket.close(code=code, reason=reason)
+            except Exception:
+                pass
+        return len(matched)
+
     @property
     def active_count(self) -> int:
         return len(self._sessions)

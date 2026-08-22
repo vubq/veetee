@@ -87,9 +87,13 @@ def bind_device(
 
 
 @router.delete("/devices/{device_id}", status_code=204)
-def unbind_device(request: Request, device_id: UUID, user_id: CurrentUser) -> None:
-    if _device_repository(request).delete(user_id, device_id) is None:
+async def unbind_device(request: Request, device_id: UUID, user_id: CurrentUser) -> None:
+    device = _device_repository(request).delete(user_id, device_id)
+    if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
+    registry = getattr(request.app.state, "device_session_registry", None)
+    if isinstance(registry, DeviceSessionRegistry):
+        await registry.close_device(device.device_id)
 
 
 @router.post("/ota/artifacts", status_code=201)

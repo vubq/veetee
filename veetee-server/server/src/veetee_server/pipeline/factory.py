@@ -7,7 +7,9 @@ and ``app.state.pacer_factory``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from veetee_server.audio.codec import (
     DOWNLINK_PCM_FORMAT,
@@ -17,6 +19,7 @@ from veetee_server.audio.codec import (
 )
 from veetee_server.audio.pacer import PacketPacer
 from veetee_server.config import Settings
+from veetee_server.control_plane.catalog import allowed_agent_model_ids
 from veetee_server.domain.session import DeviceSession
 
 from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
@@ -33,8 +36,29 @@ from .tts import (
 )
 from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
+if TYPE_CHECKING:
+    from veetee_server.agents.snapshot import AgentRuntimeSnapshot
+
+logger = logging.getLogger("veetee.pipeline")
+
 PipelineFactory = Callable[[DeviceSession, Settings], FakePipeline]
 PacerFactory = Callable[[Settings], PacketPacer]
+
+
+def _snapshot_model_override(session: DeviceSession) -> str | None:
+    """Returns a validated turn-scoped LLM model or the server default."""
+    turn = session.current_turn
+    snapshot: AgentRuntimeSnapshot | None = turn.snapshot if turn is not None else None
+    model_id = snapshot.model_id.strip() if snapshot is not None else ""
+    if not model_id:
+        return None
+    if model_id not in allowed_agent_model_ids():
+        logger.warning(
+            "agent_snapshot_model_rejected",
+            extra={"context": {"session_id": str(session.id)}},
+        )
+        return None
+    return model_id
 
 
 def build_vad_stream(
@@ -78,7 +102,9 @@ def build_fake_pipeline(
     if settings.llm_provider == "omniroute":
         if llm_runtime is None or not llm_runtime.is_ready:
             raise LLMNotReadyError("OmniRoute LLM is configured but its runtime is not ready")
-        llm = llm_runtime.create_adapter()
+        llm = llm_runtime.create_adapter(
+            model_override=_snapshot_model_override(session)
+        )
     else:
         llm = FakeLLM()
 

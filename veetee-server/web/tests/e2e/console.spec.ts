@@ -102,12 +102,174 @@ test('tạo, đổi tên và xóa trợ lý đều gọi API thật', async ({ p
   assertNoErrors()
 })
 
-test('không quảng bá cấu hình runtime chưa có hiệu lực', async ({ page }) => {
+test('cấu hình trợ lý lưu đúng payload, giữ giá trị ẩn và card cập nhật', async ({ page }) => {
   const assertNoErrors = failOnBrowserErrors(page)
   const state = createState()
   await login(page, state)
-  await expect(page.getByRole('button', { name: 'Cấu hình' })).toHaveCount(0)
-  await expect(page.getByText('groq/openai/gpt-oss-120b')).toBeVisible()
+
+  // Giữ lời gọi catalog để quan sát trạng thái loading một cách deterministic.
+  state.holdPatterns.push({ method: 'GET', path: '/api/v1/control/providers' })
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+  await expect(page.getByTestId('config-catalog-loading')).toContainText('Đang tải danh sách mô hình...')
+  await expect(page.getByText('lượt hội thoại tiếp theo')).toBeVisible()
+
+  await state.heldRequests.at(-1)!.respond(200, [
+    { kind: 'asr', provider_id: 'pho_whisper', models: ['mad1999/pho-whisper-small-ct2'], secret_configurable: false },
+    { kind: 'llm', provider_id: 'omniroute', models: ['groq/openai/gpt-oss-120b', 'groq/qwen/qwen3.6-27b'], secret_configurable: false },
+    { kind: 'tts', provider_id: 'vieneu', models: ['local'], secret_configurable: false },
+  ])
+
+  // Catalog thật được mock ở HTTP boundary: chỉ mô hình kind=llm xuất hiện trong danh sách.
+  const modelTrigger = page.getByRole('combobox', { name: 'Mô hình ngôn ngữ' })
+  await expect(modelTrigger).toBeVisible()
+  await modelTrigger.click()
+  const modelList = page.getByRole('listbox')
+  await expect(modelList.getByRole('option', { name: 'groq/openai/gpt-oss-120b' })).toBeVisible()
+  await expect(modelList.getByRole('option', { name: 'groq/qwen/qwen3.6-27b' })).toBeVisible()
+  await expect(modelList.getByRole('option', { name: 'mad1999/pho-whisper-small-ct2' })).toHaveCount(0)
+  await expect(modelList.getByRole('option', { name: 'local' })).toHaveCount(0)
+  await modelList.getByRole('option', { name: 'groq/qwen/qwen3.6-27b' }).click()
+
+  await page.getByTestId('config-role-prompt').fill('Đồng hành kiên nhẫn với trẻ nhỏ.')
+  await page.getByTestId('config-personality').fill('Ấm áp, kiên nhẫn với trẻ nhỏ')
+  await page.getByTestId('config-address-style').fill('Xưng chú với trẻ nhỏ')
+  await page.getByRole('combobox', { name: 'Mức độ chi tiết' }).click()
+  await page.getByRole('option', { name: 'Chi tiết đầy đủ' }).click()
+  await page.getByTestId('config-save').click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toHaveCount(0)
+
+  const put = state.requests.find((request) => request.method === 'PUT' && request.path === `/api/v1/control/agents/${state.agents[0]?.id}`)
+  expect(put?.body).toMatchObject({
+    name: 'Trợ lý gia đình',
+    role_prompt: 'Đồng hành kiên nhẫn với trẻ nhỏ.',
+    personality: 'Ấm áp, kiên nhẫn với trẻ nhỏ',
+    address_style: 'Xưng chú với trẻ nhỏ',
+    language: 'vi-VN',
+    detail_level: 'detailed',
+    response_style: 'balanced',
+    model_id: 'groq/qwen/qwen3.6-27b',
+    // Giá trị không hiển thị phải giữ nguyên khi PUT.
+    voice_id: '',
+    intent_strategy: 'function_call',
+    memory_enabled: true,
+    memory_min_confidence: 0.8,
+    tool_policy: {},
+    memory_policy: {},
+    expected_version: 1,
+  })
+  expect(state.agents[0]?.model_id).toBe('groq/qwen/qwen3.6-27b')
+
+  // Card cập nhật theo dữ liệu mới sau khi lưu.
+  const card = page.locator('.agent-card')
+  await expect(card.getByText('groq/qwen/qwen3.6-27b')).toBeVisible()
+  await expect(card.getByText('Ấm áp, kiên nhẫn với trẻ nhỏ')).toBeVisible()
+  assertNoErrors()
+})
+
+test('lỗi tải provider catalog cho phép thử lại và khôi phục danh sách mô hình', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState({ providersStatus: 500 })
+  await login(page, state)
+
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+  await expect(page.getByTestId('config-catalog-error')).toContainText('Không tải được danh sách mô hình')
+  await expect(page.getByRole('combobox', { name: 'Mô hình ngôn ngữ' })).toHaveCount(0)
+  await expect(page.getByTestId('config-save')).toBeEnabled()
+
+  state.providersStatus = 200
+  await page.getByTestId('config-catalog-retry').click()
+  await expect(page.getByRole('combobox', { name: 'Mô hình ngôn ngữ' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Mô hình ngôn ngữ' }).click()
+  await expect(page.getByRole('option', { name: 'groq/qwen/qwen3.6-27b' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  assertNoErrors()
+})
+
+test('xung đột phiên bản 409 hiển thị lỗi, tải lại dữ liệu mới và đóng', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState({ updateStatus: 409 })
+  await login(page, state)
+
+  const countAgentGets = () => state.requests.filter((request) => request.method === 'GET' && request.path === '/api/v1/control/agents').length
+
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+  await page.getByTestId('config-personality').fill('Bản nháp bị xung đột')
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-error')).toContainText('vừa được thay đổi ở nơi khác')
+  await expect(page.getByTestId('config-reload')).toBeVisible()
+
+  // Server chưa nhận thay đổi nào vì PUT trả 409.
+  expect(state.agents[0]?.personality).toBe('')
+  const getsBeforeReload = countAgentGets()
+
+  state.updateStatus = 200
+  await page.getByTestId('config-reload').click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toHaveCount(0)
+  await expect.poll(countAgentGets).toBe(getsBeforeReload + 1)
+
+  // Mở lại hộp thoại: form hiện giá trị trên máy chủ, không phải bản nháp cũ.
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+  await expect(page.getByTestId('config-personality')).toHaveValue('')
+  await expect(page.getByTestId('config-error')).toHaveCount(0)
+  assertNoErrors()
+})
+
+test('không đóng hộp thoại khi PUT đang chạy và giữ metadata card sau lưu', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState()
+  const agentId = state.agents[0]!.id
+  state.devices = [{ id: 'device-1', device_id: 'dev-1', agent_id: agentId, alias: '', online: true }]
+  state.conversations = [{ id: 'conv-1', agent_id: agentId, device_id: 'device-1', title: 'Cuộc trò chuyện đã giữ', summary: '', locale: 'vi-VN', turn_count: 1, started_at: '2026-08-22T01:00:00Z', ended_at: null }]
+  state.holdPatterns.push({ method: 'PUT', path: `/api/v1/control/agents/${state.agents[0]!.id}` })
+  await login(page, state)
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await page.getByTestId('config-personality').fill('Cấu hình mới')
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-save')).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+
+  await state.heldRequests.at(-1)!.respond(200, {
+    ...state.agents[0],
+    personality: 'Cấu hình mới',
+    version: 2,
+  })
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toHaveCount(0)
+  const card = page.locator('.agent-card')
+  await expect(card.getByText('Thiết bị (1)')).toBeVisible()
+  await expect(card.getByText('Trực tuyến')).toBeVisible()
+  await expect(card.getByText('Cuộc trò chuyện đã giữ')).toBeVisible()
+  assertNoErrors()
+})
+
+test('hộp thoại cấu hình không tràn ngang, focus đúng, Escape đóng và không có control no-op', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState()
+  await login(page, state)
+
+  await page.getByRole('button', { name: 'Cấu hình' }).click()
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+
+  // Autofocus vào trường đầu tiên của form.
+  await expect(page.getByTestId('config-role-prompt')).toBeFocused()
+
+  // Đúng số control được expose: 4 ô chữ + 3 combobox, không switch/tab/nhãn Sắp có.
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('textbox')).toHaveCount(4)
+  await expect(dialog.getByRole('combobox')).toHaveCount(3)
+  await expect(dialog.getByRole('switch')).toHaveCount(0)
+  await expect(dialog.getByRole('tab')).toHaveCount(0)
+  await expect(dialog.getByText('Sắp có')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: 'Lịch sử' })).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('heading', { name: 'Cấu hình trợ lý' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Cấu hình' })).toBeFocused()
   assertNoErrors()
 })
 

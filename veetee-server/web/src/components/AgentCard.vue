@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock3, Cpu, Ellipsis, History, Pencil, Sparkles, Trash2, UserRound } from '@lucide/vue'
+import { Clock3, Cpu, Ellipsis, History, Pencil, Settings2, Sparkles, Trash2, UserRound } from '@lucide/vue'
 
 import UiDropdown, { type DropdownItem } from '@/components/UiDropdown.vue'
 import type { AgentSummary } from '@/types/agent'
@@ -8,7 +8,7 @@ defineProps<{
   agent: AgentSummary
 }>()
 
-const emit = defineEmits<{ history: []; devices: []; rename: []; delete: [] }>()
+const emit = defineEmits<{ history: []; devices: []; configure: []; rename: []; delete: [] }>()
 
 const menuItems: DropdownItem[] = [
   { label: 'Đổi tên', value: 'rename', icon: Pencil },
@@ -58,6 +58,7 @@ function handleMenuSelect(value: string) {
     <div class="agent-actions">
       <button type="button" @click="emit('history')"><History :size="16" />Lịch sử</button>
       <button type="button" @click="emit('devices')"><Cpu :size="16" />Thiết bị ({{ agent.deviceCount }})</button>
+      <button type="button" data-testid="agent-configure" @click="emit('configure')"><Settings2 :size="16" />Cấu hình</button>
     </div>
   </article>
 </template>

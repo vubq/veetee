@@ -35,13 +35,22 @@ PostgreSQL được kiểm riêng trong test suite server. Test fail khi có l�
 - Logo Veetee tự thiết kế dạng mặt robot vuông bo nhẹ, mắt sắc, xanh lục–cyan.
 - Bộ component UI dùng chung: button, search, dropdown, select, switch, tab, dialog,
   table, badge, empty state và card.
-- Agent create/rename/delete, conversation, device
-  bind/unbind và OTA artifact/release/publish đều gọi API Veetee thật.
-- Console chưa hiển thị workflow cấu hình agent runtime: backend lưu được profile nhưng
-  realtime pipeline chưa áp immutable agent snapshot theo turn, nên không quảng bá control
-  này như một chức năng đã hoạt động.
-- Control chưa có backend không được hiển thị như chức năng khả dụng; các tab được giữ để
-  định hướng chỉ xuất hiện ở trạng thái disabled và có nhãn `Sắp có`.
+- Agent create/rename/delete, conversation, device bind/unbind, OTA artifact/release/publish
+  và cấu hình agent runtime đều gọi API Veetee thật.
+- Hộp thoại “Cấu hình trợ lý” tối thiểu chỉ expose các trường đã có hiệu lực realtime trong
+  pipeline: vai trò (`role_prompt`), tính cách (`personality`), cách xưng hô (`address_style`),
+  ngôn ngữ (`language`), mức độ chi tiết (`detail_level`), phong cách trả lời (`response_style`)
+  và mô hình LLM lấy từ provider catalog của máy chủ (`kind=llm`). Copy giao diện nói rõ thay
+  đổi áp dụng từ lượt hội thoại tiếp theo và lượt hội thoại đang chạy giữ nguyên cấu hình cũ.
+- Các trường chưa hiển thị (giọng nói, bộ nhớ, intent/tool) không được đưa vào UI nhưng vẫn
+  được gửi nguyên giá trị hiện có khi PUT thông qua mapping `AgentSummary`. Provider catalog
+  tải trong hộp thoại có trạng thái loading/error/thử lại; xung đột phiên bản optimistic
+  (HTTP 409) hiển thị lỗi kèm hành động tải lại dữ liệu mới và đóng; request generation chống
+  phản hồi stale khi đóng/mở hộp thoại hoặc đổi trợ lý.
+- Thiết bị bound resolve snapshot ở ranh giới processing; thay đổi đã lưu chỉ áp dụng từ
+  lượt sau. Unbind đóng session thiết bị hiện hành để không tiếp tục dùng binding cũ.
+- Control chưa có backend không được hiển thị như chức năng khả dụng; các mục này chỉ xuất
+  hiện ở trạng thái disabled với nhãn `Sắp có` (ví dụ menu tạo từ mẫu/nhập cấu hình).
 
 Giao diện tham chiếu bố cục và hành vi quan sát từ `https://xiaozhi.me/console/agents`,
 nhưng dùng tài sản nhận diện Veetee riêng và không chứa mã nguồn/tài sản thương hiệu của

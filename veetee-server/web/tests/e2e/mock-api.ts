@@ -31,12 +31,15 @@ export type MockApiState = {
   devices: Array<Record<string, unknown>>
   memories: Array<Record<string, unknown>>
   conversations: Array<Record<string, unknown>>
-  requests: Array<{ method: string; path: string; contentType: string }>
+  requests: Array<{ method: string; path: string; contentType: string; body?: Record<string, unknown> }>
   bindStatus: number
   uploadStatus: number
   conversationStatus: number
   logoutStatus: number
   logoutNetworkError: boolean
+  // Trạng thái trả về cho GET /providers (catalog nhà cung cấp) và PUT /agents/{id}.
+  providersStatus: number
+  updateStatus: number
   // Các request khớp pattern sẽ bị giữ lại (deferred) thay vì trả lời ngay;
   // test giải phóng thủ công qua heldRequests để mô phỏng response đến muộn.
   holdPatterns: Array<{ method: string; path: string }>
@@ -96,6 +99,8 @@ export function createState(overrides: Partial<MockApiState> = {}): MockApiState
     conversationStatus: 200,
     logoutStatus: 204,
     logoutNetworkError: false,
+    providersStatus: 200,
+    updateStatus: 200,
     holdPatterns: [],
     heldRequests: [],
     ...overrides,
@@ -114,13 +119,24 @@ function bodyJson(request: Request): Record<string, unknown> {
   return request.postDataJSON() as Record<string, unknown>
 }
 
+// Ghi lại body JSON của request để test xác minh payload; GET/DELETE không có body.
+function optionalBody(request: Request): Record<string, unknown> | undefined {
+  const text = request.postData()
+  if (!text) return undefined
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
 export async function installMockApi(page: Page, state: MockApiState) {
   await page.route('http://127.0.0.1:8080/api/v1/control/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname + url.search
     const method = request.method()
-    state.requests.push({ method, path, contentType: await request.headerValue('content-type') ?? '' })
+    state.requests.push({ method, path, contentType: await request.headerValue('content-type') ?? '', body: optionalBody(request) })
 
     if (path === '/api/v1/control/auth/login' && method === 'POST') {
       if (state.loginStatus !== 200) return json(route, state.loginStatus, { detail: 'Thông tin đăng nhập không đúng' })
@@ -175,8 +191,13 @@ export async function installMockApi(page: Page, state: MockApiState) {
     }
     const agentMatch = url.pathname.match(/\/api\/v1\/control\/agents\/([^/]+)$/)
     if (agentMatch && method === 'PUT') {
+      if (state.updateStatus !== 200) {
+        const detail = state.updateStatus === 409 ? 'Agent changed or does not exist' : 'Update failed'
+        return json(route, state.updateStatus, { detail })
+      }
       const index = state.agents.findIndex((item) => item.id === agentMatch[1])
-      const updated = { ...state.agents[index], ...bodyJson(request), version: (state.agents[index]?.version ?? 0) + 1 }
+      const { expected_version: _expectedVersion, ...payload } = bodyJson(request)
+      const updated = { ...state.agents[index], ...payload, version: (state.agents[index]?.version ?? 0) + 1 }
       state.agents[index] = updated as AgentWire
       return json(route, 200, updated)
     }
@@ -205,7 +226,14 @@ export async function installMockApi(page: Page, state: MockApiState) {
       return route.fulfill({ status: 204 })
     }
     if (url.pathname === '/api/v1/control/providers' && method === 'GET') {
-      return json(route, 200, [{ kind: 'llm', provider_id: 'omniroute', models: ['groq/openai/gpt-oss-120b'], secret_configurable: false }])
+      if (state.providersStatus !== 200) return json(route, state.providersStatus, { detail: 'Không tải được danh sách nhà cung cấp' })
+      // Phản chiếu đúng shape và nội dung catalog backend (kind asr/llm/tts) để UI
+      // phải lọc kind=llm mới lấy được danh sách mô hình.
+      return json(route, 200, [
+        { kind: 'asr', provider_id: 'pho_whisper', models: ['mad1999/pho-whisper-small-ct2'], secret_configurable: false },
+        { kind: 'llm', provider_id: 'omniroute', models: ['groq/openai/gpt-oss-120b', 'groq/qwen/qwen3.6-27b'], secret_configurable: false },
+        { kind: 'tts', provider_id: 'vieneu', models: ['local'], secret_configurable: false },
+      ])
     }
     if (url.pathname === '/api/v1/control/memories' && method === 'GET') return json(route, 200, state.memories)
     const memoryMatch = url.pathname.match(/\/api\/v1\/control\/memories\/([^/]+)$/)

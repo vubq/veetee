@@ -780,6 +780,25 @@ async def test_registry_unregister_is_idempotent() -> None:
     assert registry.active_count == 0
 
 
+@pytest.mark.asyncio
+async def test_registry_close_device_revokes_only_matching_sessions() -> None:
+    registry = DeviceSessionRegistry()
+    target = DeviceSession(device_id="device-target", client_id="client-1")
+    other = DeviceSession(device_id="device-other", client_id="client-2")
+    target.accept()
+    other.accept()
+    target_ws = StubWebSocket()
+    other_ws = StubWebSocket()
+    await registry.register(target, cast(Any, target_ws))
+    await registry.register(other, cast(Any, other_ws))
+
+    assert await registry.close_device("device-target") == 1
+    assert registry.active_count == 1
+    assert target.state is SessionState.CLOSED
+    assert target_ws.closed == [(1008, "Device unbound")]
+    assert other_ws.closed == []
+
+
 def test_readiness_reflects_gateway_token_configuration() -> None:
     # 1. Non-test env with empty token -> not ready (503)
     app_no_token = create_app(Settings(environment="production", device_gateway_token=""))

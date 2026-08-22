@@ -448,6 +448,17 @@ class DeviceRepository:
             ).fetchone()
             return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
 
+    def get_by_device_and_client_id(self, device_id: str, client_id: str) -> StoredDevice | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, "
+                "last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE device_id = %s AND client_id = %s",
+                (device_id, client_id),
+            ).fetchone()
+            return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
+
     def list(self, owner_user_id: uuid.UUID) -> list[StoredDevice]:
         with self.database.connection() as conn:
             rows = conn.execute(

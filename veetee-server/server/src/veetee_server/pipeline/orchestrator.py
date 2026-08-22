@@ -33,6 +33,7 @@ from veetee_server.domain.session import (
     SessionState,
     TurnState,
 )
+from veetee_server.prompt import ContextAssembler
 
 from .asr import ASRProvider
 from .events import (
@@ -44,7 +45,7 @@ from .events import (
     TtsStopEvent,
 )
 from .framing import build_downlink_frame
-from .llm import ChatMessage, LLMProvider, LLMStreamEvent, LLMTextDeltaEvent
+from .llm import LLMProvider, LLMStreamEvent, LLMTextDeltaEvent
 from .segmenter import TTSTokenSegmenter
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD
@@ -78,6 +79,7 @@ class FakePipeline:
         llm: LLMProvider | Any,
         tts: FakeTTS | Any,
         segmenter: TTSTokenSegmenter | None = None,
+        context_assembler: ContextAssembler | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         if protocol_version not in (1, 2, 3):
@@ -90,6 +92,7 @@ class FakePipeline:
         self.llm = llm
         self.tts = tts
         self.segmenter = segmenter or TTSTokenSegmenter()
+        self.context_assembler = context_assembler or ContextAssembler()
         self._now_ms = now_ms
 
     async def run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
@@ -134,7 +137,15 @@ class FakePipeline:
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
 
-        messages = [ChatMessage(role="user", content=transcript)]
+        # Platform and conversation policies are baseline for every turn.
+        # A bound snapshot only adds its profile inside that hierarchy.
+        assembled = self.context_assembler.assemble(
+            agent_profile=(
+                turn.snapshot.prompt_profile if turn.snapshot is not None else None
+            ),
+            user_turn=transcript,
+        )
+        messages = assembled.messages
         self.segmenter.reset()
 
         segment_queue: asyncio.Queue[str | Exception | object] = asyncio.Queue(maxsize=2)

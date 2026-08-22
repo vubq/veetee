@@ -197,6 +197,7 @@ class Settings(BaseSettings):
     tool_max_output_chars: int = Field(default=2048, gt=0)
     memory_min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     memory_recency_decay_half_life_hours: float = Field(default=24.0, gt=0)
+    agent_snapshot_timeout_seconds: float = Field(default=2.0, gt=0)
     # Control-plane auth hardening (M4/M5 audit): login quota is persisted per
     # redacted identifier hash in PostgreSQL with a sliding time window.
     login_rate_limit: int = Field(default=10, gt=0)

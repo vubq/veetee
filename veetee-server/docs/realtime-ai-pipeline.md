@@ -338,6 +338,33 @@ Runtime mặc định chỉ khởi tạo registry và executor; tool/provider th
 từ adapter có cấu hình. Các local tool deterministic trong test harness không được coi là
 provider sản phẩm thật.
 
+## Agent runtime snapshot theo turn (prerequisite trước M6)
+
+Sau hello hợp lệ, gateway đối chiếu đồng thời `Device-Id` và `Client-Id` với binding
+PostgreSQL. Chỉ row khớp cả hai định danh và có `agent_id` mới gắn `owner_user_id +
+agent_id` vào session; binding được giữ đến reconnect. Thiết bị chưa bind, client ID sai,
+persistence lỗi hoặc agent đã bị xóa dùng cấu hình server mặc định và không được đọc
+profile tenant khác. Unbind chủ động đóng mọi WebSocket đang giữ device binding để thu hồi
+authorization ngay.
+
+Tại đúng boundary `LISTENING -> PROCESSING`, gateway lấy `AgentRuntimeSnapshot` mới nhất
+với deadline `VEETEE_AGENT_SNAPSHOT_TIMEOUT_SECONDS` và gắn vào `ConversationTurn`.
+Snapshot gồm profile prompt, model và policy được freeze sâu; thay đổi Console giữa lượt
+không tác động lượt đang chạy, còn lượt tiếp theo resolve version mới. Manual stop và auto
+endpoint dùng cùng boundary; barge-in tạo turn mới rồi resolve snapshot khi capture mới
+chuyển sang processing.
+
+Mọi turn đều đi qua `ContextAssembler` để giữ platform/conversation policy; snapshot chỉ
+bổ sung `AgentPromptProfile` vào đúng tầng role. `model_id` không rỗng được kiểm tra lại
+theo LLM catalog và tạo adapter turn-scoped dùng chung HTTP client, semaphore và circuit
+breaker application-scoped. Giá trị rỗng/không hợp lệ fail-safe về model server mặc định.
+
+Console prerequisite chỉ expose các field đã được pipeline tiêu thụ thật: role prompt,
+personality, address style, language, detail level, response style và LLM model. Voice,
+memory, intent và tool policy vẫn được giữ nguyên khi update nhưng chưa hiển thị cho tới
+khi các stage realtime tương ứng thực sự dùng chúng. Đây chưa phải bàn giao Mốc 6 feature
+parity.
+
 ## Device simulator (M1.7 - Quyết định Veetee)
 
 `veetee_server.simulator` là client contract độc lập ngoài `references/`. Simulator đọc

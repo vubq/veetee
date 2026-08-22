@@ -73,6 +73,7 @@ watch(
       dialogStack.push(dialogId)
       document.body.classList.add('dialog-open')
       await nextTick()
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
       const preferredFocus = panel.value?.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
       preferredFocus?.focus() ?? focusableElements()[0]?.focus()
       return
