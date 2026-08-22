@@ -71,6 +71,36 @@ class LoginAttempt(NamedTuple):
     retry_after_seconds: int
 
 
+#: Persisted agent profile columns shared by every agent read/write path so
+#: repositories cannot drift apart on the stored schema.
+AGENT_PROFILE_FIELDS: tuple[str, ...] = (
+    "role_prompt",
+    "personality",
+    "address_style",
+    "language",
+    "detail_level",
+    "response_style",
+    "model_id",
+    "voice_id",
+    "intent_strategy",
+    "memory_enabled",
+    "memory_min_confidence",
+    "tool_policy",
+    "memory_policy",
+)
+
+AGENT_SELECT_COLUMNS = (
+    "id, owner_user_id, name, version, " + ", ".join(AGENT_PROFILE_FIELDS)
+)
+
+#: Full agent configuration columns including the tenant-unique name.
+AGENT_CONFIG_FIELDS: tuple[str, ...] = ("name", *AGENT_PROFILE_FIELDS)
+
+
+def agent_set_clause(fields: tuple[str, ...]) -> str:
+    return ", ".join(f"{field} = %s" for field in fields)
+
+
 @dataclass(frozen=True, slots=True)
 class StoredAgent:
     id: uuid.UUID
@@ -86,6 +116,23 @@ class StoredAgent:
             "version": self.version,
             **self.profile,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class Actor:
+    """Typed authentication context containing identity, role, and lifecycle status."""
+
+    user_id: uuid.UUID
+    role: str
+    status: str
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
 class UserRepository:
@@ -144,12 +191,18 @@ class UserRepository:
                     "rate_limited", None, None, self._retry_after_seconds(row, rate_window_seconds)
                 )
 
+            # Migration 005 guarantees the status column with default 'active'.
             user_row = connection.execute(
-                "SELECT id, password_hash FROM veetee_users WHERE email = %s", (email,)
+                "SELECT id, password_hash, status FROM veetee_users WHERE email = %s",
+                (email,),
             ).fetchone()
+
             if user_row is None:
                 # Equalize verification cost with the known-account path.
                 verify_password(password, _TIMING_EQUALIZER_HASH)
+            elif cast(str, user_row[2]) == "suspended":
+                verify_password(password, cast(str, user_row[1]))
+                user_row = None
             elif not verify_password(password, cast(str, user_row[1])):
                 user_row = None
 
@@ -159,6 +212,11 @@ class UserRepository:
                     (uuid.uuid4(), identifier_hash),
                 )
                 return LoginAttempt("invalid_credentials", None, None, 0)
+
+            connection.execute(
+                "UPDATE veetee_users SET last_login_at = now() WHERE id = %s",
+                (user_row[0],),
+            )
 
             raw_token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -181,15 +239,27 @@ class UserRepository:
         remaining = rate_window_seconds - (datetime.now(UTC) - oldest_at).total_seconds()
         return max(1, math.ceil(remaining))
 
-    def resolve_token(self, raw_token: str) -> uuid.UUID | None:
+    def resolve_actor(self, raw_token: str) -> Actor | None:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         with self.database.connection() as connection:
             row = connection.execute(
-                "SELECT user_id FROM veetee_sessions "
-                "WHERE token_hash = %s AND revoked_at IS NULL AND expires_at > now()",
+                "SELECT s.user_id, u.role, u.status "
+                "FROM veetee_sessions s "
+                "JOIN veetee_users u ON u.id = s.user_id "
+                "WHERE s.token_hash = %s AND s.revoked_at IS NULL AND s.expires_at > now()",
                 (token_hash,),
             ).fetchone()
-            return cast(uuid.UUID, row[0]) if row else None
+            if row is None:
+                return None
+            return Actor(
+                user_id=cast(uuid.UUID, row[0]),
+                role=cast(str, row[1]),
+                status=cast(str, row[2]),
+            )
+
+    def resolve_token(self, raw_token: str) -> uuid.UUID | None:
+        actor = self.resolve_actor(raw_token)
+        return actor.user_id if actor else None
 
     def revoke_token(self, raw_token: str) -> bool:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -236,10 +306,7 @@ class AgentRepository:
     def list(self, owner_user_id: uuid.UUID) -> list[StoredAgent]:
         with self.database.connection() as connection:
             rows = connection.execute(
-                "SELECT id, owner_user_id, name, version, role_prompt, personality, "
-                "address_style, language, detail_level, response_style, model_id, voice_id, "
-                "intent_strategy, memory_enabled, memory_min_confidence, "
-                "tool_policy, memory_policy "
+                f"SELECT {AGENT_SELECT_COLUMNS} "
                 "FROM veetee_agents WHERE owner_user_id = %s ORDER BY created_at, id",
                 (owner_user_id,),
             ).fetchall()
@@ -248,10 +315,7 @@ class AgentRepository:
     def get(self, owner_user_id: uuid.UUID, agent_id: uuid.UUID) -> StoredAgent | None:
         with self.database.connection() as connection:
             row = connection.execute(
-                "SELECT id, owner_user_id, name, version, role_prompt, personality, "
-                "address_style, language, detail_level, response_style, model_id, voice_id, "
-                "intent_strategy, memory_enabled, memory_min_confidence, "
-                "tool_policy, memory_policy "
+                f"SELECT {AGENT_SELECT_COLUMNS} "
                 "FROM veetee_agents WHERE owner_user_id = %s AND id = %s",
                 (owner_user_id, agent_id),
             ).fetchone()
@@ -297,9 +361,7 @@ class AgentRepository:
         expected_version: int,
         data: dict[str, Any],
     ) -> tuple[StoredAgent | None, str | None]:
-        fields = ["name", "role_prompt", "personality", "address_style", "language",
-                  "detail_level", "response_style", "model_id", "voice_id", "intent_strategy",
-                  "memory_enabled", "memory_min_confidence", "tool_policy", "memory_policy"]
+        fields = AGENT_CONFIG_FIELDS
         values = [
             Jsonb(data[field]) if field in {"tool_policy", "memory_policy"} else data[field]
             for field in fields
@@ -309,7 +371,7 @@ class AgentRepository:
                 with connection.transaction():
                     result = connection.execute(
                         "UPDATE veetee_agents SET "
-                        + ", ".join(f"{field} = %s" for field in fields)
+                        + agent_set_clause(fields)
                         + ", version = version + 1, updated_at = now() "
                         "WHERE id = %s AND owner_user_id = %s AND version = %s",
                         (*values, agent_id, owner_user_id, expected_version),
@@ -336,17 +398,7 @@ class AgentRepository:
 
     @staticmethod
     def _row(row: tuple[Any, ...]) -> StoredAgent:
-        profile = dict(
-            zip(
-                (
-                    "role_prompt", "personality", "address_style", "language", "detail_level",
-                    "response_style", "model_id", "voice_id", "intent_strategy",
-                    "memory_enabled", "memory_min_confidence", "tool_policy", "memory_policy",
-                ),
-                row[4:],
-                strict=True,
-            )
-        )
+        profile = dict(zip(AGENT_PROFILE_FIELDS, row[4:], strict=True))
         return StoredAgent(row[0], row[1], row[2], row[3], profile)
 
 
@@ -856,3 +908,153 @@ class FirmwareReleaseRepository:
 
         eligible.sort(key=lambda x: x[0], reverse=True)
         return eligible[0][1]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredProvider:
+    id: uuid.UUID
+    provider_kind: str
+    provider_id: str
+    enabled: bool
+    is_default: bool
+    version: int
+    updated_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "kind": self.provider_kind,
+            "provider_id": self.provider_id,
+            "enabled": self.enabled,
+            "default": self.is_default,
+            "is_default": self.is_default,
+            "version": self.version,
+            "updated_by": str(self.updated_by) if self.updated_by else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ProviderRepository:
+    def __init__(self, database: PostgresDatabase) -> None:
+        self.database = database
+
+    def list(self) -> list[StoredProvider]:
+        with self.database.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, provider_kind, provider_id, enabled, is_default, version, "
+                "updated_by, created_at, updated_at "
+                "FROM veetee_providers ORDER BY provider_kind, provider_id"
+            ).fetchall()
+            return [StoredProvider(*cast(tuple[Any, ...], row)) for row in rows]
+
+    def get(self, provider_kind: str, provider_id: str) -> StoredProvider | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT id, provider_kind, provider_id, enabled, is_default, version, "
+                "updated_by, created_at, updated_at "
+                "FROM veetee_providers WHERE provider_kind = %s AND provider_id = %s",
+                (provider_kind, provider_id),
+            ).fetchone()
+            return StoredProvider(*cast(tuple[Any, ...], row)) if row else None
+
+    def is_provider_enabled(self, provider_kind: str, provider_id: str) -> bool:
+        stored = self.get(provider_kind, provider_id)
+        if stored is None:
+            return True
+        return stored.enabled
+
+    def update_state(
+        self,
+        actor_user_id: uuid.UUID,
+        provider_kind: str,
+        provider_id: str,
+        expected_version: int,
+        enabled: bool | None = None,
+        is_default: bool | None = None,
+    ) -> tuple[StoredProvider | None, str | None]:
+        with self.database.connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (provider_kind,))
+
+            current = self._get_with_conn(conn, provider_kind, provider_id)
+            if current is None:
+                return None, "not_found"
+
+            if current.version != expected_version:
+                return None, "conflict"
+
+            new_enabled = current.enabled if enabled is None else enabled
+            new_is_default = current.is_default if is_default is None else is_default
+
+            if new_is_default and not new_enabled:
+                return None, "default_must_be_enabled"
+
+            if not new_enabled and current.is_default:
+                return None, "cannot_disable_default"
+
+            if not new_is_default and current.is_default:
+                return None, "cannot_unset_default"
+
+            try:
+                with conn.transaction():
+                    if new_is_default and not current.is_default:
+                        conn.execute(
+                            "UPDATE veetee_providers SET is_default = false, "
+                            "version = version + 1, updated_at = now() "
+                            "WHERE provider_kind = %s AND is_default = true",
+                            (provider_kind,),
+                        )
+
+                    res = conn.execute(
+                        "UPDATE veetee_providers SET "
+                        "enabled = %s, is_default = %s, version = version + 1, "
+                        "updated_by = %s, updated_at = now() "
+                        "WHERE provider_kind = %s AND provider_id = %s AND version = %s "
+                        "RETURNING id, provider_kind, provider_id, enabled, is_default, version, "
+                        "updated_by, created_at, updated_at",
+                        (
+                            new_enabled,
+                            new_is_default,
+                            actor_user_id,
+                            provider_kind,
+                            provider_id,
+                            expected_version,
+                        ),
+                    )
+                    row = res.fetchone()
+                    if row is None:
+                        return None, "conflict"
+
+                    updated_provider = StoredProvider(*cast(tuple[Any, ...], row))
+                    record_audit(
+                        self.database,
+                        actor_user_id,
+                        "provider.update",
+                        "provider",
+                        f"{provider_kind}:{provider_id}",
+                        {
+                            "enabled": updated_provider.enabled,
+                            "is_default": updated_provider.is_default,
+                            "version": updated_provider.version,
+                        },
+                        connection=conn,
+                    )
+                    return updated_provider, None
+
+            except psycopg.errors.CheckViolation:
+                return None, "constraint_violation"
+            except psycopg.errors.UniqueViolation:
+                return None, "unique_violation"
+
+    def _get_with_conn(
+        self, conn: psycopg.Connection[tuple[object, ...]], provider_kind: str, provider_id: str
+    ) -> StoredProvider | None:
+        row = conn.execute(
+            "SELECT id, provider_kind, provider_id, enabled, is_default, version, "
+            "updated_by, created_at, updated_at "
+            "FROM veetee_providers WHERE provider_kind = %s AND provider_id = %s",
+            (provider_kind, provider_id),
+        ).fetchone()
+        return StoredProvider(*cast(tuple[Any, ...], row)) if row else None

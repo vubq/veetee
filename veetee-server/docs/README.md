@@ -27,6 +27,7 @@ các thành phần hoặc cùng công nghệ.
 | [Báo cáo QA M2.6](m2.6-qa-report.md) | Full-duplex, barge-in, race/flow-control và QA local 100% |
 | [Báo cáo M3 AI brain](m3-ai-brain-report.md) | Prompt, dialogue, intent, tool/MCP, memory và audit |
 | [Báo cáo M4 control plane](m4-control-plane-report.md) | PostgreSQL, agent API, memory API và Console integration |
+| [Báo cáo thực hiện M6](m6-parity-report.md) | Decision record, ma trận capability và bằng chứng parity tích lũy |
 | [Giao thức và API](protocols-and-apis.md) | Device WebSocket, HTTP/OTA/vision, MCP và manager API |
 | [Provider và cấu hình](providers-and-configuration.md) | Plugin factory, selected modules và config precedence |
 | [Bảo mật, vận hành và kiểm thử](security-operations-testing.md) | Auth, secret, scale, observability và test gap |

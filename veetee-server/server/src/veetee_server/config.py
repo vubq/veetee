@@ -206,6 +206,9 @@ class Settings(BaseSettings):
     database_dsn: str = Field(default="dbname=veetee", min_length=1)
     bootstrap_admin_email: str = Field(default="")
     bootstrap_admin_password: str = Field(default="", repr=False)
+    # M6.2 conversation history: default retention for stored conversations.
+    # Transcript storage itself stays opt-in per conversation (versioned consent).
+    conversation_retention_days: int = Field(default=30, gt=0)
     cors_allowed_origins: str = Field(
         default="http://127.0.0.1:5173,http://localhost:5173"
     )

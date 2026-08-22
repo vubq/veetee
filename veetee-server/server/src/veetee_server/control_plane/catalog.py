@@ -25,3 +25,13 @@ PROVIDER_ID_BY_KIND: dict[str, str] = {
 def allowed_agent_model_ids() -> frozenset[str]:
     """LLM model ids accepted by the agent ``model_id`` field."""
     return frozenset(MODEL_CATALOG["llm"])
+
+
+def get_provider_for_model(model_id: str) -> tuple[str, str] | None:
+    """Returns (kind, provider_id) for a given backend model_id, if cataloged."""
+    if not model_id:
+        return None
+    for kind, models in MODEL_CATALOG.items():
+        if model_id in models:
+            return kind, PROVIDER_ID_BY_KIND[kind]
+    return None

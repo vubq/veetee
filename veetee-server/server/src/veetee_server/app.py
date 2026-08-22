@@ -17,6 +17,7 @@ from .config import (
     get_settings,
     validate_device_websocket_url,
 )
+from .control_plane.history_router import router as history_control_plane_router
 from .control_plane.memory_router import router as memory_control_plane_router
 from .control_plane.provider_router import router as provider_control_plane_router
 from .control_plane.router import router as control_plane_router
@@ -198,11 +199,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     from .persistence import (
         ActivationRepository,
+        AgentLifecycleRepository,
         AgentRepository,
+        ConversationRepository,
         DatabaseConfig,
         DeviceRepository,
         FirmwareReleaseRepository,
         PostgresDatabase,
+        ProviderRepository,
         UserRepository,
     )
 
@@ -223,6 +227,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.device_repository = DeviceRepository(database)
         app.state.activation_repository = ActivationRepository(database)
         app.state.firmware_repository = FirmwareReleaseRepository(database)
+        app.state.provider_repository = ProviderRepository(database)
+        app.state.lifecycle_repository = AgentLifecycleRepository(database)
+        app.state.conversation_repository = ConversationRepository(database)
 
     app.state.ready = True
     try:
@@ -260,7 +267,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
     app.state.ready = False
@@ -269,6 +276,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(control_plane_router)
     app.include_router(memory_control_plane_router)
     app.include_router(runtime_control_plane_router)
+    app.include_router(history_control_plane_router)
     app.include_router(provider_control_plane_router)
 
     @app.middleware("http")

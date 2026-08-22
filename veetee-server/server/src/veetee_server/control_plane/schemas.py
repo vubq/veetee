@@ -66,3 +66,61 @@ class FirmwareReleaseCreate(BaseModel):
     chip: str = Field(min_length=1, max_length=64)
     partition: str = Field(min_length=1, max_length=64)
     force: bool = False
+
+
+class ProviderStateUpdate(BaseModel):
+    enabled: bool | None = None
+    is_default: bool | None = None
+    expected_version: int = Field(gt=0)
+
+
+class AgentTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    # Agent-profile config WITHOUT the per-agent name; stored as JSON and
+    # validated against the current agent schema when instantiated.
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentFromTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class SnapshotCreate(BaseModel):
+    reason: Literal["manual"] = "manual"
+
+
+class SnapshotRestore(BaseModel):
+    expected_agent_version: int = Field(gt=0)
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    summary: str | None = Field(default=None, max_length=8000)
+    transcript_consent: bool | None = None
+    consent_version: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class RetentionPurgeRequest(BaseModel):
+    batch_size: int = Field(default=500, ge=1, le=10000)
+
+
+class ProviderHealthStatus(BaseModel):
+    status: Literal["ok", "degraded", "down", "unknown"]
+    details: str = ""
+
+
+class ProviderResponse(BaseModel):
+    kind: str
+    provider_id: str
+    models: list[str]
+    enabled: bool
+    default: bool
+    is_default: bool
+    health: ProviderHealthStatus
+    config_version: int
+    secret_configurable: bool = False

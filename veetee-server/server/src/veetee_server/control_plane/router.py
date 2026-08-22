@@ -9,13 +9,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from veetee_server.config import Settings, get_settings
 from veetee_server.persistence import (
+    Actor,
     AgentRepository,
+    ProviderRepository,
     UserRepository,
     hash_login_identifier,
     record_audit,
 )
 
-from .catalog import allowed_agent_model_ids
+from .catalog import allowed_agent_model_ids, get_provider_for_model
 from .schemas import AgentCreate, AgentResponse, AgentUpdate, LoginRequest, LoginResponse
 
 router = APIRouter(prefix="/api/v1/control", tags=["control-plane"])
@@ -30,10 +32,10 @@ def _repository(request: Request) -> AgentRepository:
     return repository
 
 
-def current_user(
+def current_actor(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
-) -> UUID:
+) -> Actor:
     user_repository = getattr(request.app.state, "user_repository", None)
     if user_repository is None:
         raise HTTPException(status_code=503, detail="Persistence is not enabled")
@@ -44,16 +46,36 @@ def current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    user_id = user_repository.resolve_token(authorization[7:].strip())
-    if user_id is None:
+    actor = user_repository.resolve_actor(authorization[7:].strip())
+    if actor is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session",
         )
-    return user_id
+    if actor.status == "suspended":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is suspended",
+        )
+    return actor
 
 
+def current_user(actor: Annotated[Actor, Depends(current_actor)]) -> UUID:
+    return actor.user_id
+
+
+def require_admin(actor: Annotated[Actor, Depends(current_actor)]) -> Actor:
+    if actor.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required",
+        )
+    return actor
+
+
+CurrentActor = Annotated[Actor, Depends(current_actor)]
 CurrentUser = Annotated[UUID, Depends(current_user)]
+AdminActor = Annotated[Actor, Depends(require_admin)]
 AgentRepositoryDependency = Annotated[AgentRepository, Depends(_repository)]
 
 
@@ -113,22 +135,35 @@ def list_agents(
     return [agent.to_dict() for agent in repository.list(user_id)]
 
 
-def _ensure_model_id_in_catalog(model_id: str) -> None:
-    """Rejects non-empty model ids outside the shared backend catalog with 422."""
-    if model_id and model_id not in allowed_agent_model_ids():
+def _ensure_model_id_in_catalog(request: Request, model_id: str) -> None:
+    """Rejects non-empty model ids outside the catalog or belonging to disabled providers."""
+    if not model_id:
+        return
+    if model_id not in allowed_agent_model_ids():
         raise HTTPException(
             status_code=422,
             detail="model_id must match the backend provider catalog",
         )
+    provider_info = get_provider_for_model(model_id)
+    if provider_info is not None:
+        kind, provider_id = provider_info
+        provider_repo = getattr(request.app.state, "provider_repository", None)
+        if provider_repo is not None and isinstance(provider_repo, ProviderRepository):
+            if not provider_repo.is_provider_enabled(kind, provider_id):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Cannot select model from a disabled provider",
+                )
 
 
 @router.post("/agents", response_model=AgentResponse, status_code=201)
 def create_agent(
+    request: Request,
     payload: AgentCreate,
     user_id: CurrentUser,
     repository: AgentRepositoryDependency,
 ) -> dict[str, Any]:
-    _ensure_model_id_in_catalog(payload.model_id)
+    _ensure_model_id_in_catalog(request, payload.model_id)
     agent, _ = repository.create(user_id, payload.model_dump())
     if agent is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
@@ -151,12 +186,13 @@ def get_agent(
 
 @router.put("/agents/{agent_id}", response_model=AgentResponse)
 def update_agent(
+    request: Request,
     agent_id: UUID,
     payload: AgentUpdate,
     user_id: CurrentUser,
     repository: AgentRepositoryDependency,
 ) -> dict[str, Any]:
-    _ensure_model_id_in_catalog(payload.model_id)
+    _ensure_model_id_in_catalog(request, payload.model_id)
     data = payload.model_dump(exclude={"expected_version"})
     agent, error = repository.update(user_id, agent_id, payload.expected_version, data)
     if agent is None:
