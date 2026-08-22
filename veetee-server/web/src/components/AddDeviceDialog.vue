@@ -80,11 +80,11 @@ watch(
       </div>
       <p v-if="error" class="form-message error-message" role="alert">{{ error }}</p>
       <p v-if="success" class="form-message success-message" role="status">{{ success }}</p>
-      <button class="visually-hidden" type="submit" tabindex="-1">Thêm</button>
+      <button class="visually-hidden" type="submit" tabindex="-1" aria-hidden="true">Thêm</button>
     </form>
     <template #footer>
       <button class="button button-outline" type="button" :disabled="busy" @click="emit('close')">{{ success ? 'Đóng' : 'Hủy' }}</button>
-      <button v-if="!success" class="button button-primary" type="button" :disabled="!valid || busy" @click="submit">{{ busy ? 'Đang thêm...' : 'Thêm' }}</button>
+      <button v-if="!success" class="button button-primary" type="button" :disabled="!valid || busy" data-testid="bind-submit" @click="submit">{{ busy ? 'Đang thêm...' : 'Thêm' }}</button>
     </template>
   </UiDialog>
 </template>

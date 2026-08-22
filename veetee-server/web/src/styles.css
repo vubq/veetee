@@ -177,20 +177,22 @@ textarea:focus-visible {
 }
 
 .account-button {
-  gap: 4px;
-  padding: 0 7px 0 4px;
+  gap: 5px;
+  max-width: 220px;
+  padding: 0 8px 0 7px;
 }
 
-.account-button > span {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border-radius: 6px;
-  background: var(--surface-muted);
-  color: var(--foreground);
-  font-size: 12px;
-  font-weight: 700;
+.account-button > svg {
+  flex: 0 0 auto;
+}
+
+.account-email {
+  overflow: hidden;
+  max-width: 170px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main-content {
@@ -1194,11 +1196,11 @@ textarea:focus-visible {
   }
 
   .account-button {
-    width: 34px;
+    max-width: 34px;
     padding: 0;
   }
 
-  .account-button > svg {
+  .account-email {
     display: none;
   }
 
@@ -1284,11 +1286,6 @@ textarea:focus-visible {
     height: 30px;
   }
 
-  .nav-item:nth-child(3),
-  .nav-item:nth-child(4) {
-    display: none;
-  }
-
   .page-title-group h1 {
     font-size: 19px;
   }
@@ -1359,4 +1356,232 @@ textarea:focus-visible {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Auth Screen Styles */
+.auth-page {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--background);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 32px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+}
+
+.auth-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.auth-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 12px 0 6px;
+  color: var(--foreground);
+}
+
+.auth-header p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-field span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.auth-field input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 14px;
+  color: var(--foreground);
+}
+
+.auth-field input:focus {
+  border-color: var(--primary);
+}
+
+.auth-error {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: #fdf2f2;
+  border: 1px solid #f8b4b4;
+  color: #9b1c1c;
+  font-size: 13px;
+}
+
+.auth-warning {
+  padding: 10px 12px;
+  border: 1px solid #e5bf72;
+  border-radius: var(--radius);
+  background: #fff9eb;
+  color: #704c0b;
+  font-size: 13px;
+}
+
+.auth-submit {
+  width: 100%;
+  padding: 11px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+/* OTA Console View Styles */
+.ota-view {
+  padding: 24px 0;
+}
+
+.ota-card-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ota-step-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.ota-step-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line-muted, #edf2f7);
+  padding-bottom: 12px;
+}
+
+.ota-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.ota-step-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ota-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.ota-info-box {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.ota-info-box p {
+  margin: 4px 0;
+  font-family: monospace;
+  /* SHA-256/UUID dài phải xuống dòng thay vì đẩy rộng trang ở viewport mobile. */
+  overflow-wrap: anywhere;
+}
+
+.ota-info-box.is-success {
+  border-color: #b7e4c7;
+  background: #f3faf7;
+}
+
+.ota-info-box.is-success strong {
+  color: #0e9f6e;
+}
+
+.ota-file-hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+@media (max-width: 780px) {
+  .ota-step-card {
+    padding: 18px 14px;
+  }
+
+  .auth-card {
+    padding: 28px 20px;
+  }
+}
+
+/* Trạng thái danh sách bộ nhớ thật trong hộp thoại cấu hình */
+.memory-state {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: #fafcfd;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.memory-state-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Nhãn phụ trợ cho các control bị tắt rõ ràng */
+.soon-note {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #e9eef2;
+  color: #596574;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }

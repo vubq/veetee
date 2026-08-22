@@ -38,7 +38,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeOnOutside
 </script>
 
 <template>
-  <div ref="root" class="dropdown-root">
+  <div ref="root" class="dropdown-root" @keydown.esc.stop.prevent="open = false">
     <div @click.stop="open = !open">
       <slot name="trigger" :open="open" :close="() => (open = false)" />
     </div>

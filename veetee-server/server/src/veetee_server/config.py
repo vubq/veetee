@@ -197,6 +197,10 @@ class Settings(BaseSettings):
     tool_max_output_chars: int = Field(default=2048, gt=0)
     memory_min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     memory_recency_decay_half_life_hours: float = Field(default=24.0, gt=0)
+    # Control-plane auth hardening (M4/M5 audit): login quota is persisted per
+    # redacted identifier hash in PostgreSQL with a sliding time window.
+    login_rate_limit: int = Field(default=10, gt=0)
+    login_rate_window_seconds: int = Field(default=300, gt=0)
     persistence_enabled: bool = False
     database_dsn: str = Field(default="dbname=veetee", min_length=1)
     bootstrap_admin_email: str = Field(default="")

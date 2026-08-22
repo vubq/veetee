@@ -1,0 +1,245 @@
+import type { Page, Request, Route } from '@playwright/test'
+
+export type AgentWire = {
+  id: string
+  name: string
+  version: number
+  role_prompt: string
+  personality: string
+  address_style: string
+  language: string
+  detail_level: string
+  response_style: string
+  model_id: string
+  voice_id: string
+  intent_strategy: string
+  memory_enabled: boolean
+  memory_min_confidence: number
+  tool_policy: Record<string, unknown>
+  memory_policy: Record<string, unknown>
+}
+
+export type MockApiState = {
+  loginStatus: number
+  authorized: boolean
+  // Token của phiên hiện tại; mỗi lần login thành công phát hành token mới
+  // để mô phỏng đúng server: token cũ sau khi đăng xuất/expiry sẽ bị từ chối.
+  currentToken: string
+  tokenCounter: number
+  expireNextRequest: boolean
+  agents: AgentWire[]
+  devices: Array<Record<string, unknown>>
+  memories: Array<Record<string, unknown>>
+  conversations: Array<Record<string, unknown>>
+  requests: Array<{ method: string; path: string; contentType: string }>
+  bindStatus: number
+  uploadStatus: number
+  conversationStatus: number
+  logoutStatus: number
+  logoutNetworkError: boolean
+  // Các request khớp pattern sẽ bị giữ lại (deferred) thay vì trả lời ngay;
+  // test giải phóng thủ công qua heldRequests để mô phỏng response đến muộn.
+  holdPatterns: Array<{ method: string; path: string }>
+  heldRequests: Array<HeldRequest>
+}
+
+export type HeldRequest = {
+  method: string
+  path: string
+  respond: (status: number, body?: unknown) => Promise<void>
+}
+
+export function agent(overrides: Partial<AgentWire> = {}): AgentWire {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Trợ lý gia đình',
+    version: 1,
+    role_prompt: 'Hỗ trợ gia đình bằng tiếng Việt.',
+    personality: '',
+    address_style: '',
+    language: 'vi-VN',
+    detail_level: 'adaptive',
+    response_style: 'balanced',
+    model_id: 'groq/openai/gpt-oss-120b',
+    voice_id: '',
+    intent_strategy: 'function_call',
+    memory_enabled: true,
+    memory_min_confidence: 0.8,
+    tool_policy: {},
+    memory_policy: {},
+    ...overrides,
+  }
+}
+
+export function createState(overrides: Partial<MockApiState> = {}): MockApiState {
+  return {
+    loginStatus: 200,
+    authorized: false,
+    currentToken: '',
+    tokenCounter: 0,
+    expireNextRequest: false,
+    agents: [agent()],
+    devices: [],
+    memories: [{
+      id: '22222222-2222-4222-8222-222222222222',
+      agent_id: '11111111-1111-4111-8111-111111111111',
+      kind: 'profile',
+      content: 'Người dùng ưu tiên tiếng Việt.',
+      provenance: 'user_explicit',
+      confidence: 1,
+      metadata: {},
+    }],
+    conversations: [],
+    requests: [],
+    bindStatus: 200,
+    uploadStatus: 201,
+    conversationStatus: 200,
+    logoutStatus: 204,
+    logoutNetworkError: false,
+    holdPatterns: [],
+    heldRequests: [],
+    ...overrides,
+  }
+}
+
+function json(route: Route, status: number, body: unknown) {
+  return route.fulfill({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  })
+}
+
+function bodyJson(request: Request): Record<string, unknown> {
+  return request.postDataJSON() as Record<string, unknown>
+}
+
+export async function installMockApi(page: Page, state: MockApiState) {
+  await page.route('http://127.0.0.1:8080/api/v1/control/**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname + url.search
+    const method = request.method()
+    state.requests.push({ method, path, contentType: await request.headerValue('content-type') ?? '' })
+
+    if (path === '/api/v1/control/auth/login' && method === 'POST') {
+      if (state.loginStatus !== 200) return json(route, state.loginStatus, { detail: 'Thông tin đăng nhập không đúng' })
+      state.tokenCounter += 1
+      state.currentToken = `test-token-${state.tokenCounter}`
+      state.authorized = true
+      return json(route, 200, { access_token: state.currentToken, token_type: 'bearer' })
+    }
+
+    if (path === '/api/v1/control/auth/logout' && method === 'POST' && state.logoutNetworkError) {
+      // Mô phỏng mất kết nối trước khi request tới được server revoke.
+      return route.abort('connectionreset')
+    }
+
+    const expectedAuthorization = `Bearer ${state.currentToken}`
+    const authorization = request.headers()['authorization'] ?? ''
+    if (!state.authorized || authorization !== expectedAuthorization || state.expireNextRequest) {
+      state.expireNextRequest = false
+      state.authorized = false
+      return json(route, 401, { detail: 'Invalid or expired session' })
+    }
+
+    // Request khớp pattern bị giữ lại để test quyết định thời điểm và trạng thái phản hồi;
+    // so khớp theo pathname để bắt cả biến thể có query (?agent_id=...).
+    const holdIndex = state.holdPatterns.findIndex((pattern) => pattern.method === method && url.pathname === pattern.path)
+    if (holdIndex >= 0) {
+      state.holdPatterns.splice(holdIndex, 1)
+      const held: HeldRequest = {
+        method,
+        path,
+        respond: (status, body) => json(route, status, body ?? {}),
+      }
+      state.heldRequests.push(held)
+      return
+    }
+
+    if (path === '/api/v1/control/auth/logout' && method === 'POST') {
+      state.authorized = false
+      if (state.logoutStatus !== 204) return json(route, state.logoutStatus, { detail: 'Không thu hồi được phiên trên máy chủ' })
+      return route.fulfill({ status: 204 })
+    }
+    if (path === '/api/v1/control/agents' && method === 'GET') return json(route, 200, state.agents)
+    if (path === '/api/v1/control/agents' && method === 'POST') {
+      const payload = bodyJson(request)
+      const created = agent({
+        id: '33333333-3333-4333-8333-333333333333',
+        name: String(payload.name),
+        role_prompt: String(payload.role_prompt ?? ''),
+      })
+      state.agents.push(created)
+      return json(route, 201, created)
+    }
+    const agentMatch = url.pathname.match(/\/api\/v1\/control\/agents\/([^/]+)$/)
+    if (agentMatch && method === 'PUT') {
+      const index = state.agents.findIndex((item) => item.id === agentMatch[1])
+      const updated = { ...state.agents[index], ...bodyJson(request), version: (state.agents[index]?.version ?? 0) + 1 }
+      state.agents[index] = updated as AgentWire
+      return json(route, 200, updated)
+    }
+    if (agentMatch && method === 'DELETE') {
+      state.agents = state.agents.filter((item) => item.id !== agentMatch[1])
+      return route.fulfill({ status: 204 })
+    }
+    if (url.pathname === '/api/v1/control/devices' && method === 'GET') return json(route, 200, state.devices)
+    if (url.pathname === '/api/v1/control/devices/bind' && method === 'POST') {
+      if (state.bindStatus !== 200) return json(route, state.bindStatus, { detail: 'Mã kích hoạt không hợp lệ' })
+      const payload = bodyJson(request)
+      const device = {
+        id: '44444444-4444-4444-8444-444444444444',
+        device_id: 'device-test',
+        alias: '',
+        agent_id: payload.agent_id,
+        online: false,
+        last_seen_at: null,
+      }
+      state.devices.push(device)
+      return json(route, 200, device)
+    }
+    const deviceMatch = url.pathname.match(/\/api\/v1\/control\/devices\/([^/]+)$/)
+    if (deviceMatch && method === 'DELETE') {
+      state.devices = state.devices.filter((item) => item.id !== deviceMatch[1])
+      return route.fulfill({ status: 204 })
+    }
+    if (url.pathname === '/api/v1/control/providers' && method === 'GET') {
+      return json(route, 200, [{ kind: 'llm', provider_id: 'omniroute', models: ['groq/openai/gpt-oss-120b'], secret_configurable: false }])
+    }
+    if (url.pathname === '/api/v1/control/memories' && method === 'GET') return json(route, 200, state.memories)
+    const memoryMatch = url.pathname.match(/\/api\/v1\/control\/memories\/([^/]+)$/)
+    if (memoryMatch && method === 'DELETE') {
+      state.memories = state.memories.filter((item) => item.id !== memoryMatch[1])
+      return route.fulfill({ status: 204 })
+    }
+    if (url.pathname === '/api/v1/control/conversations' && method === 'GET') {
+      if (state.conversationStatus !== 200) return json(route, state.conversationStatus, { detail: 'Không tải được lịch sử hội thoại' })
+      return json(route, 200, state.conversations)
+    }
+    if (url.pathname === '/api/v1/control/ota/artifacts' && method === 'POST') {
+      if (state.uploadStatus !== 201) return json(route, state.uploadStatus, { detail: 'Artifact không hợp lệ' })
+      return json(route, 201, { id: '55555555-5555-4555-8555-555555555555', size: request.postDataBuffer()?.byteLength ?? 0, sha256: 'a'.repeat(64) })
+    }
+    if (url.pathname === '/api/v1/control/ota/releases' && method === 'POST') {
+      const payload = bodyJson(request)
+      return json(route, 201, {
+        id: '66666666-6666-4666-8666-666666666666',
+        ...payload,
+        file_size: 4,
+        sha256: 'a'.repeat(64),
+        published: false,
+        created_at: '2026-08-22T00:00:00Z',
+      })
+    }
+    if (/\/api\/v1\/control\/ota\/releases\/[^/]+\/publish$/.test(url.pathname) && method === 'POST') {
+      return json(route, 200, {
+        id: '66666666-6666-4666-8666-666666666666',
+        artifact_id: '55555555-5555-4555-8555-555555555555',
+        version: '2.4.3', board: 'bread-compact-wifi-lcd', chip: 'esp32s3', partition: 'ota_0',
+        file_size: 4, sha256: 'a'.repeat(64), force: false, published: true, created_at: '2026-08-22T00:00:00Z',
+      })
+    }
+    return json(route, 500, { detail: `Unexpected mock request: ${method} ${path}` })
+  })
+}

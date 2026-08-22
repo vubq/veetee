@@ -36,10 +36,10 @@ async function submit() {
 <template>
   <UiDialog :open="open" title="Tạo trợ lý mới" description="Tạo hồ sơ trợ lý và tùy chỉnh vai trò chi tiết sau khi lưu." variant="compact" @close="emit('close')">
     <form class="config-form" @submit.prevent="submit">
-      <label class="config-field"><span>Tên trợ lý</span><input v-model="name" required maxlength="120" autocomplete="off" /></label>
+      <label class="config-field"><span>Tên trợ lý</span><input v-model="name" class="text-input" required maxlength="120" autocomplete="off" /></label>
       <label class="config-field"><span>Vai trò tổng quát</span><textarea v-model="rolePrompt" class="config-textarea" maxlength="12000" /></label>
       <p v-if="error" class="field-help">{{ error }}</p>
     </form>
-    <template #footer><button class="button button-outline" type="button" @click="emit('close')">Hủy</button><button class="button button-primary" type="button" :disabled="saving || !name.trim()" @click="submit">{{ saving ? 'Đang tạo...' : 'Tạo trợ lý' }}</button></template>
+    <template #footer><button class="button button-outline" type="button" @click="emit('close')">Hủy</button><button class="button button-primary" type="button" :disabled="saving || !name.trim()" data-testid="create-agent-submit" @click="submit">{{ saving ? 'Đang tạo...' : 'Tạo trợ lý' }}</button></template>
   </UiDialog>
 </template>

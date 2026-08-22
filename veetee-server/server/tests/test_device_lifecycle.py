@@ -28,10 +28,14 @@ def m5_client(tmp_path: Path) -> TestClient:
     database = _database()
     if not database.check():
         pytest.skip("PostgreSQL is unavailable")
+    login_migration = (
+        Path(__file__).parents[1] / "migrations" / "004_login_rate_limit.sql"
+    ).read_text(encoding="utf-8")
     with database.connection() as connection:
+        connection.execute(login_migration)
         connection.execute(
             "TRUNCATE veetee_device_bind_receipts, veetee_device_bind_attempts, "
-            "veetee_device_activations, "
+            "veetee_login_attempts, veetee_device_activations, "
             "veetee_firmware_releases, veetee_firmware_artifacts, veetee_audit_events, "
             "veetee_memories, veetee_conversations, veetee_devices, veetee_provider_configs, "
             "veetee_agents, veetee_sessions, veetee_users CASCADE"

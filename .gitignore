@@ -15,9 +15,12 @@ veetee-server/server/.ruff_cache/
 veetee-server/server/src/*.egg-info/
 veetee-server/server/src/**/__pycache__/
 veetee-server/server/tests/**/__pycache__/
+veetee-server/tools/**/__pycache__/
 
 # Browser automation artifacts.
 .playwright-mcp/
+veetee-server/web/playwright-report/
+veetee-server/web/test-results/
 
 # Local credentials. Keep example files tracked.
 veetee-server/.secrets/*

@@ -20,7 +20,7 @@ const selected = computed(() => props.options.find((option) => option.value === 
 </script>
 
 <template>
-  <div class="select-root">
+  <div class="select-root" @keydown.esc.stop.prevent="open = false">
     <button class="select-trigger" type="button" role="combobox" :aria-label="label" :aria-expanded="open" @click="open = !open">
       <span class="select-value"><component :is="selected?.icon" v-if="selected?.icon" :size="16" stroke-width="1.8" />{{ selected?.label }}</span><ChevronDown :size="16" />
     </button>

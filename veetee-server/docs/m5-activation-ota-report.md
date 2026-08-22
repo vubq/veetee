@@ -45,6 +45,8 @@ Console được kiểm trên viewport mobile 390 x 844 với backend persistenc
 - Confirmation dialog lồng chỉ lớp trên cùng nhận Escape và khôi phục focus về nút mở.
 - Unbind thật trả 204, empty state xuất hiện và card trở lại `Thiết bị (0)`.
 - Không có horizontal overflow; các request control plane quan sát được trả 200/201/204.
+- Console OTA hỗ trợ upload raw binary, tạo release và publish có confirmation; control
+  chưa có backend được ẩn hoặc disabled với nhãn `Sắp có`.
 
 ## Hardware E2E
 
@@ -73,10 +75,12 @@ giữ worktree sạch.
 ## Quality gates
 
 - Ruff: pass.
-- Mypy strict: pass trên 86 source files.
-- Pytest với database `veetee_test`: 404 test pass.
+- Mypy strict: pass trên 87 source files.
+- Pytest với database `veetee_test`: 412 test pass.
 - Namespace scan mặc định và `--all`: pass, references excluded bằng allowlist hẹp có test.
-- Frontend type-check và production build: pass.
+- Frontend type-check, production build và Playwright 24/24 desktop/mobile: pass.
+- Lighthouse auth screen đúng URL Veetee: accessibility, best practices và SEO 100 trên
+  desktop/mobile.
 - `git diff --check`: pass.
 
 ## Giới hạn

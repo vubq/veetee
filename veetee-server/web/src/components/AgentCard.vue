@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock3, Cpu, Ellipsis, History, Pencil, Settings2, Sparkles, Trash2, UserRound } from '@lucide/vue'
+import { Clock3, Cpu, Ellipsis, History, Pencil, Sparkles, Trash2, UserRound } from '@lucide/vue'
 
 import UiDropdown, { type DropdownItem } from '@/components/UiDropdown.vue'
 import type { AgentSummary } from '@/types/agent'
@@ -7,11 +7,18 @@ import type { AgentSummary } from '@/types/agent'
 defineProps<{
   agent: AgentSummary
 }>()
-const emit = defineEmits<{ configure: []; history: []; devices: [] }>()
+
+const emit = defineEmits<{ history: []; devices: []; rename: []; delete: [] }>()
+
 const menuItems: DropdownItem[] = [
   { label: 'Đổi tên', value: 'rename', icon: Pencil },
   { label: 'Xóa trợ lý', value: 'delete', danger: true, icon: Trash2 },
 ]
+
+function handleMenuSelect(value: string) {
+  if (value === 'rename') emit('rename')
+  else if (value === 'delete') emit('delete')
+}
 </script>
 
 <template>
@@ -28,7 +35,7 @@ const menuItems: DropdownItem[] = [
           </div>
         </div>
       </div>
-      <UiDropdown label="Thao tác" :items="menuItems">
+      <UiDropdown label="Thao tác" :items="menuItems" @select="handleMenuSelect">
         <template #trigger><button class="card-menu" type="button" aria-label="Thao tác" title="Thao tác"><Ellipsis :size="18" /></button></template>
       </UiDropdown>
     </div>
@@ -36,11 +43,11 @@ const menuItems: DropdownItem[] = [
     <dl class="agent-stats">
       <div>
         <dt><UserRound :size="15" />Vai trò</dt>
-        <dd>{{ agent.role }}</dd>
+        <dd>{{ agent.role || 'Chưa đặt vai trò' }}</dd>
       </div>
       <div>
         <dt><Sparkles :size="15" />Mô hình</dt>
-        <dd>{{ agent.model }}</dd>
+        <dd>{{ agent.model || 'Mặc định hệ thống' }}</dd>
       </div>
       <div>
         <dt><Clock3 :size="15" />Cuộc trò chuyện gần nhất</dt>
@@ -49,7 +56,6 @@ const menuItems: DropdownItem[] = [
     </dl>
 
     <div class="agent-actions">
-      <button type="button" @click="emit('configure')"><Settings2 :size="16" />Cấu hình</button>
       <button type="button" @click="emit('history')"><History :size="16" />Lịch sử</button>
       <button type="button" @click="emit('devices')"><Cpu :size="16" />Thiết bị ({{ agent.deviceCount }})</button>
     </div>

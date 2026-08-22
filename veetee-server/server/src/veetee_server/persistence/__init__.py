@@ -11,6 +11,7 @@ from .repository import (
     StoredDevice,
     StoredFirmwareRelease,
     UserRepository,
+    hash_login_identifier,
     parse_semver,
     record_audit,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "StoredDevice",
     "StoredFirmwareRelease",
     "UserRepository",
+    "hash_login_identifier",
     "parse_semver",
     "record_audit",
 ]

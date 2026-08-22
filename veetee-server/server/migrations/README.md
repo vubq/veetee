@@ -10,6 +10,7 @@ Apply locally:
 ```bash
 psql -d veetee -f migrations/001_control_plane.sql
 psql -d veetee -f migrations/002_runtime_control_plane.sql
+psql -d veetee -f migrations/004_login_rate_limit.sql
 ```
 
 Rollback only a local/test database:
@@ -17,6 +18,7 @@ Rollback only a local/test database:
 ```bash
 psql -d veetee -f migrations/001_control_plane.down.sql
 psql -d veetee -f migrations/002_runtime_control_plane.down.sql
+psql -d veetee -f migrations/004_login_rate_limit.down.sql
 ```
 
 The migration stores no provider secret. Provider credentials remain environment/secret
@@ -44,3 +46,14 @@ Migration 003 preflight duplicate trước khi đổi uniqueness, thêm global u
 tenant. Nếu dữ liệu M4 có duplicate `device_id`, migration báo rõ các ID xung đột rồi
 rollback toàn bộ để người vận hành xử lý ownership thủ công; migration không tự xóa dữ
 liệu. Down migration cũng từ chối khi đã có dữ liệu M5 để tránh mất dữ liệu.
+
+## M4/M5 audit hardening: login rate limit
+
+```bash
+psql -d veetee -f migrations/004_login_rate_limit.sql
+```
+
+Migration 004 tạo `veetee_login_attempts` lưu bộ đếm đăng nhập thất bại theo SHA-256
+của email đã chuẩn hóa (không bao giờ lưu email thô) trong một time window cấu hình qua
+`VEETEE_LOGIN_RATE_LIMIT` và `VEETEE_LOGIN_RATE_WINDOW_SECONDS`. Bảng chỉ chứa counter
+quota nên down migration drop an toàn, không cần fail closed như migration 003.

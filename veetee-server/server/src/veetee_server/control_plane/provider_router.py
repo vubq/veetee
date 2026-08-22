@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from .catalog import MODEL_CATALOG, PROVIDER_ID_BY_KIND
 from .router import AgentRepositoryDependency, CurrentUser
 
 router = APIRouter(prefix="/api/v1/control", tags=["control-plane-providers"])
@@ -19,21 +20,10 @@ def list_providers(
     del user_id, repository
     return [
         {
-            "kind": "asr",
-            "provider_id": "pho_whisper",
-            "models": ["mad1999/pho-whisper-small-ct2"],
+            "kind": kind,
+            "provider_id": PROVIDER_ID_BY_KIND[kind],
+            "models": list(MODEL_CATALOG[kind]),
             "secret_configurable": False,
-        },
-        {
-            "kind": "llm",
-            "provider_id": "omniroute",
-            "models": ["groq/openai/gpt-oss-120b", "groq/qwen/qwen3.6-27b"],
-            "secret_configurable": False,
-        },
-        {
-            "kind": "tts",
-            "provider_id": "vieneu",
-            "models": ["local"],
-            "secret_configurable": False,
-        },
+        }
+        for kind in ("asr", "llm", "tts")
     ]

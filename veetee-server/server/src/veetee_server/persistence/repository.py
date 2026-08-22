@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 import re
 import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, NamedTuple, cast
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -44,6 +45,30 @@ def verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(actual.hex(), digest_hex)
     except (ValueError, TypeError):
         return False
+
+
+def hash_login_identifier(email: str) -> str:
+    """Redacted correlation key: SHA-256 of the normalized login identifier.
+
+    Raw emails must never reach persistence or audit records; callers store and
+    log only this hash.
+    """
+    return hashlib.sha256(email.strip().lower().encode()).hexdigest()
+
+
+# Pre-computed scrypt hash so a login attempt against an unknown account burns
+# comparable verification time to an existing account; response latency must
+# not reveal whether the submitted address exists.
+_TIMING_EQUALIZER_HASH = hash_password("veetee-login-timing-equalizer")
+
+
+class LoginAttempt(NamedTuple):
+    """Outcome of one throttled authentication attempt."""
+
+    outcome: Literal["success", "invalid_credentials", "rate_limited"]
+    user_id: uuid.UUID | None
+    access_token: str | None
+    retry_after_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,21 +108,78 @@ class UserRepository:
             )
             return user_id
 
-    def authenticate(self, email: str, password: str) -> tuple[uuid.UUID, str] | None:
+    def authenticate(
+        self,
+        email: str,
+        password: str,
+        *,
+        rate_limit: int,
+        rate_window_seconds: int,
+    ) -> LoginAttempt:
+        """Authenticates under a persisted per-identifier failure quota.
+
+        The quota check runs before credential verification and keys on the
+        redacted identifier hash, so responses never reveal whether an account
+        exists. Failed attempts are recorded inside the same advisory-locked
+        transaction; successful logins never consume quota.
+        """
+        identifier_hash = hash_login_identifier(email)
         with self.database.connection() as connection:
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (identifier_hash,)
+            )
+            connection.execute(
+                "DELETE FROM veetee_login_attempts "
+                "WHERE attempted_at <= now() - (%s * interval '1 second')",
+                (rate_window_seconds,),
+            )
             row = connection.execute(
+                "SELECT count(*), min(attempted_at) FROM veetee_login_attempts "
+                "WHERE email_hash = %s",
+                (identifier_hash,),
+            ).fetchone()
+            recent_failures = cast(int, row[0]) if row else 0
+            if recent_failures >= rate_limit:
+                return LoginAttempt(
+                    "rate_limited", None, None, self._retry_after_seconds(row, rate_window_seconds)
+                )
+
+            user_row = connection.execute(
                 "SELECT id, password_hash FROM veetee_users WHERE email = %s", (email,)
             ).fetchone()
-            if not row or not verify_password(password, cast(str, row[1])):
-                return None
+            if user_row is None:
+                # Equalize verification cost with the known-account path.
+                verify_password(password, _TIMING_EQUALIZER_HASH)
+            elif not verify_password(password, cast(str, user_row[1])):
+                user_row = None
+
+            if user_row is None:
+                connection.execute(
+                    "INSERT INTO veetee_login_attempts (id, email_hash) VALUES (%s, %s)",
+                    (uuid.uuid4(), identifier_hash),
+                )
+                return LoginAttempt("invalid_credentials", None, None, 0)
+
             raw_token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
             connection.execute(
                 "INSERT INTO veetee_sessions (id, user_id, token_hash, expires_at) "
                 "VALUES (%s, %s, %s, now() + interval '12 hours')",
-                (uuid.uuid4(), row[0], token_hash),
+                (uuid.uuid4(), user_row[0], token_hash),
             )
-            return cast(uuid.UUID, row[0]), raw_token
+            return LoginAttempt("success", cast(uuid.UUID, user_row[0]), raw_token, 0)
+
+    @staticmethod
+    def _retry_after_seconds(
+        row: tuple[Any, ...] | None, rate_window_seconds: int
+    ) -> int:
+        """Seconds until the oldest retained failure leaves the quota window."""
+        oldest = cast(datetime | None, row[1] if row else None)
+        if oldest is None:
+            return rate_window_seconds
+        oldest_at = oldest if oldest.tzinfo else oldest.replace(tzinfo=UTC)
+        remaining = rate_window_seconds - (datetime.now(UTC) - oldest_at).total_seconds()
+        return max(1, math.ceil(remaining))
 
     def resolve_token(self, raw_token: str) -> uuid.UUID | None:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -108,6 +190,16 @@ class UserRepository:
                 (token_hash,),
             ).fetchone()
             return cast(uuid.UUID, row[0]) if row else None
+
+    def revoke_token(self, raw_token: str) -> bool:
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        with self.database.connection() as connection:
+            result = connection.execute(
+                "UPDATE veetee_sessions SET revoked_at = now() "
+                "WHERE token_hash = %s AND revoked_at IS NULL",
+                (token_hash,),
+            )
+            return bool(result.rowcount > 0)
 
 
 def record_audit(
@@ -171,27 +263,40 @@ class AgentRepository:
         agent = self.get(owner_user_id, agent_id)
         return snapshot_from_agent(agent) if agent is not None else None
 
-    def create(self, owner_user_id: uuid.UUID, data: dict[str, Any]) -> StoredAgent:
+    def create(
+        self, owner_user_id: uuid.UUID, data: dict[str, Any]
+    ) -> tuple[StoredAgent | None, str | None]:
         agent_id = uuid.uuid4()
         with self.database.connection() as connection:
-            connection.execute(
-                "INSERT INTO veetee_agents (id, owner_user_id, name, role_prompt, personality, "
-                "address_style, language, detail_level, response_style, model_id, voice_id, "
-                "intent_strategy, memory_enabled, memory_min_confidence, "
-                "tool_policy, memory_policy) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (agent_id, owner_user_id, data["name"], data["role_prompt"], data["personality"],
-                 data["address_style"], data["language"], data["detail_level"],
-                 data["response_style"], data["model_id"], data["voice_id"],
-                 data["intent_strategy"], data["memory_enabled"], data["memory_min_confidence"],
-                 Jsonb(data["tool_policy"]), Jsonb(data["memory_policy"])),
-            )
-        return self.get(owner_user_id, agent_id)  # type: ignore[return-value]
+            try:
+                with connection.transaction():
+                    connection.execute(
+                        "INSERT INTO veetee_agents (id, owner_user_id, name, role_prompt, "
+                        "personality, address_style, language, detail_level, response_style, "
+                        "model_id, voice_id, intent_strategy, memory_enabled, "
+                        "memory_min_confidence, tool_policy, memory_policy) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (agent_id, owner_user_id, data["name"], data["role_prompt"],
+                         data["personality"], data["address_style"], data["language"],
+                         data["detail_level"], data["response_style"], data["model_id"],
+                         data["voice_id"], data["intent_strategy"], data["memory_enabled"],
+                         data["memory_min_confidence"], Jsonb(data["tool_policy"]),
+                         Jsonb(data["memory_policy"])),
+                    )
+            except psycopg.errors.UniqueViolation:
+                return None, "duplicate_name"
+        stored = self.get(owner_user_id, agent_id)
+        if stored is None:
+            raise RuntimeError("Created agent row was not persisted")
+        return stored, None
 
     def update(
-        self, owner_user_id: uuid.UUID, agent_id: uuid.UUID, expected_version: int,
+        self,
+        owner_user_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        expected_version: int,
         data: dict[str, Any],
-    ) -> StoredAgent | None:
+    ) -> tuple[StoredAgent | None, str | None]:
         fields = ["name", "role_prompt", "personality", "address_style", "language",
                   "detail_level", "response_style", "model_id", "voice_id", "intent_strategy",
                   "memory_enabled", "memory_min_confidence", "tool_policy", "memory_policy"]
@@ -200,16 +305,26 @@ class AgentRepository:
             for field in fields
         ]
         with self.database.connection() as connection:
-            result = connection.execute(
-                "UPDATE veetee_agents SET "
-                + ", ".join(f"{field} = %s" for field in fields)
-                + ", version = version + 1, updated_at = now() "
-                "WHERE id = %s AND owner_user_id = %s AND version = %s",
-                (*values, agent_id, owner_user_id, expected_version),
-            )
+            try:
+                with connection.transaction():
+                    result = connection.execute(
+                        "UPDATE veetee_agents SET "
+                        + ", ".join(f"{field} = %s" for field in fields)
+                        + ", version = version + 1, updated_at = now() "
+                        "WHERE id = %s AND owner_user_id = %s AND version = %s",
+                        (*values, agent_id, owner_user_id, expected_version),
+                    )
+            except psycopg.errors.UniqueViolation:
+                # Rename collides with another agent owned by the same tenant;
+                # the savepoint keeps the outer transaction usable.
+                return None, "duplicate_name"
             if result.rowcount != 1:
-                return None
-        return self.get(owner_user_id, agent_id)
+                return None, "changed_or_missing"
+            updated = self.get(owner_user_id, agent_id)
+            if updated is not None:
+                return updated, None
+        # The rowcount matched but the follow-up read vanished: treat as conflict.
+        return None, "changed_or_missing"
 
     def delete(self, owner_user_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
         with self.database.connection() as connection:
