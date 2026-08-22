@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any
 
@@ -52,6 +52,9 @@ from .vad import BaseVADStream, FakeVAD
 
 logger = logging.getLogger("veetee.pipeline")
 
+CorrectionHook = Callable[[str], Awaitable[tuple[str, dict[str, Any]]]]
+ContextHook = Callable[[str], Awaitable[list[dict[str, Any]]]]
+
 _DOWNLINK_FRAME_DURATION_MS = 60.0
 _STREAM_END = object()
 
@@ -80,6 +83,8 @@ class FakePipeline:
         tts: FakeTTS | Any,
         segmenter: TTSTokenSegmenter | None = None,
         context_assembler: ContextAssembler | None = None,
+        correction_hook: CorrectionHook | None = None,
+        context_hook: ContextHook | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         if protocol_version not in (1, 2, 3):
@@ -93,6 +98,8 @@ class FakePipeline:
         self.tts = tts
         self.segmenter = segmenter or TTSTokenSegmenter()
         self.context_assembler = context_assembler or ContextAssembler()
+        self.correction_hook = correction_hook
+        self.context_hook = context_hook
         self._now_ms = now_ms
 
     async def run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
@@ -133,18 +140,28 @@ class FakePipeline:
         if not transcript or not transcript.strip():
             return PipelineOutcome.NO_UTTERANCE
 
+        correction_provenance: dict[str, Any] = {}
+        if self.correction_hook is not None:
+            transcript, correction_provenance = await self.correction_hook(transcript)
+
         await sink.emit(SttEvent(text=transcript, session_id=str(session.id)))
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
 
         # Platform and conversation policies are baseline for every turn.
         # A bound snapshot only adds its profile inside that hierarchy.
+        provider_contexts = (
+            await self.context_hook(transcript) if self.context_hook is not None else []
+        )
         assembled = self.context_assembler.assemble(
             agent_profile=(
                 turn.snapshot.prompt_profile if turn.snapshot is not None else None
             ),
             user_turn=transcript,
+            provider_contexts=provider_contexts,
         )
+        if correction_provenance:
+            assembled.metadata["correction"] = correction_provenance
         messages = assembled.messages
         self.segmenter.reset()
 

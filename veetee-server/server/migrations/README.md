@@ -11,6 +11,10 @@ Apply locally:
 psql -d veetee -f migrations/001_control_plane.sql
 psql -d veetee -f migrations/002_runtime_control_plane.sql
 psql -d veetee -f migrations/004_login_rate_limit.sql
+psql -d veetee -f migrations/005_m6_foundation_providers.sql
+psql -d veetee -f migrations/006_m6_agent_lifecycle_history.sql
+psql -d veetee -f migrations/007_m6_knowledge_rag.sql
+psql -d veetee -f migrations/008_m6_corrections_context.sql
 ```
 
 Rollback only a local/test database:
@@ -19,6 +23,10 @@ Rollback only a local/test database:
 psql -d veetee -f migrations/001_control_plane.down.sql
 psql -d veetee -f migrations/002_runtime_control_plane.down.sql
 psql -d veetee -f migrations/004_login_rate_limit.down.sql
+psql -d veetee -f migrations/008_m6_corrections_context.down.sql
+psql -d veetee -f migrations/007_m6_knowledge_rag.down.sql
+psql -d veetee -f migrations/006_m6_agent_lifecycle_history.down.sql
+psql -d veetee -f migrations/005_m6_foundation_providers.down.sql
 ```
 
 The migration stores no provider secret. Provider credentials remain environment/secret
@@ -57,3 +65,16 @@ Migration 004 tạo `veetee_login_attempts` lưu bộ đếm đăng nhập thấ
 của email đã chuẩn hóa (không bao giờ lưu email thô) trong một time window cấu hình qua
 `VEETEE_LOGIN_RATE_LIMIT` và `VEETEE_LOGIN_RATE_WINDOW_SECONDS`. Bảng chỉ chứa counter
 quota nên down migration drop an toàn, không cần fail closed như migration 003.
+
+## M6.4 Knowledge/RAG
+
+Migration 007 tạo dataset, document, chunk PostgreSQL FTS và liên kết agent-dataset.
+Composite foreign key giữ `owner_user_id` nhất quán xuyên dataset, document, chunk và
+agent; upload chỉ nhận UTF-8 `text/plain` hoặc `text/markdown`. Down migration từ chối
+khi còn dữ liệu knowledge để tránh mất dữ liệu.
+
+## M6.5 Correction và context provider
+
+Migration 008 tạo correction set/rule có version và cấu hình context provider theo agent.
+Rule chỉ hỗ trợ `exact` hoặc `phrase`; provider config có version để cache không dùng lại
+kết quả từ cấu hình cũ. Down migration từ chối khi còn correction hoặc context config.

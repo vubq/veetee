@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     id_max_length: int = Field(default=128, gt=0)
     cleanup_timeout_seconds: float = Field(default=5.0, gt=0)
 
+    # Knowledge / RAG Settings (M6.4)
+    rag_max_document_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+    rag_default_chunk_size: int = Field(default=500, gt=0)
+    rag_default_chunk_overlap: int = Field(default=50, ge=0)
+    rag_max_query_limit: int = Field(default=20, gt=0)
+    rag_max_context_chars: int = Field(default=4000, gt=0)
+
+    # Correction Rules & Context Provider Settings (M6.5)
+    context_provider_default_timeout_ms: int = Field(default=2000, gt=0)
+
     # Device Activation & OTA Settings (M5)
     activation_ttl_seconds: int = Field(default=600, gt=0)
     activation_bind_receipt_ttl_seconds: int = Field(default=600, gt=0)
@@ -320,6 +330,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "tts_segment_max_chars must cover both tts_segment_first_min_chars and "
                 "tts_segment_min_chars"
+            )
+        if self.rag_default_chunk_overlap >= self.rag_default_chunk_size:
+            raise ValueError(
+                "rag_default_chunk_overlap must be strictly less than rag_default_chunk_size"
             )
         if self.persistence_enabled and not self.ota_public_base_url:
             raise ValueError(

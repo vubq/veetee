@@ -11,12 +11,12 @@ from veetee_server.prompt import (
     PromptTemplate,
     create_default_prompt_registry,
 )
-from veetee_server.prompt.context import sanitize_untrusted_text
 from veetee_server.prompt.registry import (
     DuplicatePromptError,
     PromptNotFoundError,
     compute_prompt_checksum,
 )
+from veetee_server.untrusted import sanitize_untrusted_text
 
 
 def test_prompt_template_checksum_and_immutability():

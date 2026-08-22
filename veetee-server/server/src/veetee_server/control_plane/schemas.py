@@ -124,3 +124,62 @@ class ProviderResponse(BaseModel):
     health: ProviderHealthStatus
     config_version: int
     secret_configurable: bool = False
+
+
+class DatasetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+
+
+class DatasetUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    status: Literal["active", "archived"] | None = None
+    expected_version: int | None = Field(default=None, gt=0)
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    dataset_ids: list[UUID] = Field(min_length=1, max_length=50)
+    limit: int = Field(default=5, ge=1)
+    max_chars: int = Field(default=4000, ge=1)
+
+
+class AgentKnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=5, ge=1)
+    max_chars: int = Field(default=4000, ge=1)
+
+
+class CorrectionSetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    agent_id: UUID | None = None
+    enabled: bool = True
+
+
+class CorrectionSetUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    enabled: bool | None = None
+    expected_version: int = Field(gt=0)
+
+
+class CorrectionRuleCreate(BaseModel):
+    ordinal: int = Field(ge=0, le=10000)
+    rule_type: Literal["exact", "phrase"]
+    pattern: str = Field(min_length=1, max_length=500)
+    replacement: str = Field(max_length=500)
+    case_sensitive: bool = False
+    enabled: bool = True
+    expected_set_version: int = Field(gt=0)
+
+
+class CorrectionPreviewRequest(BaseModel):
+    text: str = Field(max_length=4096)
+
+
+class ContextProviderConfigUpdate(BaseModel):
+    enabled: bool = True
+    ordinal: int = Field(default=0, ge=0, le=10000)
+    timeout_ms: int = Field(default=2000, ge=1, le=30000)
+    cache_ttl_seconds: int = Field(default=0, ge=0, le=3600)
+    config: dict[str, Any] = Field(default_factory=dict)

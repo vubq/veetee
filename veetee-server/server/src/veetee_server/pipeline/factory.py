@@ -7,6 +7,7 @@ and ``app.state.pacer_factory``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -20,7 +21,10 @@ from veetee_server.audio.codec import (
 from veetee_server.audio.pacer import PacketPacer
 from veetee_server.config import Settings
 from veetee_server.control_plane.catalog import allowed_agent_model_ids
+from veetee_server.correction.engine import apply_asr_correction_hook
 from veetee_server.domain.session import DeviceSession
+from veetee_server.persistence.correction import CorrectionRepository
+from veetee_server.prompt.providers import ContextProviderRegistry
 
 from .asr import ASRNotReadyError, FakeASR, PhoWhisperRuntime
 from .llm import FakeLLM, LLMNotReadyError, OmniRouteLLMAdapter, OmniRouteLLMRuntime
@@ -86,6 +90,8 @@ def build_fake_pipeline(
     llm_runtime: OmniRouteLLMRuntime | None = None,
     tts_runtime: GeminiTTSRuntime | None = None,
     vieneu_runtime: VieNeuTTSRuntime | None = None,
+    correction_repository: CorrectionRepository | None = None,
+    context_provider_registry: ContextProviderRegistry | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad = build_vad_stream(settings, vad_runtime=vad_runtime)
@@ -128,6 +134,53 @@ def build_fake_pipeline(
     )
     segmenter = TTSTokenSegmenter(config=segmenter_config)
 
+    correction_hook = None
+    context_hook = None
+    if (
+        correction_repository is not None
+        and session.owner_user_id is not None
+        and session.agent_id is not None
+    ):
+        owner_user_id = session.owner_user_id
+        agent_id = session.agent_id
+
+        async def correction_hook(text: str) -> tuple[str, dict[str, object]]:
+            try:
+                rules = await asyncio.to_thread(
+                    correction_repository.list_active_rules, owner_user_id, agent_id
+                )
+            except Exception:
+                logger.exception(
+                    "correction_rules_unavailable",
+                    extra={"context": {"session_id": str(session.id)}},
+                )
+                return text, {"status": "unavailable", "corrections_applied": 0}
+            corrected, provenance = apply_asr_correction_hook(text, rules)
+            return corrected, provenance
+
+    if (
+        context_provider_registry is not None
+        and session.owner_user_id is not None
+        and session.agent_id is not None
+    ):
+        owner_user_id = session.owner_user_id
+        agent_id = session.agent_id
+
+        async def context_hook(query: str) -> list[dict[str, object]]:
+            results = await context_provider_registry.fetch_all(
+                owner_user_id, agent_id, query, settings.context_provider_default_timeout_ms
+            )
+            return [
+                {
+                    "provider_type": result.provider_type,
+                    "status": result.status,
+                    "content": result.content,
+                    "citations": result.citations,
+                    "provenance": result.provenance,
+                }
+                for result in results
+            ]
+
     return FakePipeline(
         decoder=build_opus_decoder(settings, pcm_format=UPLINK_PCM_FORMAT),
         encoder=build_opus_encoder(settings, pcm_format=DOWNLINK_PCM_FORMAT),
@@ -137,6 +190,8 @@ def build_fake_pipeline(
         llm=llm,
         tts=tts,
         segmenter=segmenter,
+        correction_hook=correction_hook,
+        context_hook=context_hook,
     )
 
 

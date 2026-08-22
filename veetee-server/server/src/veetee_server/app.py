@@ -17,7 +17,9 @@ from .config import (
     get_settings,
     validate_device_websocket_url,
 )
+from .control_plane.correction_router import router as correction_control_plane_router
 from .control_plane.history_router import router as history_control_plane_router
+from .control_plane.knowledge_router import router as knowledge_control_plane_router
 from .control_plane.memory_router import router as memory_control_plane_router
 from .control_plane.provider_router import router as provider_control_plane_router
 from .control_plane.router import router as control_plane_router
@@ -201,10 +203,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ActivationRepository,
         AgentLifecycleRepository,
         AgentRepository,
+        ContextProviderConfigRepository,
         ConversationRepository,
+        CorrectionRepository,
         DatabaseConfig,
         DeviceRepository,
         FirmwareReleaseRepository,
+        KnowledgeRepository,
         PostgresDatabase,
         ProviderRepository,
         UserRepository,
@@ -230,6 +235,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.provider_repository = ProviderRepository(database)
         app.state.lifecycle_repository = AgentLifecycleRepository(database)
         app.state.conversation_repository = ConversationRepository(database)
+        app.state.knowledge_repository = KnowledgeRepository(database)
+        app.state.correction_repository = CorrectionRepository(database)
+        app.state.context_provider_config_repository = ContextProviderConfigRepository(database)
+
+    # M6.4/M6.5 prompt context providers. Without persistence the knowledge
+    # provider degrades to a "no repository" result instead of failing requests.
+    if getattr(app.state, "context_provider_registry", None) is None:
+        from .prompt.providers import ContextProviderRegistry
+
+        app.state.context_provider_registry = ContextProviderRegistry(
+            config_repository=getattr(app.state, "context_provider_config_repository", None),
+            knowledge_repository=getattr(app.state, "knowledge_repository", None),
+            memory_store=getattr(app.state, "memory_store", None),
+        )
 
     app.state.ready = True
     try:
@@ -278,6 +297,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runtime_control_plane_router)
     app.include_router(history_control_plane_router)
     app.include_router(provider_control_plane_router)
+    app.include_router(knowledge_control_plane_router)
+    app.include_router(correction_control_plane_router)
 
     @app.middleware("http")
     async def correlation_middleware(
