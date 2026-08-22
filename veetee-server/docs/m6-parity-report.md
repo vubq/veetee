@@ -2,9 +2,9 @@
 
 ## Trạng thái
 
-Mốc 6 đang được triển khai. Tài liệu này là ma trận bằng chứng tích lũy; chưa phải bàn
-giao Cổng 6 cho tới khi mọi capability đã duyệt đạt acceptance hoặc được người dùng phê
-duyệt rõ là không áp dụng.
+Mốc 6 đã hoàn tất backend, Console responsive và migration runtime cho M6.1, M6.4–M6.8.
+Tài liệu này chưa phải bàn giao Cổng 6 vì M6.2 còn thiếu nguồn consent để nối recorder
+vào realtime pipeline mà không vi phạm nguyên tắc transcript opt-in.
 
 ## Quyết định đã khóa
 
@@ -27,14 +27,14 @@ duyệt rõ là không áp dụng.
 
 | Capability | Trạng thái | Bằng chứng hiện tại |
 | --- | --- | --- |
-| M6.1 Provider management | Backend hoàn tất, Console chưa nối | Global state/default, optimistic version, RBAC admin, runtime health không inference, model validation và audit |
-| M6.2 History và agent lifecycle | Backend hoàn tất, Console chưa nối | Consent-gated turns, JSON export, hard delete, retention purge, template/tag, immutable snapshot và restore |
+| M6.1 Provider management | Backend và Console hoàn tất | Global state/default, optimistic version, RBAC admin, runtime health không inference, model validation và audit; Console owner đọc catalog, admin mutation có role gate |
+| M6.2 History và agent lifecycle | Backend persistence/API hoàn tất; realtime recorder chưa nối | Consent-gated turns, JSON export, hard delete, retention purge, template/tag, immutable snapshot và restore; device handshake/session/Console chưa có nguồn consent versioned để gọi recorder an toàn |
 | M6.3 Voice | Chờ đánh giá adapter | Chưa expose selector/preview khi runtime chưa có voice catalog thật |
-| M6.4 Knowledge/RAG | Backend hoàn tất, Console chưa nối | Dataset/document/chunk, bounded UTF-8 upload, PostgreSQL FTS, citation/provenance, composite tenant constraint, injection delimiting và hard delete |
-| M6.5 Correction/context | Backend hoàn tất, Console chưa nối | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
-| M6.6 Tool ecosystem | Backend hoàn tất, Console chưa nối | Internal server MCP catalog; external MCP HTTPS exact-host allowlist, DNS/IP pinning chống SSRF, default-deny agent permission/rate limit/timeout/audit; Open-Meteo typed adapter |
-| M6.7 Device tools | Backend hoàn tất, Console chưa nối | Initialize/list pagination/call correlated theo live session; owner/device/capability gate; confirmation hash một lần TTL 60s bind exact arguments; bounded timeout/cleanup/audit |
-| M6.8 Administration | Backend hoàn tất, Console chưa nối | Admin-only user/status/role và one-time reset; typed optimistic settings; bounded audit search; atomic default-off quota cho LLM/TTS/tool/RAG đã nối runtime |
+| M6.4 Knowledge/RAG | Backend và Console hoàn tất | Dataset/document/chunk, bounded UTF-8 upload, PostgreSQL FTS, citation/provenance, composite tenant constraint, injection delimiting, hard delete và Console upload/search/assignment |
+| M6.5 Correction/context | Backend và Console hoàn tất | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
+| M6.6 Tool ecosystem | Backend và Console hoàn tất | Internal server MCP catalog; external MCP HTTPS exact-host allowlist, DNS/IP pinning chống SSRF, default-deny agent permission/rate limit/timeout/audit; Open-Meteo typed adapter |
+| M6.7 Device tools | Backend và Console hoàn tất | Initialize/list pagination/call correlated theo live session; owner/device/capability gate; confirmation hash một lần TTL 60s bind exact arguments; Console giữ session ID và xóa token tạm sau xác nhận/hủy/lỗi |
+| M6.8 Administration | Backend và Console hoàn tất | Admin-only user/status/role và one-time reset; typed optimistic settings; bounded audit search; atomic default-off quota cho LLM/TTS/tool/RAG đã nối runtime; `403` hiện role gate không logout |
 | M6.9 MQTT/UDP | Không áp dụng đã duyệt | WebSocket đáp ứng vận hành local; không mở thêm transport/security boundary |
 | M6.10 Client coverage | Đã khóa | Web responsive là client quản trị; không tạo mobile app riêng |
 
@@ -64,6 +64,23 @@ duyệt rõ là không áp dụng.
   UTC windows, tenant isolation, 8-way atomic concurrency, RAG pre-ingest reject và realtime
   LLM pre-provider reject đều pass. Backend sau M6.8: `459/459` test pass; Ruff pass; mypy
   pass trên 112 source files; namespace scan thường và `--all` pass.
+- Console M6: type-check và production build pass; Playwright `40/40` pass trên desktop
+  1440 x 900 và mobile 390 x 844. Scenario gồm điều hướng mọi view, Knowledge upload/search,
+  correction preview, Device MCP list/prepare/explicit-confirm/call, exact `session_id`, token
+  không render, admin `403` giữ phiên và kiểm tra horizontal page overflow/browser error.
+- Runtime PostgreSQL `veetee` đã áp migration `005`–`010`; ledger có đủ `001`–`010`, bảng
+  Knowledge/quota tồn tại và sáu typed system setting mặc định đã được seed.
+- QA cuối checkpoint: backend `459/459` pass, Ruff pass, mypy pass trên 112 source files,
+  namespace scan thường và `--all` pass; hai repo references clean.
+
+## Điểm cần quyết định trước Cổng 6
+
+`ConversationRecorder` và test consent-gated đã có, nhưng realtime pipeline không có nguồn
+`transcript_consent`/`consent_version`. Device handshake không mang consent; Console cũng
+không có workflow tạo conversation shell trước khi bật consent. Vì transcript đã khóa là
+opt-in, server không được mặc định bật ghi lịch sử. Cần chốt nơi người dùng cấp consent
+versioned (chính sách theo agent/device trong Console hoặc mở rộng contract session) trước
+khi nối recorder vào pipeline.
 
 ## Mục không áp dụng đã duyệt
 

@@ -37,6 +37,20 @@ PostgreSQL được kiểm riêng trong test suite server. Test fail khi có l�
   table, badge, empty state và card.
 - Agent create/rename/delete, conversation, device bind/unbind, OTA artifact/release/publish
   và cấu hình agent runtime đều gọi API Veetee thật.
+- Điều hướng chia ba nhóm `Trợ lý`, `Vận hành` và `Quản trị`. Nhóm Vận hành gồm provider,
+  Knowledge/RAG, hiệu chỉnh/ngữ cảnh, external integration/Device MCP và OTA; nhóm Quản trị
+  gồm user, system settings/quota và audit log. Toàn bộ dùng chung một layout responsive,
+  bảng rộng cuộn trong card thay vì làm tràn ngang trang trên mobile.
+- Knowledge hỗ trợ tải tài liệu `text/plain`/`text/markdown`, xem chunk, thử truy vấn và gắn
+  dataset vào trợ lý. Correction hỗ trợ rule `exact`/`phrase`, preview và cấu hình context
+  provider theo trợ lý.
+- Device MCP bắt buộc đi qua `tools/list` rồi `prepare-call` và hộp thoại xác nhận rõ ràng
+  trước `call`. Console giữ đúng `session_id`; confirmation token chỉ tồn tại tạm trong memory,
+  không render hoặc persist và được xóa ngay khi xác nhận, hủy hay gặp lỗi.
+- Owner luôn xem được provider catalog và quota cá nhân. API quản trị trả `403` được hiển thị
+  bằng role gate tại chỗ, không xóa phiên hoặc suy đoán role từ email. Admin có workflow quản
+  lý user/reset token một lần, typed settings, quota theo bốn cửa sổ và audit filter theo
+  actor/action/resource/time.
 - Hộp thoại “Cấu hình trợ lý” tối thiểu chỉ expose các trường đã có hiệu lực realtime trong
   pipeline: vai trò (`role_prompt`), tính cách (`personality`), cách xưng hô (`address_style`),
   ngôn ngữ (`language`), mức độ chi tiết (`detail_level`), phong cách trả lời (`response_style`)
@@ -51,6 +65,9 @@ PostgreSQL được kiểm riêng trong test suite server. Test fail khi có l�
   lượt sau. Unbind đóng session thiết bị hiện hành để không tiếp tục dùng binding cũ.
 - Control chưa có backend không được hiển thị như chức năng khả dụng; các mục này chỉ xuất
   hiện ở trạng thái disabled với nhãn `Sắp có` (ví dụ menu tạo từ mẫu/nhập cấu hình).
+- Playwright mock HTTP boundary cho các workflow M6 đại diện, gồm Knowledge upload/search,
+  correction preview, Device MCP prepare/xác nhận/call, role gate `403`, quota và audit; mọi
+  scenario chạy ở desktop 1440 x 900 và mobile 390 x 844.
 
 Giao diện tham chiếu bố cục và hành vi quan sát từ `https://xiaozhi.me/console/agents`,
 nhưng dùng tài sản nhận diện Veetee riêng và không chứa mã nguồn/tài sản thương hiệu của

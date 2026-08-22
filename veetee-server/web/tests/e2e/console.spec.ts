@@ -306,6 +306,7 @@ test('OTA upload binary, tạo release và publish có xác nhận', async ({ pa
   const assertNoErrors = failOnBrowserErrors(page)
   const state = createState()
   await login(page, state)
+  await page.getByRole('button', { name: 'Vận hành' }).click()
   await page.getByRole('button', { name: 'Firmware OTA' }).click()
   await page.getByTestId('ota-file-input').setInputFiles({ name: 'firmware.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([1, 2, 3, 4]) })
   await page.getByTestId('ota-upload-btn').click()
@@ -468,3 +469,101 @@ test('các hộp thoại chính không gây tràn ngang ở mọi viewport', asy
 
   assertNoErrors()
 })
+
+test('điều hướng M6 hiển thị mọi khu vực vận hành và quản trị responsive', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState()
+  await login(page, state)
+
+  await page.getByRole('button', { name: 'Vận hành' }).click()
+  for (const [tab, heading] of [
+    ['Nhà cung cấp', 'Nhà cung cấp'],
+    ['Kho kiến thức', 'Kho kiến thức'],
+    ['Hiệu chỉnh & ngữ cảnh', 'Hiệu chỉnh & ngữ cảnh'],
+    ['Tích hợp & thiết bị', 'Tích hợp & thiết bị'],
+    ['Firmware OTA', 'Firmware OTA'],
+  ] as const) {
+    await page.getByRole('button', { name: tab, exact: true }).click()
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
+
+  await page.getByRole('button', { name: 'Quản trị' }).click()
+  for (const [tab, heading] of [
+    ['User', 'Quản lý người dùng'],
+    ['Cài đặt & quota', 'Cài đặt & Quota'],
+    ['Audit', 'Nhật ký audit'],
+  ] as const) {
+    await page.getByRole('button', { name: tab, exact: true }).click()
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
+  assertNoErrors()
+})
+
+test('knowledge upload text và truy vấn RAG dùng đúng HTTP contract', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState()
+  await login(page, state)
+  await page.getByRole('button', { name: 'Vận hành' }).click()
+  await page.getByRole('button', { name: 'Kho kiến thức' }).click()
+
+  await page.getByTestId('document-file-input').setInputFiles({
+    name: 'van-hanh.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# Veetee\nChạy trực tiếp trên máy local.'),
+  })
+  await page.getByTestId('upload-document-btn').click()
+  await expect(page.getByText('van-hanh.md')).toBeVisible()
+  const upload = state.requests.find(request => request.method === 'PUT' && request.path.includes('/knowledge/datasets/'))
+  expect(upload?.contentType).toBe('text/markdown')
+
+  await page.getByPlaceholder('Nhập câu hỏi / từ khóa tìm kiếm...').fill('Veetee chạy ở đâu?')
+  await page.getByRole('button', { name: 'Tìm kiếm' }).click()
+  await expect(page.getByText('Veetee chạy trực tiếp trên máy local.')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  assertNoErrors()
+})
+
+test('correction preview và device MCP bắt buộc prepare rồi xác nhận rõ ràng', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState({
+    devices: [{ id: '44444444-4444-4444-8444-444444444444', device_id: 'veetee-device', alias: 'Thiết bị phòng khách', agent_id: stateAgentId(), online: true, last_seen_at: '2026-08-22T10:00:00Z' }],
+  })
+  await login(page, state)
+  await page.getByRole('button', { name: 'Vận hành' }).click()
+  await page.getByRole('button', { name: 'Hiệu chỉnh & ngữ cảnh' }).click()
+  await page.getByRole('button', { name: 'Chạy thử' }).click()
+  await expect(page.getByText('Xin chào, chau ten la Veetee.')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Tích hợp & thiết bị' }).click()
+  await page.getByRole('button', { name: 'Device MCP Tools' }).click()
+  await page.getByRole('button', { name: 'Tải danh sách MCP Tools' }).click()
+  await expect(page.getByLabel('Chọn công cụ MCP:')).toHaveValue('screen.set_brightness')
+  await page.getByTestId('device-mcp-call-btn').click()
+  await expect(page.getByTestId('mcp-confirm-modal')).toBeVisible()
+  await expect(page.getByText('secret-confirmation-token-never-render')).toHaveCount(0)
+  expect(state.requests.some(request => request.path.endsWith('/prepare-call'))).toBe(true)
+  expect(state.requests.find(request => request.path.endsWith('/prepare-call'))?.body).toMatchObject({ session_id: 'live-session-1', arguments: {} })
+  expect(state.requests.some(request => request.path.endsWith('/call'))).toBe(false)
+  await page.getByTestId('mcp-confirm-submit-btn').click()
+  await expect(page.getByText('Đã cập nhật độ sáng')).toBeVisible()
+  expect(state.requests.some(request => request.path.endsWith('/call'))).toBe(true)
+  assertNoErrors()
+})
+
+test('403 admin hiển thị role gate nhưng giữ nguyên phiên đăng nhập', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState({ forbiddenPaths: ['/api/v1/control/admin/users'] })
+  await login(page, state)
+  await page.getByRole('button', { name: 'Quản trị' }).click()
+  await expect(page.getByTestId('role-gate')).toBeVisible()
+  await expect(page.getByLabel('Email đăng nhập')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Trợ lý', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Trợ lý', exact: true })).toBeVisible()
+  assertNoErrors()
+})
+
+function stateAgentId() {
+  return '11111111-1111-4111-8111-111111111111'
+}

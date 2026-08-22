@@ -1,6 +1,9 @@
 import { reactive } from 'vue'
 import type { AgentSummary } from '@/types/agent'
 
+// Re-export để các view import kiểu AgentSummary thống nhất từ module API.
+export type { AgentSummary }
+
 export const authState = reactive({
   authenticated: false,
   userEmail: '',
@@ -237,10 +240,613 @@ export type ProviderCatalogItem = {
   provider_id: string
   models: string[]
   secret_configurable: boolean
+  enabled?: boolean
+  default?: boolean
+  is_default?: boolean
+  health?: { status: string; details?: string }
+  config_version?: number
 }
 
 export function listProviders(): Promise<ProviderCatalogItem[]> {
   return request<ProviderCatalogItem[]>('/api/v1/control/providers')
+}
+
+export function updateProvider(
+  kind: string,
+  providerId: string,
+  payload: { expected_version: number; enabled?: boolean; is_default?: boolean },
+): Promise<ProviderCatalogItem> {
+  return request<ProviderCatalogItem>(`/api/v1/control/providers/${encodeURIComponent(kind)}/${encodeURIComponent(providerId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function checkProviderHealth(kind: string, providerId: string): Promise<void> {
+  return request<void>(`/api/v1/control/providers/${encodeURIComponent(kind)}/${encodeURIComponent(providerId)}/health-check`, {
+    method: 'POST',
+  })
+}
+
+// ------------------------------------------------------------------ Snapshots, Templates, Tags
+export type AgentSnapshot = {
+  id: string
+  agent_id: string
+  version: number
+  reason: string
+  created_by: string | null
+  created_at: string
+  config: Record<string, unknown>
+}
+
+export function listSnapshots(agentId: string): Promise<AgentSnapshot[]> {
+  return request<AgentSnapshot[]>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/snapshots`)
+}
+
+export function createSnapshot(agentId: string, reason?: string): Promise<AgentSnapshot> {
+  return request<AgentSnapshot>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/snapshots`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason ?? 'Thủ công từ giao diện' }),
+  })
+}
+
+export function restoreSnapshot(agentId: string, snapshotId: string, expectedAgentVersion: number): Promise<AgentSummary> {
+  return request<AgentSummary>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_agent_version: expectedAgentVersion }),
+  })
+}
+
+export type AgentTemplate = {
+  id: string
+  name: string
+  description: string
+  config: Record<string, unknown>
+  created_at: string
+}
+
+export function listTemplates(): Promise<AgentTemplate[]> {
+  return request<AgentTemplate[]>('/api/v1/control/templates')
+}
+
+export function createTemplate(name: string, description: string, config: Record<string, unknown>): Promise<AgentTemplate> {
+  return request<AgentTemplate>('/api/v1/control/templates', {
+    method: 'POST',
+    body: JSON.stringify({ name, description, config }),
+  })
+}
+
+export type AgentTag = {
+  id: string
+  name: string
+  created_at: string
+}
+
+export function listTags(): Promise<AgentTag[]> {
+  return request<AgentTag[]>('/api/v1/control/tags')
+}
+
+export function createTag(name: string): Promise<AgentTag> {
+  return request<AgentTag>('/api/v1/control/tags', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function assignAgentTag(tagId: string, agentId: string): Promise<void> {
+  return request<void>(`/api/v1/control/tags/${encodeURIComponent(tagId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'PUT',
+  })
+}
+
+export function unassignAgentTag(tagId: string, agentId: string): Promise<void> {
+  return request<void>(`/api/v1/control/tags/${encodeURIComponent(tagId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+// ------------------------------------------------------------------ Knowledge / Datasets
+export type KnowledgeDataset = {
+  id: string
+  name: string
+  description: string
+  status: 'active' | 'archived'
+  version: number
+  document_count?: number
+  created_at?: string
+  updated_at?: string
+}
+
+export type KnowledgeDocument = {
+  id: string
+  dataset_id: string
+  filename: string
+  media_type: string
+  byte_size: number
+  sha256: string
+  status: string
+  chunk_count: number
+  created_at?: string
+}
+
+export type KnowledgeChunk = {
+  id: string
+  document_id: string
+  ordinal: number
+  content: string
+  token_estimate: number
+}
+
+export function listDatasets(): Promise<KnowledgeDataset[]> {
+  return request<KnowledgeDataset[]>('/api/v1/control/knowledge/datasets')
+}
+
+export function createDataset(payload: { name: string; description?: string }): Promise<KnowledgeDataset> {
+  return request<KnowledgeDataset>('/api/v1/control/knowledge/datasets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getDataset(id: string): Promise<KnowledgeDataset> {
+  return request<KnowledgeDataset>(`/api/v1/control/knowledge/datasets/${encodeURIComponent(id)}`)
+}
+
+export function updateDataset(id: string, payload: { name?: string; description?: string }): Promise<KnowledgeDataset> {
+  return request<KnowledgeDataset>(`/api/v1/control/knowledge/datasets/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteDataset(id: string): Promise<void> {
+  return request<void>(`/api/v1/control/knowledge/datasets/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listDocuments(datasetId: string): Promise<KnowledgeDocument[]> {
+  return request<KnowledgeDocument[]>(`/api/v1/control/knowledge/datasets/${encodeURIComponent(datasetId)}/documents`)
+}
+
+export function uploadDocument(
+  datasetId: string,
+  filename: string,
+  body: Blob | ArrayBuffer | Uint8Array,
+  contentType: 'text/plain' | 'text/markdown' = 'text/plain',
+): Promise<KnowledgeDocument> {
+  return request<KnowledgeDocument>(
+    `/api/v1/control/knowledge/datasets/${encodeURIComponent(datasetId)}/documents/${encodeURIComponent(filename)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': contentType,
+      },
+      body: body as BodyInit,
+    },
+  )
+}
+
+export function getDocumentChunks(documentId: string): Promise<KnowledgeChunk[]> {
+  return request<KnowledgeChunk[]>(`/api/v1/control/knowledge/documents/${encodeURIComponent(documentId)}/chunks`)
+}
+
+export function deleteDocument(documentId: string): Promise<void> {
+  return request<void>(`/api/v1/control/knowledge/documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listAgentDatasets(agentId: string): Promise<KnowledgeDataset[]> {
+  return request<KnowledgeDataset[]>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/knowledge/datasets`)
+}
+
+export function assignAgentDataset(agentId: string, datasetId: string): Promise<void> {
+  return request<void>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/knowledge/datasets/${encodeURIComponent(datasetId)}`, {
+    method: 'PUT',
+  })
+}
+
+export function unassignAgentDataset(agentId: string, datasetId: string): Promise<void> {
+  return request<void>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/knowledge/datasets/${encodeURIComponent(datasetId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export type SearchResultItem = {
+  chunk_id: string
+  document_id: string
+  score: number
+  content: string
+  filename?: string
+}
+
+export function searchKnowledge(payload: { dataset_ids: string[]; query: string; limit?: number; max_chars?: number }): Promise<{ results: SearchResultItem[]; count: number }> {
+  return request<{ results: SearchResultItem[]; count: number }>('/api/v1/control/knowledge/search', {
+    method: 'POST',
+    body: JSON.stringify({ limit: 10, max_chars: 2000, ...payload }),
+  })
+}
+
+// ------------------------------------------------------------------ Corrections & Context
+export type CorrectionSet = {
+  id: string
+  name: string
+  agent_id: string | null
+  enabled: boolean
+  version: number
+  created_at?: string
+}
+
+export type CorrectionRule = {
+  id: string
+  set_id: string
+  ordinal: number
+  rule_type: 'exact' | 'phrase'
+  pattern: string
+  replacement: string
+  case_sensitive: boolean
+  enabled: boolean
+}
+
+export function listCorrectionSets(): Promise<CorrectionSet[]> {
+  return request<CorrectionSet[]>('/api/v1/control/corrections/sets')
+}
+
+export function createCorrectionSet(payload: { name: string; agent_id?: string | null; enabled?: boolean }): Promise<CorrectionSet> {
+  return request<CorrectionSet>('/api/v1/control/corrections/sets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateCorrectionSet(setId: string, payload: { name?: string; enabled?: boolean; expected_version: number }): Promise<CorrectionSet> {
+  return request<CorrectionSet>(`/api/v1/control/corrections/sets/${encodeURIComponent(setId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteCorrectionSet(setId: string): Promise<void> {
+  return request<void>(`/api/v1/control/corrections/sets/${encodeURIComponent(setId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listCorrectionRules(setId: string): Promise<CorrectionRule[]> {
+  return request<CorrectionRule[]>(`/api/v1/control/corrections/sets/${encodeURIComponent(setId)}/rules`)
+}
+
+export function createCorrectionRule(setId: string, payload: {
+  ordinal: number
+  rule_type: string
+  pattern: string
+  replacement: string
+  case_sensitive?: boolean
+  enabled?: boolean
+  expected_set_version: number
+}): Promise<CorrectionRule> {
+  return request<CorrectionRule>(`/api/v1/control/corrections/sets/${encodeURIComponent(setId)}/rules`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteCorrectionRule(ruleId: string): Promise<void> {
+  return request<void>(`/api/v1/control/corrections/rules/${encodeURIComponent(ruleId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export type CorrectionPreviewResponse = {
+  set_id: string
+  version: number
+  original_text: string
+  corrected_text: string
+  applied_rules: Array<{ rule_id: string; pattern: string; replacement: string }>
+}
+
+export function previewCorrectionSet(setId: string, text: string): Promise<CorrectionPreviewResponse> {
+  return request<CorrectionPreviewResponse>(`/api/v1/control/corrections/sets/${encodeURIComponent(setId)}/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
+export type ContextProviderConfig = {
+  id: string
+  agent_id: string
+  provider_type: string
+  enabled: boolean
+  ordinal: number
+  timeout_ms: number
+  cache_ttl_seconds: number
+  config: Record<string, unknown>
+  version: number
+}
+
+export function listAgentContextProviders(agentId: string): Promise<ContextProviderConfig[]> {
+  return request<ContextProviderConfig[]>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/context-providers`)
+}
+
+export function putAgentContextProvider(
+  agentId: string,
+  providerType: string,
+  payload: { enabled: boolean; ordinal: number; timeout_ms: number; cache_ttl_seconds: number; config: Record<string, unknown> },
+): Promise<ContextProviderConfig> {
+  return request<ContextProviderConfig>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/context-providers/${encodeURIComponent(providerType)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAgentContextProvider(agentId: string, providerType: string): Promise<void> {
+  return request<void>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/context-providers/${encodeURIComponent(providerType)}`, {
+    method: 'DELETE',
+  })
+}
+
+// ------------------------------------------------------------------ External Endpoints & Device MCP
+export type ExternalEndpoint = {
+  id: string
+  name: string
+  url: string
+  auth_header_env: string
+  enabled: boolean
+  version: number
+}
+
+export type IntegrationPermission = {
+  agent_id: string
+  endpoint_id: string
+  can_list: boolean
+  can_call: boolean
+  rate_limit_calls: number
+  rate_limit_window_seconds: number
+}
+
+export function listEndpoints(): Promise<ExternalEndpoint[]> {
+  return request<ExternalEndpoint[]>('/api/v1/control/integrations/endpoints')
+}
+
+export function createEndpoint(payload: { name: string; url: string; auth_header_env?: string; enabled?: boolean }): Promise<ExternalEndpoint> {
+  return request<ExternalEndpoint>('/api/v1/control/integrations/endpoints', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getEndpoint(id: string): Promise<ExternalEndpoint> {
+  return request<ExternalEndpoint>(`/api/v1/control/integrations/endpoints/${encodeURIComponent(id)}`)
+}
+
+export function updateEndpoint(id: string, payload: { name?: string; url?: string; auth_header_env?: string; enabled?: boolean; expected_version: number }): Promise<ExternalEndpoint> {
+  return request<ExternalEndpoint>(`/api/v1/control/integrations/endpoints/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteEndpoint(id: string): Promise<void> {
+  return request<void>(`/api/v1/control/integrations/endpoints/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listAgentPermissions(agentId: string): Promise<IntegrationPermission[]> {
+  return request<IntegrationPermission[]>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/integration-permissions`)
+}
+
+export function putAgentPermission(agentId: string, endpointId: string, payload: { can_list: boolean; can_call: boolean; rate_limit_calls?: number; rate_limit_window_seconds?: number }): Promise<IntegrationPermission> {
+  return request<IntegrationPermission>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/integration-permissions/${encodeURIComponent(endpointId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAgentPermission(agentId: string, endpointId: string): Promise<void> {
+  return request<void>(`/api/v1/control/agents/${encodeURIComponent(agentId)}/integration-permissions/${encodeURIComponent(endpointId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function testToolsList(endpointId: string, agentId: string): Promise<{ tools: Array<{ name: string; description: string }> }> {
+  return request<{ tools: Array<{ name: string; description: string }> }>(`/api/v1/control/integrations/endpoints/${encodeURIComponent(endpointId)}/test/list`, {
+    method: 'POST',
+    body: JSON.stringify({ agent_id: agentId }),
+  })
+}
+
+export function testToolCall(endpointId: string, payload: { agent_id: string; tool_name: string; arguments: Record<string, unknown> }): Promise<{ content: unknown[]; isError: boolean }> {
+  return request<{ content: unknown[]; isError: boolean }>(`/api/v1/control/integrations/endpoints/${encodeURIComponent(endpointId)}/test/call`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export type DeviceMcpTool = {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+export function listDeviceMcpTools(devicePk: string, sessionId?: string): Promise<{ session_id: string; tools: DeviceMcpTool[] }> {
+  return request<{ session_id: string; tools: DeviceMcpTool[] }>(`/api/v1/control/devices/${encodeURIComponent(devicePk)}/mcp/tools/list`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+}
+
+export type DeviceMcpPrepareResponse = {
+  confirmation_token: string
+  expires_in_seconds: number
+  session_id: string
+  tool_name: string
+  binding_sha256: string
+}
+
+export function prepareDeviceMcpCall(devicePk: string, toolName: string, payload: { session_id?: string; arguments: Record<string, unknown> }): Promise<DeviceMcpPrepareResponse> {
+  return request<DeviceMcpPrepareResponse>(`/api/v1/control/devices/${encodeURIComponent(devicePk)}/mcp/tools/${encodeURIComponent(toolName)}/prepare-call`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function confirmDeviceMcpCall(devicePk: string, toolName: string, confirmationToken: string): Promise<{ content: unknown[]; is_error: boolean; truncated: boolean }> {
+  return request<{ content: unknown[]; is_error: boolean; truncated: boolean }>(`/api/v1/control/devices/${encodeURIComponent(devicePk)}/mcp/tools/${encodeURIComponent(toolName)}/call`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmation_token: confirmationToken }),
+  })
+}
+
+// ------------------------------------------------------------------ Administration (Users, Settings, Quotas, Audit)
+export type AdminUser = {
+  id: string
+  email: string
+  role: 'owner' | 'admin'
+  status: 'active' | 'suspended'
+  version: number
+  created_at?: string
+}
+
+export function listUsers(params?: { page?: number; limit?: number; role?: string; status?: string; search?: string }): Promise<{ items: AdminUser[]; total: number; page: number; limit: number }> {
+  const query = new URLSearchParams()
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.role) query.set('role', params.role)
+  if (params?.status) query.set('status', params.status)
+  if (params?.search) query.set('search', params.search)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return request<{ items: AdminUser[]; total: number; page: number; limit: number }>(`/api/v1/control/admin/users${qs}`)
+}
+
+export function createUser(payload: { email: string; role: string; status: string }): Promise<{ user: AdminUser; reset_token: string }> {
+  return request<{ user: AdminUser; reset_token: string }>('/api/v1/control/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateUser(userId: string, payload: { expected_version: number; role?: string; status?: string }): Promise<AdminUser> {
+  return request<AdminUser>(`/api/v1/control/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function issueUserResetToken(userId: string): Promise<{ reset_token: string; expires_in_seconds: number }> {
+  return request<{ reset_token: string; expires_in_seconds: number }>(`/api/v1/control/admin/users/${encodeURIComponent(userId)}/reset-token`, {
+    method: 'POST',
+  })
+}
+
+// Shape khớp SystemSettingsRepository (backend 3d6b33d): không có schema_type/description.
+export type SettingItem = {
+  key: string
+  value: unknown
+  version: number
+  updated_by?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export function listSettings(): Promise<SettingItem[]> {
+  return request<SettingItem[]>('/api/v1/control/admin/settings')
+}
+
+export function getSetting(key: string): Promise<SettingItem> {
+  return request<SettingItem>(`/api/v1/control/admin/settings/${encodeURIComponent(key)}`)
+}
+
+export function updateSetting(key: string, payload: { value: unknown; expected_version: number }): Promise<SettingItem> {
+  return request<SettingItem>(`/api/v1/control/admin/settings/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+// Shape khớp QuotaService.get_effective_quota_and_usage (backend 3d6b33d):
+// policy có thể null khi user chưa có policy riêng; usage nằm trong metrics theo cửa sổ.
+export type QuotaPolicy = {
+  user_id: string
+  llm_tokens_per_day: number | null
+  tts_chars_per_day: number | null
+  tool_calls_per_minute: number | null
+  rag_bytes_per_month: number | null
+  enabled: boolean
+  version: number
+  updated_by?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export type QuotaMetricUsage = {
+  limit: number | null
+  used: number
+  remaining: number | null
+  window_start: string
+}
+
+export type QuotaMetricKey = 'llm_tokens_day' | 'tts_chars_day' | 'tool_calls_minute' | 'rag_bytes_month'
+
+export type QuotaEffective = {
+  user_id: string
+  enabled: boolean
+  policy: QuotaPolicy | null
+  metrics: Record<QuotaMetricKey, QuotaMetricUsage>
+}
+
+export function getUserQuota(userId: string): Promise<QuotaEffective> {
+  return request<QuotaEffective>(`/api/v1/control/admin/quotas/${encodeURIComponent(userId)}`)
+}
+
+export function updateUserQuota(userId: string, payload: {
+  expected_version: number
+  enabled?: boolean
+  llm_tokens_per_day?: number
+  tts_chars_per_day?: number
+  tool_calls_per_minute?: number
+  rag_bytes_per_month?: number
+}): Promise<QuotaPolicy> {
+  return request<QuotaPolicy>(`/api/v1/control/admin/quotas/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getMyQuota(): Promise<QuotaEffective> {
+  return request<QuotaEffective>('/api/v1/control/quotas/me')
+}
+
+export type AuditLogItem = {
+  id: string
+  actor_user_id: string | null
+  action: string
+  resource_type: string
+  resource_id: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export function searchAuditLogs(params?: {
+  page?: number
+  limit?: number
+  action?: string
+  resource_type?: string
+  actor_user_id?: string
+  start_time?: string
+  end_time?: string
+}): Promise<{ items: AuditLogItem[]; total: number; page: number; limit: number }> {
+  const query = new URLSearchParams()
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.action) query.set('action', params.action)
+  if (params?.resource_type) query.set('resource_type', params.resource_type)
+  if (params?.actor_user_id) query.set('actor_user_id', params.actor_user_id)
+  if (params?.start_time) query.set('start_time', params.start_time)
+  if (params?.end_time) query.set('end_time', params.end_time)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return request<{ items: AuditLogItem[]; total: number; page: number; limit: number }>(`/api/v1/control/admin/audit-logs${qs}`)
 }
 
 export type DeviceSummary = {
