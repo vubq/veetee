@@ -5,6 +5,7 @@ import UiDropdown, { type DropdownItem } from '@/components/UiDropdown.vue'
 
 defineProps<{
   count: number
+  agentCount: number
 }>()
 
 const query = defineModel<string>('query', { required: true })
@@ -38,8 +39,9 @@ function selectCreate(value: string) {
           <input v-model="query" name="agent-search" type="search" aria-label="Tìm trợ lý" placeholder="Tìm trợ lý" />
         </label>
         <UiDropdown label="Tạo trợ lý" :items="createItems" @select="selectCreate">
-          <template #trigger><div class="split-button"><button class="button button-primary add-device-button" type="button" disabled title="Activation thiết bị thuộc Mốc 5"><Plus :size="16" /><span>Thêm thiết bị · M5</span></button><button class="button button-primary split-trigger" type="button" aria-label="Tạo trợ lý"><ChevronDown :size="16" /></button></div></template>
+          <template #trigger><div class="split-button"><button class="button button-primary add-device-button" type="button" :disabled="agentCount === 0" :title="agentCount === 0 ? 'Hãy tạo ít nhất một trợ lý trước khi thêm thiết bị.' : 'Liên kết thiết bị với một trợ lý'" @click.stop="emit('add-device')"><Plus :size="16" /><span>Thêm thiết bị</span></button><button class="button button-primary split-trigger" type="button" aria-label="Tạo trợ lý"><ChevronDown :size="16" /></button></div></template>
         </UiDropdown>
+        <span v-if="agentCount === 0" class="toolbar-device-help">Cần có trợ lý để liên kết thiết bị.</span>
       </div>
     </div>
   </section>

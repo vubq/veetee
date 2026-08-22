@@ -52,3 +52,17 @@ class AgentSummary(AgentResponse):
     device_count: int = 0
     online: bool = False
     last_conversation: str | None = None
+
+
+class DeviceBindRequest(BaseModel):
+    agent_id: UUID
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class FirmwareReleaseCreate(BaseModel):
+    artifact_id: UUID
+    version: str = Field(min_length=1, max_length=64, pattern=r"^[0-9]+(?:\.[0-9]+)*$")
+    board: str = Field(min_length=1, max_length=128)
+    chip: str = Field(min_length=1, max_length=64)
+    partition: str = Field(min_length=1, max_length=64)
+    force: bool = False

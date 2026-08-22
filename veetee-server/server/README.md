@@ -5,7 +5,8 @@ discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TT
 deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
 ASR, M2.3 thêm OmniRoute Groq LLM, M2.5 thêm Gemini TTS và M2.7 thêm native Opus cùng
 digital-human compatibility harness. M3 thêm prompt/dialogue, intent strategy, tool/MCP
-và memory boundary mở rộng. Resampler khác sample rate và database chưa được tích hợp.
+và memory boundary mở rộng. M5 thêm activation/binding cùng OTA local cơ bản. Resampler
+khác sample rate vẫn chưa được tích hợp.
 
 ## Local commands
 
@@ -44,9 +45,21 @@ Endpoints hiện có:
 - `GET /healthz`: process liveness.
 - `GET /readyz`: application readiness sau lifespan startup.
 - `GET/POST/OPTIONS /api/v1/devices/ota/check`: OTA/config discovery cho firmware
-  (server time, WebSocket URL/token, firmware no-update). Contract chi tiết ở
+  (server time, activation hoặc WebSocket/firmware eligible). Contract chi tiết ở
   `../docs/protocols-and-apis.md`; golden vector ở `../contracts/device/`.
+- `POST /api/v1/devices/ota/check/activate`: firmware poll bằng body `{}`, trả `202` cho
+  tới khi bind và `200` sau bind.
+- `GET /api/v1/devices/ota/artifacts/{artifact_id}`: stream artifact đã publish.
 - `WS /api/v1/devices/ws`: device gateway (hello/listen/abort/ping/pong/goodbye).
+
+Control plane M5 yêu cầu bearer auth: `POST /api/v1/control/devices/bind`,
+`GET /api/v1/control/devices`, `DELETE /api/v1/control/devices/{id}`, raw immutable upload
+`POST /api/v1/control/ota/artifacts` với `application/octet-stream`, tạo release qua
+`POST /api/v1/control/ota/releases` và publish qua
+`POST /api/v1/control/ota/releases/{id}/publish`. Áp migration 003 trước khi bật
+`VEETEE_PERSISTENCE_ENABLED=true`; khi bật persistence phải cấu hình explicit
+`VEETEE_OTA_PUBLIC_BASE_URL` để response firmware không phụ thuộc request `Host`. Xem
+`migrations/README.md`.
 
 Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format contract,
 bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.

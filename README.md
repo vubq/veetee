@@ -10,9 +10,9 @@ Veetee là dự án thiết bị trợ lý giọng nói gồm hai phạm vi chí
 | Server | Phiên thiết bị, xử lý AI, API, quản trị và vận hành | [veetee-server](veetee-server/README.md) |
 
 Hiện tại dự án đang triển khai server-first. Frontend Veetee Console đã có source;
-backend Mốc 1 đã có foundation, Device WebSocket/OTA/audio, fake AI pipeline và simulator.
-Firmware Veetee riêng, database schema, provider AI production, deployment và bản phát
-hành chưa được triển khai. Kiến trúc mục tiêu, công nghệ và thứ tự triển khai backend được quản lý trong
+backend đã có device gateway, realtime AI pipeline, PostgreSQL control plane, Console và
+vòng đời activation/binding/OTA local tới Mốc 5. Firmware Veetee riêng và deployment
+production chưa được triển khai. Kiến trúc mục tiêu, công nghệ và thứ tự triển khai backend được quản lý trong
 [kế hoạch Veetee Server](veetee-server/docs/server-implementation-plan.md); các tài liệu
 khảo sát upstream không phải kiến trúc chính thức của Veetee.
 

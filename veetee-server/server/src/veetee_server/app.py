@@ -196,9 +196,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         app.state.intent_router = IntentRouter(default_strategy=settings.intent_strategy)
 
-    if settings.persistence_enabled:
-        from .persistence import AgentRepository, DatabaseConfig, PostgresDatabase, UserRepository
+    from .persistence import (
+        ActivationRepository,
+        AgentRepository,
+        DatabaseConfig,
+        DeviceRepository,
+        FirmwareReleaseRepository,
+        PostgresDatabase,
+        UserRepository,
+    )
 
+    if settings.persistence_enabled:
         database = PostgresDatabase(DatabaseConfig(dsn=settings.database_dsn))
         if not database.check():
             raise RuntimeError("Configured persistence database is not ready")
@@ -212,6 +220,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.bootstrap_admin_email, settings.bootstrap_admin_password
         )
         app.state.agent_repository = AgentRepository(database)
+        app.state.device_repository = DeviceRepository(database)
+        app.state.activation_repository = ActivationRepository(database)
+        app.state.firmware_repository = FirmwareReleaseRepository(database)
 
     app.state.ready = True
     try:

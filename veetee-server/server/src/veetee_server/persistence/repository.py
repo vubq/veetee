@@ -5,14 +5,24 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import psycopg
 from psycopg.types.json import Jsonb
 
 from .database import PostgresDatabase
+
+
+def parse_semver(v_str: str) -> tuple[int, ...]:
+    nums = [int(n) for n in re.findall(r"\d+", v_str)]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    return tuple(nums) if nums else (0,)
 
 
 def hash_password(password: str) -> str:
@@ -107,16 +117,24 @@ def record_audit(
     resource_type: str,
     resource_id: str,
     metadata: dict[str, Any] | None = None,
+    *,
+    connection: psycopg.Connection[tuple[object, ...]] | None = None,
 ) -> None:
     """Writes redacted control-plane metadata; callers never pass credentials."""
-    with database.connection() as connection:
-        connection.execute(
+    def write(conn: psycopg.Connection[tuple[object, ...]]) -> None:
+        conn.execute(
             "INSERT INTO veetee_audit_events "
             "(id, actor_user_id, action, resource_type, resource_id, metadata) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
             (uuid.uuid4(), actor_user_id, action, resource_type, resource_id,
              Jsonb(metadata or {})),
         )
+
+    if connection is not None:
+        write(connection)
+        return
+    with database.connection() as owned_connection:
+        write(owned_connection)
 
 
 class AgentRepository:
@@ -215,3 +233,500 @@ class AgentRepository:
             )
         )
         return StoredAgent(row[0], row[1], row[2], row[3], profile)
+
+
+@dataclass(frozen=True, slots=True)
+class StoredDevice:
+    id: uuid.UUID
+    owner_user_id: uuid.UUID
+    agent_id: uuid.UUID | None
+    device_id: str
+    alias: str
+    board: str
+    chip: str
+    partition_name: str
+    firmware_version: str
+    client_id: str
+    last_seen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self, is_online: bool = False) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "owner_user_id": str(self.owner_user_id),
+            "agent_id": str(self.agent_id) if self.agent_id else None,
+            "device_id": self.device_id,
+            "alias": self.alias,
+            "board": self.board,
+            "chip": self.chip,
+            "partition": self.partition_name,
+            "version": self.firmware_version,
+            "client_id": self.client_id,
+            "online": is_online,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StoredActivation:
+    id: uuid.UUID
+    device_id: str
+    code: str
+    challenge: str
+    client_id: str
+    board: str
+    chip: str
+    partition_name: str
+    firmware_version: str
+    expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class StoredFirmwareRelease:
+    id: uuid.UUID
+    owner_user_id: uuid.UUID
+    artifact_id: uuid.UUID
+    version: str
+    board: str
+    chip: str
+    partition_name: str
+    force: bool
+    published_at: datetime | None
+    created_at: datetime
+    storage_name: str
+    file_size: int
+    sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "artifact_id": str(self.artifact_id),
+            "version": self.version,
+            "board": self.board,
+            "chip": self.chip,
+            "partition": self.partition_name,
+            "file_size": self.file_size,
+            "sha256": self.sha256,
+            "force": self.force,
+            "published": self.published_at is not None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class DeviceRepository:
+    def __init__(self, database: PostgresDatabase) -> None:
+        self.database = database
+
+    def get_by_device_id(self, device_id: str) -> StoredDevice | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, "
+                "last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE device_id = %s",
+                (device_id,),
+            ).fetchone()
+            return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
+
+    def list(self, owner_user_id: uuid.UUID) -> list[StoredDevice]:
+        with self.database.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, "
+                "last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE owner_user_id = %s ORDER BY created_at, id",
+                (owner_user_id,),
+            ).fetchall()
+            return [StoredDevice(*cast(tuple[Any, ...], row)) for row in rows]
+
+    def record_check(
+        self,
+        device_id: str,
+        board: str,
+        chip: str,
+        partition_name: str,
+        firmware_version: str,
+    ) -> StoredDevice | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "UPDATE veetee_devices SET "
+                "board = CASE WHEN %s <> '' THEN %s ELSE board END, "
+                "chip = CASE WHEN %s <> '' THEN %s ELSE chip END, "
+                "partition_name = CASE WHEN %s <> '' THEN %s ELSE partition_name END, "
+                "firmware_version = CASE WHEN %s <> '' THEN %s ELSE firmware_version END, "
+                "last_seen_at = now(), updated_at = now() WHERE device_id = %s "
+                "RETURNING id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at",
+                (
+                    board, board, chip, chip, partition_name, partition_name,
+                    firmware_version, firmware_version, device_id,
+                ),
+            ).fetchone()
+            return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
+
+    def delete(self, owner_user_id: uuid.UUID, device_pk: uuid.UUID) -> StoredDevice | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "DELETE FROM veetee_devices WHERE id = %s AND owner_user_id = %s "
+                "RETURNING id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, "
+                "last_seen_at, created_at, updated_at",
+                (device_pk, owner_user_id),
+            ).fetchone()
+            if not row:
+                return None
+            device = StoredDevice(*cast(tuple[Any, ...], row))
+            record_audit(
+                self.database,
+                owner_user_id,
+                "device.unbind",
+                "device",
+                str(device.id),
+                connection=conn,
+            )
+            conn.execute(
+                "DELETE FROM veetee_device_bind_receipts WHERE device_id = %s",
+                (device.id,),
+            )
+            return device
+
+
+class ActivationRepository:
+    def __init__(self, database: PostgresDatabase) -> None:
+        self.database = database
+
+    def get_or_create(
+        self,
+        device_id: str,
+        client_id: str = "",
+        board: str = "",
+        chip: str = "",
+        partition_name: str = "app",
+        firmware_version: str = "",
+        ttl_seconds: int = 600,
+    ) -> StoredActivation:
+        with self.database.connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (device_id,))
+            conn.execute(
+                "DELETE FROM veetee_device_bind_receipts WHERE expires_at <= now()"
+            )
+            conn.execute(
+                "DELETE FROM veetee_device_activations "
+                "WHERE device_id = %s AND expires_at <= now()",
+                (device_id,),
+            )
+
+            row = conn.execute(
+                "SELECT id, device_id, code, challenge, client_id, board, chip, partition_name, "
+                "firmware_version, expires_at, created_at, updated_at "
+                "FROM veetee_device_activations WHERE device_id = %s AND expires_at > now()",
+                (device_id,),
+            ).fetchone()
+            if row:
+                return StoredActivation(*cast(tuple[Any, ...], row))
+
+            act_id = uuid.uuid4()
+            challenge = secrets.token_urlsafe(24)
+            expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+            for _ in range(32):
+                code = f"{secrets.randbelow(1_000_000):06d}"
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
+                try:
+                    with conn.transaction():
+                        conn.execute(
+                            "SELECT pg_advisory_xact_lock(hashtext(%s))", (code,)
+                        )
+                        conn.execute(
+                            "DELETE FROM veetee_device_bind_receipts "
+                            "WHERE code_hash = %s AND expires_at <= now()",
+                            (code_hash,),
+                        )
+                        if conn.execute(
+                            "SELECT 1 FROM veetee_device_bind_receipts "
+                            "WHERE code_hash = %s AND expires_at > now()",
+                            (code_hash,),
+                        ).fetchone():
+                            continue
+                        conn.execute(
+                            "INSERT INTO veetee_device_activations "
+                            "(id, device_id, code, challenge, client_id, board, chip, "
+                            "partition_name, firmware_version, expires_at) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                            (act_id, device_id, code, challenge, client_id, board, chip,
+                             partition_name, firmware_version, expires_at),
+                        )
+                    break
+                except psycopg.errors.UniqueViolation:
+                    continue
+            else:
+                raise RuntimeError("Unable to allocate activation code")
+
+            row = conn.execute(
+                "SELECT id, device_id, code, challenge, client_id, board, chip, partition_name, "
+                "firmware_version, expires_at, created_at, updated_at "
+                "FROM veetee_device_activations WHERE id = %s",
+                (act_id,),
+            ).fetchone()
+            return StoredActivation(*cast(tuple[Any, ...], row))
+
+    def bind_device(
+        self,
+        owner_user_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        code: str,
+        rate_limit: int = 20,
+        rate_window_seconds: int = 600,
+        receipt_ttl_seconds: int = 600,
+    ) -> tuple[StoredDevice | None, str | None]:
+        with self.database.connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (code,))
+            conn.execute(
+                "DELETE FROM veetee_device_bind_receipts WHERE expires_at <= now()"
+            )
+
+            agent_exists = conn.execute(
+                "SELECT 1 FROM veetee_agents WHERE id = %s AND owner_user_id = %s",
+                (agent_id, owner_user_id),
+            ).fetchone()
+            if not agent_exists:
+                return None, "agent_not_found"
+
+            code_hash = hashlib.sha256(code.encode()).hexdigest()
+            receipt_row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, last_seen_at, created_at, "
+                "updated_at FROM veetee_devices WHERE id = ("
+                "SELECT device_id FROM veetee_device_bind_receipts "
+                "WHERE code_hash = %s AND expires_at > now() FOR UPDATE) FOR UPDATE",
+                (code_hash,),
+            ).fetchone()
+            if receipt_row:
+                receipt_device = StoredDevice(*cast(tuple[Any, ...], receipt_row))
+                if (
+                    receipt_device.owner_user_id == owner_user_id
+                    and receipt_device.agent_id == agent_id
+                ):
+                    return receipt_device, None
+                return None, "already_bound_conflict"
+
+            attempt_row = conn.execute(
+                "SELECT count(*) FROM veetee_device_bind_attempts "
+                "WHERE owner_user_id = %s AND attempted_at > now() - (%s * interval '1 second')",
+                (owner_user_id, rate_window_seconds),
+            ).fetchone()
+            attempt_count = cast(int, attempt_row[0]) if attempt_row else 0
+            if attempt_count >= rate_limit:
+                return None, "rate_limited"
+            conn.execute(
+                "INSERT INTO veetee_device_bind_attempts(owner_user_id) VALUES (%s)",
+                (owner_user_id,),
+            )
+
+            row = conn.execute(
+                "SELECT id, device_id, code, challenge, client_id, board, chip, partition_name, "
+                "firmware_version, expires_at, created_at, updated_at "
+                "FROM veetee_device_activations WHERE code = %s FOR UPDATE",
+                (code,),
+            ).fetchone()
+            if not row:
+                return None, "invalid_code"
+
+            act = StoredActivation(*cast(tuple[Any, ...], row))
+            now_time = datetime.now(UTC)
+            expires_at = (
+                act.expires_at
+                if act.expires_at.tzinfo
+                else act.expires_at.replace(tzinfo=UTC)
+            )
+
+            if expires_at <= now_time:
+                return None, "expired_code"
+
+            existing_row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE device_id = %s",
+                (act.device_id,),
+            ).fetchone()
+
+            if existing_row:
+                existing_dev = StoredDevice(*cast(tuple[Any, ...], existing_row))
+                if (
+                    existing_dev.owner_user_id == owner_user_id
+                    and existing_dev.agent_id == agent_id
+                ):
+                    return existing_dev, None
+                return None, "already_bound_conflict"
+
+            dev_id = uuid.uuid4()
+            conn.execute(
+                "INSERT INTO veetee_devices "
+                "(id, owner_user_id, agent_id, device_id, board, chip, partition_name, "
+                "firmware_version, client_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (dev_id, owner_user_id, agent_id, act.device_id, act.board, act.chip,
+                 act.partition_name, act.firmware_version, act.client_id),
+            )
+
+            conn.execute("DELETE FROM veetee_device_activations WHERE id = %s", (act.id,))
+            conn.execute(
+                "INSERT INTO veetee_device_bind_receipts "
+                "(id, code_hash, device_id, owner_user_id, agent_id, expires_at) "
+                "VALUES (%s, %s, %s, %s, %s, now() + (%s * interval '1 second'))",
+                (uuid.uuid4(), hashlib.sha256(code.encode()).hexdigest(), dev_id,
+                 owner_user_id, agent_id, receipt_ttl_seconds),
+            )
+
+            record_audit(
+                self.database,
+                owner_user_id,
+                "device.bind",
+                "device",
+                str(dev_id),
+                {"agent_id": str(agent_id)},
+                connection=conn,
+            )
+
+            dev_row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE id = %s",
+                (dev_id,),
+            ).fetchone()
+            if dev_row is None:
+                raise RuntimeError("Bound device row was not persisted")
+            return StoredDevice(*cast(tuple[Any, ...], dev_row)), None
+
+
+class FirmwareReleaseRepository:
+    def __init__(self, database: PostgresDatabase) -> None:
+        self.database = database
+
+    def create_artifact(
+        self,
+        owner_user_id: uuid.UUID,
+        storage_name: str,
+        file_size: int,
+        sha256: str,
+    ) -> uuid.UUID:
+        artifact_id = uuid.uuid4()
+        with self.database.connection() as conn:
+            conn.execute(
+                "INSERT INTO veetee_firmware_artifacts "
+                "(id, owner_user_id, storage_name, file_size, sha256) VALUES (%s, %s, %s, %s, %s)",
+                (artifact_id, owner_user_id, storage_name, file_size, sha256),
+            )
+            record_audit(
+                self.database, owner_user_id, "ota.artifact.upload", "firmware_artifact",
+                str(artifact_id), {"size": file_size, "sha256": sha256}, connection=conn,
+            )
+        return artifact_id
+
+    def create_release(
+        self,
+        owner_user_id: uuid.UUID,
+        artifact_id: uuid.UUID,
+        version: str,
+        board: str,
+        chip: str,
+        partition_name: str,
+        force: bool,
+    ) -> StoredFirmwareRelease:
+        rel_id = uuid.uuid4()
+        with self.database.connection() as conn:
+            conn.execute(
+                "INSERT INTO veetee_firmware_releases "
+                "(id, owner_user_id, artifact_id, version, board, chip, partition_name, force) "
+                "SELECT %s, %s, id, %s, %s, %s, %s, %s FROM veetee_firmware_artifacts "
+                "WHERE id = %s AND owner_user_id = %s",
+                (rel_id, owner_user_id, version, board, chip, partition_name, force,
+                 artifact_id, owner_user_id),
+            )
+            exists = conn.execute(
+                "SELECT 1 FROM veetee_firmware_releases WHERE id = %s", (rel_id,)
+            ).fetchone()
+            if exists is None:
+                raise LookupError("Artifact not found")
+        return cast(StoredFirmwareRelease, self.get(rel_id))
+
+    def publish(
+        self, owner_user_id: uuid.UUID, release_id: uuid.UUID
+    ) -> StoredFirmwareRelease | None:
+        with self.database.connection() as conn:
+            result = conn.execute(
+                "UPDATE veetee_firmware_releases SET published_at = COALESCE(published_at, now()) "
+                "WHERE id = %s AND owner_user_id = %s",
+                (release_id, owner_user_id),
+            )
+            if result.rowcount != 1:
+                return None
+            record_audit(
+                self.database, owner_user_id, "ota.release.publish", "firmware_release",
+                str(release_id), connection=conn,
+            )
+        return self.get(release_id)
+
+    def get(self, release_id: uuid.UUID) -> StoredFirmwareRelease | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT r.id, r.owner_user_id, r.artifact_id, r.version, r.board, r.chip, "
+                "r.partition_name, r.force, r.published_at, r.created_at, a.storage_name, "
+                "a.file_size, a.sha256 FROM veetee_firmware_releases r "
+                "JOIN veetee_firmware_artifacts a ON a.id = r.artifact_id WHERE r.id = %s",
+                (release_id,),
+            ).fetchone()
+            return StoredFirmwareRelease(*cast(tuple[Any, ...], row)) if row else None
+
+    def get_by_artifact(self, artifact_id: uuid.UUID) -> StoredFirmwareRelease | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT r.id, r.owner_user_id, r.artifact_id, r.version, r.board, r.chip, "
+                "r.partition_name, r.force, r.published_at, r.created_at, a.storage_name, "
+                "a.file_size, a.sha256 FROM veetee_firmware_releases r "
+                "JOIN veetee_firmware_artifacts a ON a.id = r.artifact_id "
+                "WHERE r.artifact_id = %s AND r.published_at IS NOT NULL",
+                (artifact_id,),
+            ).fetchone()
+            return StoredFirmwareRelease(*cast(tuple[Any, ...], row)) if row else None
+
+    def find_eligible(
+        self,
+        owner_user_id: uuid.UUID,
+        board: str,
+        chip: str,
+        partition_name: str,
+        current_version: str,
+    ) -> StoredFirmwareRelease | None:
+        with self.database.connection() as conn:
+            rows = conn.execute(
+                "SELECT r.id, r.owner_user_id, r.artifact_id, r.version, r.board, r.chip, "
+                "r.partition_name, r.force, r.published_at, r.created_at, a.storage_name, "
+                "a.file_size, a.sha256 FROM veetee_firmware_releases r "
+                "JOIN veetee_firmware_artifacts a ON a.id = r.artifact_id "
+                "WHERE r.published_at IS NOT NULL AND r.owner_user_id = %s "
+                "AND r.board = %s AND r.chip = %s "
+                "AND r.partition_name = %s",
+                (owner_user_id, board, chip, partition_name),
+            ).fetchall()
+            releases = [
+                StoredFirmwareRelease(*cast(tuple[Any, ...], row)) for row in rows
+            ]
+
+        eligible: list[tuple[tuple[int, ...], StoredFirmwareRelease]] = []
+        for r in releases:
+            parsed_v = parse_semver(r.version)
+            parsed_curr = parse_semver(current_version)
+
+            if r.force or parsed_v > parsed_curr:
+                eligible.append((parsed_v, r))
+
+        if not eligible:
+            return None
+
+        eligible.sort(key=lambda x: x[0], reverse=True)
+        return eligible[0][1]

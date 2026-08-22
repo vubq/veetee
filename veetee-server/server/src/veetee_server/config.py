@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     readiness_enabled: bool = True
 
-    # Device Gateway Settings (M1.3 & M1.4)
+    # Device Gateway Settings (M1.3 & M1.4 & M5)
     device_gateway_token: str = Field(default="")
     device_websocket_public_url: str = Field(default="")
     hello_timeout_seconds: float = Field(default=10.0, gt=0)
@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     binary_max_bytes: int = Field(default=65536, gt=0)
     id_max_length: int = Field(default=128, gt=0)
     cleanup_timeout_seconds: float = Field(default=5.0, gt=0)
+
+    # Device Activation & OTA Settings (M5)
+    activation_ttl_seconds: int = Field(default=600, gt=0)
+    activation_bind_receipt_ttl_seconds: int = Field(default=600, gt=0)
+    activation_bind_rate_limit: int = Field(default=20, gt=0)
+    activation_bind_rate_window_seconds: int = Field(default=600, gt=0)
+    activation_console_url: str = Field(default="http://127.0.0.1:5173/devices")
+    ota_artifact_dir: str = Field(default="/tmp/veetee_ota_artifacts")
+    ota_public_base_url: str = Field(default="")
+    ota_max_artifact_bytes: int = Field(default=16 * 1024 * 1024, gt=0)
 
     # Audio Primitives Settings (M1.5 & M2.7/M2.8)
     audio_codec: Literal["fake", "native"] = Field(default="fake")
@@ -228,6 +238,18 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid device_websocket_public_url: {reason}")
         return v.strip()
 
+    @field_validator("activation_console_url", "ota_public_base_url")
+    @classmethod
+    def _validate_http_url(cls, value: str) -> str:
+        if not value.strip():
+            return ""
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("URL must use http/https and include a host")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("URL must not contain credentials, query or fragment")
+        return value.strip().rstrip("/")
+
     @model_validator(mode="after")
     def _validate_audio_constraints(self) -> "Settings":
         # The audio queue must be able to hold at least one full 60 ms frame;
@@ -290,6 +312,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "tts_segment_max_chars must cover both tts_segment_first_min_chars and "
                 "tts_segment_min_chars"
+            )
+        if self.persistence_enabled and not self.ota_public_base_url:
+            raise ValueError(
+                "ota_public_base_url is required when persistence is enabled"
             )
         return self
 

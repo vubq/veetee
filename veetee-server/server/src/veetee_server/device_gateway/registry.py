@@ -29,6 +29,10 @@ class DeviceSessionRegistry:
         async with self._lock:
             return self._sessions.get(session_id)
 
+    async def online_device_ids(self) -> set[str]:
+        async with self._lock:
+            return {session.device_id for session, _ in self._sessions.values()}
+
     @property
     def active_count(self) -> int:
         return len(self._sessions)

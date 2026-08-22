@@ -53,6 +53,10 @@ Ngoại lệ duy nhất là tài liệu khảo sát hoặc source trong `referen
 dẫn bằng chứng upstream. Ngoại lệ phải được giới hạn theo path và không được dùng trong
 runtime source.
 
+Adapter `digital_human_harness/app.py` có một allowlist hẹp cho đúng đường dẫn filesystem
+tới client tham khảo trong `references`; ngoại lệ này chỉ cho phép locator test harness,
+không cho phép tên upstream trong endpoint, metadata hoặc runtime contract khác.
+
 ## Boundary với wire compatibility
 
 Giữ field/header/message cần thiết để firmware tham khảo kết nối được không đồng nghĩa

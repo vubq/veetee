@@ -276,6 +276,40 @@ headers cho phép gồm `Device-Id, Client-Id, User-Agent, Accept-Language, Cont
 X-Veetee-Request-Id`. Không dùng `Access-Control-Allow-Credentials` (endpoint device
 không dùng cookie/credential trình duyệt).
 
+### M5 activation, binding và OTA local cơ bản
+
+Khi PostgreSQL persistence được bật, `POST /api/v1/devices/ota/check` cho thiết bị chưa
+bind trả thêm `activation` gồm code sáu chữ số, challenge không rỗng, thời gian sống còn
+lại theo millisecond và `message` đúng dạng `<console URL>\n<code>`. Code/challenge giữ
+nguyên trong TTL mặc định 10 phút. `POST /api/v1/devices/ota/check/activate` chỉ nhận body
+Version1 chính xác `{}`: trả `202 {"activated": false}` trước bind và
+`200 {"activated": true}` sau bind. `Device-Id` đã bind với `Client-Id` khác bị từ chối.
+
+Control plane bearer-authenticated cung cấp:
+
+- `POST /api/v1/control/devices/bind` với `agent_id` và `code`; agent phải thuộc tenant.
+  Brute-force được giới hạn bằng quota theo user/cửa sổ thời gian. Bind thành công tạo
+  receipt chỉ chứa hash code, sống trong TTL ngắn để retry cùng user/agent/code idempotent;
+  receipt hết hạn được dọn và code sáu chữ số có thể tái sử dụng an toàn.
+- `GET /api/v1/control/devices`; `online` lấy từ WebSocket session registry hiện hành.
+- `DELETE /api/v1/control/devices/{id}`; unbind tenant-scoped và ghi audit.
+- `POST /api/v1/control/ota/artifacts`; body raw `application/octet-stream`, stream có
+  giới hạn kích thước và SHA-256, tên lưu do server tạo và artifact bất biến.
+- `POST /api/v1/control/ota/releases` và
+  `POST /api/v1/control/ota/releases/{id}/publish`; release khóa version/board/chip/
+  partition/force và chỉ tham chiếu artifact cùng owner.
+
+System-info firmware hiện tại được đọc từ `application.version`, `board.type` (fallback
+`board.name`), `ota.label` và `chip_model_name`; metadata đã bind giữ đúng các giá trị này.
+Thiết bị bound chỉ nhận release cùng owner có board/chip/partition khớp chính xác và
+version cao nhất lớn hơn version hiện tại; release `force=true` vẫn eligible và được
+serialize thành JSON number `force: 1` vì firmware hiện tại kiểm kiểu number. URL artifact
+chỉ sinh từ `VEETEE_OTA_PUBLIC_BASE_URL` đã validate, không dùng request `Host`. Download dùng
+`GET /api/v1/devices/ota/artifacts/{artifact_id}`, chỉ resolve storage name do server tạo
+trong artifact root, hash SHA-256 lại theo chunk trước khi stream và không nạp toàn bộ vào
+RAM. Phạm vi rút gọn này chưa có
+signature, channel/cohort, rollout percentage hay firmware report.
+
 ---
 
 ## Endpoint mặc định quan sát từ firmware tham khảo (Upstream reference)

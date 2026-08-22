@@ -8,7 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = re.compile(r"xiaozhi", re.IGNORECASE)
 DEFAULT_ROOTS = (
@@ -24,6 +23,15 @@ PRODUCT_SUFFIXES = {
     ".toml", ".sql",
 }
 SELF = Path(__file__).resolve()
+CONTENT_ALLOWLIST = {
+    "veetee-server/server/src/veetee_server/digital_human_harness/app.py": (
+        re.compile(r'^\s*/ "references/xiaozhi-esp32-server/main/digital-human"\s*$'),
+    ),
+}
+
+
+def is_allowed_content(relative_path: str, line: str) -> bool:
+    return any(pattern.search(line) for pattern in CONTENT_ALLOWLIST.get(relative_path, ()))
 
 
 def files_to_scan(scan_all: bool) -> tuple[list[Path], list[str]]:
@@ -49,7 +57,9 @@ def files_to_scan(scan_all: bool) -> tuple[list[Path], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--all", action="store_true", help="scan all non-reference repository files")
+    parser.add_argument(
+        "--all", action="store_true", help="scan all non-reference repository files"
+    )
     args = parser.parse_args()
 
     files, forbidden_paths = files_to_scan(args.all)
@@ -59,9 +69,10 @@ def main() -> int:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
+        relative_path = path.relative_to(ROOT).as_posix()
         for line_number, line in enumerate(text.splitlines(), start=1):
-            if FORBIDDEN.search(line):
-                violations.append((path.relative_to(ROOT).as_posix(), line_number))
+            if FORBIDDEN.search(line) and not is_allowed_content(relative_path, line):
+                violations.append((relative_path, line_number))
 
     if forbidden_paths or violations:
         for path in forbidden_paths:

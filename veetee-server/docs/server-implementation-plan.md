@@ -591,52 +591,59 @@ thử nghiệm.
 
 ## 13. Mốc 5 - Activation, binding và OTA Veetee
 
-**Mục tiêu:** vòng đời thiết bị/firmware đầy đủ, an toàn và không mang branding upstream.
+**Mục tiêu:** hoàn thiện đúng vòng đời activation/binding/OTA mà firmware tham khảo đang
+chạy hỗ trợ, không sửa hoặc tạo firmware trong giai đoạn server-first.
 
 ### M5.1 OTA/config discovery
 
-- Mở rộng responder tương thích tối thiểu từ M1 thành lifecycle production đầy đủ.
-- Hoàn thiện activation state, WebSocket credential rotation và firmware eligibility.
+- Thiết bị chưa bind nhận `activation.code/message/challenge`, đọc mã sáu số và poll
+  `/activate`; sau bind, check kế tiếp bỏ activation và firmware khởi tạo WebSocket.
+- Parse đúng system-info lồng của firmware, cập nhật last-seen và firmware eligibility.
 - Không có URL/path/metadata chứa namespace cấm.
 
-### M5.2 Device credential
+### M5.2 Transport credential tương thích
 
-- Credential riêng từng device, rotation/revocation và binding với Device-Id/Client-Id.
-- Token có issuer/audience/expiry; không dùng shared fleet secret làm thiết kế cuối.
-- Recovery không được yêu cầu erase NVS.
+- Trả WebSocket URL/token đúng schema firmware lưu vào NVS và gửi ở Bearer handshake.
+- Giữ shared gateway token cho compatibility local hiện tại; thiết kế per-device
+  credential/rotation/revocation đã tách sang branch `feature/m5-secure-device-lifecycle`
+  để phát triển khi có yêu cầu firmware tương ứng.
+- Bind/unbind/rebind không yêu cầu erase NVS hoặc Wi-Fi.
 
 ### M5.3 Activation và binding
 
-- Activation code/challenge có TTL, attempt limit và idempotency.
+- Activation code/challenge có TTL, allocation collision-safe, quota và idempotency TTL.
 - User bind/unbind/rebind có ownership, confirmation và audit.
 - Test device chưa bind, code hết hạn, replay và race bind.
 
 ### M5.4 Firmware release model
 
-- Immutable artifact/release, board/chip/partition/version compatibility và checksum.
-- Chữ ký, provenance, channel, cohort, rollout percentage và kill switch.
-- Anti-rollback và rollback target rõ; không ghi đè release cũ.
+- Artifact/release local bất biến, tenant-scoped, đúng board/chip/partition/version và SHA-256.
+- Release chỉ xuất hiện sau publish; hỗ trợ `force` đúng field firmware hiện tại parse.
+- Signature/channel/cohort/staged rollout là backlog secure lifecycle, không giả lập trên
+  firmware tham khảo.
 
 ### M5.5 Artifact upload/download
 
-- Admin upload có MIME/size/hash/signature validation và atomic storage.
-- Download streaming, path traversal protection, token/expiry/range request.
+- Owner upload raw binary có size/hash validation và atomic storage.
+- Download streaming, path traversal protection và integrity recheck trước stream.
 - Không load toàn bộ firmware vào RAM.
 
-### M5.6 Rollout/reporting
+### M5.6 Publish và compatibility evidence
 
-- Device report check/download/install/boot success/failure.
-- Dashboard theo board/version/cohort; health gate tự dừng rollout theo policy.
-- Test interrupted download, corrupt artifact, downgrade và power-loss scenario phù hợp.
+- Console/API tạo artifact, release và publish; device bound nhận update tương thích.
+- Test corrupt artifact, downgrade/no-update, tenant isolation và force update.
+- Firmware hiện tại không gửi progression report; report/health gate thuộc secure branch
+  và chỉ đưa vào main khi firmware Veetee hỗ trợ.
 
 ### M5.7 Hardware validation
 
-- Flash/OTA theo quy trình bảo toàn NVS/Wi-Fi.
-- Xác minh rollback, reconnect, server endpoint và peripheral smoke test.
-- Không kết luận production-safe chỉ từ simulator.
+- Dùng nguyên firmware tham khảo đã pin; không patch hoặc tạo firmware.
+- Chạy thật toàn chuỗi: first-contact, mã sáu số, Console bind, poll 202->200, check không
+  còn activation, WebSocket/hội thoại, OTA partition switch, reboot/reconnect và rollback.
+- Bảo toàn NVS/Wi-Fi; không gọi compatibility evidence là production-safe.
 
-**Bàn giao Mốc 5:** activation/bind demo, OTA rollout local, audit/report và hardware
-evidence.
+**Bàn giao Mốc 5:** activation/bind sáu số end-to-end, OTA publish/download/install local,
+audit, Console và hardware evidence bằng firmware tham khảo nguyên trạng.
 
 **CỔNG DUYỆT 5: DỪNG. Chờ người dùng duyệt trước khi mở rộng tính năng parity.**
 

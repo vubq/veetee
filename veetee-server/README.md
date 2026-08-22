@@ -6,7 +6,8 @@
 hiện có nền tảng M1, state machine, Device WebSocket, OTA discovery, audio primitives,
 fake AI pipeline deterministic, Silero VAD adapter (M2.1), PhoWhisper ASR adapter (M2.2),
 OmniRoute Groq LLM adapter (M2.3) và device simulator; frontend Vue 3 + Vite nằm trong
-`web/`. Database, provider AI production và deployment manifest chưa được triển khai.
+`web/`. PostgreSQL control plane, Console integration và activation/binding/OTA local M5
+đã được triển khai; deployment production chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model

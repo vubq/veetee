@@ -30,3 +30,17 @@ device tests.
 Control-plane integration tests must use a separate database named `veetee_test` (or a
 DSN containing that name through `VEETEE_TEST_DATABASE_DSN`). Tests fail closed instead
 of truncating the runtime `veetee` database.
+
+## M5 activation và OTA
+
+Áp migration sau M4 bằng database owner local:
+
+```bash
+psql -d veetee -f migrations/003_device_activation_ota.sql
+```
+
+Migration 003 preflight duplicate trước khi đổi uniqueness, thêm global uniqueness cho
+`device_id`, activation TTL, bind quota/receipt TTL và artifact/release bất biến theo
+tenant. Nếu dữ liệu M4 có duplicate `device_id`, migration báo rõ các ID xung đột rồi
+rollback toàn bộ để người vận hành xử lý ownership thủ công; migration không tự xóa dữ
+liệu. Down migration cũng từ chối khi đã có dữ liệu M5 để tránh mất dữ liệu.

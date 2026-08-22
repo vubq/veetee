@@ -49,23 +49,47 @@ const baseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080'
 let accessToken = ''
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  readonly name = 'ApiError'
+
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly detail?: unknown,
+  ) {
     super(message)
   }
 }
 
+function errorMessage(status: number, detail: unknown): string {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    const messages = detail.flatMap((item) => {
+      if (typeof item === 'string') return [item]
+      if (item && typeof item === 'object' && 'msg' in item && typeof item.msg === 'string') return [item.msg]
+      return []
+    })
+    if (messages.length) return messages.join(' ')
+  }
+  return `API error ${status}`
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...init.headers,
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...init.headers,
+      },
+    })
+  } catch (reason) {
+    throw new ApiError(0, 'Không thể kết nối tới máy chủ.', reason)
+  }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { detail?: string }
-    throw new ApiError(response.status, body.detail ?? `API error ${response.status}`)
+    const body = await response.json().catch(() => ({})) as { detail?: unknown }
+    throw new ApiError(response.status, errorMessage(response.status, body.detail), body.detail)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -121,6 +145,9 @@ export type DeviceSummary = {
   agent_id: string | null
   online: boolean
   last_seen_at: string | null
+  created_at?: string
+  board?: string | null
+  version?: string | null
 }
 
 export type ConversationSummary = {
@@ -137,6 +164,19 @@ export type ConversationSummary = {
 
 export function listDevices(): Promise<DeviceSummary[]> {
   return request<DeviceSummary[]>('/api/v1/control/devices')
+}
+
+export function bindDevice(agentId: string, code: string): Promise<DeviceSummary> {
+  return request<DeviceSummary>('/api/v1/control/devices/bind', {
+    method: 'POST',
+    body: JSON.stringify({ agent_id: agentId, code }),
+  })
+}
+
+export function unbindDevice(deviceId: string): Promise<void> {
+  return request<void>(`/api/v1/control/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+  })
 }
 
 export function listConversations(agentId?: string): Promise<ConversationSummary[]> {

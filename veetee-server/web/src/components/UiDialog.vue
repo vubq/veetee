@@ -2,6 +2,14 @@
 import { X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, useId, useTemplateRef, watch } from 'vue'
 
+const dialogStack: symbol[] = []
+
+function removeFromStack(id: symbol) {
+  const index = dialogStack.lastIndexOf(id)
+  if (index >= 0) dialogStack.splice(index, 1)
+  document.body.classList.toggle('dialog-open', dialogStack.length > 0)
+}
+
 const props = withDefaults(
   defineProps<{
     open: boolean
@@ -18,14 +26,27 @@ const panel = useTemplateRef<HTMLElement>('panel')
 const titleId = `${useId()}-title`
 const descriptionId = `${useId()}-description`
 const previousFocus = ref<HTMLElement | null>(null)
+const dialogId = Symbol('dialog')
+
+function isTopmost() {
+  const visiblePanels = document.querySelectorAll<HTMLElement>('.dialog-layer .dialog-panel')
+  const topmostPanel = visiblePanels.item(visiblePanels.length - 1)
+  return topmostPanel ? topmostPanel === panel.value : dialogStack.at(-1) === dialogId
+}
+
+function closeTopmost() {
+  if (isTopmost()) emit('close')
+}
 
 function focusableElements() {
-  return Array.from(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])
+  return Array.from(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])') ?? [])
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (!props.open) return
+  if (!props.open || !isTopmost()) return
   if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopImmediatePropagation()
     emit('close')
     return
   }
@@ -48,27 +69,31 @@ watch(
   async (open) => {
     if (open) {
       previousFocus.value = document.activeElement as HTMLElement | null
+      removeFromStack(dialogId)
+      dialogStack.push(dialogId)
       document.body.classList.add('dialog-open')
       await nextTick()
-      focusableElements()[0]?.focus()
+      const preferredFocus = panel.value?.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
+      preferredFocus?.focus() ?? focusableElements()[0]?.focus()
       return
     }
-    document.body.classList.remove('dialog-open')
-    previousFocus.value?.focus()
+    removeFromStack(dialogId)
+    await nextTick()
+    if (previousFocus.value?.isConnected) previousFocus.value.focus()
   },
 )
 
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown)
-  document.body.classList.remove('dialog-open')
+  removeFromStack(dialogId)
 })
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="dialog-fade">
-      <div v-if="open" class="dialog-layer" :class="`dialog-layer-${variant}`" role="presentation" @mousedown.self="emit('close')">
+      <div v-if="open" class="dialog-layer" :class="`dialog-layer-${variant}`" role="presentation" @mousedown.self="closeTopmost">
         <section ref="panel" class="dialog-panel" :class="[`dialog-${size}`, `dialog-${variant}`]" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined">
           <header class="dialog-header">
             <div>

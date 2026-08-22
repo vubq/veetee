@@ -221,6 +221,20 @@ object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quy
 
 ## OTA/config discovery (M1.4 - Quyết định Veetee)
 
+### Activation/binding M5 trong giai đoạn server-first
+
+Firmware tham khảo được dùng nguyên trạng. Thiết bị chưa bind nhận object `activation`
+gồm `code` sáu chữ số, `message` chứa URL Console và mã, `challenge` không rỗng cùng
+`timeout_ms`. Firmware đọc mã, rồi `POST` body `{}` tới URL OTA nối thêm `/activate`;
+server trả 202 cho tới khi người dùng nhập mã trong Console và trả 200 sau bind. OTA check
+kế tiếp không còn `activation`, firmware dùng object `websocket` đã lưu để kết nối.
+
+M5 trên `main` không yêu cầu firmware gửi proof mới, per-device rediscovery credential,
+signature verification hoặc progression report. Thiết kế mở rộng đó được giữ ở branch
+`feature/m5-secure-device-lifecycle` và chỉ quay lại main khi có yêu cầu phát triển firmware.
+Field OTA `firmware.force` phải là JSON number `0` hoặc `1`; firmware tham khảo kiểm
+`cJSON_IsNumber` nên JSON boolean không kích hoạt force install.
+
 Endpoint thiết bị gọi để discover server time, WebSocket URL/token và trạng thái
 firmware. Golden vector chung nằm tại
 `../veetee-server/contracts/device/ota_check_request.json` và

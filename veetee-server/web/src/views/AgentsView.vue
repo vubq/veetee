@@ -9,15 +9,26 @@ import DeviceDialog from '@/components/DeviceDialog.vue'
 import HistoryDialog from '@/components/HistoryDialog.vue'
 import PageToolbar from '@/components/PageToolbar.vue'
 import type { AgentSummary } from '@/types/agent'
-import { listAgents, login } from '@/api/controlPlane'
+import { listAgents, listDevices, login } from '@/api/controlPlane'
 
 const query = ref('')
 const dialog = ref<'add-device' | 'create-agent' | 'config' | 'history' | 'devices' | null>(null)
 const selectedAgent = ref<AgentSummary | null>(null)
+const addDeviceAgentId = ref<string | null>(null)
 
 function show(type: 'config' | 'history' | 'devices', agent: AgentSummary) {
   selectedAgent.value = agent
   dialog.value = type
+}
+
+function showAddDevice(agentId: string | null = null) {
+  addDeviceAgentId.value = agentId
+  dialog.value = 'add-device'
+}
+
+function closeAddDevice() {
+  dialog.value = null
+  addDeviceAgentId.value = null
 }
 
 const agents = ref<AgentSummary[]>([])
@@ -28,8 +39,29 @@ const password = ref('')
 const authenticated = ref(false)
 
 async function loadAgents() {
-  agents.value = await listAgents()
+  const [agentResult, devices] = await Promise.all([listAgents(), listDevices()])
+  agents.value = agentResult.map((agent) => ({
+    ...agent,
+    deviceCount: devices.filter((device) => device.agent_id === agent.id).length,
+    online: devices.some((device) => device.agent_id === agent.id && device.online),
+  }))
   authenticated.value = true
+}
+
+async function refreshDeviceMetadata() {
+  const devices = await listDevices()
+  for (const agent of agents.value) {
+    agent.deviceCount = devices.filter((device) => device.agent_id === agent.id).length
+    agent.online = devices.some((device) => device.agent_id === agent.id && device.online)
+  }
+}
+
+async function deviceChanged() {
+  try {
+    await refreshDeviceMetadata()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : 'Không thể làm mới danh sách thiết bị.'
+  }
 }
 
 async function signIn() {
@@ -64,7 +96,7 @@ const filteredAgents = computed(() => {
 
 <template>
   <main class="page-container main-content">
-    <PageToolbar v-model:query="query" :count="filteredAgents.length" @add-device="dialog = 'add-device'" @create-agent="dialog = 'create-agent'" />
+    <PageToolbar v-model:query="query" :count="filteredAgents.length" :agent-count="agents.length" @add-device="showAddDevice()" @create-agent="dialog = 'create-agent'" />
     <form v-if="!authenticated" class="empty-state" @submit.prevent="signIn">
       <h2>Đăng nhập Console</h2>
       <p>Phiên đăng nhập chỉ được giữ trong bộ nhớ trình duyệt.</p>
@@ -82,10 +114,10 @@ const filteredAgents = computed(() => {
         <p>Thử một tên, mã trợ lý hoặc mô hình khác.</p>
       </div>
     </section>
-    <AddDeviceDialog :open="dialog === 'add-device'" @close="dialog = null" />
+    <AddDeviceDialog :open="dialog === 'add-device'" :agents="agents" :initial-agent-id="addDeviceAgentId" @close="closeAddDevice" @bound="deviceChanged" />
     <CreateAgentDialog :open="dialog === 'create-agent'" @close="dialog = null" @created="addCreatedAgent" />
     <ConfigDialog :open="dialog === 'config'" :agent="selectedAgent" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />
     <HistoryDialog :open="dialog === 'history'" :agent-id="selectedAgent?.id" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />
-    <DeviceDialog :open="dialog === 'devices'" :agent-name="selectedAgent?.name ?? ''" @close="dialog = null" />
+    <DeviceDialog :open="dialog === 'devices'" :agent="selectedAgent" @close="dialog = null" @changed="deviceChanged" />
   </main>
 </template>

@@ -32,6 +32,7 @@ def persisted_client() -> TestClient:
         environment="test",
         persistence_enabled=True,
         database_dsn=TEST_DATABASE_DSN,
+        ota_public_base_url="http://ota.example.test",
         bootstrap_admin_email="owner@example.test",
         bootstrap_admin_password="a-test-password-long-enough",
     )
