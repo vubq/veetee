@@ -29,6 +29,7 @@ import {
   testToolCall,
   testToolsList,
   updateEndpoint,
+  updateDeviceTranscriptConsent,
   type AgentSummary,
   type DeviceMcpTool,
   type DeviceSummary,
@@ -73,6 +74,7 @@ const selectedDevice = ref<DeviceSummary | null>(null)
 const deviceTools = ref<DeviceMcpTool[]>([])
 const deviceMcpSessionId = ref('')
 const loadingDeviceTools = ref(false)
+const savingTranscriptConsent = ref(false)
 const selectedDeviceTool = ref<DeviceMcpTool | null>(null)
 
 // Arguments editor for Device MCP
@@ -265,6 +267,38 @@ async function selectDevice(dev: DeviceSummary) {
   deviceMcpSessionId.value = ''
   deviceToolResult.value = null
   actionError.value = ''
+}
+
+async function handleTranscriptConsentToggle() {
+  const device = selectedDevice.value
+  if (!device || savingTranscriptConsent.value) return
+  const enabled = !device.transcript_consent
+  if (enabled && !confirm(
+    'Bật lưu bản ghi chữ cho thiết bị này? Veetee sẽ lưu nội dung nhận dạng giọng nói và câu trả lời, không lưu âm thanh thô. Chính sách hiện hành: transcript-v1.',
+  )) return
+
+  savingTranscriptConsent.value = true
+  actionError.value = ''
+  try {
+    const updated = await updateDeviceTranscriptConsent(device.id, {
+      enabled,
+      consent_version: enabled ? 'transcript-v1' : '',
+      expected_policy_version: device.consent_policy_version,
+    })
+    const index = devices.value.findIndex(item => item.id === updated.id)
+    if (index >= 0) devices.value[index] = updated
+    selectedDevice.value = updated
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      actionError.value = 'Chính sách lưu hội thoại vừa thay đổi ở nơi khác. Danh sách thiết bị đã được tải lại.'
+      await loadDeviceData()
+      selectedDevice.value = devices.value.find(item => item.id === device.id) ?? null
+    } else {
+      actionError.value = err instanceof Error ? err.message : 'Không thể cập nhật quyền lưu hội thoại.'
+    }
+  } finally {
+    savingTranscriptConsent.value = false
+  }
 }
 
 async function handleFetchDeviceMcpTools() {
@@ -620,6 +654,29 @@ onMounted(() => {
             <div v-if="!selectedDevice.online" class="alert-box is-warning">
               <AlertTriangle :size="16" />
               <span>Thiết bị đang offline. Cần có kết nối WebSocket trực tuyến để gọi MCP Tools.</span>
+            </div>
+
+            <div class="transcript-consent-panel" data-testid="transcript-consent-panel">
+              <div>
+                <strong>Lưu bản ghi chữ hội thoại</strong>
+                <p>
+                  Mặc định tắt. Khi bật, Veetee chỉ lưu văn bản người dùng và câu trả lời;
+                  không lưu âm thanh thô. Thay đổi có hiệu lực khi thiết bị kết nối lại.
+                </p>
+              </div>
+              <button
+                class="secondary-button compact"
+                :class="{ 'is-active': selectedDevice.transcript_consent }"
+                type="button"
+                data-testid="transcript-consent-toggle"
+                :aria-pressed="selectedDevice.transcript_consent"
+                :disabled="savingTranscriptConsent"
+                @click="handleTranscriptConsentToggle"
+              >
+                {{ savingTranscriptConsent
+                  ? 'Đang lưu...'
+                  : selectedDevice.transcript_consent ? 'Đang bật' : 'Đang tắt' }}
+              </button>
             </div>
 
             <div v-if="loadingDeviceTools" class="state-card loading-card compact">

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from veetee_server.app import create_app
 from veetee_server.config import Settings
 from veetee_server.dialogue.history import DialogueHistory
-from veetee_server.dialogue.recorder import ConversationRecorder
+from veetee_server.dialogue.recorder import ConversationRecorder, SessionTranscriptRecorder
 from veetee_server.persistence import (
     ConversationRepository,
     DatabaseConfig,
@@ -44,6 +44,7 @@ def _apply_migrations(database: PostgresDatabase) -> None:
         "008_m6_corrections_context.sql",
         "009_m6_tool_integrations.sql",
         "010_m6_administration.sql",
+        "011_m6_consent_transcript.sql",
     ):
         with database.connection() as connection:
             connection.execute((migrations_dir / name).read_text(encoding="utf-8"))
@@ -621,3 +622,132 @@ def test_conversation_consent_export_delete_and_retention(
         )
     assert purge_expired_conversations(isolated_database(), batch_size=1) == 1
     assert purge_expired_conversations(isolated_database(), batch_size=1) == 0
+
+
+def test_device_transcript_consent_is_versioned_tenant_scoped_and_audited(
+    persisted_client: TestClient,
+) -> None:
+    headers = _login(
+        persisted_client, "owner@example.test", "a-test-password-long-enough"
+    )
+    agent = persisted_client.post(
+        "/api/v1/control/agents", headers=headers, json={"name": "Consent agent"}
+    ).json()
+    device_pk = uuid4()
+    with isolated_database().connection() as connection:
+        owner_id = connection.execute(
+            "SELECT id FROM veetee_users WHERE email = 'owner@example.test'"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO veetee_devices "
+            "(id, owner_user_id, agent_id, device_id, client_id) "
+            "VALUES (%s, %s, %s, 'consent-device', 'consent-client')",
+            (device_pk, owner_id, agent["id"]),
+        )
+
+    listed = persisted_client.get("/api/v1/control/devices", headers=headers).json()[0]
+    assert listed["transcript_consent"] is False
+    assert listed["consent_version"] == ""
+    assert listed["consent_policy_version"] == 1
+
+    endpoint = f"/api/v1/control/devices/{device_pk}/transcript-consent"
+    assert persisted_client.put(
+        endpoint,
+        headers=headers,
+        json={"enabled": True, "consent_version": "", "expected_policy_version": 1},
+    ).status_code == 422
+    enabled = persisted_client.put(
+        endpoint,
+        headers=headers,
+        json={
+            "enabled": True,
+            "consent_version": "transcript-v1",
+            "expected_policy_version": 1,
+        },
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["transcript_consent"] is True
+    assert enabled.json()["consent_policy_version"] == 2
+    assert persisted_client.put(
+        endpoint,
+        headers=headers,
+        json={
+            "enabled": False,
+            "consent_version": "",
+            "expected_policy_version": 1,
+        },
+    ).status_code == 409
+
+    second_email = "consent-other@example.test"
+    second_password = "consent-other-password"
+    with isolated_database().connection() as connection:
+        connection.execute(
+            "INSERT INTO veetee_users (id, email, password_hash, role) "
+            "VALUES (%s, %s, %s, 'owner')",
+            (uuid4(), second_email, hash_password(second_password)),
+        )
+    second_headers = _login(persisted_client, second_email, second_password)
+    assert persisted_client.put(
+        endpoint,
+        headers=second_headers,
+        json={
+            "enabled": False,
+            "consent_version": "",
+            "expected_policy_version": 2,
+        },
+    ).status_code == 404
+
+    disabled = persisted_client.put(
+        endpoint,
+        headers=headers,
+        json={
+            "enabled": False,
+            "consent_version": "ignored-on-disable",
+            "expected_policy_version": 2,
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["transcript_consent"] is False
+    assert disabled.json()["consent_version"] == ""
+    assert disabled.json()["consent_policy_version"] == 3
+
+    with isolated_database().connection() as connection:
+        audit_rows = connection.execute(
+            "SELECT metadata FROM veetee_audit_events "
+            "WHERE action = 'device.transcript_consent.update' ORDER BY created_at"
+        ).fetchall()
+    assert [row[0] for row in audit_rows] == [
+        {"enabled": True, "policy_version": 2},
+        {"enabled": False, "policy_version": 3},
+    ]
+    assert "transcript-v1" not in str(audit_rows)
+
+
+def test_session_transcript_recorder_fails_open_without_logging_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingRecorder:
+        def begin(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("sensitive transcript must not reach logs")
+
+    recorder = SessionTranscriptRecorder(
+        FailingRecorder(),  # type: ignore[arg-type]
+        owner_user_id=uuid4(),
+        agent_id=None,
+        device_id=uuid4(),
+        consent_version="transcript-v1",
+        session_id="safe-session-id",
+    )
+    recorder.record_user_turn(
+        raw_transcript="Nội dung riêng tư",
+        normalized_text="nội dung riêng tư",
+        model_text="Nội dung riêng tư",
+    )
+
+    assert recorder.active is False
+    assert caplog.records[-1].context == {  # type: ignore[attr-defined]
+        "session_id": "safe-session-id",
+        "error_type": "RuntimeError",
+    }
+    assert "Nội dung riêng tư" not in caplog.text
+    assert "sensitive transcript" not in caplog.text

@@ -63,6 +63,18 @@ class RejectingQuotaService:
         raise AssertionError("Usage must not be recorded after LLM precheck rejection")
 
 
+class RecordingTranscriptRecorder:
+    def __init__(self) -> None:
+        self.user_turns: list[dict[str, Any]] = []
+        self.assistant_turns: list[str] = []
+
+    def record_user_turn(self, **turn: Any) -> None:
+        self.user_turns.append(turn)
+
+    def record_assistant_turn(self, final_text: str) -> None:
+        self.assistant_turns.append(final_text)
+
+
 def _make_speech_pcm(duration_ms: float = 60.0, amplitude: int = 1000) -> bytes:
     sample_count = int(16000 * (duration_ms / 1000.0))
     pattern = amplitude.to_bytes(2, byteorder="little", signed=True)
@@ -421,6 +433,7 @@ async def test_fake_pipeline_event_order_and_completion() -> None:
 
     session.begin_processing()
 
+    transcript_recorder = RecordingTranscriptRecorder()
     pipeline = FakePipeline(
         decoder=decoder,
         encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
@@ -429,6 +442,7 @@ async def test_fake_pipeline_event_order_and_completion() -> None:
         asr=FakeASR(default_text="Thử nghiệm."),
         llm=FakeLLM(),
         tts=FakeTTS(chunks_per_sentence=2, delay_seconds=0.0),
+        transcript_recorder=transcript_recorder,  # type: ignore[arg-type]
     )
 
     sink = RecordingSink()
@@ -451,6 +465,15 @@ async def test_fake_pipeline_event_order_and_completion() -> None:
     stt_event = sink.events[0]
     assert isinstance(stt_event, SttEvent)
     assert stt_event.text == "Thử nghiệm."
+    assert transcript_recorder.user_turns == [
+        {
+            "raw_transcript": "Thử nghiệm.",
+            "normalized_text": "Thử nghiệm.",
+            "model_text": "Thử nghiệm.",
+            "metadata": None,
+        }
+    ]
+    assert transcript_recorder.assistant_turns == ["Thử nghiệm."]
 
 
 @pytest.mark.asyncio

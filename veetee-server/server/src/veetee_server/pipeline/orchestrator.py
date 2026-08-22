@@ -45,18 +45,25 @@ from .events import (
     TtsStopEvent,
 )
 from .framing import build_downlink_frame
-from .llm import LLMProvider, LLMStreamEvent, LLMTextDeltaEvent, LLMUsageEvent
+from .llm import (
+    LLMCompletedEvent,
+    LLMProvider,
+    LLMStreamEvent,
+    LLMTextDeltaEvent,
+    LLMUsageEvent,
+)
 from .segmenter import TTSTokenSegmenter
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD
+
+if TYPE_CHECKING:
+    from veetee_server.dialogue.recorder import SessionTranscriptRecorder
+    from veetee_server.persistence import QuotaService
 
 logger = logging.getLogger("veetee.pipeline")
 
 CorrectionHook = Callable[[str], Awaitable[tuple[str, dict[str, Any]]]]
 ContextHook = Callable[[str], Awaitable[list[dict[str, Any]]]]
-
-if TYPE_CHECKING:
-    from veetee_server.persistence import QuotaService
 
 _DOWNLINK_FRAME_DURATION_MS = 60.0
 _STREAM_END = object()
@@ -90,6 +97,7 @@ class FakePipeline:
         correction_hook: CorrectionHook | None = None,
         context_hook: ContextHook | None = None,
         quota_service: QuotaService | None = None,
+        transcript_recorder: SessionTranscriptRecorder | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         if protocol_version not in (1, 2, 3):
@@ -106,6 +114,7 @@ class FakePipeline:
         self.correction_hook = correction_hook
         self.context_hook = context_hook
         self.quota_service = quota_service
+        self.transcript_recorder = transcript_recorder
         self._now_ms = now_ms
 
     async def run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
@@ -154,6 +163,17 @@ class FakePipeline:
         if not self._alive(session, turn, expected_queue_generation=expected_queue_gen):
             return PipelineOutcome.CANCELLED
 
+        if self.transcript_recorder is not None:
+            await asyncio.to_thread(
+                self.transcript_recorder.record_user_turn,
+                raw_transcript=asr_result.raw_text,
+                normalized_text=asr_result.normalized_text,
+                model_text=transcript,
+                metadata={"correction": correction_provenance}
+                if correction_provenance
+                else None,
+            )
+
         # Platform and conversation policies are baseline for every turn.
         # A bound snapshot only adds its profile inside that hierarchy.
         provider_contexts = (
@@ -180,8 +200,11 @@ class FakePipeline:
                 return PipelineOutcome.QUOTA_EXCEEDED
 
         segment_queue: asyncio.Queue[str | Exception | object] = asyncio.Queue(maxsize=2)
+        assistant_text_parts: list[str] = []
+        assistant_final_text = ""
 
         async def producer() -> None:
+            nonlocal assistant_final_text
             stream = self.llm.generate_stream(messages)
             next_event: asyncio.Task[LLMStreamEvent] | None = None
             cancelled = False
@@ -221,8 +244,11 @@ class FakePipeline:
                         next_event = None
 
                     if isinstance(item, LLMTextDeltaEvent) and not item.reasoning:
+                        assistant_text_parts.append(item.delta)
                         for seg in self.segmenter.feed(item.delta):
                             await segment_queue.put(seg)
+                    elif isinstance(item, LLMCompletedEvent):
+                        assistant_final_text = item.text
                     elif (
                         isinstance(item, LLMUsageEvent)
                         and self.quota_service is not None
@@ -354,6 +380,11 @@ class FakePipeline:
                 session.complete_turn()
             except InvalidTransitionError:
                 return PipelineOutcome.CANCELLED
+            if self.transcript_recorder is not None:
+                await asyncio.to_thread(
+                    self.transcript_recorder.record_assistant_turn,
+                    assistant_final_text or "".join(assistant_text_parts),
+                )
             return PipelineOutcome.COMPLETED
         finally:
             if not producer_task.done():

@@ -222,6 +222,9 @@ export async function installMockApi(page: Page, state: MockApiState) {
         agent_id: payload.agent_id,
         online: false,
         last_seen_at: null,
+        transcript_consent: false,
+        consent_version: '',
+        consent_policy_version: 1,
       }
       state.devices.push(device)
       return json(route, 200, device)
@@ -230,6 +233,24 @@ export async function installMockApi(page: Page, state: MockApiState) {
     if (deviceMatch && method === 'DELETE') {
       state.devices = state.devices.filter((item) => item.id !== deviceMatch[1])
       return route.fulfill({ status: 204 })
+    }
+    const transcriptConsentMatch = url.pathname.match(/\/api\/v1\/control\/devices\/([^/]+)\/transcript-consent$/)
+    if (transcriptConsentMatch && method === 'PUT') {
+      const index = state.devices.findIndex(item => item.id === transcriptConsentMatch[1])
+      if (index < 0) return json(route, 404, { detail: 'Device not found' })
+      const payload = bodyJson(request)
+      const currentVersion = Number(state.devices[index]?.consent_policy_version ?? 1)
+      if (payload.expected_policy_version !== currentVersion) {
+        return json(route, 409, { detail: 'Transcript consent policy changed' })
+      }
+      const updated = {
+        ...state.devices[index],
+        transcript_consent: Boolean(payload.enabled),
+        consent_version: payload.enabled ? String(payload.consent_version) : '',
+        consent_policy_version: currentVersion + 1,
+      }
+      state.devices[index] = updated
+      return json(route, 200, updated)
     }
     if (url.pathname === '/api/v1/control/providers' && method === 'GET') {
       if (state.providersStatus !== 200) return json(route, state.providersStatus, { detail: 'Không tải được danh sách nhà cung cấp' })

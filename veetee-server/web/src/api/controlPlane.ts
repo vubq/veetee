@@ -859,6 +859,9 @@ export type DeviceSummary = {
   created_at?: string
   board?: string | null
   version?: string | null
+  transcript_consent: boolean
+  consent_version: string
+  consent_policy_version: number
 }
 
 export type ConversationSummary = {
@@ -888,6 +891,16 @@ export function unbindDevice(deviceId: string): Promise<void> {
   return request<void>(`/api/v1/control/devices/${encodeURIComponent(deviceId)}`, {
     method: 'DELETE',
   })
+}
+
+export function updateDeviceTranscriptConsent(
+  deviceId: string,
+  payload: { enabled: boolean; consent_version: string; expected_policy_version: number },
+): Promise<DeviceSummary> {
+  return request<DeviceSummary>(
+    `/api/v1/control/devices/${encodeURIComponent(deviceId)}/transcript-consent`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  )
 }
 
 export function listConversations(agentId?: string): Promise<ConversationSummary[]> {

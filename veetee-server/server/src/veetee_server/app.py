@@ -249,6 +249,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.provider_repository = ProviderRepository(database)
         app.state.lifecycle_repository = AgentLifecycleRepository(database)
         app.state.conversation_repository = ConversationRepository(database)
+        from .dialogue.recorder import ConversationRecorder
+
+        app.state.conversation_recorder = ConversationRecorder(
+            app.state.conversation_repository,
+            retention_days=settings.conversation_retention_days,
+        )
         app.state.knowledge_repository = KnowledgeRepository(database)
         app.state.correction_repository = CorrectionRepository(database)
         app.state.context_provider_config_repository = ContextProviderConfigRepository(database)

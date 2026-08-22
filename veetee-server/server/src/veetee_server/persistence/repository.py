@@ -101,6 +101,17 @@ def agent_set_clause(fields: tuple[str, ...]) -> str:
     return ", ".join(f"{field} = %s" for field in fields)
 
 
+#: Persisted device columns shared by every device read/write path so the
+#: gateway binding resolution, control-plane API and lifecycle repository
+#: cannot drift apart on the stored schema (M6.2 adds transcript consent).
+DEVICE_SELECT_COLUMNS = (
+    "id, owner_user_id, agent_id, device_id, alias, board, chip, "
+    "partition_name, firmware_version, client_id, "
+    "transcript_consent, consent_version, consent_policy_version, "
+    "last_seen_at, created_at, updated_at"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class StoredAgent:
     id: uuid.UUID
@@ -420,6 +431,12 @@ class StoredDevice:
     partition_name: str
     firmware_version: str
     client_id: str
+    # Per-device transcript consent policy (M6.2). Tenant-scoped, default off:
+    # ``consent_version`` must be non-empty while consent is enabled and the
+    # integer ``consent_policy_version`` is the optimistic concurrency token.
+    transcript_consent: bool
+    consent_version: str
+    consent_policy_version: int
     last_seen_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -436,6 +453,9 @@ class StoredDevice:
             "partition": self.partition_name,
             "version": self.firmware_version,
             "client_id": self.client_id,
+            "transcript_consent": self.transcript_consent,
+            "consent_version": self.consent_version,
+            "consent_policy_version": self.consent_policy_version,
             "online": is_online,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -498,9 +518,7 @@ class DeviceRepository:
     def get_by_device_id(self, device_id: str) -> StoredDevice | None:
         with self.database.connection() as conn:
             row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, "
-                "last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE device_id = %s",
                 (device_id,),
             ).fetchone()
@@ -509,9 +527,7 @@ class DeviceRepository:
     def get_by_device_and_client_id(self, device_id: str, client_id: str) -> StoredDevice | None:
         with self.database.connection() as conn:
             row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, "
-                "last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE device_id = %s AND client_id = %s",
                 (device_id, client_id),
             ).fetchone()
@@ -521,9 +537,7 @@ class DeviceRepository:
         """Returns a tenant-owned device by primary key or None."""
         with self.database.connection() as conn:
             row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, "
-                "last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE id = %s AND owner_user_id = %s",
                 (device_pk, owner_user_id),
             ).fetchone()
@@ -532,9 +546,7 @@ class DeviceRepository:
     def list(self, owner_user_id: uuid.UUID) -> list[StoredDevice]:
         with self.database.connection() as conn:
             rows = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, "
-                "last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE owner_user_id = %s ORDER BY created_at, id",
                 (owner_user_id,),
             ).fetchall()
@@ -556,8 +568,7 @@ class DeviceRepository:
                 "partition_name = CASE WHEN %s <> '' THEN %s ELSE partition_name END, "
                 "firmware_version = CASE WHEN %s <> '' THEN %s ELSE firmware_version END, "
                 "last_seen_at = now(), updated_at = now() WHERE device_id = %s "
-                "RETURNING id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at",
+                f"RETURNING {DEVICE_SELECT_COLUMNS}",
                 (
                     board, board, chip, chip, partition_name, partition_name,
                     firmware_version, firmware_version, device_id,
@@ -568,10 +579,8 @@ class DeviceRepository:
     def delete(self, owner_user_id: uuid.UUID, device_pk: uuid.UUID) -> StoredDevice | None:
         with self.database.connection() as conn:
             row = conn.execute(
-                "DELETE FROM veetee_devices WHERE id = %s AND owner_user_id = %s "
-                "RETURNING id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, "
-                "last_seen_at, created_at, updated_at",
+                f"DELETE FROM veetee_devices WHERE id = %s AND owner_user_id = %s "
+                f"RETURNING {DEVICE_SELECT_COLUMNS}",
                 (device_pk, owner_user_id),
             ).fetchone()
             if not row:
@@ -590,6 +599,66 @@ class DeviceRepository:
                 (device.id,),
             )
             return device
+
+    def set_transcript_consent(
+        self,
+        owner_user_id: uuid.UUID,
+        device_pk: uuid.UUID,
+        *,
+        enabled: bool,
+        consent_version: str,
+        expected_policy_version: int,
+    ) -> tuple[StoredDevice | None, str | None]:
+        """Applies the tenant-owned transcript consent decision for one device.
+
+        The update is optimistic: it only lands when ``consent_policy_version``
+        still equals ``expected_policy_version``, so a concurrent change makes
+        the caller retry on the fresh state. Enabling requires a non-empty
+        version string; disabling clears the stored version. Error codes:
+        ``not_found`` (device absent or owned by another tenant),
+        ``stale_version`` and ``consent_version_required``. Audit metadata
+        carries identifiers and policy versions only, never transcript text.
+        """
+        if enabled and not consent_version.strip():
+            return None, "consent_version_required"
+        stored_version = consent_version.strip() if enabled else ""
+        with self.database.connection() as conn:
+            row = conn.execute(
+                f"UPDATE veetee_devices SET "
+                f"transcript_consent = %s, consent_version = %s, "
+                f"consent_policy_version = consent_policy_version + 1, "
+                f"updated_at = now() "
+                f"WHERE id = %s AND owner_user_id = %s "
+                f"AND consent_policy_version = %s "
+                f"RETURNING {DEVICE_SELECT_COLUMNS}",
+                (
+                    enabled,
+                    stored_version,
+                    device_pk,
+                    owner_user_id,
+                    expected_policy_version,
+                ),
+            ).fetchone()
+            if row is None:
+                exists = conn.execute(
+                    "SELECT 1 FROM veetee_devices WHERE id = %s AND owner_user_id = %s",
+                    (device_pk, owner_user_id),
+                ).fetchone()
+                return None, ("stale_version" if exists else "not_found")
+            device = StoredDevice(*cast(tuple[Any, ...], row))
+            record_audit(
+                self.database,
+                owner_user_id,
+                "device.transcript_consent.update",
+                "device",
+                str(device.id),
+                {
+                    "enabled": device.transcript_consent,
+                    "policy_version": device.consent_policy_version,
+                },
+                connection=conn,
+            )
+            return device, None
 
 
 class ActivationRepository:
@@ -694,9 +763,7 @@ class ActivationRepository:
 
             code_hash = hashlib.sha256(code.encode()).hexdigest()
             receipt_row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, last_seen_at, created_at, "
-                "updated_at FROM veetee_devices WHERE id = ("
+                f"SELECT {DEVICE_SELECT_COLUMNS} FROM veetee_devices WHERE id = ("
                 "SELECT device_id FROM veetee_device_bind_receipts "
                 "WHERE code_hash = %s AND expires_at > now() FOR UPDATE) FOR UPDATE",
                 (code_hash,),
@@ -744,8 +811,7 @@ class ActivationRepository:
                 return None, "expired_code"
 
             existing_row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE device_id = %s",
                 (act.device_id,),
             ).fetchone()
@@ -789,8 +855,7 @@ class ActivationRepository:
             )
 
             dev_row = conn.execute(
-                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
-                "partition_name, firmware_version, client_id, last_seen_at, created_at, updated_at "
+                f"SELECT {DEVICE_SELECT_COLUMNS} "
                 "FROM veetee_devices WHERE id = %s",
                 (dev_id,),
             ).fetchone()

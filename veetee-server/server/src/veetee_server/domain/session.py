@@ -219,6 +219,14 @@ class DeviceSession:
     # The binding stays fixed until the connection ends; reconnect re-resolves.
     owner_user_id: UUID | None = None
     agent_id: UUID | None = None
+    # Primary key of the bound veetee_devices row (distinct from the hardware
+    # ``device_id`` string), resolved together with the tenant binding.
+    device_pk: UUID | None = None
+    # Transcript consent policy snapshot (M6.2) taken from the same bound
+    # device row at binding resolution time, after authentication. Default is
+    # fail-closed off; the snapshot stays fixed until reconnect re-resolves it.
+    transcript_consent: bool = False
+    consent_version: str = ""
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=_now)
     cancellation: CancellationScope = field(default_factory=CancellationScope)

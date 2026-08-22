@@ -74,7 +74,7 @@ async def test_binding_requires_both_device_and_client_identity() -> None:
     agent_id = uuid4()
     stored = StoredDevice(
         uuid4(), owner_id, agent_id, "device-1", "", "", "", "app", "", "client-1",
-        None, None, None,
+        True, "transcript-v1", 2, None, None, None,
     )
     repository = BindingRepository(stored)
     session = DeviceSession(device_id="device-1", client_id="client-1")
@@ -83,6 +83,9 @@ async def test_binding_requires_both_device_and_client_identity() -> None:
 
     assert repository.calls == [("device-1", "client-1")]
     assert (session.owner_user_id, session.agent_id) == (owner_id, agent_id)
+    assert session.device_pk == stored.id
+    assert session.transcript_consent is True
+    assert session.consent_version == "transcript-v1"
 
     mismatch = DeviceSession(device_id="device-1", client_id="other-client")
     mismatch_repository = BindingRepository(None)
@@ -90,6 +93,7 @@ async def test_binding_requires_both_device_and_client_identity() -> None:
         SimpleNamespace(device_repository=mismatch_repository), mismatch
     )
     assert mismatch.owner_user_id is None and mismatch.agent_id is None
+    assert mismatch.transcript_consent is False
 
 
 @pytest.mark.asyncio

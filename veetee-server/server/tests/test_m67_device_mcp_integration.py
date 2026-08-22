@@ -36,6 +36,7 @@ def _prepare_database(database: PostgresDatabase) -> None:
         "008_m6_corrections_context.sql",
         "009_m6_tool_integrations.sql",
         "010_m6_administration.sql",
+        "011_m6_consent_transcript.sql",
     ):
         with database.connection() as connection:
             connection.execute((MIGRATIONS / name).read_text(encoding="utf-8"))

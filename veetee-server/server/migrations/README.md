@@ -17,6 +17,7 @@ psql -d veetee -f migrations/007_m6_knowledge_rag.sql
 psql -d veetee -f migrations/008_m6_corrections_context.sql
 psql -d veetee -f migrations/009_m6_tool_integrations.sql
 psql -d veetee -f migrations/010_m6_administration.sql
+psql -d veetee -f migrations/011_m6_consent_transcript.sql
 ```
 
 Rollback only a local/test database:
@@ -25,6 +26,7 @@ Rollback only a local/test database:
 psql -d veetee -f migrations/001_control_plane.down.sql
 psql -d veetee -f migrations/002_runtime_control_plane.down.sql
 psql -d veetee -f migrations/004_login_rate_limit.down.sql
+psql -d veetee -f migrations/011_m6_consent_transcript.down.sql
 psql -d veetee -f migrations/010_m6_administration.down.sql
 psql -d veetee -f migrations/009_m6_tool_integrations.down.sql
 psql -d veetee -f migrations/008_m6_corrections_context.down.sql
@@ -97,3 +99,10 @@ user và usage bucket theo cửa sổ UTC. Token plaintext chỉ trả lúc phá
 lưu SHA-256, expiry và thời điểm sử dụng. Quota mặc định tắt, gồm LLM token/ngày, TTS ký
 tự/ngày, tool call/phút và RAG byte/tháng. Down migration từ chối nếu có token, policy,
 usage hoặc setting mặc định đã bị chỉnh để tránh mất dữ liệu quản trị.
+
+## M6.2 Consent transcript theo thiết bị
+
+Migration 011 thêm policy consent text-only trên từng thiết bị: mặc định tắt, version
+consent bắt buộc khi bật và `consent_policy_version` cho optimistic concurrency. Down
+migration từ chối nếu đã có quyết định consent hoặc policy version đã thay đổi để không
+làm mất bằng chứng lựa chọn của người dùng.

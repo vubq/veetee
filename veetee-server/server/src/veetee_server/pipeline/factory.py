@@ -42,6 +42,7 @@ from .vad import BaseVADStream, FakeVAD, SileroVADRuntime, VADNotReadyError
 
 if TYPE_CHECKING:
     from veetee_server.agents.snapshot import AgentRuntimeSnapshot
+    from veetee_server.dialogue.recorder import SessionTranscriptRecorder
     from veetee_server.persistence import QuotaService
 
 logger = logging.getLogger("veetee.pipeline")
@@ -94,6 +95,7 @@ def build_fake_pipeline(
     correction_repository: CorrectionRepository | None = None,
     context_provider_registry: ContextProviderRegistry | None = None,
     quota_service: QuotaService | None = None,
+    transcript_recorder: SessionTranscriptRecorder | None = None,
 ) -> FakePipeline:
     """Builds the default pipeline for a session."""
     vad = build_vad_stream(settings, vad_runtime=vad_runtime)
@@ -195,6 +197,7 @@ def build_fake_pipeline(
         correction_hook=correction_hook,
         context_hook=context_hook,
         quota_service=quota_service,
+        transcript_recorder=transcript_recorder,
     )
 
 

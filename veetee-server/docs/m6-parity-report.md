@@ -2,16 +2,18 @@
 
 ## Trạng thái
 
-Mốc 6 đã hoàn tất backend, Console responsive và migration runtime cho M6.1, M6.4–M6.8.
-Tài liệu này chưa phải bàn giao Cổng 6 vì M6.2 còn thiếu nguồn consent để nối recorder
-vào realtime pipeline mà không vi phạm nguyên tắc transcript opt-in.
+Mốc 6 đã hoàn tất backend, Console responsive và migration runtime cho M6.1–M6.2,
+M6.4–M6.8. Consent transcript versioned theo thiết bị đã nối vào realtime pipeline theo
+cơ chế opt-in; raw audio không được lưu và mọi nhánh lỗi mặc định tắt ghi transcript.
 
 ## Quyết định đã khóa
 
 - Provider enable/disable/default là trạng thái toàn server do admin quản lý; agent chỉ
   chọn model/voice thuộc catalog đang bật.
 - Transcript là opt-in theo consent có version, retention mặc định 30 ngày và delete là
-  hard delete trong transaction. Raw audio không được lưu.
+  hard delete trong transaction. Policy nằm trên từng thiết bị, dùng optimistic version,
+  snapshot sau authenticated binding và có hiệu lực từ lần reconnect sau. Raw audio không
+  được lưu.
 - Knowledge/RAG bản đầu dùng PostgreSQL full-text search; chưa thêm `pgvector`, embedding
   model, Redis hoặc broker.
 - External MCP chỉ được gọi qua HTTPS host allowlist; loopback chỉ dành cho MCP local.
@@ -28,7 +30,7 @@ vào realtime pipeline mà không vi phạm nguyên tắc transcript opt-in.
 | Capability | Trạng thái | Bằng chứng hiện tại |
 | --- | --- | --- |
 | M6.1 Provider management | Backend và Console hoàn tất | Global state/default, optimistic version, RBAC admin, runtime health không inference, model validation và audit; Console owner đọc catalog, admin mutation có role gate |
-| M6.2 History và agent lifecycle | Backend persistence/API hoàn tất; realtime recorder chưa nối | Consent-gated turns, JSON export, hard delete, retention purge, template/tag, immutable snapshot và restore; device handshake/session/Console chưa có nguồn consent versioned để gọi recorder an toàn |
+| M6.2 History và agent lifecycle | Backend, realtime và Console hoàn tất | Consent-gated text turns theo policy versioned từng thiết bị; optimistic tenant-scoped API/audit; session snapshot sau binding; JSON export, hard delete, retention purge, template/tag, immutable snapshot và restore |
 | M6.3 Voice | Chờ đánh giá adapter | Chưa expose selector/preview khi runtime chưa có voice catalog thật |
 | M6.4 Knowledge/RAG | Backend và Console hoàn tất | Dataset/document/chunk, bounded UTF-8 upload, PostgreSQL FTS, citation/provenance, composite tenant constraint, injection delimiting, hard delete và Console upload/search/assignment |
 | M6.5 Correction/context | Backend và Console hoàn tất | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
@@ -68,19 +70,26 @@ vào realtime pipeline mà không vi phạm nguyên tắc transcript opt-in.
   1440 x 900 và mobile 390 x 844. Scenario gồm điều hướng mọi view, Knowledge upload/search,
   correction preview, Device MCP list/prepare/explicit-confirm/call, exact `session_id`, token
   không render, admin `403` giữ phiên và kiểm tra horizontal page overflow/browser error.
-- Runtime PostgreSQL `veetee` đã áp migration `005`–`010`; ledger có đủ `001`–`010`, bảng
+- M6.2 consent bổ sung: API tenant isolation/default-off/stale version/audit, binding
+  snapshot và pipeline text-only đều pass; Console toggle có explicit confirmation và
+  optimistic payload pass trên desktop/mobile.
+- Runtime PostgreSQL `veetee` đã áp migration `005`–`011`; ledger có đủ `001`–`011`, bảng
   Knowledge/quota tồn tại và sáu typed system setting mặc định đã được seed.
 - QA cuối checkpoint: backend `459/459` pass, Ruff pass, mypy pass trên 112 source files,
   namespace scan thường và `--all` pass; hai repo references clean.
+- QA cuối consent M6.2: backend `461/461` pass; Ruff check và mypy pass trên 112 source
+  files; namespace scan thường và `--all` pass. Console type-check/build pass và Playwright
+  `42/42` pass trên desktop/mobile. Full `ruff format --check src tests` vẫn nêu 70 file
+  lịch sử ngoài phạm vi chưa theo formatter hiện tại; không format hàng loạt để tránh diff
+  không liên quan.
 
-## Điểm cần quyết định trước Cổng 6
+## Điểm dừng Cổng 6
 
-`ConversationRecorder` và test consent-gated đã có, nhưng realtime pipeline không có nguồn
-`transcript_consent`/`consent_version`. Device handshake không mang consent; Console cũng
-không có workflow tạo conversation shell trước khi bật consent. Vì transcript đã khóa là
-opt-in, server không được mặc định bật ghi lịch sử. Cần chốt nơi người dùng cấp consent
-versioned (chính sách theo agent/device trong Console hoặc mở rộng contract session) trước
-khi nối recorder vào pipeline.
+Nguồn consent đã được khóa ở policy từng thiết bị trong Console, không mở rộng device wire
+protocol. Realtime chỉ đọc policy sau authenticated binding, tạo conversation shell lazy và
+ghi user/assistant text qua `ConversationRecorder`; persistence lỗi không làm hỏng audio
+session và log chỉ mang identifier/error type. Cổng 6 sẵn sàng cho QA cuối và bàn giao;
+không tự bắt đầu M7.
 
 ## Mục không áp dụng đã duyệt
 

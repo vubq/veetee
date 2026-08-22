@@ -19,7 +19,7 @@ from veetee_server.persistence import (
 )
 
 from .router import AgentRepositoryDependency, CurrentUser
-from .schemas import DeviceBindRequest, FirmwareReleaseCreate
+from .schemas import DeviceBindRequest, FirmwareReleaseCreate, TranscriptConsentUpdate
 
 router = APIRouter(prefix="/api/v1/control", tags=["control-plane-runtime"])
 
@@ -94,6 +94,29 @@ async def unbind_device(request: Request, device_id: UUID, user_id: CurrentUser)
     registry = getattr(request.app.state, "device_session_registry", None)
     if isinstance(registry, DeviceSessionRegistry):
         await registry.close_device(device.device_id)
+
+
+@router.put("/devices/{device_id}/transcript-consent")
+def update_transcript_consent(
+    request: Request,
+    device_id: UUID,
+    payload: TranscriptConsentUpdate,
+    user_id: CurrentUser,
+) -> dict[str, Any]:
+    device, error = _device_repository(request).set_transcript_consent(
+        user_id,
+        device_id,
+        enabled=payload.enabled,
+        consent_version=payload.consent_version,
+        expected_policy_version=payload.expected_policy_version,
+    )
+    if error == "not_found":
+        raise HTTPException(status_code=404, detail="Device not found")
+    if error == "stale_version":
+        raise HTTPException(status_code=409, detail="Transcript consent policy changed")
+    if error or device is None:
+        raise HTTPException(status_code=422, detail="Versioned transcript consent is required")
+    return device.to_dict()
 
 
 @router.post("/ota/artifacts", status_code=201)

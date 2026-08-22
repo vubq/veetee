@@ -79,6 +79,25 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
     llm_runtime = getattr(app_state, "llm_runtime", None)
     tts_runtime = getattr(app_state, "tts_runtime", None)
     vieneu_runtime = getattr(app_state, "vieneu_runtime", None)
+    transcript_recorder = None
+    conversation_recorder = getattr(app_state, "conversation_recorder", None)
+    if (
+        conversation_recorder is not None
+        and session.transcript_consent
+        and session.owner_user_id is not None
+        and session.device_pk is not None
+        and session.consent_version
+    ):
+        from veetee_server.dialogue.recorder import SessionTranscriptRecorder
+
+        transcript_recorder = SessionTranscriptRecorder(
+            conversation_recorder,
+            owner_user_id=session.owner_user_id,
+            agent_id=session.agent_id,
+            device_id=session.device_pk,
+            consent_version=session.consent_version,
+            session_id=str(session.id),
+        )
     return build_fake_pipeline(
         session,
         settings,
@@ -90,6 +109,7 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
         correction_repository=getattr(app_state, "correction_repository", None),
         context_provider_registry=getattr(app_state, "context_provider_registry", None),
         quota_service=getattr(app_state, "quota_service", None),
+        transcript_recorder=transcript_recorder,
     )
 
 
@@ -124,6 +144,11 @@ async def _resolve_session_binding(
     disabled persistence or database error leaves the session unbound: the
     connection continues with default server behavior and never reads another
     tenant's profile. The result stays fixed until reconnect re-resolves it.
+
+    The per-device transcript consent policy (M6.2) is snapshotted from the
+    same row at this boundary. Consent defaults to off for every failure mode
+    so a session can never start recording without an explicit stored grant;
+    like the binding it is not re-read mid-connection.
     """
     repository = getattr(app_state, "device_repository", None)
     if repository is None:
@@ -141,7 +166,7 @@ async def _resolve_session_binding(
             extra={"context": {"session_id": str(session.id)}},
         )
         return
-    if stored is None or stored.agent_id is None:
+    if stored is None:
         logger.debug(
             "session_unbound_default_behavior",
             extra={
@@ -154,6 +179,10 @@ async def _resolve_session_binding(
         return
     session.owner_user_id = stored.owner_user_id
     session.agent_id = stored.agent_id
+    session.device_pk = stored.id
+    consented = bool(stored.transcript_consent) and bool(stored.consent_version.strip())
+    session.transcript_consent = consented
+    session.consent_version = stored.consent_version if consented else ""
 
 
 async def _begin_processing_turn(

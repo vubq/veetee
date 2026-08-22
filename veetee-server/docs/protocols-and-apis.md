@@ -297,6 +297,12 @@ Control plane bearer-authenticated cung cấp:
   receipt chỉ chứa hash code, sống trong TTL ngắn để retry cùng user/agent/code idempotent;
   receipt hết hạn được dọn và code sáu chữ số có thể tái sử dụng an toàn.
 - `GET /api/v1/control/devices`; `online` lấy từ WebSocket session registry hiện hành.
+- `PUT /api/v1/control/devices/{id}/transcript-consent`; body gồm `enabled`,
+  `consent_version` và `expected_policy_version`. Policy thuộc owner của thiết bị, mặc định
+  tắt, bật bắt buộc consent version khác rỗng và stale update trả `409`. Session WebSocket
+  snapshot policy sau khi xác thực binding; thay đổi có hiệu lực từ lần reconnect tiếp theo.
+  Khi bật, server chỉ ghi raw/normalized/model transcript và câu trả lời text; không ghi
+  raw audio, reasoning text hay transcript vào audit/log.
 - `DELETE /api/v1/control/devices/{id}`; unbind tenant-scoped và ghi audit.
 - `POST /api/v1/control/ota/artifacts`; body raw `application/octet-stream`, stream có
   giới hạn kích thước và SHA-256, tên lưu do server tạo và artifact bất biến.

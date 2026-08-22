@@ -8,8 +8,9 @@ fake AI pipeline deterministic, Silero VAD adapter (M2.1), PhoWhisper ASR adapte
 OmniRoute Groq LLM adapter (M2.3) và device simulator; frontend Vue 3 + Vite nằm trong
 `web/`. PostgreSQL control plane, Console responsive, activation/binding/OTA local M5 và
 các workflow M6 provider, Knowledge/RAG, correction/context, integration/Device MCP,
-user, settings/quota và audit đã được triển khai. M6.2 còn chờ quyết định nguồn consent
-để nối ghi transcript opt-in vào realtime pipeline; deployment production chưa được triển khai.
+user, settings/quota, audit và consent transcript versioned theo thiết bị đã được triển khai.
+Realtime pipeline chỉ ghi text khi thiết bị opt-in trong Console và không lưu raw audio;
+deployment production chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -57,6 +57,21 @@ class AgentSummary(AgentResponse):
 class DeviceBindRequest(BaseModel):
     agent_id: UUID
     code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class TranscriptConsentUpdate(BaseModel):
+    enabled: bool
+    consent_version: str = Field(default="", max_length=64)
+    expected_policy_version: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_versioned_consent(self) -> TranscriptConsentUpdate:
+        self.consent_version = self.consent_version.strip()
+        if self.enabled and not self.consent_version:
+            raise ValueError("consent_version is required when transcript consent is enabled")
+        if not self.enabled:
+            self.consent_version = ""
+        return self
 
 
 class FirmwareReleaseCreate(BaseModel):

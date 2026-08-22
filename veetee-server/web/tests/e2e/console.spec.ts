@@ -528,7 +528,7 @@ test('knowledge upload text và truy vấn RAG dùng đúng HTTP contract', asyn
 test('correction preview và device MCP bắt buộc prepare rồi xác nhận rõ ràng', async ({ page }) => {
   const assertNoErrors = failOnBrowserErrors(page)
   const state = createState({
-    devices: [{ id: '44444444-4444-4444-8444-444444444444', device_id: 'veetee-device', alias: 'Thiết bị phòng khách', agent_id: stateAgentId(), online: true, last_seen_at: '2026-08-22T10:00:00Z' }],
+    devices: [{ id: '44444444-4444-4444-8444-444444444444', device_id: 'veetee-device', alias: 'Thiết bị phòng khách', agent_id: stateAgentId(), online: true, last_seen_at: '2026-08-22T10:00:00Z', transcript_consent: false, consent_version: '', consent_policy_version: 1 }],
   })
   await login(page, state)
   await page.getByRole('button', { name: 'Vận hành' }).click()
@@ -549,6 +549,36 @@ test('correction preview và device MCP bắt buộc prepare rồi xác nhận r
   await page.getByTestId('mcp-confirm-submit-btn').click()
   await expect(page.getByText('Đã cập nhật độ sáng')).toBeVisible()
   expect(state.requests.some(request => request.path.endsWith('/call'))).toBe(true)
+  assertNoErrors()
+})
+
+test('consent transcript thiết bị mặc định tắt, có xác nhận và gửi version optimistic', async ({ page }) => {
+  const assertNoErrors = failOnBrowserErrors(page)
+  const state = createState({
+    devices: [{ id: '44444444-4444-4444-8444-444444444444', device_id: 'veetee-device', alias: 'Thiết bị phòng khách', agent_id: stateAgentId(), online: true, last_seen_at: '2026-08-22T10:00:00Z', transcript_consent: false, consent_version: '', consent_policy_version: 1 }],
+  })
+  await login(page, state)
+  await page.getByRole('button', { name: 'Vận hành' }).click()
+  await page.getByRole('button', { name: 'Tích hợp & thiết bị' }).click()
+  await page.getByRole('button', { name: 'Device MCP Tools' }).click()
+
+  const toggle = page.getByTestId('transcript-consent-toggle')
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('transcript-consent-panel')).toContainText('không lưu âm thanh thô')
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('transcript-v1')
+    await dialog.accept()
+  })
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  const consentRequest = state.requests.find(request => request.path.endsWith('/transcript-consent'))
+  expect(consentRequest?.body).toEqual({
+    enabled: true,
+    consent_version: 'transcript-v1',
+    expected_policy_version: 1,
+  })
+  expect(state.authorized).toBe(true)
+  await expectNoHorizontalOverflow(page)
   assertNoErrors()
 })
 

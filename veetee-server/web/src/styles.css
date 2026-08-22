@@ -1033,6 +1033,33 @@ textarea:focus-visible {
 .section-heading strong { font-size: 13px; }
 .section-heading p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .switch-label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+
+.transcript-consent-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.transcript-consent-panel p {
+  max-width: 62ch;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .transcript-consent-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
 .role-preview { margin-top: 10px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: #f8fbfa; font-size: 12px; line-height: 1.65; }
 .role-preview p { margin: 8px 0 0; color: #50615d; }
 .config-textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--foreground); outline: none; font: inherit; }
