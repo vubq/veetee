@@ -5,7 +5,9 @@ discovery responder; M1.5 thêm audio primitives; M1.6 nối fake VAD/ASR/LLM/TT
 deterministic thành luồng device hoàn chỉnh; M2.1 thêm Silero VAD và M2.2 thêm PhoWhisper
 ASR, M2.3 thêm OmniRoute Groq LLM, M2.5 thêm Gemini TTS và M2.7 thêm native Opus cùng
 digital-human compatibility harness. M3 thêm prompt/dialogue, intent strategy, tool/MCP
-và memory boundary mở rộng. Resampler khác sample rate và database chưa được tích hợp.
+và memory boundary; M4 thêm PostgreSQL control plane; M5 thêm activation/binding,
+credential thiết bị và OTA artifact/release/rollout/report. Resampler khác sample rate
+chưa được tích hợp.
 
 ## Local commands
 
@@ -47,6 +49,25 @@ Endpoints hiện có:
   (server time, WebSocket URL/token, firmware no-update). Contract chi tiết ở
   `../docs/protocols-and-apis.md`; golden vector ở `../contracts/device/`.
 - `WS /api/v1/devices/ws`: device gateway (hello/listen/abort/ping/pong/goodbye).
+- `POST /api/v1/devices/ota/report`: report OTA idempotent có device credential.
+- `GET /api/v1/devices/ota/artifacts/{artifact_id}`: download streaming có token/range.
+- `/api/v1/control/devices` và `/api/v1/control/ota`: lifecycle/OTA control plane.
+
+Khi bật persistence ngoài local/test, phải cấu hình `VEETEE_OTA_PUBLIC_BASE_URL` bằng
+HTTPS origin public tin cậy và `VEETEE_DEVICE_WEBSOCKET_PUBLIC_URL` bằng `wss://`.
+`http://`/`ws://` chỉ được phép khi environment là `local` hoặc `test`; server không tạo
+artifact URL từ request `Host`. OTA fleet API là admin-only, còn bind/recovery thiết bị
+giữ kiểm tra owner/admin theo ownership.
+
+Production activation yêu cầu admin provision trước `Device-Id`, `Client-Id` tùy chọn và
+Ed25519 public key raw 32 byte. Discovery đầu chỉ trả nonce; thiết bị ký canonical
+challenge rồi gửi `Activation-Nonce`/`Activation-Proof`. Chỉ response proof hợp lệ mới trả
+code để thiết bị hiển thị vật lý. `VEETEE_ALLOW_INSECURE_ACTIVATION=true` chỉ được phép ở
+`local`/`test`, mặc định tắt và bị readiness/config từ chối ở môi trường khác.
+
+OTA report có quota persistent theo thiết bị/giờ, dedupe window và retention days cấu hình
+được. Không có xóa tự động; operator chỉ gọi cleanup repository có chủ đích sau khi đã lưu
+bằng chứng/audit cần thiết.
 
 Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format contract,
 bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.

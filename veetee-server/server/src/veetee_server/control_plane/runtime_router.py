@@ -12,31 +12,6 @@ from .router import AgentRepositoryDependency, CurrentUser
 router = APIRouter(prefix="/api/v1/control", tags=["control-plane-runtime"])
 
 
-@router.get("/devices")
-def list_devices(
-    user_id: CurrentUser,
-    repository: AgentRepositoryDependency,
-) -> list[dict[str, Any]]:
-    with repository.database.connection() as connection:
-        rows = connection.execute(
-            "SELECT id, device_id, alias, agent_id, last_seen_at, created_at "
-            "FROM veetee_devices WHERE owner_user_id = %s ORDER BY created_at, id",
-            (user_id,),
-        ).fetchall()
-    return [
-        {
-            "id": row[0],
-            "device_id": row[1],
-            "alias": row[2],
-            "agent_id": row[3],
-            "last_seen_at": row[4],
-            "created_at": row[5],
-            "online": False,
-        }
-        for row in rows
-    ]
-
-
 @router.get("/conversations")
 def list_conversations(
     user_id: CurrentUser,

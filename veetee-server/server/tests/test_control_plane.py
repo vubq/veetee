@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.conninfo import conninfo_to_dict
 
 from veetee_server.app import create_app
 from veetee_server.config import Settings
@@ -14,7 +15,7 @@ TEST_DATABASE_DSN = os.environ.get("VEETEE_TEST_DATABASE_DSN", "dbname=veetee_te
 
 
 def isolated_database() -> PostgresDatabase:
-    if "veetee_test" not in TEST_DATABASE_DSN:
+    if conninfo_to_dict(TEST_DATABASE_DSN).get("dbname") != "veetee_test":
         raise RuntimeError("Control-plane tests require an isolated veetee_test database")
     return PostgresDatabase(DatabaseConfig(TEST_DATABASE_DSN))
 
@@ -25,8 +26,10 @@ def persisted_client() -> TestClient:
     if not database.check():
         pytest.skip("PostgreSQL is unavailable")
     with database.connection() as connection:
-        connection.execute("TRUNCATE veetee_audit_events, veetee_memories, veetee_devices, "
-                           "veetee_agents, veetee_sessions, veetee_users CASCADE")
+        connection.execute(
+            "TRUNCATE veetee_audit_events, veetee_memories, veetee_devices, "
+            "veetee_agents, veetee_sessions, veetee_users CASCADE"
+        )
     settings = Settings(
         app_name="test-control-plane",
         environment="test",
@@ -34,6 +37,8 @@ def persisted_client() -> TestClient:
         database_dsn=TEST_DATABASE_DSN,
         bootstrap_admin_email="owner@example.test",
         bootstrap_admin_password="a-test-password-long-enough",
+        activation_secret="activation-test-secret-32-characters",
+        device_jwt_secret="device-token-test-secret-32-characters",
     )
     with TestClient(create_app(settings)) as client:
         yield client
@@ -77,15 +82,13 @@ def test_agent_crud_auth_and_optimistic_concurrency(persisted_client: TestClient
     )
     assert updated.status_code == 200
     assert updated.json()["version"] == 2
-    assert client.put(
-        f"/api/v1/control/agents/{agent['id']}", headers=headers, json=stale
-    ).status_code == 409
+    assert (
+        client.put(f"/api/v1/control/agents/{agent['id']}", headers=headers, json=stale).status_code
+        == 409
+    )
 
     assert (
-        client.delete(
-            f"/api/v1/control/agents/{agent['id']}", headers=headers
-        ).status_code
-        == 204
+        client.delete(f"/api/v1/control/agents/{agent['id']}", headers=headers).status_code == 204
     )
 
 
@@ -95,9 +98,12 @@ def test_migration_is_idempotent() -> None:
     database = isolated_database()
     with database.connection() as connection:
         connection.execute(migration.read_text(encoding="utf-8"))
-        assert connection.execute(
-            "SELECT count(*) FROM veetee_schema_migrations WHERE version = '001_control_plane'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM veetee_schema_migrations WHERE version = '001_control_plane'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_memory_crud_and_audit_are_tenant_scoped(persisted_client: TestClient) -> None:
@@ -119,11 +125,18 @@ def test_memory_crud_and_audit_are_tenant_scoped(persisted_client: TestClient) -
     memory_id = created.json()["id"]
     memories = persisted_client.get("/api/v1/control/memories", headers=headers).json()
     assert memories[0]["id"] == memory_id
-    assert persisted_client.delete(
-        f"/api/v1/control/memories/{memory_id}", headers=headers
-    ).status_code == 204
+    assert (
+        persisted_client.delete(
+            f"/api/v1/control/memories/{memory_id}", headers=headers
+        ).status_code
+        == 204
+    )
     with isolated_database().connection() as connection:
         actions = connection.execute(
             "SELECT action FROM veetee_audit_events ORDER BY created_at"
         ).fetchall()
-    assert [row[0] for row in actions] == ["memory.create", "memory.forget"]
+    assert [row[0] for row in actions] == [
+        "identity.bootstrap_admin_created",
+        "memory.create",
+        "memory.forget",
+    ]

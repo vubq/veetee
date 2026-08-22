@@ -5,8 +5,8 @@
 `veetee-server` là không gian phát triển server và web console của Veetee. Backend FastAPI
 hiện có nền tảng M1, state machine, Device WebSocket, OTA discovery, audio primitives,
 fake AI pipeline deterministic, Silero VAD adapter (M2.1), PhoWhisper ASR adapter (M2.2),
-OmniRoute Groq LLM adapter (M2.3) và device simulator; frontend Vue 3 + Vite nằm trong
-`web/`. Database, provider AI production và deployment manifest chưa được triển khai.
+OmniRoute Groq LLM adapter (M2.3), PostgreSQL control plane M4 và lifecycle/OTA core M5;
+frontend Vue 3 + Vite nằm trong `web/`. Deployment manifest chưa được triển khai.
 
 Source trong `references/xiaozhi-esp32-server` là upstream để nghiên cứu, không phải
 backend đang vận hành của Veetee và không áp đặt Python, Java, Vue hay deployment model

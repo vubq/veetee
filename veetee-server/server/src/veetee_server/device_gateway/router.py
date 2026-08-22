@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from veetee_server.audio import (
     UPLINK_PCM_FORMAT,
@@ -20,7 +21,7 @@ from veetee_server.audio import (
     build_opus_decoder,
     parse_audio_frame,
 )
-from veetee_server.config import Settings, get_settings
+from veetee_server.config import Settings, get_effective_device_jwt_secret, get_settings
 from veetee_server.domain.errors import InvalidTransitionError
 from veetee_server.domain.session import DeviceSession, SessionState
 from veetee_server.pipeline.downlink import DownlinkQueue
@@ -103,9 +104,7 @@ def _start_pipeline(
     session.cancellation.create_task(supervise_pipeline(session, websocket, pipeline_task, turn))
 
 
-async def _cleanup_session(
-    session: DeviceSession, registry: DeviceSessionRegistry | None
-) -> None:
+async def _cleanup_session(session: DeviceSession, registry: DeviceSessionRegistry | None) -> None:
     """Stops advertising a disconnected session before draining its tasks."""
     if registry is not None:
         await registry.unregister(str(session.id))
@@ -126,10 +125,14 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
     )
 
     # 1. Validate Auth & Headers
-    auth_result = validate_handshake_headers(
+    auth_result = await run_in_threadpool(
+        validate_handshake_headers,
         websocket.headers,
-        expected_token=settings.device_gateway_token,
-        id_max_length=settings.id_max_length,
+        settings.device_gateway_token,
+        settings.id_max_length,
+        get_effective_device_jwt_secret(settings),
+        settings.persistence_enabled,
+        getattr(websocket.app.state, "database", None),
     )
     if not auth_result.is_valid:
         env = make_error_envelope(
@@ -277,9 +280,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.close(code=1000, reason="conversation_idle_timeout")
                 break
             idle_remaining = settings.idle_timeout_seconds - (monotonic() - last_activity)
-            conversation_remaining = (
-                settings.conversation_idle_timeout_seconds - conversation_idle
-            )
+            conversation_remaining = settings.conversation_idle_timeout_seconds - conversation_idle
             if idle_remaining <= 0:
                 env = make_error_envelope(
                     "veetee_timeout", "Idle timeout", session_id=str(session.id)
@@ -362,14 +363,10 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         barge_in = BargeInCoordinator(
                             session,
                             BargeInDetector(
-                                build_opus_decoder(
-                                    settings, pcm_format=UPLINK_PCM_FORMAT
-                                ),
+                                build_opus_decoder(settings, pcm_format=UPLINK_PCM_FORMAT),
                                 build_vad_stream(
                                     settings,
-                                    vad_runtime=getattr(
-                                        websocket.app.state, "vad_runtime", None
-                                    ),
+                                    vad_runtime=getattr(websocket.app.state, "vad_runtime", None),
                                 ),
                                 max_pre_roll_frames=settings.barge_in_pre_roll_frames,
                             ),
@@ -575,9 +572,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                             await session.start_turn()
                             if session.listen_mode == "auto":
                                 auto_endpoint = AutoEndpointDetector(
-                                    build_opus_decoder(
-                                        settings, pcm_format=UPLINK_PCM_FORMAT
-                                    ),
+                                    build_opus_decoder(settings, pcm_format=UPLINK_PCM_FORMAT),
                                     build_vad_stream(
                                         settings,
                                         vad_runtime=getattr(

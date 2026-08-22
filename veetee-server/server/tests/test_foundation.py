@@ -188,3 +188,77 @@ def test_audio_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -
     assert settings.audio_max_queue_bytes == 65536
     assert settings.audio_max_queue_duration_ms == 5000.0
     assert settings.audio_pacing_max_drift_ms == 250.0
+
+
+def test_lifecycle_secrets_use_effective_values_and_must_differ() -> None:
+    with pytest.raises(ValidationError, match="activation_secret"):
+        Settings(
+            persistence_enabled=True,
+            activation_secret="   " + "a" * 29 + "   ",
+            device_jwt_secret="b" * 32,
+        )
+    with pytest.raises(ValidationError, match="distinct"):
+        Settings(
+            persistence_enabled=True,
+            activation_secret="  " + "a" * 32,
+            device_jwt_secret="a" * 32 + "  ",
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://ota.example.test",
+        "https://user@ota.example.test",
+        "https://ota.example.test/path",
+        "https://ota.example.test?host=attacker",
+        "https://ota.example.test#fragment",
+    ],
+)
+def test_ota_public_base_url_rejects_unsafe_values(url: str) -> None:
+    with pytest.raises(ValidationError, match="ota_public_base_url"):
+        Settings(ota_public_base_url=url)
+
+
+@pytest.mark.parametrize(
+    ("ota_url", "websocket_url", "message"),
+    [
+        (
+            "http://ota.example.test",
+            "wss://device.example.test/api/v1/devices/ws",
+            "ota_public_base_url must use https",
+        ),
+        (
+            "https://ota.example.test",
+            "ws://device.example.test/api/v1/devices/ws",
+            "device_websocket_public_url must use wss",
+        ),
+    ],
+)
+def test_production_persistence_rejects_plaintext_public_urls(
+    ota_url: str, websocket_url: str, message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings(
+            environment="production",
+            persistence_enabled=True,
+            activation_secret="a" * 32,
+            device_jwt_secret="b" * 32,
+            ota_public_base_url=ota_url,
+            device_websocket_public_url=websocket_url,
+        )
+
+
+@pytest.mark.parametrize("environment", ["local", "test"])
+def test_local_test_persistence_explicitly_allows_plaintext_urls(environment: str) -> None:
+    settings = Settings(
+        environment=environment,
+        persistence_enabled=True,
+        activation_secret="a" * 32,
+        device_jwt_secret="b" * 32,
+        ota_public_base_url="http://127.0.0.1:8080",
+        device_websocket_public_url="ws://127.0.0.1:8080/api/v1/devices/ws",
+    )
+
+    assert settings.ota_public_base_url.startswith("http://")
+    assert settings.device_websocket_public_url.startswith("ws://")

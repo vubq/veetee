@@ -631,12 +631,20 @@ thử nghiệm.
 
 ### M5.7 Hardware validation
 
-- Flash/OTA theo quy trình bảo toàn NVS/Wi-Fi.
-- Xác minh rollback, reconnect, server endpoint và peripheral smoke test.
-- Không kết luận production-safe chỉ từ simulator.
+- Trong giai đoạn server-first, dùng nguyên firmware tham khảo đã pin làm client hardware;
+  không sửa hoặc tạo firmware khi chưa có yêu cầu riêng. Chạy discovery/OTA theo wire flow
+  firmware này hỗ trợ, bảo toàn NVS/Wi-Fi và xác minh partition switch, reboot, reconnect,
+  server endpoint cùng peripheral smoke test.
+- Activation proof Ed25519, bound rediscovery credential, detached signature verification
+  và OTA progression report phía thiết bị là acceptance của firmware Veetee sau này. M5
+  hiện tại phải khóa contract và test đầy đủ phía server nhưng không giả lập các capability
+  đó trên firmware tham khảo hoặc hạ security policy production để lấy hardware pass.
+- Evidence hardware compatibility không được gọi là production-safe; báo cáo phải tách
+  rõ phần đã chạy trên board tham khảo và phần chờ firmware Veetee.
 
-**Bàn giao Mốc 5:** activation/bind demo, OTA rollout local, audit/report và hardware
-evidence.
+**Bàn giao Mốc 5:** activation/bind demo và audit/report phía server, OTA rollout local
+theo firmware tham khảo không sửa source, cùng hardware compatibility evidence. Secure
+device-side lifecycle được giữ trong contract/backlog firmware Veetee.
 
 **CỔNG DUYỆT 5: DỪNG. Chờ người dùng duyệt trước khi mở rộng tính năng parity.**
 

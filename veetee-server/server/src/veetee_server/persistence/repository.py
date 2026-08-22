@@ -62,14 +62,36 @@ class UserRepository:
             raise ValueError("Bootstrap credentials must be provided through environment")
         with self.database.connection() as connection:
             row = connection.execute(
-                "SELECT id FROM veetee_users WHERE email = %s", (email,)
+                "SELECT id, role FROM veetee_users WHERE email = %s FOR UPDATE", (email,)
             ).fetchone()
             if row:
+                if row[1] != "admin":
+                    connection.execute(
+                        "UPDATE veetee_users SET role = 'admin', updated_at = now() WHERE id = %s",
+                        (row[0],),
+                    )
+                    connection.execute(
+                        "INSERT INTO veetee_audit_events "
+                        "(id, actor_user_id, action, resource_type, resource_id, metadata) "
+                        "VALUES (%s, %s, 'identity.bootstrap_admin_promoted', 'user', %s, %s)",
+                        (
+                            uuid.uuid4(),
+                            row[0],
+                            str(row[0]),
+                            Jsonb({"configured_identity": email}),
+                        ),
+                    )
                 return cast(uuid.UUID, row[0])
             user_id = uuid.uuid4()
             connection.execute(
                 "INSERT INTO veetee_users (id, email, password_hash, role) VALUES (%s, %s, %s, %s)",
-                (user_id, email, hash_password(password), "owner"),
+                (user_id, email, hash_password(password), "admin"),
+            )
+            connection.execute(
+                "INSERT INTO veetee_audit_events "
+                "(id, actor_user_id, action, resource_type, resource_id, metadata) "
+                "VALUES (%s, %s, 'identity.bootstrap_admin_created', 'user', %s, %s)",
+                (uuid.uuid4(), user_id, str(user_id), Jsonb({"configured_identity": email})),
             )
             return user_id
 
@@ -99,6 +121,13 @@ class UserRepository:
             ).fetchone()
             return cast(uuid.UUID, row[0]) if row else None
 
+    def get_role(self, user_id: uuid.UUID) -> str:
+        with self.database.connection() as connection:
+            row = connection.execute(
+                "SELECT role FROM veetee_users WHERE id = %s", (user_id,)
+            ).fetchone()
+            return cast(str, row[0]) if row else "owner"
+
 
 def record_audit(
     database: PostgresDatabase,
@@ -114,8 +143,14 @@ def record_audit(
             "INSERT INTO veetee_audit_events "
             "(id, actor_user_id, action, resource_type, resource_id, metadata) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
-            (uuid.uuid4(), actor_user_id, action, resource_type, resource_id,
-             Jsonb(metadata or {})),
+            (
+                uuid.uuid4(),
+                actor_user_id,
+                action,
+                resource_type,
+                resource_id,
+                Jsonb(metadata or {}),
+            ),
         )
 
 
@@ -162,21 +197,50 @@ class AgentRepository:
                 "intent_strategy, memory_enabled, memory_min_confidence, "
                 "tool_policy, memory_policy) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (agent_id, owner_user_id, data["name"], data["role_prompt"], data["personality"],
-                 data["address_style"], data["language"], data["detail_level"],
-                 data["response_style"], data["model_id"], data["voice_id"],
-                 data["intent_strategy"], data["memory_enabled"], data["memory_min_confidence"],
-                 Jsonb(data["tool_policy"]), Jsonb(data["memory_policy"])),
+                (
+                    agent_id,
+                    owner_user_id,
+                    data["name"],
+                    data["role_prompt"],
+                    data["personality"],
+                    data["address_style"],
+                    data["language"],
+                    data["detail_level"],
+                    data["response_style"],
+                    data["model_id"],
+                    data["voice_id"],
+                    data["intent_strategy"],
+                    data["memory_enabled"],
+                    data["memory_min_confidence"],
+                    Jsonb(data["tool_policy"]),
+                    Jsonb(data["memory_policy"]),
+                ),
             )
         return self.get(owner_user_id, agent_id)  # type: ignore[return-value]
 
     def update(
-        self, owner_user_id: uuid.UUID, agent_id: uuid.UUID, expected_version: int,
+        self,
+        owner_user_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        expected_version: int,
         data: dict[str, Any],
     ) -> StoredAgent | None:
-        fields = ["name", "role_prompt", "personality", "address_style", "language",
-                  "detail_level", "response_style", "model_id", "voice_id", "intent_strategy",
-                  "memory_enabled", "memory_min_confidence", "tool_policy", "memory_policy"]
+        fields = [
+            "name",
+            "role_prompt",
+            "personality",
+            "address_style",
+            "language",
+            "detail_level",
+            "response_style",
+            "model_id",
+            "voice_id",
+            "intent_strategy",
+            "memory_enabled",
+            "memory_min_confidence",
+            "tool_policy",
+            "memory_policy",
+        ]
         values = [
             Jsonb(data[field]) if field in {"tool_policy", "memory_policy"} else data[field]
             for field in fields
@@ -206,9 +270,19 @@ class AgentRepository:
         profile = dict(
             zip(
                 (
-                    "role_prompt", "personality", "address_style", "language", "detail_level",
-                    "response_style", "model_id", "voice_id", "intent_strategy",
-                    "memory_enabled", "memory_min_confidence", "tool_policy", "memory_policy",
+                    "role_prompt",
+                    "personality",
+                    "address_style",
+                    "language",
+                    "detail_level",
+                    "response_style",
+                    "model_id",
+                    "voice_id",
+                    "intent_strategy",
+                    "memory_enabled",
+                    "memory_min_confidence",
+                    "tool_policy",
+                    "memory_policy",
                 ),
                 row[4:],
                 strict=True,

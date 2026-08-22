@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {
   Bot,
-  Box,
+  RadioTower,
   ChevronDown,
   Languages,
   LibraryBig,
@@ -18,11 +18,14 @@ import IconButton from '@/components/IconButton.vue'
 import RobotLogo from '@/components/RobotLogo.vue'
 import UiDropdown, { type DropdownItem } from '@/components/UiDropdown.vue'
 
+type View = 'agents' | 'ota'
+const props = defineProps<{ activeView: View }>()
+const emit = defineEmits<{ navigate: [view: View]; logout: [] }>()
 const navItems = [
-  { label: 'Trợ lý', icon: Bot, active: true },
-  { label: 'Nhân bản giọng nói', icon: MicVocal },
-  { label: 'Kho kiến thức', suffix: 'Beta', icon: LibraryBig },
-  { label: 'Firmware Builder', icon: Box },
+  { label: 'Trợ lý', icon: Bot, view: 'agents' as const },
+  { label: 'Nhân bản giọng nói', icon: MicVocal, disabled: true, suffix: 'Sắp có' },
+  { label: 'Kho kiến thức', icon: LibraryBig, disabled: true, suffix: 'Sắp có' },
+  { label: 'OTA', icon: RadioTower, view: 'ota' as const },
 ]
 
 const languageItems: DropdownItem[] = [
@@ -38,16 +41,20 @@ const themeItems: DropdownItem[] = [
   { label: 'Theo hệ thống', value: 'system', icon: Monitor },
 ]
 const accountItems: DropdownItem[] = [
-  { label: 'Hồ sơ cá nhân', value: 'profile', icon: UserRound },
-  { label: 'Cài đặt tài khoản', value: 'settings', icon: Settings },
+  { label: 'Hồ sơ cá nhân · Sắp có', value: 'profile', icon: UserRound, disabled: true },
+  { label: 'Cài đặt · Sắp có', value: 'settings', icon: Settings, disabled: true },
   { label: 'Đăng xuất', value: 'logout', icon: LogOut },
 ]
+
+function selectAccount(value: string) {
+  if (value === 'logout') emit('logout')
+}
 </script>
 
 <template>
   <header class="app-header">
     <div class="page-container header-inner">
-      <button class="brand" type="button" aria-label="Bảng điều khiển Veetee">
+      <button class="brand" type="button" aria-label="Bảng điều khiển Veetee" @click="emit('navigate', 'agents')">
         <RobotLogo :size="34" />
         <span>Bảng điều khiển Veetee</span>
       </button>
@@ -57,10 +64,12 @@ const accountItems: DropdownItem[] = [
           v-for="item in navItems"
           :key="item.label"
           class="nav-item"
-          :class="{ 'is-active': item.active }"
-          :aria-current="item.active ? 'page' : undefined"
+          :class="{ 'is-active': item.view === props.activeView }"
+          :aria-current="item.view === props.activeView ? 'page' : undefined"
+          :disabled="item.disabled"
           type="button"
           :title="item.label"
+          @click="item.view && emit('navigate', item.view)"
         >
           <component :is="item.icon" :size="17" stroke-width="1.8" />
           <span class="nav-label">{{ item.label }}</span>
@@ -75,7 +84,7 @@ const accountItems: DropdownItem[] = [
         <UiDropdown label="Chọn giao diện: Sáng" :items="themeItems">
           <template #trigger><IconButton label="Chọn giao diện: Sáng"><Moon :size="17" /></IconButton></template>
         </UiDropdown>
-        <UiDropdown label="Menu tài khoản" :items="accountItems">
+        <UiDropdown label="Menu tài khoản" :items="accountItems" @select="selectAccount">
           <template #trigger><button class="account-button" type="button" aria-label="Menu tài khoản"><span>Q</span><ChevronDown :size="14" /></button></template>
         </UiDropdown>
       </div>

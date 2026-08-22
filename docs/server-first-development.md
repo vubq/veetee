@@ -183,6 +183,15 @@ Mỗi công việc server liên quan device flow phải báo cáo tối thiểu:
 - Trích log cần thiết đã loại bỏ credential/token.
 - Giới hạn chưa xác minh, đặc biệt hardware, Wi-Fi yếu, audio/AEC và OTA rollback.
 
+### Phạm vi hardware M5 trong giai đoạn server-first
+
+Firmware tham khảo được dùng nguyên trạng để kiểm discovery, OTA download/install,
+partition switch, reboot, reconnect và peripheral; không patch hoặc tạo firmware Veetee
+chỉ để đáp ứng M5 server. Nếu firmware tham khảo chưa triển khai activation proof,
+per-device credential khi rediscovery, detached signature verification hoặc OTA report,
+phải ghi các capability đó vào backlog firmware Veetee và giữ test/contract phía server.
+Không được tắt hoặc nới policy production của server để mô phỏng capability chưa có.
+
 ## Cổng chất lượng QA E2E
 
 Mọi mốc có phạm vi E2E chỉ được bàn giao khi ma trận QA E2E đã khai báo đạt **100%**:
