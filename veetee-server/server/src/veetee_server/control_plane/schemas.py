@@ -183,3 +183,39 @@ class ContextProviderConfigUpdate(BaseModel):
     timeout_ms: int = Field(default=2000, ge=1, le=30000)
     cache_ttl_seconds: int = Field(default=0, ge=0, le=3600)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalEndpointCreate(BaseModel):
+    """Tenant-scoped outbound MCP endpoint registration (M6.6)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=8, max_length=2048)
+    auth_header_env: str | None = Field(default=None, max_length=128)
+    enabled: bool = True
+
+
+class ExternalEndpointUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    url: str | None = Field(default=None, min_length=8, max_length=2048)
+    auth_header_env: str | None = Field(default=None, max_length=128)
+    enabled: bool | None = None
+    expected_version: int | None = Field(default=None, gt=0)
+
+
+class IntegrationPermissionUpdate(BaseModel):
+    """Per-agent integration grant; absent fields fall back to server defaults."""
+
+    can_list: bool = False
+    can_call: bool = False
+    rate_limit_calls: int | None = Field(default=None, ge=1, le=100000)
+    rate_limit_window_seconds: int | None = Field(default=None, ge=1, le=86400)
+
+
+class IntegrationToolsListRequest(BaseModel):
+    agent_id: UUID
+
+
+class IntegrationToolCallRequest(BaseModel):
+    agent_id: UUID
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)

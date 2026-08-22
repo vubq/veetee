@@ -32,7 +32,7 @@ duyệt rõ là không áp dụng.
 | M6.3 Voice | Chờ đánh giá adapter | Chưa expose selector/preview khi runtime chưa có voice catalog thật |
 | M6.4 Knowledge/RAG | Backend hoàn tất, Console chưa nối | Dataset/document/chunk, bounded UTF-8 upload, PostgreSQL FTS, citation/provenance, composite tenant constraint, injection delimiting và hard delete |
 | M6.5 Correction/context | Backend hoàn tất, Console chưa nối | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
-| M6.6 Tool ecosystem | Chưa triển khai | External MCP allowlist và Open-Meteo đã được duyệt |
+| M6.6 Tool ecosystem | Backend hoàn tất, Console chưa nối | Internal server MCP catalog; external MCP HTTPS exact-host allowlist, DNS/IP pinning chống SSRF, default-deny agent permission/rate limit/timeout/audit; Open-Meteo typed adapter |
 | M6.7 Device tools | Chưa triển khai | Mọi Console call cần confirmation một lần |
 | M6.8 Administration | Nền RBAC đã có | Typed actor/status/admin dependency; user/settings/audit/quota workflow chưa triển khai |
 | M6.9 MQTT/UDP | Không áp dụng đã duyệt | WebSocket đáp ứng vận hành local; không mở thêm transport/security boundary |
@@ -50,6 +50,9 @@ duyệt rõ là không áp dụng.
   isolation, injection boundary và realtime pipeline regressions đều pass.
 - Backend sau M6.4–M6.5: `434/434` test pass; Ruff pass; mypy pass trên 100 source
   files; namespace scan thường và `--all` pass.
+- Backend sau M6.6: `442/442` test pass; Ruff pass; mypy pass trên 106 source files;
+  focused SSRF/redirect/peer pinning/timeout/size/JSON-RPC/weather/permission/rate-limit/
+  tenant/audit tests và namespace scan đều pass.
 
 ## Mục không áp dụng đã duyệt
 

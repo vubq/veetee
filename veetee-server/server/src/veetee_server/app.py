@@ -24,6 +24,7 @@ from .control_plane.memory_router import router as memory_control_plane_router
 from .control_plane.provider_router import router as provider_control_plane_router
 from .control_plane.router import router as control_plane_router
 from .control_plane.runtime_router import router as runtime_control_plane_router
+from .control_plane.tool_router import router as tool_control_plane_router
 from .device_gateway import DeviceSessionRegistry
 from .device_gateway import router as device_gateway_router
 from .logging import configure_logging
@@ -212,6 +213,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         KnowledgeRepository,
         PostgresDatabase,
         ProviderRepository,
+        ToolingRepository,
         UserRepository,
     )
 
@@ -238,6 +240,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.knowledge_repository = KnowledgeRepository(database)
         app.state.correction_repository = CorrectionRepository(database)
         app.state.context_provider_config_repository = ContextProviderConfigRepository(database)
+        app.state.tooling_repository = ToolingRepository(database)
+
+    from .tools.external_mcp import ExternalMCPClient, ExternalMCPConfig
+    from .tools.integrations import IntegrationGate, IntegrationPermissionSnapshot
+    from .tools.ssrf import ExternalURLPolicy
+
+    app.state.external_url_policy = ExternalURLPolicy(settings.tool_external_allowed_hosts)
+    app.state.external_mcp_client = ExternalMCPClient(
+        app.state.external_url_policy,
+        config=ExternalMCPConfig(
+            request_timeout_seconds=settings.tool_external_request_timeout_seconds,
+            max_response_bytes=settings.tool_external_max_response_bytes,
+            max_redirects=settings.tool_external_max_redirects,
+        ),
+    )
+    weather_hosts = {"api.open-meteo.com", "geocoding-api.open-meteo.com"}
+    if weather_hosts.issubset(set(settings.tool_external_allowed_hosts)):
+        from .tools.weather import OpenMeteoWeatherTool, create_weather_tool_definition
+
+        app.state.tool_registry.register(
+            create_weather_tool_definition(
+                OpenMeteoWeatherTool(app.state.external_mcp_client)
+            )
+        )
+    tooling_repository = getattr(app.state, "tooling_repository", None)
+
+    def lookup_integration_permission(
+        owner_user_id: str, agent_id: str, endpoint_id: str
+    ) -> IntegrationPermissionSnapshot | None:
+        if not isinstance(tooling_repository, ToolingRepository):
+            return None
+        stored = tooling_repository.get_permission(
+            UUID(owner_user_id), UUID(agent_id), UUID(endpoint_id)
+        )
+        if stored is None:
+            return None
+        return IntegrationPermissionSnapshot(
+            can_list=stored.can_list,
+            can_call=stored.can_call,
+            rate_limit_calls=stored.rate_limit_calls,
+            rate_limit_window_seconds=float(stored.rate_limit_window_seconds),
+        )
+
+    app.state.integration_gate = IntegrationGate(lookup_integration_permission)
 
     # M6.4/M6.5 prompt context providers. Without persistence the knowledge
     # provider degrades to a "no repository" result instead of failing requests.
@@ -299,6 +345,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(provider_control_plane_router)
     app.include_router(knowledge_control_plane_router)
     app.include_router(correction_control_plane_router)
+    app.include_router(tool_control_plane_router)
 
     @app.middleware("http")
     async def correlation_middleware(

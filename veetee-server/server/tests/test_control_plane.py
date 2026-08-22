@@ -42,6 +42,7 @@ def _apply_migrations(database: PostgresDatabase) -> None:
         "006_m6_agent_lifecycle_history.sql",
         "007_m6_knowledge_rag.sql",
         "008_m6_corrections_context.sql",
+        "009_m6_tool_integrations.sql",
     ):
         with database.connection() as connection:
             connection.execute((migrations_dir / name).read_text(encoding="utf-8"))
@@ -55,7 +56,8 @@ def persisted_client() -> TestClient:
     _apply_migrations(database)
     with database.connection() as connection:
         connection.execute(
-            "TRUNCATE veetee_agent_context_providers, veetee_correction_rules, "
+            "TRUNCATE veetee_agent_integration_permissions, veetee_external_endpoints, "
+            "veetee_agent_context_providers, veetee_correction_rules, "
             "veetee_correction_sets, veetee_agent_datasets, veetee_chunks, "
             "veetee_documents, veetee_datasets, veetee_conversation_turns, "
             "veetee_agent_snapshots, "

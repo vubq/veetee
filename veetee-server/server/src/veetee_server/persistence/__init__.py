@@ -39,10 +39,17 @@ from .repository import (
     StoredAgent,
     StoredDevice,
     StoredFirmwareRelease,
+    StoredProvider,
     UserRepository,
     hash_login_identifier,
     parse_semver,
     record_audit,
+)
+from .tooling import (
+    StoredExternalEndpoint,
+    StoredIntegrationPermission,
+    ToolingRepository,
+    validate_external_endpoint_url,
 )
 
 __all__ = [
@@ -72,14 +79,18 @@ __all__ = [
     "StoredDataset",
     "StoredDevice",
     "StoredDocument",
+    "StoredExternalEndpoint",
     "StoredFirmwareRelease",
+    "StoredIntegrationPermission",
     "StoredProvider",
     "StoredTag",
     "StoredTurn",
+    "ToolingRepository",
     "TurnInput",
     "UserRepository",
     "hash_login_identifier",
     "parse_semver",
     "purge_expired_conversations",
     "record_audit",
+    "validate_external_endpoint_url",
 ]

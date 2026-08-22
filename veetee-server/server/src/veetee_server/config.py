@@ -106,6 +106,18 @@ class Settings(BaseSettings):
     # Correction Rules & Context Provider Settings (M6.5)
     context_provider_default_timeout_ms: int = Field(default=2000, gt=0)
 
+    # External tool integrations (M6.6). The HTTPS host allowlist is exact
+    # match (case-insensitive) and empty by default, which denies every
+    # outbound integration call.
+    tool_external_allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
+    tool_external_request_timeout_seconds: float = Field(default=10.0, gt=0)
+    tool_external_max_response_bytes: int = Field(default=262144, gt=0)
+    tool_external_max_redirects: int = Field(default=3, ge=0)
+    tool_integration_rate_limit_calls: int = Field(default=30, gt=0)
+    tool_integration_rate_window_seconds: float = Field(default=60.0, gt=0)
+
     # Device Activation & OTA Settings (M5)
     activation_ttl_seconds: int = Field(default=600, gt=0)
     activation_bind_receipt_ttl_seconds: int = Field(default=600, gt=0)
@@ -245,6 +257,33 @@ class Settings(BaseSettings):
             values = [str(key).strip() for key in v if str(key).strip()]
             return list(dict.fromkeys(values))
         return []
+
+    @field_validator("tool_external_allowed_hosts", mode="before")
+    @classmethod
+    def _parse_allowed_hosts(cls, v: object) -> list[str]:
+        """Parses a comma/semicolon/whitespace-separated exact host allowlist.
+
+        Hosts are normalized to lower case; port suffixes are rejected because
+        the policy compares bare host names.
+        """
+        raw_items: list[str]
+        if isinstance(v, str):
+            raw_items = [item for item in re.split(r"[,; \n\t]+", v) if item.strip()]
+        elif isinstance(v, list):
+            raw_items = [str(item) for item in v if str(item).strip()]
+        else:
+            return []
+        hosts: list[str] = []
+        for item in raw_items:
+            host = item.strip().casefold().rstrip(".")
+            if ":" in host or "/" in host:
+                raise ValueError(
+                    "tool_external_allowed_hosts entries must be bare host names"
+                )
+            if host:
+                hosts.append(host)
+        return list(dict.fromkeys(hosts))
+
 
     @field_validator("device_websocket_public_url")
     @classmethod
