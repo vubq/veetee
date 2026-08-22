@@ -219,3 +219,22 @@ class IntegrationToolCallRequest(BaseModel):
     agent_id: UUID
     tool_name: str = Field(min_length=1, max_length=128)
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceMcpToolsListRequest(BaseModel):
+    """Owner/device/session-scoped device tool discovery (no confirmation)."""
+
+    session_id: UUID | None = None
+
+
+class DeviceMcpPrepareCallRequest(BaseModel):
+    """Prepares a one-time confirmation token binding exact call inputs (M6.7)."""
+
+    session_id: UUID | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceMcpConfirmCallRequest(BaseModel):
+    """Executes the prepared call; arguments come only from the stored token."""
+
+    confirmation_token: str = Field(min_length=16, max_length=256)

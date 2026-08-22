@@ -29,6 +29,15 @@ class DeviceSessionRegistry:
         async with self._lock:
             return self._sessions.get(session_id)
 
+    async def find_device_sessions(self, device_id: str) -> list[tuple[DeviceSession, WebSocket]]:
+        """Returns every live session currently advertising a persisted device id."""
+        async with self._lock:
+            return [
+                (session, websocket)
+                for session, websocket in self._sessions.values()
+                if session.device_id == device_id
+            ]
+
     async def online_device_ids(self) -> set[str]:
         async with self._lock:
             return {session.device_id for session, _ in self._sessions.values()}

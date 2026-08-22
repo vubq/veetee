@@ -18,6 +18,12 @@ from .config import (
     validate_device_websocket_url,
 )
 from .control_plane.correction_router import router as correction_control_plane_router
+from .control_plane.device_tool_router import (
+    DeviceMCPConfirmationStore,
+)
+from .control_plane.device_tool_router import (
+    router as device_tool_control_plane_router,
+)
 from .control_plane.history_router import router as history_control_plane_router
 from .control_plane.knowledge_router import router as knowledge_control_plane_router
 from .control_plane.memory_router import router as memory_control_plane_router
@@ -25,7 +31,7 @@ from .control_plane.provider_router import router as provider_control_plane_rout
 from .control_plane.router import router as control_plane_router
 from .control_plane.runtime_router import router as runtime_control_plane_router
 from .control_plane.tool_router import router as tool_control_plane_router
-from .device_gateway import DeviceSessionRegistry
+from .device_gateway import DeviceMCPBroker, DeviceSessionRegistry
 from .device_gateway import router as device_gateway_router
 from .logging import configure_logging
 
@@ -337,6 +343,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.ready = False
     app.state.device_session_registry = DeviceSessionRegistry()
+    app.state.device_mcp_broker = DeviceMCPBroker(
+        call_timeout_seconds=runtime_settings.device_mcp_call_timeout_seconds,
+        max_pending_per_session=runtime_settings.device_mcp_max_pending_calls_per_session,
+    )
+    app.state.device_mcp_confirmation_store = DeviceMCPConfirmationStore(
+        ttl_seconds=runtime_settings.device_mcp_confirmation_ttl_seconds,
+        max_entries=runtime_settings.device_mcp_max_pending_confirmations,
+    )
     app.include_router(device_gateway_router)
     app.include_router(control_plane_router)
     app.include_router(memory_control_plane_router)
@@ -346,6 +360,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(knowledge_control_plane_router)
     app.include_router(correction_control_plane_router)
     app.include_router(tool_control_plane_router)
+    app.include_router(device_tool_control_plane_router)
 
     @app.middleware("http")
     async def correlation_middleware(

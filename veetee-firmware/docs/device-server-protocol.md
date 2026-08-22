@@ -39,8 +39,8 @@ Endpoint chính thức: `/api/v1/devices/ws`
 - **Codec**:
   - Server chọn `VEETEE_AUDIO_CODEC=fake|native`; mode `native` dùng libopus stateful cho
     đúng uplink/downlink 60 ms và readiness fail-closed nếu thư viện không sẵn sàng.
-  - Resampling khác sample rate vẫn deferred; Device MCP integration full tool call hoãn
-    lại M3.
+  - Resampling khác sample rate vẫn deferred. Từ M6.7, Device MCP response được correlate
+    theo exact live session; firmware chỉ nhận call khi đã công bố `features.mcp=true`.
 
 ---
 
@@ -191,7 +191,7 @@ UDP packet tham khảo:
 AES-CTR chỉ mã hóa, không tự cung cấp integrity/authentication cho từng packet. Nếu
 Veetee dùng UDP, nên đánh giá AEAD, key rotation, nonce uniqueness và replay window.
 
-## MCP trên transport
+## MCP trên transport (Quyết định Veetee - M6.7)
 
 Outer envelope:
 
@@ -212,12 +212,23 @@ Flow chính:
 
 1. Device hello công bố `features.mcp=true`.
 2. Server gửi `initialize`; device trả protocol version và server info.
-3. Server gửi `tools/list`, lặp theo `nextCursor` nếu có.
+3. Server gửi `tools/list`, lặp theo `nextCursor` nếu có (server chặn tối đa 10 trang và
+   100 tool, cursor lặp/sai bị từ chối).
 4. Server gửi `tools/call`; device trả `result.content` hoặc JSON-RPC `error`.
-5. Device có thể gửi notification không có `id`.
+5. Trong contract Veetee M6.7, device chỉ gửi response cho request server đã phát. Request
+   hoặc notification tự phát từ device không được nhận như response.
 
-Method quan sát: `initialize`, `tools/list`, `tools/call`. Tool schema theo JSON Schema
-object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quyền.
+Outer envelope bắt buộc có đúng `type="mcp"`, `session_id` của connection hiện hành và
+`payload` JSON-RPC 2.0. Mỗi response phải giữ nguyên `id` và có đúng một trong `result`
+hoặc `error`; unknown/duplicate/stale response bị server ignore an toàn. Correlation ID
+string tối đa 128 ký tự, error message tối đa 512 ký tự và request timeout mặc định 10s.
+
+Console list tool không cần confirmation nhưng vẫn owner/device/session scoped. Mọi
+`tools/call` từ Console cần token confirmation một lần, TTL mặc định 60s, bind exact
+owner/device/client/agent/live session/tool/arguments; token bị consume trước execution.
+Firmware không được coi token này là device credential và không bao giờ nhận token trên
+wire. Tool đặc quyền không được tự mở bằng `withUserTools`; policy server là default deny.
+Golden vector chung nằm tại `../../veetee-server/contracts/device/mcp_golden.json`.
 
 ## OTA/config discovery (M1.4 - Quyết định Veetee)
 

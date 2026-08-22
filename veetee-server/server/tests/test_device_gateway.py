@@ -457,7 +457,7 @@ def test_binary_frames_after_hello(
             assert exc_info.value.code == 1009
 
 
-def test_unsupported_mcp_message_type(
+def test_malformed_mcp_frame_is_safe_and_connection_stays_open(
     test_settings: Settings,
     valid_headers: dict[str, str],
     valid_hello_payload: dict[str, Any],
@@ -471,7 +471,7 @@ def test_unsupported_mcp_message_type(
             ws.send_json({"type": "mcp", "session_id": session_id, "payload": {}})
             err = ws.receive_json()
             assert err["code"] == "veetee_invalid_input"
-            assert err["message"] == "Unsupported frame type"
+            assert err["message"] == "Invalid MCP frame"
             assert "mcp" not in err["message"]
 
             # Connection remains open after safe error

@@ -511,6 +511,18 @@ class DeviceRepository:
             ).fetchone()
             return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
 
+    def get(self, owner_user_id: uuid.UUID, device_pk: uuid.UUID) -> StoredDevice | None:
+        """Returns a tenant-owned device by primary key or None."""
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT id, owner_user_id, agent_id, device_id, alias, board, chip, "
+                "partition_name, firmware_version, client_id, "
+                "last_seen_at, created_at, updated_at "
+                "FROM veetee_devices WHERE id = %s AND owner_user_id = %s",
+                (device_pk, owner_user_id),
+            ).fetchone()
+            return StoredDevice(*cast(tuple[Any, ...], row)) if row else None
+
     def list(self, owner_user_id: uuid.UUID) -> list[StoredDevice]:
         with self.database.connection() as conn:
             rows = conn.execute(

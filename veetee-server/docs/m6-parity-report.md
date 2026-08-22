@@ -33,7 +33,7 @@ duyệt rõ là không áp dụng.
 | M6.4 Knowledge/RAG | Backend hoàn tất, Console chưa nối | Dataset/document/chunk, bounded UTF-8 upload, PostgreSQL FTS, citation/provenance, composite tenant constraint, injection delimiting và hard delete |
 | M6.5 Correction/context | Backend hoàn tất, Console chưa nối | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
 | M6.6 Tool ecosystem | Backend hoàn tất, Console chưa nối | Internal server MCP catalog; external MCP HTTPS exact-host allowlist, DNS/IP pinning chống SSRF, default-deny agent permission/rate limit/timeout/audit; Open-Meteo typed adapter |
-| M6.7 Device tools | Chưa triển khai | Mọi Console call cần confirmation một lần |
+| M6.7 Device tools | Backend hoàn tất, Console chưa nối | Initialize/list pagination/call correlated theo live session; owner/device/capability gate; confirmation hash một lần TTL 60s bind exact arguments; bounded timeout/cleanup/audit |
 | M6.8 Administration | Nền RBAC đã có | Typed actor/status/admin dependency; user/settings/audit/quota workflow chưa triển khai |
 | M6.9 MQTT/UDP | Không áp dụng đã duyệt | WebSocket đáp ứng vận hành local; không mở thêm transport/security boundary |
 | M6.10 Client coverage | Đã khóa | Web responsive là client quản trị; không tạo mobile app riêng |
@@ -53,6 +53,12 @@ duyệt rõ là không áp dụng.
 - Backend sau M6.6: `442/442` test pass; Ruff pass; mypy pass trên 106 source files;
   focused SSRF/redirect/peer pinning/timeout/size/JSON-RPC/weather/permission/rate-limit/
   tenant/audit tests và namespace scan đều pass.
+- M6.7 focused: parser/envelope strict, initialize-once, correlation/session isolation,
+  timeout/disconnect/duplicate/stale cleanup, shared WebSocket send lock, confirmation
+  expiry/replay/collision/store bound, strict argument/result JSON và PostgreSQL-backed
+  Console-to-live-device list/prepare/call/audit flow đều pass. Backend sau M6.7:
+  `450/450` test pass; Ruff pass; mypy pass trên 110 source files; namespace scan thường
+  và `--all` pass; hai repo references clean.
 
 ## Mục không áp dụng đã duyệt
 

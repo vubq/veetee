@@ -35,15 +35,23 @@ from veetee_server.pipeline.orchestrator import FakePipeline
 
 from .auth import validate_handshake_headers
 from .barge_in import AutoEndpointDetector, BargeInCoordinator, BargeInDetector
-from .downlink import GatewayEventSink, run_downlink_sender, supervise_pipeline
+from .downlink import (
+    GatewayEventSink,
+    run_downlink_sender,
+    send_ws_json,
+    supervise_pipeline,
+)
+from .mcp_broker import DeviceMCPBroker
 from .ota import ota_router
 from .protocol import (
     AbortMessage,
     HelloMessage,
     ListenMessage,
+    McpMessage,
     SessionMessage,
     make_error_envelope,
     parse_and_validate_json,
+    parse_device_mcp_response,
 )
 from .registry import DeviceSessionRegistry
 
@@ -187,9 +195,21 @@ async def _begin_processing_turn(
 
 
 async def _cleanup_session(
-    session: DeviceSession, registry: DeviceSessionRegistry | None
+    session: DeviceSession,
+    registry: DeviceSessionRegistry | None,
+    broker: DeviceMCPBroker | None = None,
 ) -> None:
-    """Stops advertising a disconnected session before draining its tasks."""
+    """Stops advertising a disconnected session before draining its tasks.
+
+    Cancelling pending device MCP calls happens first so control-plane
+    callers fail with a typed disconnect error instead of waiting for their
+    full call timeout.
+    """
+    if broker is not None:
+        try:
+            broker.cancel_session(str(session.id))
+        except Exception:
+            pass
     if registry is not None:
         await registry.unregister(str(session.id))
     try:
@@ -198,14 +218,70 @@ async def _cleanup_session(
         pass
 
 
+def _handle_device_mcp_frame(
+    broker: DeviceMCPBroker | None,
+    session: DeviceSession,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Routes one inbound ``type=mcp`` frame; returns a safe error envelope or None.
+
+    The live session id of this WebSocket connection is the only routing key.
+    An envelope ``session_id`` that disagrees marks the frame stale and it is
+    dropped without any response. Malformed frames - including unsolicited
+    device JSON-RPC requests/notifications - get a typed error that never
+    echoes payload content, and the connection stays alive.
+    """
+    try:
+        message = McpMessage.model_validate(payload)
+    except ValidationError:
+        return make_error_envelope(
+            "veetee_invalid_input", "Invalid MCP frame", session_id=str(session.id)
+        )
+    envelope_session_id = message.session_id
+    if envelope_session_id is not None and envelope_session_id != str(session.id):
+        logger.debug(
+            "mcp_stale_session_frame_ignored",
+            extra={"context": {"session_id": str(session.id)}},
+        )
+        return None
+    try:
+        rpc_id = parse_device_mcp_response(message.payload)
+    except ValueError:
+        return make_error_envelope(
+            "veetee_invalid_input", "Invalid MCP frame", session_id=str(session.id)
+        )
+    if broker is None:
+        return None
+    if "result" in message.payload:
+        routed = broker.handle_response(str(session.id), rpc_id, message.payload["result"])
+    else:
+        error_object = message.payload["error"]
+        routed = broker.handle_error(
+            str(session.id),
+            rpc_id,
+            int(error_object["code"]),
+            str(error_object["message"]),
+        )
+    if not routed:
+        logger.debug(
+            "mcp_unmatched_response_ignored",
+            extra={"context": {"session_id": str(session.id)}},
+        )
+    return None
+
+
 @router.websocket("/ws")
 async def device_websocket_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint handling device connection lifecycle according to M1.3 specification."""
     await websocket.accept()
+    websocket.state.send_lock = asyncio.Lock()
 
     settings: Settings = getattr(websocket.app.state, "settings", None) or get_settings()
     registry: DeviceSessionRegistry | None = getattr(
         websocket.app.state, "device_session_registry", None
+    )
+    mcp_broker: DeviceMCPBroker | None = getattr(
+        websocket.app.state, "device_mcp_broker", None
     )
 
     # 1. Validate Auth & Headers
@@ -221,7 +297,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             session_id=None,
         )
         try:
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1008)
         except Exception:
             pass
@@ -241,7 +317,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             )
         except TimeoutError:
             env = make_error_envelope("veetee_timeout", "Hello timeout", session_id=None)
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1008)
             return
 
@@ -255,14 +331,14 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 "Binary frame received before hello",
                 session_id=None,
             )
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1002)  # Protocol error
             return
 
         raw_text = first_frame.get("text")
         if not raw_text:
             env = make_error_envelope("veetee_invalid_input", "Empty frame", session_id=None)
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1008)
             return
 
@@ -271,7 +347,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             env = make_error_envelope(
                 "veetee_invalid_input", "JSON payload size limit exceeded", session_id=None
             )
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1009)  # Message too big
             return
 
@@ -282,7 +358,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             env = make_error_envelope(
                 "veetee_invalid_input", "Malformed JSON or depth limit exceeded", session_id=None
             )
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1008)
             return
 
@@ -293,7 +369,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
             env = make_error_envelope(
                 "veetee_invalid_input", "Invalid hello schema or audio params", session_id=None
             )
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1008)
             return
 
@@ -342,7 +418,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 "frame_duration": 60,
             },
         }
-        await websocket.send_json(server_hello)
+        await send_ws_json(websocket, server_hello)
 
         # One downlink sender per session drains the egress queue (stt/tts
         # control messages + paced audio frames) in FIFO order.
@@ -375,7 +451,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 env = make_error_envelope(
                     "veetee_timeout", "Idle timeout", session_id=str(session.id)
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
                 await websocket.close(code=1001)
                 break
             try:
@@ -392,7 +468,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     env = make_error_envelope(
                         "veetee_timeout", "Idle timeout", session_id=str(session.id)
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1001)
                     break
                 # Do not send an application-level JSON ping here. The ESP32
@@ -414,7 +490,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         "Binary payload size limit exceeded",
                         session_id=str(session.id),
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1009)
                     break
                 try:
@@ -429,7 +505,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         "Audio payload size limit exceeded",
                         session_id=str(session.id),
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1009)
                     break
                 except AudioProtocolError as exc:
@@ -438,7 +514,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         f"Malformed binary audio frame: {exc}",
                         session_id=str(session.id),
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1002)
                     break
 
@@ -492,7 +568,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         "Audio queue overflow",
                         session_id=str(session.id),
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1009)
                     break
                 if auto_endpoint is not None:
@@ -526,7 +602,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     "JSON payload size limit exceeded",
                     session_id=str(session.id),
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
                 await websocket.close(code=1009)
                 break
 
@@ -538,9 +614,20 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     "Malformed JSON or depth limit exceeded",
                     session_id=str(session.id),
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
                 await websocket.close(code=1008)
                 break
+
+            # Device MCP frames (M6.7) are responses to server-issued JSON-RPC
+            # calls. They are routed to the broker keyed by this connection's
+            # live session; malformed, stale or unsolicited frames never tear
+            # the session down, so they are handled before the strict
+            # session-id mismatch gate below.
+            if payload.get("type") == "mcp":
+                error_env = _handle_device_mcp_frame(mcp_broker, session, payload)
+                if error_env is not None:
+                    await send_ws_json(websocket, error_env)
+                continue
 
             # Session ID verification if present
             msg_session_id = payload.get("session_id")
@@ -550,7 +637,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     "Session ID mismatch",
                     session_id=str(session.id),
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
                 await websocket.close(code=1008)
                 break
 
@@ -562,7 +649,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     "Duplicate hello message",
                     session_id=str(session.id),
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
                 await websocket.close(code=1008)
                 break
 
@@ -570,27 +657,29 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 try:
                     SessionMessage.model_validate(payload)
                 except ValidationError:
-                    await websocket.send_json(
+                    await send_ws_json(
+                        websocket,
                         make_error_envelope(
                             "veetee_invalid_input",
                             "Invalid control message",
                             session_id=str(session.id),
-                        )
+                        ),
                     )
                     await websocket.close(code=1008)
                     break
-                await websocket.send_json({"type": "pong", "session_id": str(session.id)})
+                await send_ws_json(websocket, {"type": "pong", "session_id": str(session.id)})
 
             elif msg_type == "pong":
                 try:
                     SessionMessage.model_validate(payload)
                 except ValidationError:
-                    await websocket.send_json(
+                    await send_ws_json(
+                        websocket,
                         make_error_envelope(
                             "veetee_invalid_input",
                             "Invalid control message",
                             session_id=str(session.id),
-                        )
+                        ),
                     )
                     await websocket.close(code=1008)
                     break
@@ -599,16 +688,17 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 try:
                     SessionMessage.model_validate(payload)
                 except ValidationError:
-                    await websocket.send_json(
+                    await send_ws_json(
+                        websocket,
                         make_error_envelope(
                             "veetee_invalid_input",
                             "Invalid control message",
                             session_id=str(session.id),
-                        )
+                        ),
                     )
                     await websocket.close(code=1008)
                     break
-                await websocket.send_json({"type": "goodbye", "session_id": str(session.id)})
+                await send_ws_json(websocket, {"type": "goodbye", "session_id": str(session.id)})
                 await websocket.close(code=1000)
                 break
 
@@ -616,12 +706,13 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                 try:
                     AbortMessage.model_validate(payload)
                 except ValidationError:
-                    await websocket.send_json(
+                    await send_ws_json(
+                        websocket,
                         make_error_envelope(
                             "veetee_invalid_input",
                             "Invalid control message",
                             session_id=str(session.id),
-                        )
+                        ),
                     )
                     await websocket.close(code=1008)
                     break
@@ -650,7 +741,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                         "Invalid listen schema",
                         session_id=str(session.id),
                     )
-                    await websocket.send_json(env)
+                    await send_ws_json(websocket, env)
                     await websocket.close(code=1008)
                     break
 
@@ -701,13 +792,13 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
                     )
 
             else:
-                # Unsupported message type (mcp or others) -> return safe typed error
+                # Unsupported message type -> return safe typed error
                 env = make_error_envelope(
                     "veetee_invalid_input",
                     "Unsupported frame type",
                     session_id=str(session.id),
                 )
-                await websocket.send_json(env)
+                await send_ws_json(websocket, env)
 
     except WebSocketDisconnect:
         pass
@@ -719,7 +810,7 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
         try:
             sid = str(session.id) if session else None
             env = make_error_envelope("veetee_internal", "Internal server error", session_id=sid)
-            await websocket.send_json(env)
+            await send_ws_json(websocket, env)
             await websocket.close(code=1011)
         except Exception:
             pass
@@ -729,4 +820,4 @@ async def device_websocket_endpoint(websocket: WebSocket) -> None:
         if "auto_endpoint" in locals() and auto_endpoint is not None:
             auto_endpoint.close()
         if session is not None:
-            await _cleanup_session(session, registry)
+            await _cleanup_session(session, registry, mcp_broker)

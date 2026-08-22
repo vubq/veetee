@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     tool_integration_rate_limit_calls: int = Field(default=30, gt=0)
     tool_integration_rate_window_seconds: float = Field(default=60.0, gt=0)
 
+    # Device MCP confirmation flow (M6.7). Tool calls against an online device
+    # always require a one-time confirmation token bound to the canonical
+    # owner+device+session+tool+arguments tuple; the locked default TTL is 60
+    # seconds. Confirmation state is ephemeral in memory only.
+    device_mcp_call_timeout_seconds: float = Field(default=10.0, gt=0)
+    device_mcp_confirmation_ttl_seconds: float = Field(default=60.0, gt=0)
+    device_mcp_max_pending_calls_per_session: int = Field(default=8, gt=0)
+    device_mcp_max_pending_confirmations: int = Field(default=256, gt=0)
+    device_mcp_max_arguments_bytes: int = Field(default=8192, gt=0)
+
     # Device Activation & OTA Settings (M5)
     activation_ttl_seconds: int = Field(default=600, gt=0)
     activation_bind_receipt_ttl_seconds: int = Field(default=600, gt=0)

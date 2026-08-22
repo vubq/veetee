@@ -38,6 +38,27 @@ from .protocol import make_error_envelope
 logger = logging.getLogger("veetee.device_gateway")
 
 
+def websocket_send_lock(websocket: WebSocket) -> asyncio.Lock | None:
+    """Returns the injected session send lock, including for minimal test doubles."""
+    state = getattr(websocket, "state", None)
+    return getattr(state, "send_lock", None)
+
+
+async def send_ws_json(websocket: WebSocket, envelope: dict[str, Any]) -> None:
+    """Serializes one JSON frame onto the socket under the shared per-session lock.
+
+    Every concurrent sender (downlink audio/control, gateway error paths and
+    the device MCP broker) must go through this helper so Starlette never sees
+    interleaved ``send_*`` calls on the same WebSocket.
+    """
+    lock = websocket_send_lock(websocket)
+    if lock is not None:
+        async with lock:
+            await websocket.send_json(envelope)
+    else:
+        await websocket.send_json(envelope)
+
+
 class GatewayEventSink:
     """Translates pipeline events into ordered downlink items for the session."""
 
@@ -113,7 +134,12 @@ async def run_downlink_sender(
                 if queue.is_closed or item.generation < queue.generation:
                     continue
                 control_text = item.payload.decode("utf-8")
-                await websocket.send_text(control_text)
+                send_lock = websocket_send_lock(websocket)
+                if send_lock is not None:
+                    async with send_lock:
+                        await websocket.send_text(control_text)
+                else:
+                    await websocket.send_text(control_text)
                 control = json.loads(control_text)
                 if control.get("type") == "tts" and control.get("state") == "stop":
                     session.mark_conversation_activity(
@@ -123,7 +149,12 @@ async def run_downlink_sender(
                 await session.pacer.pace(item.duration_ms / 1000.0)
                 if queue.is_closed or item.generation < queue.generation:
                     continue
-                await websocket.send_bytes(item.payload)
+                send_lock = websocket_send_lock(websocket)
+                if send_lock is not None:
+                    async with send_lock:
+                        await websocket.send_bytes(item.payload)
+                else:
+                    await websocket.send_bytes(item.payload)
     except QueueClosedError:
         return
     except asyncio.CancelledError:
@@ -150,12 +181,13 @@ async def supervise_pipeline(
         return
     except SlowClientQueueOverflowError:
         try:
-            await websocket.send_json(
+            await send_ws_json(
+                websocket,
                 make_error_envelope(
                     "veetee_invalid_input",
                     "Audio queue overflow",
                     session_id=str(session.id),
-                )
+                ),
             )
             await websocket.close(code=1009)
         except Exception:

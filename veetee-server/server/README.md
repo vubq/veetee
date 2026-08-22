@@ -50,7 +50,8 @@ Endpoints hiện có:
 - `POST /api/v1/devices/ota/check/activate`: firmware poll bằng body `{}`, trả `202` cho
   tới khi bind và `200` sau bind.
 - `GET /api/v1/devices/ota/artifacts/{artifact_id}`: stream artifact đã publish.
-- `WS /api/v1/devices/ws`: device gateway (hello/listen/abort/ping/pong/goodbye).
+- `WS /api/v1/devices/ws`: device gateway
+  (hello/listen/abort/ping/pong/goodbye và MCP JSON-RPC khi device công bố capability).
 
 Control plane M5 yêu cầu bearer auth: `POST /api/v1/control/devices/bind`,
 `GET /api/v1/control/devices`, `DELETE /api/v1/control/devices/{id}`, raw immutable upload
@@ -60,6 +61,11 @@ Control plane M5 yêu cầu bearer auth: `POST /api/v1/control/devices/bind`,
 `VEETEE_PERSISTENCE_ENABLED=true`; khi bật persistence phải cấu hình explicit
 `VEETEE_OTA_PUBLIC_BASE_URL` để response firmware không phụ thuộc request `Host`. Xem
 `migrations/README.md`.
+
+M6.7 thêm owner-scoped device MCP qua control plane: list tool không cần confirmation;
+call tool luôn đi qua `prepare-call` rồi `call` bằng token một lần, mặc định hết hạn sau
+60 giây và bind exact owner/device/client/live-session/tool/arguments. Thiết bị offline,
+unbound, binding lệch hoặc không công bố `features.mcp=true` đều bị từ chối.
 
 Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format contract,
 bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.

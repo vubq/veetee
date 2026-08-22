@@ -95,8 +95,13 @@ Các mã lỗi thuộc M0 taxonomy: `veetee_invalid_input`, `veetee_auth_failed`
       về `idle` và chờ WakeNet.
    - Từ M1.6, `listen/stop` chạy fake pipeline deterministic và server phát theo thứ tự
      `stt` -> `tts/start` -> `tts/sentence_start` -> binary audio* -> `tts/stop`.
-6. `mcp` và unsupported frames:
-   - Trả safe typed error envelope `veetee_invalid_input`. Tích hợp MCP pipeline hoãn lại M3.
+6. `mcp` (M6.7) và unsupported frames:
+   - `mcp` chỉ hợp lệ khi outer envelope có đúng `type`, `session_id` của live connection
+     và `payload` JSON-RPC 2.0. Server gửi request `initialize`, `tools/list` và
+     `tools/call`; device trả response có cùng `id` với đúng một trong `result`/`error`.
+   - Response lạ, trùng, trễ hoặc thuộc session cũ bị ignore; malformed/unsolicited
+     request trả safe `veetee_invalid_input` không echo payload và không đóng session.
+   - Message type khác không hỗ trợ tiếp tục trả safe `veetee_invalid_input`.
 
 ### Full-duplex và barge-in (M2.6)
 
@@ -347,23 +352,52 @@ Khi `read_config_from_api=true`, OTA route local không được đăng ký; con
 nhận OTA/config. Download handler phải chống path traversal và giới hạn file/content.
 Vision endpoint cần giới hạn upload, MIME, timeout, token và chống SSRF nếu gọi URL ngoài.
 
-## MCP device protocol
+## MCP device protocol (Quyết định Veetee - M6.7)
 
-Server đóng vai MCP client đối với ESP32. Flow:
+Server đóng vai MCP client đối với ESP32. Device phải công bố `hello.features.mcp=true`.
+Outer envelope hai chiều:
+
+```json
+{
+  "type": "mcp",
+  "session_id": "<live-session-uuid>",
+  "payload": {"jsonrpc": "2.0", "id": "vtmcp-...", "method": "tools/list", "params": {}}
+}
+```
+
+Flow:
 
 ```text
 device hello features.mcp=true
   -> server initialize
   -> device capabilities/serverInfo
-  -> server tools/list (có pagination)
+  -> server tools/list (tối đa 10 trang/100 tool, cursor không được lặp)
   -> LLM/backend chọn tool
   -> server tools/call
   -> device result/error
 ```
 
-MCP payload là JSON-RPC 2.0 bọc trong message `type=mcp`. Tool invocation cần được ràng
-buộc vào đúng session/device và authorization policy. Không để model tự động gọi
-user-only tool như reboot/upgrade.
+Correlation ID string tối đa 128 ký tự; error message tối đa 512 ký tự. Pending request
+được giới hạn theo session, timeout mặc định 10 giây; timeout, cancellation, disconnect,
+duplicate và stale response đều cleanup deterministic. Mọi sender JSON/audio/MCP của một
+WebSocket dùng chung send lock để không concurrent-send.
+Golden vector chung nằm tại `../contracts/device/mcp_golden.json`.
+
+Control plane owner-scoped cung cấp:
+
+- `POST /api/v1/control/devices/{device_pk}/mcp/tools/list`: discovery trên đúng live
+  session; nếu có nhiều session phải truyền `session_id` explicit; không cần confirmation.
+- `POST /api/v1/control/devices/{device_pk}/mcp/tools/{tool_name}/prepare-call`: nhận
+  `session_id` tùy chọn và `arguments`; trả token plaintext đúng một lần, TTL mặc định 60s.
+- `POST /api/v1/control/devices/{device_pk}/mcp/tools/{tool_name}/call`: nhận token; token
+  được consume trước validation/execution nên timeout, lỗi, mismatch và replay đều không
+  thể dùng lại.
+
+Server chỉ lưu SHA-256 token trong bounded memory và bind confirmation vào exact owner,
+device primary key/device ID/client ID/agent ID/live session/tool/arguments bằng canonical
+digest. Execute tái xác minh toàn bộ binding và capability `features.mcp=true`; offline,
+unbound hoặc mismatch fail closed. Audit không lưu token, arguments hay result. Address
+book/device calling và process restart qua device message không thuộc phạm vi đã duyệt.
 
 ## Manager API
 
