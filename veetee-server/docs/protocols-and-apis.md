@@ -193,86 +193,6 @@ Golden vector cho v1/v2/v3 hợp lệ và malformed/truncated/oversized nằm t�
 
 ## OTA/config discovery Veetee (Quyết định Veetee - M1.4)
 
-### Mở rộng vòng đời M5
-
-Khi `VEETEE_PERSISTENCE_ENABLED=true`, responder M5 thay shared fleet token bằng vòng
-đời thiết bị có persistence:
-
-- Admin provision out-of-band `Device-Id`, `Client-Id` tùy chọn và Ed25519 public key raw
-  32 byte tại `/api/v1/control/devices/provision`; server không nhận/lưu private key.
-  Discovery đầu của identity đã provision chỉ trả `activation.nonce` opaque và TTL, không
-  trả code/token. Thiết bị ký đúng bytes
-  `veetee-activation-v1\n<device_id>\n<client_id>\n<nonce>\n`, gửi chữ ký raw 64 byte hex
-  trong `Activation-Proof` cùng `Activation-Nonce`. Nonce một lần, có TTL/attempt limit;
-  replay bị từ chối. Chỉ response proof hợp lệ mới trả code 6 chữ số và bootstrap token
-  một lần để thiết bị hiển thị code vật lý. User control API không có endpoint đọc code.
-- Identity chưa provision nhận `activation.status=pending`, không có nonce/code/token và
-  không được tự tạo production enrollment. Compatibility cũ chỉ bật rõ bằng
-  `VEETEE_ALLOW_INSECURE_ACTIVATION=true` khi environment là `local` hoặc `test`; mặc định
-  false và production readiness/config cấm bật.
-- Bootstrap/recovery token không phải credential WebSocket và bị từ chối tại WebSocket,
-  OTA report và artifact download. Sau bind/recovery, token này chỉ được chấp nhận đúng
-  một lần tại discovery để cấp credential `veetee-device-ws`; insert token mới và revoke
-  token một lần diễn ra trong cùng transaction, nên replay thất bại.
-- Discovery của thiết bị đã bind bắt buộc gửi `Authorization: Bearer <active-token>` khớp
-  chính xác `Device-Id`/`Client-Id`. Server lock/load device và xác thực credential trước
-  khi nhận board/chip/partition/version quan sát hoặc rotate token; không fallback shared
-  token khi persistence bật và credential cũ chỉ bị revoke sau khi token mới được ghi.
-  Credential HMAC-SHA256 TTL ngắn có `iss=veetee-server`,
-  `aud=veetee-device-ws`, `device_id`, `client_id`, `jti`, `iat`, `exp`. Lần discovery
-  sau revoke credential active trước của cùng cặp device/client. WebSocket kiểm chữ ký,
-  claims, JTI active, trạng thái bind và không fallback shared token khi persistence bật.
-- Shared `VEETEE_DEVICE_GATEWAY_TOKEN` chỉ còn là compatibility mode khi persistence tắt.
-  Unbind revoke toàn bộ credential của thiết bị.
-- Firmware baseline hiện tại chưa gửi Authorization ở bound rediscovery; firmware/client
-  production phải được thích nghi contract này trước khi bật persistence M5. Simulator
-  Veetee có thể gửi token; không patch repo tham khảo.
-- OTA chỉ trả release SemVer 2 cao nhất, đúng tuyệt đối board/chip/partition và
-  channel, thuộc rollout `active` theo cohort SHA-256 deterministic. Rollout `paused` hoặc
-  `killed`, `auto_update=false` hoặc thiếu partition đều trả no-update chính xác.
-
-Artifact URL mang token HMAC TTL ngắn ràng buộc đúng device/artifact. Download chỉ cho
-artifact vẫn thuộc release/rollout đủ điều kiện và SHA-256 của toàn file trên disk còn
-khớp trước khi trả byte đầu, hỗ trợ đúng một byte range (`start-end`,
-`start-` hoặc suffix `-length`); malformed/multi-range trả `416`. Upload control plane
-stream body `application/octet-stream`, bắt buộc SHA-256, detached Ed25519 signature và
-target metadata qua header; file được fsync + publish atomically và artifact/release/report
-là append-only. Device gửi report tại `POST /api/v1/devices/ota/report` bằng credential
-WS cùng `Device-Id`/`Client-Id`; download/install/boot/rollback bắt buộc `release_id`, phải
-khớp release published đã được offer và đúng progression. `event_id` retry cùng payload
-là idempotent, payload khác trả `409`; chỉ boot success của release đó cập nhật version
-authoritative. Discovery version chỉ là observed telemetry. Failure gate cấu hình được tự
-pause rollout active khi đủ sample/minimum; insert/count/pause được serialize bằng rollout
-row/advisory lock. Report có quota persistent theo device/giờ, terminal uniqueness và
-dedupe window cho check/in-progress. Retention cleanup chỉ chạy khi operator gọi explicit,
-không có bulk delete tự động. Summary nhóm theo board/version/cohort.
-
-M4 row chưa có `Client-Id` được migrate thành `recovery_required`, giữ nguyên owner. Chỉ
-owner đó hoặc admin được gọi recovery để gắn Client-Id đầu tiên. Bind/unbind bắt buộc
-`Idempotency-Key`; cùng actor/action/payload replay kết quả ổn định, payload khác trả conflict.
-Release lưu provenance và rollback target. Admin rollback tạo một rollout target chuyên biệt
-cùng authorization persistent gắn source rollout/release, exact target release và scope
-rollout/cohort/device. Mọi eligibility trên rollout rollback đều bắt buộc authorization khớp,
-kể cả khi version hiện tại thấp hơn target. Scope device/cohort giữ source rollout active cho
-thiết bị ngoài scope; chỉ scope rollout mới kill source toàn cục. Authorization còn hiệu lực
-mới cho phép offer/download/report/boot rollback, và boot success cập nhật current version.
-Artifact metadata trả SHA-256, Ed25519 signature, algorithm, key id và size. Parser firmware
-baseline bỏ qua field firmware thừa, nhưng client production vẫn phải verify digest và
-signature trước install.
-
-Mọi OTA fleet API dưới `/api/v1/control/ota` chỉ dành cho role `admin`; owner không tự
-động trở thành admin. Identity cấu hình bởi `VEETEE_BOOTSTRAP_ADMIN_EMAIL` được tạo hoặc
-promote thành admin một cách deterministic và có audit. Recovery trả riêng một
-`recovery_token` một lần qua response control plane owner/admin, không bao giờ trả WS token
-cho browser. Artifact/release bắt buộc provenance bounded. URL tải artifact chỉ được tạo từ
-`VEETEE_OTA_PUBLIC_BASE_URL`, bắt buộc HTTPS ngoài local/test, không dùng Host header khi
-persistence bật. Discovery persistence production cũng bắt buộc public WebSocket `wss://`;
-`http://`/`ws://` chỉ được phép khi environment được đặt rõ là `local` hoặc `test`.
-
-Identity chưa provision không có activation code. Public key phải được provision qua kênh
-quản trị tin cậy trước first contact; private key chỉ tồn tại trên thiết bị. Code sau proof
-vẫn phải được người dùng đọc từ kênh vật lý để hoàn tất binding.
-
 Endpoint thiết bị gọi để nhận server time, WebSocket URL/token và trạng thái firmware.
 
 ```text
@@ -287,7 +207,6 @@ Header bắt buộc (có phân biệt hoa thường, so khớp không phân bi�
 
 | Header | Yêu cầu |
 | --- | --- |
-| `Authorization` | Bắt buộc cho bound rediscovery; Bearer active per-device token |
 | `Device-Id` | non-empty, <= `VEETEE_ID_MAX_LENGTH=128` |
 | `Client-Id` | non-empty, <= `VEETEE_ID_MAX_LENGTH=128` |
 
@@ -353,7 +272,7 @@ response OTA (kể cả lỗi) có header `X-Veetee-Request-Id` và `Access-Cont
 ### CORS
 
 `OPTIONS` trả 204 với `Access-Control-Allow-Origin: *`, methods `GET, POST, OPTIONS`,
-headers cho phép gồm `Authorization, Device-Id, Client-Id, User-Agent, Accept-Language, Content-Type,
+headers cho phép gồm `Device-Id, Client-Id, User-Agent, Accept-Language, Content-Type,
 X-Veetee-Request-Id`. Không dùng `Access-Control-Allow-Credentials` (endpoint device
 không dùng cookie/credential trình duyệt).
 

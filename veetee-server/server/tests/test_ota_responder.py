@@ -1,6 +1,5 @@
 """Comprehensive tests for Veetee OTA/Config Responder (M1.4)."""
 
-import asyncio
 import json
 import time
 from pathlib import Path
@@ -8,12 +7,10 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from fastapi import Request
 from fastapi.testclient import TestClient
 
 from veetee_server.app import create_app
 from veetee_server.config import Settings, validate_device_websocket_url
-from veetee_server.device_gateway.ota import ota_check
 
 
 @pytest.fixture
@@ -438,85 +435,6 @@ def test_production_readiness_checks() -> None:
         resp = client.get("/readyz")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ready"
-
-
-@pytest.mark.parametrize(
-    ("ota_url", "websocket_url", "reason"),
-    [
-        (
-            "http://ota.example.test",
-            "wss://api.veetee.ai/api/v1/devices/ws",
-            "insecure_ota_public_url",
-        ),
-        (
-            "https://ota.example.test",
-            "ws://api.veetee.ai/api/v1/devices/ws",
-            "insecure_websocket_public_url",
-        ),
-    ],
-)
-def test_production_persistence_readiness_rejects_plaintext_if_validation_is_bypassed(
-    tmp_path: Path,
-    ota_url: str,
-    websocket_url: str,
-    reason: str,
-) -> None:
-    settings = Settings(
-        environment="test",
-        persistence_enabled=True,
-        activation_secret="a" * 32,
-        device_jwt_secret="b" * 32,
-        ota_artifact_dir=str(tmp_path),
-        ota_public_base_url=ota_url,
-        device_websocket_public_url=websocket_url,
-        ota_ed25519_public_key="1" * 64,
-    ).model_copy(update={"environment": "production"})
-    app = create_app(settings)
-    app.state.ready = True
-    app.state.database = object()
-    endpoint = next(
-        route.endpoint for route in app.routes if getattr(route, "path", None) == "/readyz"
-    )
-
-    response = asyncio.run(endpoint())
-
-    assert response.status_code == 503
-    assert json.loads(response.body)["reason"] == reason
-
-
-def test_production_persistence_discovery_rejects_plaintext_transport() -> None:
-    settings = Settings(
-        environment="test",
-        persistence_enabled=True,
-        activation_secret="a" * 32,
-        device_jwt_secret="b" * 32,
-    ).model_copy(update={"environment": "production"})
-    app = create_app(settings)
-
-    async def receive() -> dict[str, object]:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    request = Request(
-        {
-            "type": "http",
-            "http_version": "1.1",
-            "method": "GET",
-            "scheme": "http",
-            "path": "/api/v1/devices/ota/check",
-            "raw_path": b"/api/v1/devices/ota/check",
-            "query_string": b"",
-            "headers": [(b"device-id", b"device-a"), (b"client-id", b"client-a")],
-            "client": ("127.0.0.1", 12345),
-            "server": ("testserver", 80),
-            "app": app,
-        },
-        receive,
-    )
-
-    response = asyncio.run(ota_check(request))
-
-    assert response.status_code == 400
-    assert json.loads(response.body)["message"] == "Production device discovery requires HTTPS"
 
 
 def test_golden_fixtures_parsing(valid_headers: dict[str, str]) -> None:

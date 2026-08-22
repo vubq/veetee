@@ -272,12 +272,4 @@ def test_registry_shutdown_closes_active_simulator_1012(simulator_settings: Sett
 
 def test_openapi_and_product_source_pass_namespace_policy(simulator_settings: Settings) -> None:
     app = create_app(simulator_settings)
-    schema = app.openapi()
-    assert "xia" + "ozhi" not in str(schema).lower()
-    paths = schema["paths"]
-    assert "/api/v1/control/devices/provision" in paths
-    assert "/api/v1/control/devices/bind" in paths
-    assert "/api/v1/control/ota/artifacts" in paths
-    assert "/api/v1/control/ota/releases/{release_id}/publish" in paths
-    assert "/api/v1/devices/ota/artifacts/{artifact_id}" in paths
-    assert "/api/v1/devices/ota/report" in paths
+    assert "xia" + "ozhi" not in str(app.openapi()).lower()

@@ -64,31 +64,6 @@ def validate_device_websocket_url(url: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def validate_http_public_base_url(url: str) -> tuple[bool, str | None]:
-    """Validates an origin-like public HTTP(S) base URL used in signed OTA links."""
-    if not isinstance(url, str) or not url.strip():
-        return False, "URL must be a non-empty string"
-    try:
-        parsed = urlparse(url.strip())
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError as exc:
-        return False, f"Invalid URL host or port: {exc}"
-    if parsed.scheme.lower() not in {"http", "https"}:
-        return False, "Invalid scheme: must be http or https"
-    if parsed.username or parsed.password or "@" in parsed.netloc:
-        return False, "URL must not contain userinfo or credentials"
-    if not hostname or not parsed.netloc:
-        return False, "URL must contain a valid host"
-    if port is not None and not 1 <= port <= 65535:
-        return False, "URL port must be between 1 and 65535"
-    if parsed.query or parsed.fragment:
-        return False, "URL must not contain query or fragment"
-    if parsed.path not in {"", "/"}:
-        return False, "URL must not contain a path"
-    return True, None
-
-
 class Settings(BaseSettings):
     """Environment-backed settings with the public VEETEE_ prefix."""
 
@@ -165,7 +140,9 @@ class Settings(BaseSettings):
     llm_omniroute_base_url: str = Field(default="http://127.0.0.1:20128/v1", min_length=1)
     llm_api_key: str = Field(default="")
     llm_omniroute_model: str = Field(default="groq/openai/gpt-oss-120b", min_length=1)
-    llm_omniroute_reasoning_effort: Literal["none", "low", "medium", "high"] = Field(default="low")
+    llm_omniroute_reasoning_effort: Literal["none", "low", "medium", "high"] = Field(
+        default="low"
+    )
     llm_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     llm_first_token_timeout_seconds: float = Field(default=5.0, gt=0)
     llm_total_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -214,29 +191,9 @@ class Settings(BaseSettings):
     database_dsn: str = Field(default="dbname=veetee", min_length=1)
     bootstrap_admin_email: str = Field(default="")
     bootstrap_admin_password: str = Field(default="", repr=False)
-    cors_allowed_origins: str = Field(default="http://127.0.0.1:5173,http://localhost:5173")
-
-    # Lifecycle & OTA / Mốc 5 Settings
-    activation_secret: str = Field(default="", repr=False)
-    device_jwt_secret: str = Field(default="", repr=False)
-    ota_artifact_dir: str = Field(default="/tmp/veetee_ota_artifacts")
-    ota_public_base_url: str = Field(default="")
-    ota_max_upload_bytes: int = Field(default=10485760, gt=0)
-    ota_report_max_bytes: int = Field(default=16384, gt=0, le=1048576)
-    activation_code_ttl_seconds: int = Field(default=600, gt=0)
-    activation_max_attempts: int = Field(default=3, gt=0)
-    allow_insecure_activation: bool = False
-    device_ws_token_ttl_seconds: int = Field(default=900, gt=0, le=3600)
-    ota_download_token_ttl_seconds: int = Field(default=300, gt=0, le=3600)
-    ota_ed25519_public_key: str = Field(default="", repr=False)
-    ota_signature_key_id: str = Field(default="primary", min_length=1, max_length=64)
-    ota_discovery_min_interval_seconds: float = Field(default=1.0, ge=0)
-    ota_health_gate_failure_minimum: int = Field(default=3, gt=0)
-    ota_health_gate_sample_threshold: int = Field(default=10, gt=0)
-    ota_health_gate_failure_percentage: int = Field(default=25, ge=1, le=100)
-    ota_report_max_per_device_hour: int = Field(default=120, gt=0)
-    ota_report_dedupe_window_seconds: int = Field(default=30, ge=0)
-    ota_report_retention_days: int = Field(default=90, gt=0)
+    cors_allowed_origins: str = Field(
+        default="http://127.0.0.1:5173,http://localhost:5173"
+    )
 
     @field_validator("tts_gemini_api_keys", mode="before")
     @classmethod
@@ -270,30 +227,6 @@ class Settings(BaseSettings):
         if not valid:
             raise ValueError(f"Invalid device_websocket_public_url: {reason}")
         return v.strip()
-
-    @field_validator("ota_public_base_url")
-    @classmethod
-    def _validate_ota_public_base_url(cls, v: str) -> str:
-        value = v.strip()
-        if not value:
-            return ""
-        valid, reason = validate_http_public_base_url(value)
-        if not valid:
-            raise ValueError(f"Invalid ota_public_base_url: {reason}")
-        return value.rstrip("/")
-
-    @field_validator("activation_secret", "device_jwt_secret", mode="before")
-    @classmethod
-    def _strip_lifecycle_secret(cls, v: object) -> object:
-        return v.strip() if isinstance(v, str) else v
-
-    @field_validator("ota_ed25519_public_key")
-    @classmethod
-    def _validate_ota_ed25519_public_key(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized and not re.fullmatch(r"[0-9a-f]{64}", normalized):
-            raise ValueError("ota_ed25519_public_key must be exactly 32 bytes encoded as hex")
-        return normalized
 
     @model_validator(mode="after")
     def _validate_audio_constraints(self) -> "Settings":
@@ -358,32 +291,6 @@ class Settings(BaseSettings):
                 "tts_segment_max_chars must cover both tts_segment_first_min_chars and "
                 "tts_segment_min_chars"
             )
-        if self.persistence_enabled:
-            if len(self.activation_secret) < 32:
-                raise ValueError("activation_secret must contain at least 32 characters")
-            if len(self.device_jwt_secret) < 32:
-                raise ValueError("device_jwt_secret must contain at least 32 characters")
-            if self.activation_secret == self.device_jwt_secret:
-                raise ValueError("activation_secret and device_jwt_secret must be distinct")
-            if self.environment not in {"local", "test"}:
-                if not self.ota_public_base_url:
-                    raise ValueError(
-                        "ota_public_base_url is required for production persistence"
-                    )
-                if urlparse(self.ota_public_base_url).scheme.lower() != "https":
-                    raise ValueError(
-                        "ota_public_base_url must use https for production persistence"
-                    )
-                if not self.device_websocket_public_url:
-                    raise ValueError(
-                        "device_websocket_public_url is required for production persistence"
-                    )
-                if urlparse(self.device_websocket_public_url).scheme.lower() != "wss":
-                    raise ValueError(
-                        "device_websocket_public_url must use wss for production persistence"
-                    )
-        if self.allow_insecure_activation and self.environment not in {"local", "test"}:
-            raise ValueError("allow_insecure_activation is restricted to local/test environments")
         return self
 
 
@@ -392,14 +299,6 @@ def get_effective_device_websocket_url(settings: Settings) -> str:
     if settings.device_websocket_public_url.strip():
         return settings.device_websocket_public_url.strip()
     return f"ws://{settings.host}:{settings.port}/api/v1/devices/ws"
-
-
-def get_effective_activation_secret(settings: Settings) -> str:
-    return settings.activation_secret.strip()
-
-
-def get_effective_device_jwt_secret(settings: Settings) -> str:
-    return settings.device_jwt_secret.strip()
 
 
 @lru_cache(maxsize=1)

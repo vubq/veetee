@@ -15,26 +15,15 @@ class DeviceSessionRegistry:
 
     def __init__(self) -> None:
         self._sessions: dict[str, tuple[DeviceSession, WebSocket]] = {}
-        self._device_sessions: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
 
     async def register(self, session: DeviceSession, websocket: WebSocket) -> None:
         async with self._lock:
             self._sessions[str(session.id)] = (session, websocket)
-            self._device_sessions.setdefault(session.device_id, set()).add(str(session.id))
 
     async def unregister(self, session_id: str) -> None:
         async with self._lock:
-            entry = self._sessions.pop(session_id, None)
-            if entry is not None:
-                sessions = self._device_sessions.get(entry[0].device_id)
-                if sessions is not None:
-                    sessions.discard(session_id)
-                    if not sessions:
-                        self._device_sessions.pop(entry[0].device_id, None)
-
-    def is_online(self, device_id: str) -> bool:
-        return bool(self._device_sessions.get(device_id))
+            self._sessions.pop(session_id, None)
 
     async def get(self, session_id: str) -> tuple[DeviceSession, WebSocket] | None:
         async with self._lock:
@@ -49,7 +38,6 @@ class DeviceSessionRegistry:
         async with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
-            self._device_sessions.clear()
 
         for session, ws in sessions:
             try:

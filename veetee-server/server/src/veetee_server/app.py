@@ -1,11 +1,8 @@
 """FastAPI entrypoint for the M1.1 server foundation."""
 
 import logging
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
@@ -20,15 +17,12 @@ from .config import (
     get_settings,
     validate_device_websocket_url,
 )
-from .control_plane.device_router import device_control_router
 from .control_plane.memory_router import router as memory_control_plane_router
-from .control_plane.ota_router import ota_control_router
 from .control_plane.provider_router import router as provider_control_plane_router
 from .control_plane.router import router as control_plane_router
 from .control_plane.runtime_router import router as runtime_control_plane_router
 from .device_gateway import DeviceSessionRegistry
 from .device_gateway import router as device_gateway_router
-from .device_gateway.ota_router import device_ota_router
 from .logging import configure_logging
 
 logger = logging.getLogger("veetee.server")
@@ -158,7 +152,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.tts_provider == "vieneu" and vieneu_runtime is None:
         from .pipeline.tts import VieNeuTTSRuntime
 
-        vieneu_runtime = VieNeuTTSRuntime(settings.vieneu_base_url, settings.vieneu_timeout_seconds)
+        vieneu_runtime = VieNeuTTSRuntime(
+            settings.vieneu_base_url, settings.vieneu_timeout_seconds
+        )
         await vieneu_runtime.startup()
         app.state.vieneu_runtime = vieneu_runtime
 
@@ -222,7 +218,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.ready = False
-        registry: DeviceSessionRegistry | None = getattr(app.state, "device_session_registry", None)
+        registry: DeviceSessionRegistry | None = getattr(
+            app.state, "device_session_registry", None
+        )
         if registry is not None:
             await registry.close_all(code=1012, reason="Server shutdown")
         if vad_runtime is not None:
@@ -251,23 +249,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "Device-Id",
-            "Client-Id",
-            "Idempotency-Key",
-            "Range",
-            "X-Artifact-SHA256",
-            "X-Artifact-Signature",
-            "X-Artifact-Name",
-            "X-Artifact-Board",
-            "X-Artifact-Chip",
-            "X-Artifact-Partition",
-            "X-Artifact-Provenance",
-            "X-Veetee-Request-Id",
-        ],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
     app.state.ready = False
     app.state.device_session_registry = DeviceSessionRegistry()
@@ -276,9 +259,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memory_control_plane_router)
     app.include_router(runtime_control_plane_router)
     app.include_router(provider_control_plane_router)
-    app.include_router(device_control_router)
-    app.include_router(ota_control_router)
-    app.include_router(device_ota_router)
 
     @app.middleware("http")
     async def correlation_middleware(
@@ -316,75 +296,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if not app.state.ready:
             return JSONResponse(status_code=503, content={"status": "not_ready"})
-        if (
-            not runtime_settings.persistence_enabled
-            and not runtime_settings.device_gateway_token
-            and runtime_settings.environment != "test"
-        ):
+        if not runtime_settings.device_gateway_token and runtime_settings.environment != "test":
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "reason": "gateway_token_not_configured"},
             )
-        if runtime_settings.persistence_enabled:
-            if (
-                runtime_settings.allow_insecure_activation
-                and runtime_settings.environment not in {"local", "test"}
-            ):
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "not_ready", "reason": "insecure_activation_forbidden"},
-                )
-            if getattr(app.state, "database", None) is None:
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "not_ready", "reason": "database_not_ready"},
-                )
-            if len(runtime_settings.device_jwt_secret) < 32:
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "not_ready", "reason": "device_secret_not_configured"},
-                )
-            if runtime_settings.environment not in {"local", "test"}:
-                if not runtime_settings.ota_public_base_url:
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "status": "not_ready",
-                            "reason": "ota_public_url_not_configured",
-                        },
-                    )
-                if urlparse(runtime_settings.ota_public_base_url).scheme.lower() != "https":
-                    return JSONResponse(
-                        status_code=503,
-                        content={"status": "not_ready", "reason": "insecure_ota_public_url"},
-                    )
-                if not runtime_settings.device_websocket_public_url:
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "status": "not_ready",
-                            "reason": "websocket_public_url_not_configured",
-                        },
-                    )
-                if urlparse(runtime_settings.device_websocket_public_url).scheme.lower() != "wss":
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "status": "not_ready",
-                            "reason": "insecure_websocket_public_url",
-                        },
-                    )
-            artifact_dir = Path(runtime_settings.ota_artifact_dir)
-            if not artifact_dir.is_dir() or not os.access(artifact_dir, os.W_OK):
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "not_ready", "reason": "artifact_storage_not_ready"},
-                )
-            if not runtime_settings.ota_ed25519_public_key:
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "not_ready", "reason": "ota_signature_key_not_configured"},
-                )
         if runtime_settings.audio_codec == "native" and not is_native_opus_available():
             return JSONResponse(
                 status_code=503,

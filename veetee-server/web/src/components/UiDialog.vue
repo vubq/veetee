@@ -9,9 +9,8 @@ const props = withDefaults(
     description?: string
     size?: 'small' | 'medium' | 'large'
     variant?: 'default' | 'compact'
-    busy?: boolean
   }>(),
-  { description: '', size: 'small', variant: 'default', busy: false },
+  { description: '', size: 'small', variant: 'default' },
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -26,10 +25,8 @@ function focusableElements() {
 
 function onKeydown(event: KeyboardEvent) {
   if (!props.open) return
-  const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('.dialog-panel'))
-  if (openDialogs.at(-1) !== panel.value) return
   if (event.key === 'Escape') {
-    if (!props.busy) emit('close')
+    emit('close')
     return
   }
   if (event.key !== 'Tab') return
@@ -56,8 +53,7 @@ watch(
       focusableElements()[0]?.focus()
       return
     }
-    await nextTick()
-    if (!document.querySelector('.dialog-panel')) document.body.classList.remove('dialog-open')
+    document.body.classList.remove('dialog-open')
     previousFocus.value?.focus()
   },
 )
@@ -72,14 +68,14 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition name="dialog-fade">
-      <div v-if="open" class="dialog-layer" :class="`dialog-layer-${variant}`" role="presentation" @mousedown.self="!busy && emit('close')">
+      <div v-if="open" class="dialog-layer" :class="`dialog-layer-${variant}`" role="presentation" @mousedown.self="emit('close')">
         <section ref="panel" class="dialog-panel" :class="[`dialog-${size}`, `dialog-${variant}`]" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined">
           <header class="dialog-header">
             <div>
               <h2 :id="titleId">{{ title }}</h2>
               <p v-if="description" :id="descriptionId">{{ description }}</p>
             </div>
-            <button class="dialog-close" type="button" aria-label="Đóng" :disabled="busy" @click="emit('close')">
+            <button class="dialog-close" type="button" aria-label="Đóng" @click="emit('close')">
               <X :size="18" />
             </button>
           </header>

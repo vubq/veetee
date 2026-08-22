@@ -221,54 +221,6 @@ object đơn giản. `withUserTools=true` mở rộng danh sách tool đặc quy
 
 ## OTA/config discovery (M1.4 - Quyết định Veetee)
 
-### Vòng đời M5 (Quyết định Veetee)
-
-Khi server bật persistence, firmware phải xử lý hai trạng thái discovery:
-
-- Persistence production chỉ enrollment/discovery qua HTTPS, chỉ nhận WebSocket URL `wss://`
-  và chỉ tải artifact từ HTTPS origin. `http://`/`ws://` dành riêng cho local/test explicit;
-  firmware production không được gửi credential hoặc activation proof qua plaintext transport.
-
-- Thiết bị production được provision out-of-band Ed25519 keypair; server chỉ lưu public key
-  raw 32 byte cùng identity. Discovery đầu trả nonce opaque, không trả code/token. Firmware
-  ký bytes UTF-8 `veetee-activation-v1\n<device_id>\n<client_id>\n<nonce>\n`, gửi raw
-  signature 64 byte hex ở `Activation-Proof` và nonce ở `Activation-Nonce`. Chỉ response
-  proof hợp lệ mới có code để hiển thị vật lý và bootstrap token một lần; nonce có
-  TTL/attempt limit, replay thất bại. Identity chưa provision chỉ nhận pending.
-- `activation` vắng mặt và `websocket.token` có giá trị: dùng token TTL ngắn cho đúng cặp
-  `Device-Id`/`Client-Id`. Mọi bound rediscovery bắt buộc gửi token hiện hành trong
-  `Authorization: Bearer ...`; server không hỗ trợ shared-token fallback. Không tái dùng
-  token sau discovery mới, unbind hoặc hết hạn;
-  recovery không xóa NVS/Wi-Fi.
-
-Bootstrap/recovery token bị revoke atomically khi discovery cấp WS token đầu tiên và replay
-phải thất bại. Recovery token chỉ đến từ control plane owner/admin, không phải WS token cho
-browser. Identity chưa provision chỉ nhận pending và không có activation code; private key
-không được gửi lên server hoặc đưa vào log.
-
-Firmware baseline đã pin chưa gửi Authorization trong bound OTA check. Vì vậy phải cập nhật
-client/firmware Veetee trước khi dùng production-bound persistence; không được hạ policy
-server để giữ tương thích. M4 device thiếu Client-Id cần owner/admin recovery một lần.
-
-Trong hardware validation server-first của M5, firmware baseline được giữ nguyên và chỉ
-kiểm wire flow nó đã hỗ trợ: discovery, firmware URL, ESP-IDF OTA partition switch, reboot
-và reconnect. Ed25519 activation proof, bound rediscovery credential, detached signature
-verification và progression report là backlog của firmware Veetee khi người dùng yêu cầu
-phát triển firmware; hardware compatibility hiện tại không được gắn nhãn production-safe.
-
-Firmware chỉ tải `firmware.url` được server cấp cho board/chip/partition/channel hiện tại.
-Response update có `sha256`, detached Ed25519 `signature`, `signature_algorithm`,
-`signature_key_id`, `size` và `release_id`; parser baseline bỏ qua field object thừa. URL
-có token ngắn hạn ràng buộc thiết bị/artifact và hỗ trợ resume bằng đúng một HTTP byte
-range; firmware phải kiểm SHA-256 và chữ ký artifact trước khi install, không cài version
-bằng/thấp hơn version hiện tại. Sau check/download/install/boot/rollback, gửi report có
-`event_id` UUID ổn định cùng `release_id` bắt buộc qua
-`POST /api/v1/devices/ota/report`, dùng cùng credential và headers WebSocket; retry phải
-giữ nguyên toàn bộ payload. `paused`/`killed` rollout được biểu diễn bằng no-update
-(`firmware.version` và `firmware.url` rỗng). Rollback device/cohort chỉ áp dụng cho identity
-khớp authorization; thiết bị ngoài scope tiếp tục theo source rollout. Chỉ rollback toàn
-rollout dừng source cho mọi thiết bị.
-
 Endpoint thiết bị gọi để discover server time, WebSocket URL/token và trạng thái
 firmware. Golden vector chung nằm tại
 `../veetee-server/contracts/device/ota_check_request.json` và
