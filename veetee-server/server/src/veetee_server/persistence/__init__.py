@@ -1,5 +1,19 @@
 """PostgreSQL persistence boundary for the Veetee control plane."""
 
+from .admin import (
+    ALLOWED_SETTINGS_SCHEMA,
+    AdminUserRepository,
+    AuditLogRepository,
+    QuotaCheckResult,
+    QuotaRepository,
+    QuotaService,
+    QuotaServiceError,
+    StoredSetting,
+    StoredUser,
+    StoredUserQuota,
+    SystemSettingsRepository,
+    get_quota_window_start,
+)
 from .conversation import (
     ConversationRepository,
     StoredConversation,
@@ -53,10 +67,13 @@ from .tooling import (
 )
 
 __all__ = [
+    "ALLOWED_SETTINGS_SCHEMA",
     "ActivationRepository",
     "Actor",
+    "AdminUserRepository",
     "AgentLifecycleRepository",
     "AgentRepository",
+    "AuditLogRepository",
     "ContextProviderConfigRepository",
     "ConversationRepository",
     "CorrectionRepository",
@@ -66,6 +83,10 @@ __all__ = [
     "KnowledgeRepository",
     "PostgresDatabase",
     "ProviderRepository",
+    "QuotaCheckResult",
+    "QuotaRepository",
+    "QuotaService",
+    "QuotaServiceError",
     "SearchResult",
     "StoredActivation",
     "StoredAgent",
@@ -83,11 +104,16 @@ __all__ = [
     "StoredFirmwareRelease",
     "StoredIntegrationPermission",
     "StoredProvider",
+    "StoredSetting",
     "StoredTag",
     "StoredTurn",
+    "StoredUser",
+    "StoredUserQuota",
+    "SystemSettingsRepository",
     "ToolingRepository",
     "TurnInput",
     "UserRepository",
+    "get_quota_window_start",
     "hash_login_identifier",
     "parse_semver",
     "purge_expired_conversations",

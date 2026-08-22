@@ -38,6 +38,7 @@ def _apply_migrations(database: PostgresDatabase) -> None:
         "007_m6_knowledge_rag.sql",
         "008_m6_corrections_context.sql",
         "009_m6_tool_integrations.sql",
+        "010_m6_administration.sql",
     ):
         with database.connection() as connection:
             connection.execute((MIGRATIONS / name).read_text(encoding="utf-8"))

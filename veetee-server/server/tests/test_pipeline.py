@@ -2,6 +2,7 @@
 
 import asyncio
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -21,6 +22,7 @@ from veetee_server.audio.queue import (
 )
 from veetee_server.device_gateway.downlink import GatewayEventSink, run_downlink_sender
 from veetee_server.domain.session import DeviceSession, SessionState, TurnState
+from veetee_server.persistence import QuotaCheckResult
 from veetee_server.pipeline.asr import FakeASR
 from veetee_server.pipeline.downlink import DownlinkItem, DownlinkKind, DownlinkQueue
 from veetee_server.pipeline.events import (
@@ -45,6 +47,20 @@ class RecordingSink:
 
     async def emit(self, event: Any) -> None:
         self.events.append(event)
+
+
+class RejectingQuotaService:
+    def check_only(self, _user_id: Any, metric: str) -> QuotaCheckResult:
+        assert metric == "llm_tokens_day"
+        return QuotaCheckResult(False, 1, 1, 0, "quota exceeded")
+
+    def check_and_consume(
+        self, _user_id: Any, _metric: str, _amount: int
+    ) -> QuotaCheckResult:
+        raise AssertionError("TTS quota must not run after LLM precheck rejection")
+
+    def record_usage(self, _user_id: Any, _metric: str, _amount: int) -> None:
+        raise AssertionError("Usage must not be recorded after LLM precheck rejection")
 
 
 def _make_speech_pcm(duration_ms: float = 60.0, amplitude: int = 1000) -> bytes:
@@ -435,6 +451,38 @@ async def test_fake_pipeline_event_order_and_completion() -> None:
     stt_event = sink.events[0]
     assert isinstance(stt_event, SttEvent)
     assert stt_event.text == "Thử nghiệm."
+
+
+@pytest.mark.asyncio
+async def test_fake_pipeline_rejects_llm_quota_before_provider_call() -> None:
+    session = DeviceSession(device_id="quota-device", client_id="quota-client")
+    session.owner_user_id = uuid4()
+    session.accept()
+    await session.start_turn()
+    encoder = FakeOpusEncoder(pcm_format=UPLINK_PCM_FORMAT)
+    for pcm in [*([_make_speech_pcm()] * 3), *([_make_silence_pcm()] * 3)]:
+        await session.ingress_queue.put(
+            AudioQueueItem(
+                payload=encoder.encode(pcm),
+                generation=session.ingress_queue.generation,
+            )
+        )
+    session.begin_processing()
+    llm = FakeLLM()
+    pipeline = FakePipeline(
+        decoder=FakeOpusDecoder(pcm_format=UPLINK_PCM_FORMAT),
+        encoder=FakeOpusEncoder(pcm_format=DOWNLINK_PCM_FORMAT),
+        protocol_version=1,
+        vad=FakeVAD(start_frames=2, end_silence_frames=2),
+        asr=FakeASR(default_text="Quota test."),
+        llm=llm,
+        tts=FakeTTS(),
+        quota_service=RejectingQuotaService(),  # type: ignore[arg-type]
+    )
+    sink = RecordingSink()
+    outcome = await pipeline.run(session, sink)
+    assert outcome is PipelineOutcome.QUOTA_EXCEEDED
+    assert [type(event) for event in sink.events] == [SttEvent]
 
 
 @pytest.mark.asyncio

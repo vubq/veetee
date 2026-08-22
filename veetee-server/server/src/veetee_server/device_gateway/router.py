@@ -89,6 +89,7 @@ def _make_pipeline(session: DeviceSession, settings: Settings, app_state: Any) -
         vieneu_runtime=vieneu_runtime,
         correction_repository=getattr(app_state, "correction_repository", None),
         context_provider_registry=getattr(app_state, "context_provider_registry", None),
+        quota_service=getattr(app_state, "quota_service", None),
     )
 
 

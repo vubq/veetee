@@ -67,6 +67,16 @@ call tool luôn đi qua `prepare-call` rồi `call` bằng token một lần, m�
 60 giây và bind exact owner/device/client/live-session/tool/arguments. Thiết bị offline,
 unbound, binding lệch hoặc không công bố `features.mcp=true` đều bị từ chối.
 
+M6.8 thêm admin-only user/status/role management, typed system settings, audit search và
+quota usage. User mới nhận reset token một lần; chỉ hash/expiry được lưu. Quota mặc định
+tắt và khi bật được enforce tại realtime LLM/TTS, external/device MCP call và RAG upload.
+API quản trị nằm dưới `/api/v1/control/admin`; user đọc quota hiệu lực của chính mình tại
+`GET /api/v1/control/quotas/me`. Phải áp migration 010 trước khi chạy server đã bật
+persistence; thiếu schema quota làm các cost-bearing endpoint fail-closed.
+Identity cấu hình qua `VEETEE_BOOTSTRAP_ADMIN_EMAIL` luôn có role `admin`; nếu identity
+đó đã tồn tại với role `owner`, startup promote đúng identity này nhưng không tự bỏ trạng
+thái suspended.
+
 Module `veetee_server.audio` cung cấp parser/encoder binary frame, PCM format contract,
 bounded ingress/egress queue và pacing. Golden vectors nằm trong `../contracts/device/`.
 Các biến `VEETEE_AUDIO_*` trong `.env.example` giới hạn queue và pacing; chúng không chứa

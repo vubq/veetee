@@ -223,3 +223,19 @@ async def supervise_pipeline(
                 "no_utterance_cleanup_failed",
                 extra={"context": {"session_id": str(session.id)}},
             )
+    elif outcome is PipelineOutcome.QUOTA_EXCEEDED and session.current_turn is turn:
+        try:
+            await send_ws_json(
+                websocket,
+                make_error_envelope(
+                    "veetee_quota_exceeded",
+                    "Usage quota exceeded",
+                    session_id=str(session.id),
+                ),
+            )
+            await session.abort_turn()
+        except Exception:
+            logger.exception(
+                "quota_exceeded_cleanup_failed",
+                extra={"context": {"session_id": str(session.id)}},
+            )

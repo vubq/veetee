@@ -360,6 +360,26 @@ async def test_tool_call(
     )
     client = _external_client(request)
 
+    quota_service = getattr(request.app.state, "quota_service", None)
+    if quota_service is not None:
+        try:
+            check = await asyncio.to_thread(
+                quota_service.check_and_consume, user_id, "tool_calls_minute", 1
+            )
+            if not check.allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Quota exceeded for tool_calls_minute",
+                    headers={"Retry-After": "60"},
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if await asyncio.to_thread(quota_service.is_quota_enabled, user_id):
+                raise HTTPException(
+                    status_code=503, detail="Quota enforcement unavailable"
+                ) from exc
+
     try:
         result = await client.call_tool(
             endpoint.url,

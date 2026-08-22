@@ -17,6 +17,7 @@ from .config import (
     get_settings,
     validate_device_websocket_url,
 )
+from .control_plane.admin_router import router as admin_control_plane_router
 from .control_plane.correction_router import router as correction_control_plane_router
 from .control_plane.device_tool_router import (
     DeviceMCPConfirmationStore,
@@ -208,8 +209,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     from .persistence import (
         ActivationRepository,
+        AdminUserRepository,
         AgentLifecycleRepository,
         AgentRepository,
+        AuditLogRepository,
         ContextProviderConfigRepository,
         ConversationRepository,
         CorrectionRepository,
@@ -219,6 +222,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         KnowledgeRepository,
         PostgresDatabase,
         ProviderRepository,
+        QuotaRepository,
+        QuotaService,
+        SystemSettingsRepository,
         ToolingRepository,
         UserRepository,
     )
@@ -247,6 +253,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.correction_repository = CorrectionRepository(database)
         app.state.context_provider_config_repository = ContextProviderConfigRepository(database)
         app.state.tooling_repository = ToolingRepository(database)
+        app.state.admin_user_repository = AdminUserRepository(database)
+        app.state.system_settings_repository = SystemSettingsRepository(database)
+        app.state.audit_log_repository = AuditLogRepository(database)
+        app.state.quota_repository = QuotaRepository(database)
+        app.state.quota_service = QuotaService(
+            database,
+            app.state.system_settings_repository,
+            app.state.quota_repository,
+        )
 
     from .tools.external_mcp import ExternalMCPClient, ExternalMCPConfig
     from .tools.integrations import IntegrationGate, IntegrationPermissionSnapshot
@@ -361,6 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(correction_control_plane_router)
     app.include_router(tool_control_plane_router)
     app.include_router(device_tool_control_plane_router)
+    app.include_router(admin_control_plane_router)
 
     @app.middleware("http")
     async def correlation_middleware(

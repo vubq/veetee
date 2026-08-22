@@ -12,6 +12,7 @@ delimiting.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
@@ -275,6 +276,28 @@ async def upload_document(
         )
 
     content_bytes = await _read_bounded_body(request, settings.rag_max_document_bytes)
+
+    quota_service = getattr(request.app.state, "quota_service", None)
+    if quota_service is not None:
+        try:
+            check = await asyncio.to_thread(
+                quota_service.check_and_consume,
+                user_id,
+                "rag_bytes_month",
+                len(content_bytes),
+            )
+            if not check.allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Quota exceeded for rag_bytes_month",
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if await asyncio.to_thread(quota_service.is_quota_enabled, user_id):
+                raise HTTPException(
+                    status_code=503, detail="Quota enforcement unavailable"
+                ) from exc
 
     effective_chunk_size = chunk_size or settings.rag_default_chunk_size
     effective_chunk_overlap = (

@@ -22,7 +22,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from veetee_server.audio.codec import AudioDecoder, AudioEncoder
 from veetee_server.domain.errors import InvalidTransitionError, StaleGenerationError
@@ -45,7 +45,7 @@ from .events import (
     TtsStopEvent,
 )
 from .framing import build_downlink_frame
-from .llm import LLMProvider, LLMStreamEvent, LLMTextDeltaEvent
+from .llm import LLMProvider, LLMStreamEvent, LLMTextDeltaEvent, LLMUsageEvent
 from .segmenter import TTSTokenSegmenter
 from .tts import FakeTTS
 from .vad import BaseVADStream, FakeVAD
@@ -54,6 +54,9 @@ logger = logging.getLogger("veetee.pipeline")
 
 CorrectionHook = Callable[[str], Awaitable[tuple[str, dict[str, Any]]]]
 ContextHook = Callable[[str], Awaitable[list[dict[str, Any]]]]
+
+if TYPE_CHECKING:
+    from veetee_server.persistence import QuotaService
 
 _DOWNLINK_FRAME_DURATION_MS = 60.0
 _STREAM_END = object()
@@ -66,6 +69,7 @@ class PipelineOutcome(StrEnum):
     CANCELLED = "cancelled"
     NO_UTTERANCE = "no_utterance"
     INVALID_START = "invalid_start"
+    QUOTA_EXCEEDED = "quota_exceeded"
 
 
 class FakePipeline:
@@ -85,6 +89,7 @@ class FakePipeline:
         context_assembler: ContextAssembler | None = None,
         correction_hook: CorrectionHook | None = None,
         context_hook: ContextHook | None = None,
+        quota_service: QuotaService | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         if protocol_version not in (1, 2, 3):
@@ -100,6 +105,7 @@ class FakePipeline:
         self.context_assembler = context_assembler or ContextAssembler()
         self.correction_hook = correction_hook
         self.context_hook = context_hook
+        self.quota_service = quota_service
         self._now_ms = now_ms
 
     async def run(self, session: DeviceSession, sink: EventSink) -> PipelineOutcome:
@@ -165,6 +171,14 @@ class FakePipeline:
         messages = assembled.messages
         self.segmenter.reset()
 
+        owner_user_id = session.owner_user_id
+        if self.quota_service is not None and owner_user_id is not None:
+            quota = await asyncio.to_thread(
+                self.quota_service.check_only, owner_user_id, "llm_tokens_day"
+            )
+            if not quota.allowed:
+                return PipelineOutcome.QUOTA_EXCEEDED
+
         segment_queue: asyncio.Queue[str | Exception | object] = asyncio.Queue(maxsize=2)
 
         async def producer() -> None:
@@ -209,6 +223,18 @@ class FakePipeline:
                     if isinstance(item, LLMTextDeltaEvent) and not item.reasoning:
                         for seg in self.segmenter.feed(item.delta):
                             await segment_queue.put(seg)
+                    elif (
+                        isinstance(item, LLMUsageEvent)
+                        and self.quota_service is not None
+                        and owner_user_id is not None
+                        and item.usage.total_tokens > 0
+                    ):
+                        await asyncio.to_thread(
+                            self.quota_service.record_usage,
+                            owner_user_id,
+                            "llm_tokens_day",
+                            item.usage.total_tokens,
+                        )
             except Exception as exc:
                 logger.warning("LLM stream failed", extra={"error_type": type(exc).__name__})
                 await segment_queue.put(exc)
@@ -241,6 +267,17 @@ class FakePipeline:
                     raise segment
                 if not isinstance(segment, str):
                     raise TypeError("unexpected segment queue item")
+
+                if self.quota_service is not None and owner_user_id is not None:
+                    quota = await asyncio.to_thread(
+                        self.quota_service.check_and_consume,
+                        owner_user_id,
+                        "tts_chars_day",
+                        len(segment),
+                    )
+                    if not quota.allowed:
+                        producer_task.cancel()
+                        return PipelineOutcome.QUOTA_EXCEEDED
 
                 if first_segment:
                     first_segment = False

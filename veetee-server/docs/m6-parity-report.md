@@ -34,7 +34,7 @@ duyệt rõ là không áp dụng.
 | M6.5 Correction/context | Backend hoàn tất, Console chưa nối | Versioned exact/phrase rules và preview; typed provider timeout/cache/provenance; correction và context đã nối vào realtime pipeline |
 | M6.6 Tool ecosystem | Backend hoàn tất, Console chưa nối | Internal server MCP catalog; external MCP HTTPS exact-host allowlist, DNS/IP pinning chống SSRF, default-deny agent permission/rate limit/timeout/audit; Open-Meteo typed adapter |
 | M6.7 Device tools | Backend hoàn tất, Console chưa nối | Initialize/list pagination/call correlated theo live session; owner/device/capability gate; confirmation hash một lần TTL 60s bind exact arguments; bounded timeout/cleanup/audit |
-| M6.8 Administration | Nền RBAC đã có | Typed actor/status/admin dependency; user/settings/audit/quota workflow chưa triển khai |
+| M6.8 Administration | Backend hoàn tất, Console chưa nối | Admin-only user/status/role và one-time reset; typed optimistic settings; bounded audit search; atomic default-off quota cho LLM/TTS/tool/RAG đã nối runtime |
 | M6.9 MQTT/UDP | Không áp dụng đã duyệt | WebSocket đáp ứng vận hành local; không mở thêm transport/security boundary |
 | M6.10 Client coverage | Đã khóa | Web responsive là client quản trị; không tạo mobile app riêng |
 
@@ -59,6 +59,11 @@ duyệt rõ là không áp dụng.
   Console-to-live-device list/prepare/call/audit flow đều pass. Backend sau M6.7:
   `450/450` test pass; Ruff pass; mypy pass trên 110 source files; namespace scan thường
   và `--all` pass; hai repo references clean.
+- M6.8 focused: admin RBAC, one-time reset/replay/expiry, self/last-admin lockout,
+  suspension revoke session, typed setting/version, bounded audit filter, quota default-off,
+  UTC windows, tenant isolation, 8-way atomic concurrency, RAG pre-ingest reject và realtime
+  LLM pre-provider reject đều pass. Backend sau M6.8: `459/459` test pass; Ruff pass; mypy
+  pass trên 112 source files; namespace scan thường và `--all` pass.
 
 ## Mục không áp dụng đã duyệt
 

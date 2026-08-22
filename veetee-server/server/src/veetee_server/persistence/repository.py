@@ -144,14 +144,20 @@ class UserRepository:
             raise ValueError("Bootstrap credentials must be provided through environment")
         with self.database.connection() as connection:
             row = connection.execute(
-                "SELECT id FROM veetee_users WHERE email = %s", (email,)
+                "SELECT id, role FROM veetee_users WHERE email = %s", (email,)
             ).fetchone()
             if row:
+                if cast(str, row[1]) != "admin":
+                    connection.execute(
+                        "UPDATE veetee_users SET role = 'admin', "
+                        "version = version + 1, updated_at = now() WHERE id = %s",
+                        (row[0],),
+                    )
                 return cast(uuid.UUID, row[0])
             user_id = uuid.uuid4()
             connection.execute(
                 "INSERT INTO veetee_users (id, email, password_hash, role) VALUES (%s, %s, %s, %s)",
-                (user_id, email, hash_password(password), "owner"),
+                (user_id, email, hash_password(password), "admin"),
             )
             return user_id
 

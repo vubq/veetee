@@ -16,6 +16,7 @@ psql -d veetee -f migrations/006_m6_agent_lifecycle_history.sql
 psql -d veetee -f migrations/007_m6_knowledge_rag.sql
 psql -d veetee -f migrations/008_m6_corrections_context.sql
 psql -d veetee -f migrations/009_m6_tool_integrations.sql
+psql -d veetee -f migrations/010_m6_administration.sql
 ```
 
 Rollback only a local/test database:
@@ -24,6 +25,7 @@ Rollback only a local/test database:
 psql -d veetee -f migrations/001_control_plane.down.sql
 psql -d veetee -f migrations/002_runtime_control_plane.down.sql
 psql -d veetee -f migrations/004_login_rate_limit.down.sql
+psql -d veetee -f migrations/010_m6_administration.down.sql
 psql -d veetee -f migrations/009_m6_tool_integrations.down.sql
 psql -d veetee -f migrations/008_m6_corrections_context.down.sql
 psql -d veetee -f migrations/007_m6_knowledge_rag.down.sql
@@ -87,3 +89,11 @@ Migration 009 tạo external MCP endpoint theo tenant và permission/rate limit 
 Database chỉ lưu tên biến môi trường chứa bearer token, không lưu secret; runtime còn
 enforce HTTPS exact-host allowlist, DNS/peer SSRF checks và response bounds. Down migration
 từ chối khi còn endpoint hoặc permission.
+
+## M6.8 Administration và quota
+
+Migration 010 tạo reset token một lần, typed system setting có version, quota policy theo
+user và usage bucket theo cửa sổ UTC. Token plaintext chỉ trả lúc phát hành; database chỉ
+lưu SHA-256, expiry và thời điểm sử dụng. Quota mặc định tắt, gồm LLM token/ngày, TTS ký
+tự/ngày, tool call/phút và RAG byte/tháng. Down migration từ chối nếu có token, policy,
+usage hoặc setting mặc định đã bị chỉnh để tránh mất dữ liệu quản trị.

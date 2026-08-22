@@ -441,6 +441,25 @@ commit đang pin. Không nên coi bảng tổng hợp này là OpenAPI contract.
 - RBAC tenant-aware; admin action có audit log.
 - Rate limit login, activation, upload và AI-cost endpoint.
 
+### Administration API M6.8
+
+- `GET/POST /api/v1/control/admin/users` và
+  `PUT /api/v1/control/admin/users/{user_id}`: admin-only, filter/pagination bounded,
+  optimistic `version`; suspend user revoke toàn bộ session còn sống trong transaction.
+- `POST /api/v1/control/admin/users/{user_id}/reset-token`: trả token plaintext đúng một
+  lần; database chỉ lưu SHA-256 và expiry. `POST /api/v1/control/auth/reset-password`
+  consume token atomically, chặn replay/expiry và revoke session cũ.
+- `GET/PUT /api/v1/control/admin/settings/{key}`: chỉ nhận allowlist setting có type và
+  version; không nhận arbitrary key/secret.
+- `GET /api/v1/control/admin/audit-logs`: admin-only, filter theo action/resource/actor/
+  thời gian và pagination bounded, thứ tự `created_at DESC, id DESC`.
+- `GET/PUT /api/v1/control/admin/quotas/{user_id}` và
+  `GET /api/v1/control/quotas/me`: policy/usage cho LLM token theo ngày UTC, TTS ký tự theo
+  ngày UTC, tool call theo phút UTC cố định và RAG byte theo tháng UTC. Quota mặc định tắt;
+  PostgreSQL advisory lock giữ check-and-consume atomic. LLM precheck trước provider và
+  ghi usage exact khi provider trả metadata, nên một request đang chạy có thể vượt limit
+  tối đa đúng usage của request đó; lượt tiếp theo bị chặn.
+
 ## Source đối chiếu
 
 - `../references/xiaozhi-esp32-server/main/xiaozhi-server/core/http_server.py`

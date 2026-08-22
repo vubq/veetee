@@ -43,6 +43,7 @@ def _apply_migrations(database: PostgresDatabase) -> None:
         "007_m6_knowledge_rag.sql",
         "008_m6_corrections_context.sql",
         "009_m6_tool_integrations.sql",
+        "010_m6_administration.sql",
     ):
         with database.connection() as connection:
             connection.execute((migrations_dir / name).read_text(encoding="utf-8"))
@@ -317,9 +318,15 @@ def _login(client: TestClient, email: str, password: str) -> dict[str, str]:
 def test_provider_management_requires_admin_and_protects_default(
     persisted_client: TestClient,
 ) -> None:
-    owner_headers = _login(
-        persisted_client, "owner@example.test", "a-test-password-long-enough"
-    )
+    owner_email = "provider-owner@example.test"
+    owner_password = "provider-owner-password"
+    with isolated_database().connection() as connection:
+        connection.execute(
+            "INSERT INTO veetee_users (id, email, password_hash, role) "
+            "VALUES (%s, %s, %s, 'owner')",
+            (uuid4(), owner_email, hash_password(owner_password)),
+        )
+    owner_headers = _login(persisted_client, owner_email, owner_password)
     listing = persisted_client.get("/api/v1/control/providers", headers=owner_headers)
     assert listing.status_code == 200
     llm = next(item for item in listing.json() if item["kind"] == "llm")
