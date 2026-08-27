@@ -81,6 +81,19 @@ async def get_config_from_api_async(config):
     # 如果服务器没有prompt_template，则从本地配置读取
     if not config_data.get("prompt_template"):
         config_data["prompt_template"] = config.get("prompt_template")
+
+    # Runtime pipeline settings are managed by manager-api when present, with
+    # local config defaults retained for lightweight standalone deployments.
+    for key in (
+        "enable_realtime_tool_router",
+        "enable_direct_answer_tool",
+        "enable_prompt_enhancement",
+        "tts_parallel_workers",
+        "tts_first_segment_chars",
+        "tts_segment_chars",
+    ):
+        if key not in config_data and key in config:
+            config_data[key] = config[key]
     return config_data
 
 

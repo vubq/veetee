@@ -1,5 +1,6 @@
 import httpx
 import openai
+import json
 from openai.types import CompletionUsage
 from config.logger import setup_logging
 from core.utils.util import check_model_key
@@ -16,13 +17,14 @@ THINKING_DISABLED_DOMAINS = {
     "bigmodel.cn": {"thinking": {"type": "disabled"}},
     "moonshot.cn": {"thinking": {"type": "disabled"}},
     "volces.com": {"thinking": {"type": "disabled"}},
-    "groq.com": {"reasoning_effort": "none"},
 }
 
 
 class LLMProvider(LLMProviderBase):
     def __init__(self, config):
         self.model_name = config.get("model_name")
+        self.request_overrides = config.get("request_overrides", {}) or {}
+        self.realtime_router = config.get("realtime_router", {}) or {}
         self.api_key = config.get("api_key")
         if "base_url" in config:
             self.base_url = config.get("base_url")
@@ -89,6 +91,57 @@ class LLMProvider(LLMProviderBase):
                 request_params.setdefault("extra_body", {}).update(params)
                 logger.bind(tag=TAG).info(f"为域名 {domain} 禁用思考模式，参数: {params}")
                 break
+
+        for key, value in self.request_overrides.items():
+            request_params.setdefault(key, value)
+
+    @property
+    def realtime_router_enabled(self):
+        return bool(
+            self.realtime_router.get("enabled")
+            and self.realtime_router.get("model_name")
+            and self.realtime_router.get("prompt")
+        )
+
+    def should_use_tools(self, text, functions):
+        """Ask a configurable routing model whether the current turn needs tools."""
+        if not functions or not self.realtime_router_enabled:
+            return False
+
+        tool_catalog = []
+        for item in functions:
+            function = item.get("function", {})
+            tool_catalog.append(
+                {
+                    "name": function.get("name", ""),
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {}),
+                }
+            )
+
+        request_params = {
+            "model": self.realtime_router["model_name"],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        self.realtime_router["prompt"]
+                        + "\nAvailable tools:\n"
+                        + json.dumps(tool_catalog, ensure_ascii=False, separators=(",", ":"))
+                        + "\nReturn exactly TOOL when a tool is required; otherwise return exactly CHAT."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            "temperature": self.realtime_router.get("temperature", 0),
+            "max_tokens": self.realtime_router.get("output_limit", 16),
+        }
+        request_params.update(self.realtime_router.get("request_overrides", {}) or {})
+        self._apply_thinking_disabled(request_params)
+        response = self.client.chat.completions.create(**request_params)
+        content = (response.choices[0].message.content or "").strip().upper()
+        logger.bind(tag=TAG).info(f"实时工具路由模型输出: {content[:32]}")
+        return content.startswith("TOOL")
 
     def response(self, session_id, dialogue, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)

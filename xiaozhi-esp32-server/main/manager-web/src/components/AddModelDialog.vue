@@ -76,7 +76,10 @@
       <el-form :model="formData.configJson" label-width="auto" label-position="left" class="custom-form">
         <div v-for="(row, rowIndex) in chunkedCallInfoFields" :key="rowIndex" class="form-row">
           <el-form-item v-for="field in row" :key="field.prop" :label="field.label" :prop="field.prop" style="flex: 1;">
-            <el-input v-model="formData.configJson[field.prop]" :placeholder="field.placeholder"
+            <el-input v-if="field.type === 'json-textarea'" v-model="fieldJsonMap[field.prop]"
+              type="textarea" :rows="4" :placeholder="$t('modelConfigDialog.enterJsonExample')"
+              class="custom-input-bg"></el-input>
+            <el-input v-else v-model="formData.configJson[field.prop]" :placeholder="field.placeholder"
               :type="field.type || 'text'" class="custom-input-bg" :show-password="field.type === 'password'">
             </el-input>
           </el-form-item>
@@ -105,6 +108,7 @@ export default {
       dialogVisible: false,
       providersLoaded: false,
       providerFields: [],
+      fieldJsonMap: {},
       currentProvider: null,
       formData: {
         id: '',
@@ -160,7 +164,7 @@ export default {
           fields: JSON.parse(item.fields || '[]').map(f => ({
             label: f.label,
             prop: f.key,
-            type: f.type === 'password' ? 'password' : 'text',
+            type: f.type === 'dict' ? 'json-textarea' : (f.type === 'password' ? 'password' : 'text'),
             placeholder: `请输入${f.key}`
           }))
         }))
@@ -171,6 +175,9 @@ export default {
       const defaultConfig = {};
       this.providerFields.forEach(field => {
         defaultConfig[field.prop] = '';
+        if (field.type === 'json-textarea') {
+          this.$set(this.fieldJsonMap, field.prop, '{}');
+        }
       });
       this.formData.configJson = { ...defaultConfig };
     },
@@ -184,11 +191,30 @@ export default {
       const newConfig = {};
       this.providerFields.forEach(field => {
         newConfig[field.prop] = this.formData.configJson[field.prop] || '';
+        if (field.type === 'json-textarea') {
+          const value = newConfig[field.prop];
+          this.$set(this.fieldJsonMap, field.prop, JSON.stringify(value || {}, null, 2));
+        }
       });
       this.formData.configJson = newConfig;
     },
     confirm() {
       this.saving = true;
+
+      for (const field of this.providerFields) {
+        if (field.type !== 'json-textarea') continue;
+        try {
+          const value = JSON.parse(this.fieldJsonMap[field.prop] || '{}');
+          if (!value || Array.isArray(value) || typeof value !== 'object') {
+            throw new Error('JSON object required');
+          }
+          this.formData.configJson[field.prop] = value;
+        } catch (error) {
+          this.$message.error(`${field.label}: JSON format invalid`);
+          this.saving = false;
+          return;
+        }
+      }
 
       // 校验模型ID不能为纯文字或空格
       if (this.formData.id && !this.validateModelId(this.formData.id)) {
@@ -250,6 +276,7 @@ export default {
       // 重置字段配置
       this.providerFields = [];
       this.currentProvider = null;
+      this.fieldJsonMap = {};
     },
     
     // 校验模型ID：不能为纯文字或空格

@@ -93,7 +93,7 @@ class Dialogue:
 
     def get_llm_dialogue_with_memory(
             self, memory_str: str = None, voiceprint_config: dict = None,
-            current_speaker: str = None,
+            current_speaker: str = None, include_fewshot: bool = True,
     ) -> List[Dict[str, str]]:
         # 构建对话
         dialogue = []
@@ -149,10 +149,11 @@ class Dialogue:
 
         # 第二段：few-shot 示例（会话内不变）
         non_system_messages = [m for m in self.dialogue if m.role != "system"]
-        fewshot_messages = [m for m in non_system_messages if m.is_temporary]
-        complete_fewshot = self._ensure_tool_calls_complete(fewshot_messages)
-        for m in complete_fewshot:
-            self.getMessages(m, dialogue)
+        if include_fewshot:
+            fewshot_messages = [m for m in non_system_messages if m.is_temporary]
+            complete_fewshot = self._ensure_tool_calls_complete(fewshot_messages)
+            for m in complete_fewshot:
+                self.getMessages(m, dialogue)
 
         # 第三段：实际对话历史（不含 few-shot）
         actual_messages = [m for m in non_system_messages if not m.is_temporary]

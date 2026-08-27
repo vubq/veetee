@@ -61,12 +61,23 @@ delete_audio: true
 close_connection_no_voice_time: 120
 # TTS请求超时时间(秒)
 tts_timeout: 15
+# LLM token -> TTS pipeline: synthesize upcoming phrases concurrently, play in order.
+tts_parallel_workers: 1
+# Flush the first natural phrase before the LLM emits a full sentence.
+tts_first_segment_chars: 18
+tts_segment_chars: 60
 # 工具调用超时时间(秒)
 tool_call_timeout: 30
 # 开启唤醒词加速
 enable_wakeup_words_response_cache: true
 # 开场是否回复唤醒词
 enable_greeting: true
+# Enrich the agent prompt with time, location, weather, language and dynamic context.
+enable_prompt_enhancement: true
+# Preserve real tools, but stream normal replies as plain text instead of JSON tool calls.
+enable_direct_answer_tool: true
+# Route with a fast model first; normal questions stream directly, actions keep full tools.
+enable_realtime_tool_router: true
 # 说完话是否开启提示音
 enable_stop_tts_notify: false
 # 说完话是否开启提示音，音效地址
@@ -640,6 +651,20 @@ LLM:
     type: openai
     base_url: https://api.groq.com/openai/v1
     model_name: qwen/qwen3.6-27b
+    request_overrides:
+      reasoning_effort: none
+    realtime_router:
+      enabled: true
+      model_name: qwen/qwen3.6-27b
+      temperature: 0
+      output_limit: 16
+      request_overrides: {}
+      prompt: >-
+        You are a realtime voice-assistant tool router. Inspect the available tool
+        schemas and the user's request. Select a tool only when the request requires
+        an external action or fresh external data supplied by a tool. For greetings,
+        general knowledge, explanations, and casual conversation, do not call a tool.
+        Do not answer the user; only decide whether a tool is required.
     api_key: 你的groq api key
     temperature: 0.7
     max_tokens: 1024

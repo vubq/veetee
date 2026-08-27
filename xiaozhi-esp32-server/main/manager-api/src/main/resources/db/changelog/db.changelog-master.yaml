@@ -739,3 +739,24 @@ databaseChangeLog:
         - sqlFile:
             encoding: utf8
             path: classpath:db/changelog/202608131030.sql
+  - changeSet:
+      id: 202608271700
+      author: veetee
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202608271700.sql
+  - changeSet:
+      id: 202608271730
+      author: veetee
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202608271730.sql
+  - changeSet:
+      id: 202608271745
+      author: veetee
+      changes:
+        - sqlFile:
+            encoding: utf8
+            path: classpath:db/changelog/202608271745.sql

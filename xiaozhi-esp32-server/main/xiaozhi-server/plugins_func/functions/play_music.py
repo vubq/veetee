@@ -151,19 +151,29 @@ async def handle_music_command(conn: "ConnectionHandler", text):
     return True
 
 
-def _get_random_play_prompt(song_name):
+def _get_random_play_prompt(conn, song_name):
     """生成随机播放引导语"""
     # 移除文件扩展名
     clean_name = os.path.splitext(song_name)[0]
-    prompts = [
-        f"正在为您播放，《{clean_name}》",
-        f"请欣赏歌曲，《{clean_name}》",
-        f"即将为您播放，《{clean_name}》",
-        f"现在为您带来，《{clean_name}》",
-        f"让我们一起聆听，《{clean_name}》",
-        f"接下来请欣赏，《{clean_name}》",
-        f"此刻为您献上，《{clean_name}》",
-    ]
+    tts_config = conn.config.get("TTS", {}).get(
+        conn.config.get("selected_module", {}).get("TTS", ""), {}
+    )
+    if str(tts_config.get("language", "")).startswith("vi"):
+        prompts = [
+            f"Mời bạn nghe bài {clean_name}.",
+            f"Bây giờ mình phát bài {clean_name} nhé.",
+            f"Cùng nghe bài {clean_name} nào.",
+        ]
+    else:
+        prompts = [
+            f"正在为您播放，《{clean_name}》",
+            f"请欣赏歌曲，《{clean_name}》",
+            f"即将为您播放，《{clean_name}》",
+            f"现在为您带来，《{clean_name}》",
+            f"让我们一起聆听，《{clean_name}》",
+            f"接下来请欣赏，《{clean_name}》",
+            f"此刻为您献上，《{clean_name}》",
+        ]
     # 直接使用random.choice，不设置seed
     return random.choice(prompts)
 
@@ -192,7 +202,7 @@ async def play_local_music(conn: "ConnectionHandler", specific_file=None):
         if not os.path.exists(music_path):
             conn.logger.bind(tag=TAG).error(f"选定的音乐文件不存在: {music_path}")
             return
-        text = _get_random_play_prompt(selected_music)
+        text = _get_random_play_prompt(conn, selected_music)
         conn.tts.store_tts_text(conn.sentence_id, text)
         # conn.dialogue.put(Message(role="assistant", content=text))
 

@@ -654,6 +654,9 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).error(f"实例化组件失败: {e}")
 
     def _init_prompt_enhancement(self):
+        if not self.config.get("enable_prompt_enhancement", True):
+            self.logger.bind(tag=TAG).info("已禁用提示词增强，使用低延迟原始提示词")
+            return
 
         # 更新上下文信息
         self.prompt_manager.update_context_info(self, self.client_ip)
@@ -685,24 +688,22 @@ class ConnectionHandler:
         tool_names = {t.get("function", {}).get("name") for t in tools}
 
         # === few-shot 示例（is_temporary）===
-        # 展示 direct_answer 携带 response 参数的用法，一次调用完成回复
-
-        # 示例1：direct_answer（回复内容写在 response 参数里，无需递归）
-        da_tc_id = "fewshot_da_001"
-        self.dialogue.put(Message(role="user", content="给我讲个故事吧", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_tc_id,
-                "function": {"arguments": '{"response": "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~"}', "name": "direct_answer"},
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_tc_id,
-            content="已直接回复", is_temporary=True,
-        ))
+        if self.config.get("enable_direct_answer_tool", True):
+            da_tc_id = "fewshot_da_001"
+            self.dialogue.put(Message(role="user", content="给我讲个故事吧", is_temporary=True))
+            self.dialogue.put(Message(
+                role="assistant",
+                tool_calls=[{
+                    "id": da_tc_id,
+                    "function": {"arguments": '{"response": "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~"}', "name": "direct_answer"},
+                    "type": "function", "index": 0,
+                }],
+                is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="tool", tool_call_id=da_tc_id,
+                content="已直接回复", is_temporary=True,
+            ))
 
         # 示例2：真实工具调用（handle_exit_intent）
         if "handle_exit_intent" in tool_names:
@@ -1104,6 +1105,29 @@ class ConnectionHandler:
                 functions.append(DIRECT_ANSWER_TOOL)
 
         response_message = []
+        use_tools = functions is not None
+        if (
+            use_tools
+            and depth == 0
+            and self.config.get("enable_realtime_tool_router", False)
+            and hasattr(self.llm, "should_use_tools")
+            and getattr(self.llm, "realtime_router_enabled", False)
+        ):
+            try:
+                real_functions = [
+                    item
+                    for item in functions
+                    if item.get("function", {}).get("name") != "direct_answer"
+                ]
+                use_tools = self.llm.should_use_tools(query, real_functions)
+                self.logger.bind(tag=TAG).info(
+                    f"实时工具路由结果: {'tool' if use_tools else 'direct_stream'}"
+                )
+                if not use_tools:
+                    functions = None
+            except Exception as e:
+                self.logger.bind(tag=TAG).warning(f"实时工具路由失败，回退完整工具模式: {e}")
+                use_tools = True
 
         try:
             # 使用带记忆的对话
@@ -1128,7 +1152,10 @@ class ConnectionHandler:
                 llm_responses = self.llm.response_with_functions(
                     self.session_id,
                     self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {}), speaker_for_system
+                        memory_str,
+                        self.config.get("voiceprint", {}),
+                        speaker_for_system,
+                        include_fewshot=True,
                     ),
                     functions=functions,
                 )
@@ -1136,7 +1163,12 @@ class ConnectionHandler:
                 llm_responses = self.llm.response(
                     self.session_id,
                     self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {}), speaker_for_system
+                        memory_str,
+                        self.config.get("voiceprint", {}),
+                        speaker_for_system,
+                        include_fewshot=not self.config.get(
+                            "enable_realtime_tool_router", False
+                        ),
                     ),
                 )
         except Exception as e:

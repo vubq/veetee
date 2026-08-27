@@ -43,6 +43,16 @@ class TTSProviderBase(ABC):
             raise ValueError("tts_timeout must be a positive finite number")
         self.tts_text_queue = queue.Queue()
         self.tts_audio_queue = queue.Queue()
+        self.parallel_workers = max(1, int(config.get("parallel_workers", 1)))
+        self.first_segment_chars = max(6, int(config.get("first_segment_chars", 18)))
+        self.segment_chars = max(
+            self.first_segment_chars, int(config.get("segment_chars", 60))
+        )
+        self._synthesis_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.parallel_workers,
+            thread_name_prefix="tts-synthesis",
+        )
+        self._synthesis_output_queue = queue.Queue()
         self.tts_audio_first_sentence = True
         self.before_stop_play_files = []
         self.report_on_last = False
@@ -91,6 +101,8 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ".",
+            "\n",
         )
         self.first_sentence_punctuations = (
             "，",
@@ -105,6 +117,8 @@ class TTSProviderBase(ABC):
             "；",
             ";",
             "：",
+            ".",
+            "\n",
         )
         self.tts_stop_request = False
         self.processed_chars = 0
@@ -325,6 +339,11 @@ class TTSProviderBase(ABC):
         )
         self.audio_play_priority_thread.start()
 
+        self.synthesis_output_thread = threading.Thread(
+            target=self._synthesis_output_priority_thread, daemon=True
+        )
+        self.synthesis_output_thread.start()
+
     def store_tts_text(self, sentence_id, text):
         """存储指定 sentence_id 对应的文本，用于流式TTS获取正确的字幕文本
 
@@ -387,20 +406,22 @@ class TTSProviderBase(ABC):
                     self.tts_audio_first_sentence = True
                 elif ContentType.TEXT == message.content_type:
                     self.tts_text_buff.append(message.content_detail)
-                    segment_text = self._get_segment_text()
-                    if segment_text:
-                        self.to_tts_stream(segment_text, opus_handler=self.handle_opus)
+                    while True:
+                        segment_text = self._get_segment_text()
+                        if not segment_text:
+                            break
+                        self._submit_tts_segment(segment_text, message.sentence_id)
                 elif ContentType.FILE == message.content_type:
-                    self._process_remaining_text_stream(opus_handler=self.handle_opus)
+                    self._submit_remaining_text(message.sentence_id)
                     tts_file = message.content_file
                     if tts_file and os.path.exists(tts_file):
-                        self._process_audio_file_stream(
-                            tts_file, callback=self.handle_opus
+                        self._synthesis_output_queue.put(
+                            ("file", tts_file, message.sentence_id)
                         )
                 if message.sentence_type == SentenceType.LAST:
-                    self._process_remaining_text_stream(opus_handler=self.handle_opus)
-                    self.tts_audio_queue.put(
-                        (message.sentence_type, [], message.content_detail, message.sentence_id)
+                    self._submit_remaining_text(message.sentence_id)
+                    self._synthesis_output_queue.put(
+                        ("last", message.content_detail, message.sentence_id)
                     )
 
             except queue.Empty:
@@ -410,6 +431,97 @@ class TTSProviderBase(ABC):
                     f"处理TTS文本失败: {str(e)}, 类型: {type(e).__name__}, 堆栈: {traceback.format_exc()}"
                 )
                 continue
+
+    def _submit_tts_segment(self, text, sentence_id):
+        future = self._synthesis_executor.submit(self._synthesize_audio_bytes, text)
+        self._synthesis_output_queue.put(("segment", future, sentence_id))
+
+    def _submit_remaining_text(self, sentence_id):
+        full_text = "".join(self.tts_text_buff)
+        remaining_text = full_text[self.processed_chars :]
+        if not remaining_text:
+            return False
+        segment_text = textUtils.get_string_no_punctuation_or_emoji(remaining_text)
+        self.processed_chars = len(full_text)
+        if segment_text:
+            self._submit_tts_segment(segment_text, sentence_id)
+            return True
+        return False
+
+    def _synthesize_audio_bytes(self, text):
+        original_text = text
+        clean_text = MarkdownCleaner.clean_markdown(text)
+        if self._correct_words_pattern:
+            clean_text = self._correct_words_pattern.sub(
+                lambda m: self.correct_words[m.group(0)], clean_text
+            )
+
+        last_error = None
+        for attempt in range(1, 6):
+            try:
+                audio_bytes = asyncio.run(self.text_to_speak(clean_text, None))
+                if audio_bytes:
+                    return original_text, audio_bytes
+            except Exception as e:
+                last_error = e
+                logger.bind(tag=TAG).warning(
+                    f"语音生成失败{attempt}次: {original_text}，错误: {e}"
+                )
+        logger.bind(tag=TAG).error(
+            f"语音生成失败: {original_text}，请检查网络或服务是否正常: {last_error}"
+        )
+        return original_text, None
+
+    def _synthesis_output_priority_thread(self):
+        while not self.conn.stop_event.is_set():
+            try:
+                item_type, payload, sentence_id = self._synthesis_output_queue.get(
+                    timeout=0.1
+                )
+            except queue.Empty:
+                continue
+
+            if sentence_id != self.conn.sentence_id or self.conn.client_abort:
+                if item_type == "segment":
+                    payload.cancel()
+                continue
+
+            try:
+                if item_type == "segment":
+                    original_text, audio_bytes = payload.result(timeout=self.tts_timeout)
+                    if not audio_bytes or sentence_id != self.conn.sentence_id:
+                        continue
+                    self.tts_audio_queue.put(
+                        (SentenceType.FIRST, None, original_text, sentence_id)
+                    )
+                    audio_bytes_to_data_stream(
+                        audio_bytes,
+                        file_type=self.audio_file_type,
+                        is_opus=True,
+                        callback=lambda data, sid=sentence_id: self.tts_audio_queue.put(
+                            (SentenceType.MIDDLE, data, None, sid)
+                        ),
+                        sample_rate=self.conn.sample_rate,
+                        opus_encoder=self.opus_encoder,
+                    )
+                    logger.bind(tag=TAG).info(f"语音生成成功: {original_text}")
+                elif item_type == "file":
+                    self._process_audio_file_stream(
+                        payload,
+                        callback=lambda data, sid=sentence_id: self.tts_audio_queue.put(
+                            (SentenceType.MIDDLE, data, None, sid)
+                        ),
+                    )
+                elif item_type == "last":
+                    self.tts_audio_queue.put(
+                        (SentenceType.LAST, [], payload, sentence_id)
+                    )
+            except concurrent.futures.TimeoutError:
+                logger.bind(tag=TAG).error("TTS生成超时，跳过当前文本段")
+            except Exception as e:
+                logger.bind(tag=TAG).error(
+                    f"处理并行TTS输出失败: {e}, 堆栈: {traceback.format_exc()}"
+                )
 
     def _audio_play_priority_thread(self):
         # 需要上报的文本和音频列表
@@ -480,6 +592,7 @@ class TTSProviderBase(ABC):
     async def close(self):
         """资源清理方法"""
         self._sentence_text_map.clear()
+        self._synthesis_executor.shutdown(wait=False, cancel_futures=True)
         if hasattr(self, "ws") and self.ws:
             await self.ws.close()
 
@@ -487,7 +600,6 @@ class TTSProviderBase(ABC):
         # 合并当前全部文本并处理未分割部分
         full_text = "".join(self.tts_text_buff)
         current_text = full_text[self.processed_chars :]  # 从未处理的位置开始
-        last_punct_pos = -1
 
         # 根据是否是第一句话选择不同的标点符号集合
         punctuations_to_use = (
@@ -496,12 +608,21 @@ class TTSProviderBase(ABC):
             else self.punctuations
         )
 
+        punctuation_positions = []
         for punct in punctuations_to_use:
-            pos = current_text.rfind(punct)
-            if (pos != -1 and last_punct_pos == -1) or (
-                pos != -1 and pos < last_punct_pos
-            ):
-                last_punct_pos = pos
+            pos = current_text.find(punct)
+            if pos != -1:
+                punctuation_positions.append(pos)
+        last_punct_pos = min(punctuation_positions, default=-1)
+
+        max_chars = (
+            self.first_segment_chars if self.is_first_sentence else self.segment_chars
+        )
+        if len(current_text) >= max_chars and (
+            last_punct_pos == -1 or last_punct_pos >= max_chars
+        ):
+            split_at = current_text.rfind(" ", 0, max_chars + 1)
+            last_punct_pos = split_at if split_at > 0 else max_chars - 1
 
         if last_punct_pos != -1:
             segment_text_raw = current_text[: last_punct_pos + 1]

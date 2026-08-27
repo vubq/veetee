@@ -102,6 +102,11 @@ def initialize_tts(config):
     select_tts_module = config["selected_module"]["TTS"]
     tts_config = config["TTS"][select_tts_module].copy()
     tts_config.setdefault("tts_timeout", config.get("tts_timeout", 15))
+    tts_config.setdefault("parallel_workers", config.get("tts_parallel_workers", 1))
+    tts_config.setdefault(
+        "first_segment_chars", config.get("tts_first_segment_chars", 18)
+    )
+    tts_config.setdefault("segment_chars", config.get("tts_segment_chars", 60))
     tts_type = (
         select_tts_module
         if "type" not in tts_config
