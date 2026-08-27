@@ -639,7 +639,7 @@ LLM:
     # 定义LLM API类型 (Groq Cloud OpenAI API)
     type: openai
     base_url: https://api.groq.com/openai/v1
-    model_name: qwen-3.6-27b
+    model_name: qwen/qwen3.6-27b
     api_key: 你的groq api key
     temperature: 0.7
     max_tokens: 1024

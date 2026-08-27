@@ -30,6 +30,13 @@ WAKEUP_CONFIG = {
         "请问您需要什么帮助？",
         "我在这里，等候您的指令。",
     ],
+    "responses_vi": [
+        "Mình đang nghe đây, bạn nói đi.",
+        "Mình đây, bạn cần gì nào?",
+        "Có mình đây, bạn cứ nói nhé.",
+        "Mình sẵn sàng rồi, bạn nói đi.",
+        "Bạn cần mình giúp gì nào?",
+    ],
 }
 
 # 创建全局的唤醒词配置管理器
@@ -134,7 +141,9 @@ async def wakeupWordsResponse(conn: "ConnectionHandler"):
             return
 
         # 从预定义回复列表中随机选择一个回复
-        result = random.choice(WAKEUP_CONFIG["responses"])
+        voice = getattr(conn.tts, "voice", "") or ""
+        responses_key = "responses_vi" if voice.startswith("vi-VN-") else "responses"
+        result = random.choice(WAKEUP_CONFIG[responses_key])
         if not result or len(result) == 0:
             return
 
