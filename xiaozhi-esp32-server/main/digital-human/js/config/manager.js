@@ -48,11 +48,16 @@ export function loadConfig() {
     const savedOtaUrl = localStorage.getItem('xz_tester_otaUrl');
     if (savedOtaUrl) {
         otaUrlInput.value = savedOtaUrl;
+    } else if (otaUrlInput) {
+        otaUrlInput.value = `${window.location.origin}/xiaozhi/ota/`;
     }
 
     const savedWakewordWsUrl = localStorage.getItem('xz_tester_wakewordWsUrl');
     if (savedWakewordWsUrl !== null && wakewordWsUrlInput) {
         wakewordWsUrlInput.value = savedWakewordWsUrl;
+    } else if (wakewordWsUrlInput) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wakewordWsUrlInput.value = `${protocol}//${window.location.host}/wakeword-ws`;
     }
 
     const savedWakewordEnabled = localStorage.getItem('xz_tester_wakewordEnabled');
