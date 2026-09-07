@@ -1,0 +1,16 @@
+references/
+
+veetee-server/config.yaml
+veetee-server/server.log
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+
+.DS_Store
+

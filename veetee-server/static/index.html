@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeeTee Realtime Voice Server Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/opus-decoder@0.7.7/dist/opus-decoder.min.js"></script>
+    <style>
+        .sound-wave {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            height: 16px;
+        }
+        .sound-wave span {
+            width: 3px;
+            height: 100%;
+            background-color: #10b981;
+            border-radius: 3px;
+            animation: wave 1s ease-in-out infinite;
+        }
+        .sound-wave span:nth-child(2) { animation-delay: 0.2s; }
+        .sound-wave span:nth-child(3) { animation-delay: 0.4s; }
+        .sound-wave span:nth-child(4) { animation-delay: 0.6s; }
+        @keyframes wave {
+            0%, 100% { height: 4px; }
+            50% { height: 16px; }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+    <header class="border-b border-slate-800 bg-slate-950/70 backdrop-blur px-6 py-4 flex items-center justify-between shadow-sm">
+        <div class="flex items-center gap-3">
+            <div id="statusDot" class="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></div>
+            <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
+                VeeTee Voice Assistant Dashboard
+            </h1>
+        </div>
+        <div class="flex items-center gap-3 text-xs text-slate-400">
+            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">ASR: Deepgram Nova-2</span>
+            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">LLM: Groq Qwen 3.6 27B</span>
+            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">TTS: Vieneu Local GPU</span>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-4xl w-full mx-auto p-6 flex flex-col gap-6">
+        <!-- Status & Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
+                <span class="text-xs text-slate-400 font-medium">Trạng Thái Kết Nối</span>
+                <span id="connStatus" class="text-lg font-semibold text-amber-400 mt-1">Chưa kết nối</span>
+            </div>
+            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
+                <span class="text-xs text-slate-400 font-medium">Thời Gian Phản Hồi (TTFA)</span>
+                <span id="latencyStat" class="text-lg font-semibold text-emerald-400 mt-1">~600 - 900 ms</span>
+            </div>
+            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
+                <span class="text-xs text-slate-400 font-medium">Cảm Xúc Biểu Cảm</span>
+                <div class="flex items-center justify-between mt-1">
+                    <span id="emotionStat" class="text-lg font-semibold text-indigo-400">😊 Neutral</span>
+                    <div id="soundWave" class="sound-wave hidden">
+                        <span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Conversation Logs -->
+        <div class="flex-1 bg-slate-950/80 border border-slate-800 rounded-2xl p-6 overflow-y-auto min-h-[380px] max-h-[480px] flex flex-col gap-4 shadow-inner" id="chatLogs">
+            <div class="flex items-start gap-3 text-slate-400 text-sm italic">
+                <span>Trợ lý đã sẵn sàng. Hãy bấm <b>"Kết nối WebSocket"</b> để kích hoạt âm thanh và bắt đầu trò chuyện.</span>
+            </div>
+        </div>
+
+        <!-- Control Bar -->
+        <div class="bg-slate-800/50 border border-slate-800 rounded-2xl p-6 flex flex-col gap-4 shadow-lg">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+                <div class="flex items-center gap-3 w-full md:w-auto">
+                    <button id="btnConnect" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 font-medium text-sm rounded-xl transition shadow">
+                        Kết nối WebSocket
+                    </button>
+                    <button id="btnAbort" disabled class="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 font-medium text-sm rounded-xl transition shadow">
+                        Ngắt lời (Abort)
+                    </button>
+                </div>
+                <div class="text-xs text-slate-400 flex flex-col items-start md:items-end font-mono">
+                    <span>WebSocket URL: <code class="text-emerald-400" id="wsUrlText"></code></span>
+                    <span>OTA Endpoint: <code class="text-emerald-400" id="otaUrlText"></code></span>
+                </div>
+            </div>
+
+            <!-- Quick Text Query Simulation -->
+            <div class="flex items-center gap-2 pt-2 border-t border-slate-700/50">
+                <input id="inputQuery" type="text" placeholder="Nhập câu hỏi để trò chuyện (ví dụ: Bạn là ai, hãy giới thiệu bản thân?)..." 
+                       class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition">
+                <button id="btnSendText" disabled class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 font-medium text-sm rounded-xl transition flex items-center gap-1.5 shadow">
+                    <span>Gửi</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const isHttps = window.location.protocol === 'https:';
+        let wsUrl;
+        let otaUrl;
+
+        if (isHttps) {
+            wsUrl = `wss://${window.location.host}/ws`;
+            otaUrl = `https://${window.location.host}/ota/`;
+        } else {
+            const host = window.location.hostname || 'localhost';
+            wsUrl = `ws://${host}:8000/`;
+            otaUrl = `http://${host}:8003/ota/`;
+        }
+
+        document.getElementById('wsUrlText').innerText = wsUrl;
+        document.getElementById('otaUrlText').innerText = otaUrl;
+
+        let ws = null;
+        let audioCtx = null;
+        let nextPlayTime = 0;
+        let opusDecoder = null;
+        let tTurnStart = null;
+
+        const btnConnect = document.getElementById('btnConnect');
+        const btnAbort = document.getElementById('btnAbort');
+        const btnSendText = document.getElementById('btnSendText');
+        const inputQuery = document.getElementById('inputQuery');
+        const connStatus = document.getElementById('connStatus');
+        const statusDot = document.getElementById('statusDot');
+        const latencyStat = document.getElementById('latencyStat');
+        const emotionStat = document.getElementById('emotionStat');
+        const soundWave = document.getElementById('soundWave');
+        const chatLogs = document.getElementById('chatLogs');
+
+        // Initialize Opus WebAssembly decoder and Web Audio Context
+        async function initAudioSystem() {
+            if (!audioCtx) {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContextClass({ sampleRate: 24000 });
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            if (!opusDecoder) {
+                try {
+                    const OpusDecoderPkg = window["opus-decoder"] || window.OpusDecoder;
+                    const DecoderClass = OpusDecoderPkg?.OpusDecoder || OpusDecoderPkg;
+                    if (DecoderClass) {
+                        opusDecoder = new DecoderClass({
+                            sampleRate: 24000,
+                            channels: 1
+                        });
+                        await opusDecoder.ready;
+                        console.log("Opus WebAssembly Decoder initialized successfully!");
+                    } else {
+                        console.warn("OpusDecoder class not found in window");
+                    }
+                } catch (err) {
+                    console.error("Failed to initialize Opus decoder:", err);
+                }
+            }
+        }
+
+        function playDecodedAudio(channelData) {
+            if (!audioCtx) return;
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const floatArray = channelData[0];
+            if (!floatArray || floatArray.length === 0) return;
+
+            const buffer = audioCtx.createBuffer(1, floatArray.length, 24000);
+            buffer.getChannelData(0).set(floatArray);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+            if (nextPlayTime < now) {
+                nextPlayTime = now + 0.02;
+            }
+            source.start(nextPlayTime);
+            nextPlayTime += buffer.duration;
+            soundWave.classList.remove('hidden');
+        }
+
+        function appendMessage(role, text, emotion) {
+            const row = document.createElement('div');
+            row.className = role === 'user' ? 'flex justify-end' : 'flex justify-start';
+            
+            const bubble = document.createElement('div');
+            bubble.className = role === 'user' 
+                ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 max-w-[80%] text-sm shadow'
+                : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-2xl rounded-tl-none px-4 py-2.5 max-w-[80%] text-sm shadow';
+            
+            if (role === 'assistant' && emotion) {
+                const badge = document.createElement('span');
+                badge.className = 'inline-block bg-slate-900 text-indigo-300 text-xs px-2 py-0.5 rounded mr-2 font-mono';
+                badge.innerText = `[${emotion}]`;
+                bubble.appendChild(badge);
+            }
+            
+            const spanText = document.createElement('span');
+            spanText.innerText = text;
+            bubble.appendChild(spanText);
+            
+            row.appendChild(bubble);
+            chatLogs.appendChild(row);
+            chatLogs.scrollTop = chatLogs.scrollHeight;
+            return spanText;
+        }
+
+        let currentAssistantBubble = null;
+
+        async function connectWS() {
+            await initAudioSystem();
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            connStatus.innerText = 'Đang kết nối...';
+            connStatus.className = 'text-lg font-semibold text-amber-400 mt-1';
+            statusDot.className = 'w-3 h-3 rounded-full bg-amber-500 animate-pulse';
+
+            try {
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
+            } catch (e) {
+                console.error("WS error:", e);
+                connStatus.innerText = 'Lỗi kết nối';
+                connStatus.className = 'text-lg font-semibold text-rose-400 mt-1';
+                return;
+            }
+
+            ws.onopen = () => {
+                connStatus.innerText = 'Đã kết nối';
+                connStatus.className = 'text-lg font-semibold text-emerald-400 mt-1';
+                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
+                btnConnect.innerText = 'Ngắt kết nối';
+                btnConnect.className = 'px-5 py-2.5 bg-slate-700 hover:bg-slate-600 font-medium text-sm rounded-xl transition shadow';
+                btnAbort.disabled = false;
+                btnSendText.disabled = false;
+
+                // Send Hello handshake
+                ws.send(JSON.stringify({
+                    type: "hello",
+                    version: 1,
+                    transport: "websocket",
+                    audio_params: {
+                        format: "opus",
+                        sample_rate: 16000,
+                        channels: 1,
+                        frame_duration: 60
+                    }
+                }));
+            };
+
+            ws.onmessage = async (event) => {
+                if (typeof event.data === 'string') {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'stt') {
+                        appendMessage('user', data.text);
+                    } else if (data.type === 'llm') {
+                        if (data.emotion) {
+                            emotionStat.innerText = `😊 ${data.emotion}`;
+                        }
+                    } else if (data.type === 'tts') {
+                        if (data.state === 'start') {
+                            if (tTurnStart) {
+                                const ms = Math.round(performance.now() - tTurnStart);
+                                latencyStat.innerText = `${ms} ms`;
+                            }
+                            currentAssistantBubble = appendMessage('assistant', '', 'happy');
+                            if (audioCtx) nextPlayTime = audioCtx.currentTime + 0.02;
+                        } else if (data.state === 'sentence_start') {
+                            if (currentAssistantBubble) {
+                                currentAssistantBubble.innerText += (currentAssistantBubble.innerText ? ' ' : '') + data.text;
+                                chatLogs.scrollTop = chatLogs.scrollHeight;
+                            }
+                        } else if (data.state === 'stop') {
+                            currentAssistantBubble = null;
+                            setTimeout(() => {
+                                soundWave.classList.add('hidden');
+                            }, 500);
+                        }
+                    }
+                } else if (event.data instanceof ArrayBuffer) {
+                    // Binary Opus audio frame received from server
+                    if (opusDecoder) {
+                        try {
+                            const rawBytes = new Uint8Array(event.data);
+                            const decoded = await opusDecoder.decodeFrame(rawBytes);
+                            if (decoded && decoded.channelData) {
+                                playDecodedAudio(decoded.channelData);
+                            }
+                        } catch (err) {
+                            console.debug("Opus decode error:", err);
+                        }
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                connStatus.innerText = 'Đã ngắt kết nối';
+                connStatus.className = 'text-lg font-semibold text-rose-400 mt-1';
+                statusDot.className = 'w-3 h-3 rounded-full bg-rose-500';
+                btnConnect.innerText = 'Kết nối WebSocket';
+                btnConnect.className = 'px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 font-medium text-sm rounded-xl transition shadow';
+                btnAbort.disabled = true;
+                btnSendText.disabled = true;
+                soundWave.classList.add('hidden');
+            };
+
+            ws.onerror = (err) => {
+                console.error("WS error:", err);
+            };
+        }
+
+        btnConnect.addEventListener('click', connectWS);
+
+        btnAbort.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "abort", reason: "user_cancel" }));
+            }
+            if (audioCtx) {
+                nextPlayTime = audioCtx.currentTime;
+            }
+            soundWave.classList.add('hidden');
+        });
+
+        btnSendText.addEventListener('click', async () => {
+            await initAudioSystem();
+            const query = inputQuery.value.trim();
+            if (!query || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            appendMessage('user', query);
+            inputQuery.value = '';
+            tTurnStart = performance.now();
+            
+            // Send chat message
+            ws.send(JSON.stringify({
+                type: "chat",
+                text: query
+            }));
+        });
+
+        inputQuery.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                btnSendText.click();
+            }
+        });
+    </script>
+</body>
+</html>
