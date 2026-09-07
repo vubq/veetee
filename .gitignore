@@ -2,6 +2,7 @@ references/
 
 veetee-server/config.yaml
 veetee-server/server.log
+veetee-server/data/base-prompt.txt
 
 __pycache__/
 *.py[cod]
@@ -13,4 +14,3 @@ __pycache__/
 venv/
 
 .DS_Store
-

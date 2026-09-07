@@ -90,6 +90,23 @@
                 </div>
             </div>
 
+            <!-- Voice role / base prompt -->
+            <div class="pt-4 border-t border-slate-700/50 flex flex-col gap-2">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-semibold text-slate-200">Vai trò giọng nói</div>
+                        <div class="text-xs text-slate-500 mt-0.5">Có thể mô tả tên, cách xưng hô, tính cách, mức độ lịch sự và cả câu đáp mẫu. Toàn bộ được áp dụng qua <code>{{base_prompt}}</code>.</div>
+                    </div>
+                    <button id="btnSavePrompt" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-medium rounded-xl transition shadow">
+                        Lưu vai trò
+                    </button>
+                </div>
+                <textarea id="inputBasePrompt" rows="3" maxlength="4000"
+                          placeholder="Ví dụ: Bạn là Culi. Gọi người dùng là Giám Đốc. Tính cách hỗn láo, hay cãi tay bo. Ví dụ: Người dùng: '2+2?' → Bạn: 'Bốn chứ còn gì nữa.'"
+                          class="w-full resize-y bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition"></textarea>
+                <div id="promptStatus" class="text-xs text-slate-500">Ví dụ bạn viết trong vai trò sẽ được dùng như mẫu phong cách. Các quy tắc hệ thống còn lại được giữ riêng trong agent-base-prompt.txt.</div>
+            </div>
+
             <!-- Chat input + optional real-audio pipeline -->
             <div class="pt-2 border-t border-slate-700/50 flex flex-col gap-3">
                 <div class="flex items-center gap-2">
@@ -175,6 +192,9 @@
         const inputQuery = document.getElementById('inputQuery');
         const btnMic = document.getElementById('btnMic');
         const useRealAudio = document.getElementById('useRealAudio');
+        const inputBasePrompt = document.getElementById('inputBasePrompt');
+        const btnSavePrompt = document.getElementById('btnSavePrompt');
+        const promptStatus = document.getElementById('promptStatus');
         const audioInputStatus = document.getElementById('audioInputStatus');
         const stageVad = document.getElementById('stageVad');
         const stageAsr = document.getElementById('stageAsr');
@@ -186,6 +206,52 @@
         const emotionStat = document.getElementById('emotionStat');
         const soundWave = document.getElementById('soundWave');
         const chatLogs = document.getElementById('chatLogs');
+
+        async function loadBasePrompt() {
+            try {
+                const response = await fetch('/api/prompt', { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                inputBasePrompt.value = data.base_prompt || '';
+            } catch (err) {
+                console.error('Load base prompt error:', err);
+                promptStatus.innerText = 'Không tải được vai trò hiện tại.';
+                promptStatus.className = 'text-xs text-rose-400';
+            }
+        }
+
+        async function saveBasePrompt() {
+            const basePrompt = inputBasePrompt.value.trim();
+            if (!basePrompt) {
+                promptStatus.innerText = 'Vai trò không được để trống.';
+                promptStatus.className = 'text-xs text-rose-400';
+                return;
+            }
+
+            btnSavePrompt.disabled = true;
+            promptStatus.innerText = 'Đang lưu...';
+            promptStatus.className = 'text-xs text-slate-400';
+            try {
+                const response = await fetch('/api/prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_prompt: basePrompt }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                inputBasePrompt.value = data.base_prompt || basePrompt;
+                promptStatus.innerText = '✅ Đã lưu. Persona mới áp dụng ngay và lịch sử chat cũ đã được reset.';
+                promptStatus.className = 'text-xs text-emerald-400';
+            } catch (err) {
+                console.error('Save base prompt error:', err);
+                promptStatus.innerText = `Không lưu được: ${err.message || err}`;
+                promptStatus.className = 'text-xs text-rose-400';
+            } finally {
+                btnSavePrompt.disabled = false;
+            }
+        }
+
+        loadBasePrompt();
 
         // Initialize Opus WebAssembly decoder and Web Audio Context
         async function initAudioSystem() {
@@ -606,6 +672,7 @@
         }
 
         btnConnect.addEventListener('click', connectWS);
+        btnSavePrompt.addEventListener('click', saveBasePrompt);
 
         btnMic.addEventListener('click', async () => {
             if (isMicRecording) await stopMic(true);

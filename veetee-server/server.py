@@ -22,6 +22,7 @@ class VeeTeeServer:
     def __init__(self, config: AppConfig):
         self.config = config
         self.local_ip = get_local_ip()
+        server_dir = os.path.dirname(os.path.abspath(__file__))
         logger.info(f"Loaded config: LLM provider=OmniRoute, model={config.llm.model}, max_tokens={config.llm.max_tokens}")
         
         # 1. Initialize Vieneu Neural TTS
@@ -41,7 +42,9 @@ class VeeTeeServer:
             model=config.llm.model,
             temperature=config.llm.temperature,
             max_tokens=config.llm.max_tokens,
-            system_prompt=config.llm.system_prompt
+            base_prompt=config.llm.base_prompt,
+            prompt_template_path=os.path.join(server_dir, config.llm.prompt_template),
+            base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
         )
         
         self.active_sessions = {}

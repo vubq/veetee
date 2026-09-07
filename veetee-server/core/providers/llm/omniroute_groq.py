@@ -1,6 +1,7 @@
 import aiohttp
 import json
 import logging
+import os
 import re
 from typing import List, Dict, AsyncGenerator, Tuple, Optional
 from core.providers.llm.base import BaseLLM
@@ -137,15 +138,68 @@ class OmnirouteGroqLLM(BaseLLM):
         model: str = "qwen/qwen3.6-27b",
         temperature: float = 0.7,
         max_tokens: int = 256,
-        system_prompt: str = ""
+        base_prompt: str = "",
+        prompt_template_path: Optional[str] = None,
+        base_prompt_state_path: Optional[str] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.system_prompt = system_prompt
+        self.prompt_template_path = prompt_template_path
+        self.base_prompt_state_path = base_prompt_state_path
+        self.prompt_template = self._load_prompt_template()
+        self.base_prompt = self._load_saved_base_prompt() or base_prompt.strip()
+        self.system_prompt = self._render_system_prompt(self.base_prompt)
         self._http_session: Optional[aiohttp.ClientSession] = None
+
+    def _load_prompt_template(self) -> str:
+        if not self.prompt_template_path:
+            return "{{base_prompt}}"
+        try:
+            with open(self.prompt_template_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        except OSError as e:
+            logger.warning(f"Could not read prompt template {self.prompt_template_path}: {e}")
+            return "{{base_prompt}}"
+        if "{{base_prompt}}" not in template:
+            logger.warning("Prompt template is missing {{base_prompt}}; using base prompt directly")
+            return "{{base_prompt}}"
+        return template
+
+    def _load_saved_base_prompt(self) -> str:
+        if not self.base_prompt_state_path:
+            return ""
+        try:
+            with open(self.base_prompt_state_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return ""
+        except OSError as e:
+            logger.warning(f"Could not read saved base prompt: {e}")
+            return ""
+
+    def _render_system_prompt(self, base_prompt: str) -> str:
+        return self.prompt_template.replace("{{base_prompt}}", base_prompt.strip())
+
+    def get_base_prompt(self) -> str:
+        return self.base_prompt
+
+    def set_base_prompt(self, base_prompt: str, persist: bool = True) -> None:
+        cleaned = (base_prompt or "").strip()
+        if not cleaned:
+            raise ValueError("base_prompt must not be empty")
+        self.base_prompt = cleaned
+        self.system_prompt = self._render_system_prompt(cleaned)
+
+        if persist and self.base_prompt_state_path:
+            state_dir = os.path.dirname(self.base_prompt_state_path)
+            os.makedirs(state_dir, exist_ok=True)
+            temp_path = f"{self.base_prompt_state_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(cleaned)
+            os.replace(temp_path, self.base_prompt_state_path)
 
     async def _get_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None or self._http_session.closed:

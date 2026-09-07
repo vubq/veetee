@@ -75,6 +75,8 @@ class HttpServer:
         self.app.router.add_get("/api/ota/", self.handle_ota)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_post("/api/test-voice", self.handle_test_voice)
+        self.app.router.add_get("/api/prompt", self.handle_get_prompt)
+        self.app.router.add_post("/api/prompt", self.handle_set_prompt)
         
         static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
         if os.path.exists(static_dir):
@@ -172,6 +174,42 @@ class HttpServer:
             content_type="audio/wav",
             headers={"Cache-Control": "no-store"},
         )
+
+    async def handle_get_prompt(self, request: web.Request) -> web.Response:
+        if self.llm_engine is None or not hasattr(self.llm_engine, "get_base_prompt"):
+            return web.json_response({"error": "LLM prompt unavailable"}, status=503)
+        return web.json_response({"base_prompt": self.llm_engine.get_base_prompt()})
+
+    async def handle_set_prompt(self, request: web.Request) -> web.Response:
+        if self.llm_engine is None or not hasattr(self.llm_engine, "set_base_prompt"):
+            return web.json_response({"error": "LLM prompt unavailable"}, status=503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        base_prompt = str(payload.get("base_prompt", "")).strip()
+        if not base_prompt:
+            return web.json_response({"error": "Base prompt is required"}, status=400)
+        if len(base_prompt) > 4000:
+            return web.json_response({"error": "Base prompt is too long"}, status=400)
+
+        try:
+            self.llm_engine.set_base_prompt(base_prompt, persist=True)
+        except (OSError, ValueError) as e:
+            logger.error(f"Failed to update base prompt: {e}")
+            return web.json_response({"error": "Could not save base prompt"}, status=500)
+
+        # A persona change should take effect from the very next turn. Old
+        # assistant replies can otherwise anchor the model to the previous
+        # personality even though the system prompt has already changed.
+        for session in self.active_sessions.values():
+            dialogue = getattr(session, "dialogue", None)
+            if dialogue is not None:
+                dialogue.clear()
+            session.processed_transcript = ""
+
+        return web.json_response({"ok": True, "base_prompt": self.llm_engine.get_base_prompt()})
 
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({

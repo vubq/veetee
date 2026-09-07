@@ -30,7 +30,8 @@ class LLMConfig:
     temperature: float = 0.6
     max_tokens: int = 600
     reasoning_format: str = "hidden"
-    system_prompt: str = "Bạn là trợ lý ảo giọng nói tiếng Việt thông minh. Luôn trả lời trực tiếp trong 1-2 câu ngắn gọn, không giải thích dài dòng, không dùng markdown. Bắt đầu câu trả lời bằng một cảm xúc như [happy] hoặc [neutral]."
+    base_prompt: str = "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
+    prompt_template: str = "agent-base-prompt.txt"
 
 @dataclass
 class TTSConfig:
