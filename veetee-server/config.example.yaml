@@ -26,9 +26,9 @@ llm:
 
 tts:
   provider: "vieneu"
-  voice: "Xuân Vĩnh"
+  voice: "Trúc Ly"
+  source_voice: "Xuân Vĩnh"
   sample_rate: 24000
   frame_duration_ms: 60
   denoise: true
   temperature: 0.7
-

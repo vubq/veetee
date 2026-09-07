@@ -1,7 +1,10 @@
 import asyncio
 import functools
+import io
 import logging
+import threading
 import time
+import wave
 import numpy as np
 from typing import AsyncGenerator, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -14,12 +17,14 @@ class VieneuLocalTTS(BaseTTS):
     def __init__(
         self,
         voice: str = "Xuân Vĩnh",
+        source_voice: str = "Xuân Vĩnh",
         sample_rate: int = 24000,
         frame_duration_ms: int = 60,
         denoise: bool = True,
         temperature: float = 0.7
     ):
         self.voice = voice
+        self.source_voice = source_voice
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
         self.denoise = denoise
@@ -31,6 +36,7 @@ class VieneuLocalTTS(BaseTTS):
             frame_duration_ms=frame_duration_ms
         )
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vieneu_tts")
+        self._engine_lock = threading.Lock()
         self.engine = None
         self._init_engine()
 
@@ -61,6 +67,34 @@ class VieneuLocalTTS(BaseTTS):
             break
         logger.info(f"Vieneu Neural TTS loaded and warmed up in {time.time() - t0:.2f}s")
 
+    async def synthesize_wav(self, text: str) -> bytes:
+        """Generate a complete mono WAV for dashboard source-audio testing."""
+        text = (text or "").strip()
+        if not text:
+            return b""
+
+        loop = asyncio.get_running_loop()
+
+        def _generate_wav() -> bytes:
+            with self._engine_lock:
+                audio_48k = self.engine.infer(
+                    text,
+                    voice=self.source_voice,
+                    denoise=self.denoise,
+                    temperature=self.temperature,
+                    apply_watermark=False,
+                )
+            pcm_24k = self.codec.resample_float32_48k_to_pcm16_24k(audio_48k)
+            output = io.BytesIO()
+            with wave.open(output, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(pcm_24k.tobytes())
+            return output.getvalue()
+
+        return await loop.run_in_executor(self.executor, _generate_wav)
+
     async def stream_sentence_to_opus(
         self,
         text: str,
@@ -75,16 +109,17 @@ class VieneuLocalTTS(BaseTTS):
 
         def _generate():
             try:
-                for chunk in self.engine.infer_stream(
-                    text,
-                    voice=self.voice,
-                    denoise=self.denoise,
-                    temperature=self.temperature,
-                    apply_watermark=False,
-                ):
-                    if cancel_event and cancel_event.is_set():
-                        break
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                with self._engine_lock:
+                    for chunk in self.engine.infer_stream(
+                        text,
+                        voice=self.voice,
+                        denoise=self.denoise,
+                        temperature=self.temperature,
+                        apply_watermark=False,
+                    ):
+                        if cancel_event and cancel_event.is_set():
+                            break
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
             except Exception as e:
                 logger.error(f"Error during Vieneu infer_stream: {e}")
             finally:

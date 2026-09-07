@@ -74,6 +74,7 @@ class HttpServer:
         self.app.router.add_post("/api/ota/", self.handle_ota)
         self.app.router.add_get("/api/ota/", self.handle_ota)
         self.app.router.add_get("/health", self.handle_health)
+        self.app.router.add_post("/api/test-voice", self.handle_test_voice)
         
         static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
         if os.path.exists(static_dir):
@@ -145,6 +146,32 @@ class HttpServer:
             }
         }
         return web.json_response(response_data)
+
+    async def handle_test_voice(self, request: web.Request) -> web.Response:
+        if self.tts_engine is None:
+            return web.json_response({"error": "TTS unavailable"}, status=503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            return web.json_response({"error": "Text is required"}, status=400)
+        if len(text) > 1000:
+            return web.json_response({"error": "Text is too long"}, status=400)
+
+        try:
+            wav_bytes = await self.tts_engine.synthesize_wav(text)
+        except Exception as e:
+            logger.error(f"VieNeu test voice generation failed: {e}", exc_info=True)
+            return web.json_response({"error": "TTS generation failed"}, status=500)
+
+        return web.Response(
+            body=wav_bytes,
+            content_type="audio/wav",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({

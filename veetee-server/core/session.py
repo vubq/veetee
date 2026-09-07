@@ -13,6 +13,7 @@ from core.protocol import (
     pack_audio_payload,
     make_hello_response,
     make_stt_message,
+    make_vad_message,
     make_llm_message,
     make_tts_message,
     parse_incoming_json,
@@ -50,6 +51,7 @@ class ClientSession:
         self.version = ProtocolVersion.V1
         self.device_id = "unknown"
         self.client_id = "unknown"
+        self.input_audio_format = "opus"
         
         self.state = SessionState.IDLE
         self.codec = AudioCodec(
@@ -65,6 +67,7 @@ class ClientSession:
         
         self.last_transcript = ""
         self.processed_transcript = ""
+        self.final_transcript_parts = []
         
         # Instantiate streaming ASR for this session
         self.asr: BaseASR = DeepgramStreamASR(
@@ -101,6 +104,12 @@ class ClientSession:
             await self._handle_text_json(message)
 
     async def _handle_binary_audio(self, data: bytes):
+        if self.input_audio_format in ("pcm16", "linear16"):
+            # Browser diagnostics send raw mono PCM16 at 16 kHz so the audio
+            # still goes through the same Deepgram VAD/ASR pipeline as ESP32.
+            await self.asr.send_audio(data)
+            return
+
         opus_payload, timestamp = unpack_audio_payload(data, self.version)
         if not opus_payload:
             return
@@ -120,6 +129,10 @@ class ClientSession:
             client_ver = data.get("version")
             if client_ver:
                 self.version = int(client_ver)
+            audio_params = data.get("audio_params") or {}
+            requested_format = str(audio_params.get("format", "opus")).lower()
+            if requested_format in ("opus", "pcm16", "linear16"):
+                self.input_audio_format = requested_format
             
             hello_resp = make_hello_response(
                 self.session_id,
@@ -134,6 +147,7 @@ class ClientSession:
             if state == "start":
                 self.state = SessionState.LISTENING
                 self._abort_turn()
+                self.final_transcript_parts.clear()
             elif state == "detect":
                 user_text = data.get("text", "").strip()
                 logger.info(f"Listen detect received: '{user_text}'")
@@ -144,9 +158,9 @@ class ClientSession:
                     self.state = SessionState.LISTENING
             elif state == "stop":
                 self.state = SessionState.THINKING
-                # Send silence to Deepgram to trigger speech final
-                silence_pcm = (b"\x00\x00") * int(16000 * 0.4)
-                await self.asr.send_audio(silence_pcm)
+                # The user explicitly ended capture (mic button / uploaded file).
+                # Flush Deepgram's buffered streaming audio immediately.
+                await self.asr.finalize()
 
         elif msg_type in ("text", "chat"):
             user_text = data.get("text", "").strip()
@@ -171,6 +185,7 @@ class ClientSession:
             self.current_turn_task = None
 
     async def _on_speech_started(self):
+        await self.send_text(make_vad_message(self.session_id, "speech_started"))
         # Auto barge-in interruption when user speaks during playback
         if self.state == SessionState.SPEAKING:
             logger.info("Speech detected while speaking -> Barge-in aborting TTS playback")
@@ -181,12 +196,30 @@ class ClientSession:
     async def _on_asr_transcript(self, transcript: str, is_final: bool, speech_final: bool):
         logger.info(f"ASR transcript received: '{transcript}' (final={is_final}, speech_final={speech_final})")
         self.last_transcript = transcript
+
+        if is_final and transcript:
+            if not self.final_transcript_parts or self.final_transcript_parts[-1] != transcript:
+                self.final_transcript_parts.append(transcript)
+
+        if is_final:
+            display_text = " ".join(self.final_transcript_parts).strip()
+        else:
+            display_text = " ".join([*self.final_transcript_parts, transcript]).strip()
         
         # Stream live STT result to client screen
-        await self.send_text(make_stt_message(self.session_id, transcript))
+        await self.send_text(make_stt_message(
+            self.session_id,
+            display_text or transcript,
+            is_final=is_final,
+            speech_final=speech_final,
+        ))
         
         if speech_final:
-            await self._trigger_ai_turn(transcript)
+            await self.send_text(make_vad_message(self.session_id, "speech_ended"))
+            final_text = " ".join(self.final_transcript_parts).strip() or transcript.strip()
+            self.final_transcript_parts.clear()
+            if final_text:
+                await self._trigger_ai_turn(final_text)
 
     async def _trigger_ai_turn(self, transcript: str):
         if not transcript.strip() or transcript == self.processed_transcript:

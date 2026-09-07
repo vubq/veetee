@@ -27,6 +27,7 @@ class VeeTeeServer:
         # 1. Initialize Vieneu Neural TTS
         self.tts_engine = VieneuLocalTTS(
             voice=config.tts.voice,
+            source_voice=config.tts.source_voice,
             sample_rate=config.tts.sample_rate,
             frame_duration_ms=config.tts.frame_duration_ms,
             denoise=config.tts.denoise,

@@ -90,14 +90,47 @@
                 </div>
             </div>
 
-            <!-- Quick Text Query Simulation -->
-            <div class="flex items-center gap-2 pt-2 border-t border-slate-700/50">
-                <input id="inputQuery" type="text" placeholder="Nhập câu hỏi để trò chuyện (ví dụ: Bạn là ai, hãy giới thiệu bản thân?)..." 
-                       class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition">
-                <button id="btnSendText" disabled class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 font-medium text-sm rounded-xl transition flex items-center gap-1.5 shadow">
-                    <span>Gửi</span>
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
-                </button>
+            <!-- Chat input + optional real-audio pipeline -->
+            <div class="pt-2 border-t border-slate-700/50 flex flex-col gap-3">
+                <div class="flex items-center gap-2">
+                    <input id="inputQuery" type="text" placeholder="Nhập câu muốn nói..."
+                           class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition">
+                    <button id="btnSendText" disabled class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 font-medium text-sm rounded-xl transition flex items-center gap-1.5 shadow">
+                        <span>Gửi</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                    </button>
+                </div>
+                <label class="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none w-fit">
+                    <input id="useRealAudio" type="checkbox" class="w-4 h-4 accent-emerald-500">
+                    <span>🔊 Dùng âm thanh thật</span>
+                    <span class="text-xs text-slate-500">VieNeu → phát loa + VAD → ASR → LLM → TTS</span>
+                </label>
+            </div>
+
+            <!-- Realtime audio diagnostics -->
+            <div class="pt-4 border-t border-slate-700/50 flex flex-col gap-3">
+                <div class="flex items-center gap-3">
+                    <button id="btnMic" disabled class="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 font-medium text-sm rounded-xl transition shadow">
+                        🎙️ Bắt đầu Mic
+                    </button>
+                    <span class="text-xs text-slate-500">Mic vẫn chạy trực tiếp qua Deepgram VAD/ASR như trước.</span>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
+                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
+                        <div class="text-slate-500">VAD</div><div id="stageVad" class="text-cyan-300 mt-1">Chờ audio</div>
+                    </div>
+                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
+                        <div class="text-slate-500">ASR</div><div id="stageAsr" class="text-amber-300 mt-1 truncate">Chờ VAD</div>
+                    </div>
+                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
+                        <div class="text-slate-500">LLM</div><div id="stageLlm" class="text-indigo-300 mt-1">Chờ ASR</div>
+                    </div>
+                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
+                        <div class="text-slate-500">TTS</div><div id="stageTts" class="text-emerald-300 mt-1">Chờ LLM</div>
+                    </div>
+                </div>
+                <div id="audioInputStatus" class="text-xs text-slate-400">Mic hoặc âm thanh VieNeu từ ô chat được chuyển thành PCM16 16 kHz và đi qua Deepgram VAD → ASR → LLM → VieNeu TTS.</div>
             </div>
         </div>
     </main>
@@ -124,11 +157,29 @@
         let nextPlayTime = 0;
         let opusDecoder = null;
         let tTurnStart = null;
+        let firstAudioPending = false;
+        let currentUserBubble = null;
+        let micStream = null;
+        let micAudioCtx = null;
+        let micSource = null;
+        let micProcessor = null;
+        let micMute = null;
+        let isMicRecording = false;
+        let syntheticCancelled = false;
+        let isSyntheticAudioRunning = false;
+        let activeSyntheticSource = null;
 
         const btnConnect = document.getElementById('btnConnect');
         const btnAbort = document.getElementById('btnAbort');
         const btnSendText = document.getElementById('btnSendText');
         const inputQuery = document.getElementById('inputQuery');
+        const btnMic = document.getElementById('btnMic');
+        const useRealAudio = document.getElementById('useRealAudio');
+        const audioInputStatus = document.getElementById('audioInputStatus');
+        const stageVad = document.getElementById('stageVad');
+        const stageAsr = document.getElementById('stageAsr');
+        const stageLlm = document.getElementById('stageLlm');
+        const stageTts = document.getElementById('stageTts');
         const connStatus = document.getElementById('connStatus');
         const statusDot = document.getElementById('statusDot');
         const latencyStat = document.getElementById('latencyStat');
@@ -218,6 +269,200 @@
 
         let currentAssistantBubble = null;
 
+        function resetPipelineStages() {
+            stageVad.innerText = 'Đang chờ giọng nói';
+            stageAsr.innerText = 'Chờ VAD';
+            stageLlm.innerText = 'Chờ ASR';
+            stageTts.innerText = 'Chờ LLM';
+            currentUserBubble = null;
+            tTurnStart = null;
+            firstAudioPending = false;
+        }
+
+        function resampleToPcm16(input, sourceRate, targetRate = 16000) {
+            if (sourceRate === targetRate) {
+                const direct = new Int16Array(input.length);
+                for (let i = 0; i < input.length; i++) {
+                    const sample = Math.max(-1, Math.min(1, input[i]));
+                    direct[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+                }
+                return direct;
+            }
+
+            const outputLength = Math.max(1, Math.round(input.length * targetRate / sourceRate));
+            const output = new Int16Array(outputLength);
+            const ratio = sourceRate / targetRate;
+            for (let i = 0; i < outputLength; i++) {
+                const position = i * ratio;
+                const left = Math.floor(position);
+                const right = Math.min(left + 1, input.length - 1);
+                const fraction = position - left;
+                const value = input[left] + (input[right] - input[left]) * fraction;
+                const sample = Math.max(-1, Math.min(1, value));
+                output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+            }
+            return output;
+        }
+
+        function sendPcm16(pcm16) {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !pcm16?.length) return;
+            ws.send(pcm16.buffer.slice(pcm16.byteOffset, pcm16.byteOffset + pcm16.byteLength));
+        }
+
+        async function stopMic(sendStop = true) {
+            if (!isMicRecording && !micStream) return;
+            isMicRecording = false;
+            if (micProcessor) {
+                micProcessor.onaudioprocess = null;
+                micProcessor.disconnect();
+            }
+            if (micSource) micSource.disconnect();
+            if (micMute) micMute.disconnect();
+            if (micStream) micStream.getTracks().forEach(track => track.stop());
+            if (micAudioCtx && micAudioCtx.state !== 'closed') await micAudioCtx.close();
+            micProcessor = null;
+            micSource = null;
+            micMute = null;
+            micStream = null;
+            micAudioCtx = null;
+            btnMic.innerText = '🎙️ Bắt đầu Mic';
+            if (sendStop && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'listen', state: 'stop' }));
+            }
+            audioInputStatus.innerText = 'Mic đã dừng. Đang chờ VAD/ASR chốt câu...';
+        }
+
+        async function startMic() {
+            if (!ws || ws.readyState !== WebSocket.OPEN || isSyntheticAudioRunning) return;
+            if (!navigator.mediaDevices?.getUserMedia) {
+                audioInputStatus.innerText = 'Trình duyệt không cho truy cập mic. Hãy mở dashboard bằng HTTPS hoặc localhost.';
+                return;
+            }
+            await initAudioSystem();
+            resetPipelineStages();
+            syntheticCancelled = true;
+
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                micAudioCtx = new AudioContextClass({ sampleRate: 16000 });
+                await micAudioCtx.resume();
+                micSource = micAudioCtx.createMediaStreamSource(micStream);
+                micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+                micMute = micAudioCtx.createGain();
+                micMute.gain.value = 0;
+                micSource.connect(micProcessor);
+                micProcessor.connect(micMute);
+                micMute.connect(micAudioCtx.destination);
+
+                ws.send(JSON.stringify({ type: 'listen', state: 'start' }));
+                isMicRecording = true;
+                btnMic.innerText = '⏹ Dừng Mic';
+                audioInputStatus.innerText = `Mic đang stream PCM16 ${micAudioCtx.sampleRate} Hz → Deepgram VAD/ASR`;
+
+                micProcessor.onaudioprocess = (event) => {
+                    if (!isMicRecording) return;
+                    const mono = event.inputBuffer.getChannelData(0);
+                    sendPcm16(resampleToPcm16(mono, micAudioCtx.sampleRate));
+                };
+            } catch (err) {
+                console.error('Mic error:', err);
+                audioInputStatus.innerText = `Không mở được mic: ${err.message || err}`;
+                await stopMic(false);
+            }
+        }
+
+        async function decodeGeneratedVoice(response) {
+            if (!response.ok) {
+                let message = `HTTP ${response.status}`;
+                try {
+                    const data = await response.json();
+                    if (data?.error) message = data.error;
+                } catch (_) {}
+                throw new Error(message);
+            }
+
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const decodeCtx = new AudioContextClass();
+            try {
+                const audioBuffer = await decodeCtx.decodeAudioData(await response.arrayBuffer());
+                const mono = new Float32Array(audioBuffer.length);
+                for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+                    const data = audioBuffer.getChannelData(channel);
+                    for (let i = 0; i < data.length; i++) mono[i] += data[i] / audioBuffer.numberOfChannels;
+                }
+                return {
+                    pcm: resampleToPcm16(mono, audioBuffer.sampleRate),
+                    playbackBuffer: audioBuffer,
+                };
+            } finally {
+                await decodeCtx.close();
+            }
+        }
+
+        async function streamPcmIntoPipeline(pcm, label) {
+            const chunkSamples = 320; // 20 ms @ 16 kHz, paced in realtime for VAD fidelity.
+            ws.send(JSON.stringify({ type: 'listen', state: 'start' }));
+            audioInputStatus.innerText = `🔊 Đang phát ${label} và đồng thời chạy VAD → ASR → LLM → TTS...`;
+
+            for (let offset = 0; offset < pcm.length && !syntheticCancelled; offset += chunkSamples) {
+                sendPcm16(pcm.subarray(offset, Math.min(offset + chunkSamples, pcm.length)));
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'listen', state: 'stop' }));
+            }
+            audioInputStatus.innerText = syntheticCancelled
+                ? `Đã dừng ${label}.`
+                : `Đã phát hết ${label}. Đang chờ VAD/ASR chốt câu...`;
+        }
+
+        async function runTextThroughRealAudio(query) {
+            if (isSyntheticAudioRunning || isMicRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            await initAudioSystem();
+            resetPipelineStages();
+            isSyntheticAudioRunning = true;
+            syntheticCancelled = false;
+            btnMic.disabled = true;
+            btnSendText.disabled = true;
+            inputQuery.disabled = true;
+            audioInputStatus.innerText = 'VieNeu đang tạo âm thanh từ câu vừa nhập...';
+
+            try {
+                const response = await fetch('/api/test-voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: query }),
+                    cache: 'no-store',
+                });
+                const { pcm, playbackBuffer } = await decodeGeneratedVoice(response);
+                if (syntheticCancelled) return;
+
+                activeSyntheticSource = audioCtx.createBufferSource();
+                activeSyntheticSource.buffer = playbackBuffer;
+                activeSyntheticSource.connect(audioCtx.destination);
+                const source = activeSyntheticSource;
+                source.onended = () => {
+                    if (activeSyntheticSource === source) activeSyntheticSource = null;
+                };
+                source.start();
+                await streamPcmIntoPipeline(pcm, 'giọng VieNeu');
+            } catch (err) {
+                console.error('VieNeu source audio error:', err);
+                audioInputStatus.innerText = `Không tạo được âm thanh VieNeu: ${err.message || err}`;
+            } finally {
+                isSyntheticAudioRunning = false;
+                btnMic.disabled = !ws || ws.readyState !== WebSocket.OPEN;
+                btnSendText.disabled = !ws || ws.readyState !== WebSocket.OPEN;
+                inputQuery.disabled = false;
+                inputQuery.focus();
+            }
+        }
+
         async function connectWS() {
             await initAudioSystem();
 
@@ -248,6 +493,7 @@
                 btnConnect.className = 'px-5 py-2.5 bg-slate-700 hover:bg-slate-600 font-medium text-sm rounded-xl transition shadow';
                 btnAbort.disabled = false;
                 btnSendText.disabled = false;
+                btnMic.disabled = false;
 
                 // Send Hello handshake
                 ws.send(JSON.stringify({
@@ -255,10 +501,10 @@
                     version: 1,
                     transport: "websocket",
                     audio_params: {
-                        format: "opus",
+                        format: "pcm16",
                         sample_rate: 16000,
                         channels: 1,
-                        frame_duration: 60
+                        frame_duration: 20
                     }
                 }));
             };
@@ -266,18 +512,35 @@
             ws.onmessage = async (event) => {
                 if (typeof event.data === 'string') {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'stt') {
-                        appendMessage('user', data.text);
+                    if (data.type === 'vad') {
+                        if (data.state === 'speech_started') {
+                            stageVad.innerText = '🟢 Có giọng nói';
+                            stageAsr.innerText = 'Đang nhận âm thanh...';
+                        } else if (data.state === 'speech_ended') {
+                            stageVad.innerText = '✅ Kết thúc câu';
+                        }
+                    } else if (data.type === 'stt') {
+                        stageAsr.innerText = data.speech_final ? `✅ ${data.text}` : `… ${data.text}`;
+                        if (data.is_final !== undefined || data.speech_final !== undefined) {
+                            if (!currentUserBubble) currentUserBubble = appendMessage('user', data.text);
+                            else currentUserBubble.innerText = data.text;
+                            if (data.speech_final) {
+                                currentUserBubble = null;
+                                tTurnStart = performance.now();
+                                stageLlm.innerText = 'Đang suy nghĩ...';
+                            }
+                        } else {
+                            appendMessage('user', data.text);
+                        }
                     } else if (data.type === 'llm') {
+                        stageLlm.innerText = '✅ Bắt đầu trả lời';
+                        stageTts.innerText = 'Đang tổng hợp...';
                         if (data.emotion) {
                             emotionStat.innerText = `😊 ${data.emotion}`;
                         }
                     } else if (data.type === 'tts') {
                         if (data.state === 'start') {
-                            if (tTurnStart) {
-                                const ms = Math.round(performance.now() - tTurnStart);
-                                latencyStat.innerText = `${ms} ms`;
-                            }
+                            firstAudioPending = true;
                             currentAssistantBubble = appendMessage('assistant', '', 'happy');
                             if (audioCtx) nextPlayTime = audioCtx.currentTime + 0.02;
                         } else if (data.state === 'sentence_start') {
@@ -286,6 +549,7 @@
                                 chatLogs.scrollTop = chatLogs.scrollHeight;
                             }
                         } else if (data.state === 'stop') {
+                            stageTts.innerText = '✅ Hoàn tất';
                             currentAssistantBubble = null;
                             setTimeout(() => {
                                 soundWave.classList.add('hidden');
@@ -296,6 +560,16 @@
                     // Binary Opus audio frame received from server
                     if (opusDecoder) {
                         try {
+                            if (firstAudioPending) {
+                                firstAudioPending = false;
+                                if (tTurnStart) {
+                                    const ms = Math.round(performance.now() - tTurnStart);
+                                    latencyStat.innerText = `${ms} ms`;
+                                    stageTts.innerText = `🔊 Audio đầu: ${ms} ms`;
+                                } else {
+                                    stageTts.innerText = '🔊 Đang phát';
+                                }
+                            }
                             const rawBytes = new Uint8Array(event.data);
                             const decoded = await opusDecoder.decodeFrame(rawBytes);
                             if (decoded && decoded.channelData) {
@@ -316,6 +590,13 @@
                 btnConnect.className = 'px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 font-medium text-sm rounded-xl transition shadow';
                 btnAbort.disabled = true;
                 btnSendText.disabled = true;
+                btnMic.disabled = true;
+                syntheticCancelled = true;
+                if (activeSyntheticSource) {
+                    try { activeSyntheticSource.stop(); } catch (_) {}
+                    activeSyntheticSource = null;
+                }
+                stopMic(false);
                 soundWave.classList.add('hidden');
             };
 
@@ -326,7 +607,17 @@
 
         btnConnect.addEventListener('click', connectWS);
 
+        btnMic.addEventListener('click', async () => {
+            if (isMicRecording) await stopMic(true);
+            else await startMic();
+        });
+
         btnAbort.addEventListener('click', () => {
+            syntheticCancelled = true;
+            if (activeSyntheticSource) {
+                try { activeSyntheticSource.stop(); } catch (_) {}
+                activeSyntheticSource = null;
+            }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: "abort", reason: "user_cancel" }));
             }
@@ -340,12 +631,21 @@
             await initAudioSystem();
             const query = inputQuery.value.trim();
             if (!query || !ws || ws.readyState !== WebSocket.OPEN) return;
-            
-            appendMessage('user', query);
+
             inputQuery.value = '';
+            if (useRealAudio.checked) {
+                await runTextThroughRealAudio(query);
+                return;
+            }
+
+            appendMessage('user', query);
             tTurnStart = performance.now();
-            
-            // Send chat message
+            firstAudioPending = true;
+            stageVad.innerText = 'Bỏ qua (text)';
+            stageAsr.innerText = 'Bỏ qua (text)';
+            stageLlm.innerText = 'Đang suy nghĩ...';
+            stageTts.innerText = 'Chờ LLM';
+
             ws.send(JSON.stringify({
                 type: "chat",
                 text: query

@@ -67,11 +67,28 @@ def make_hello_response(session_id: str, sample_rate: int = 24000, frame_duratio
         }
     })
 
-def make_stt_message(session_id: str, text: str) -> str:
-    return json.dumps({
+def make_stt_message(
+    session_id: str,
+    text: str,
+    is_final: Optional[bool] = None,
+    speech_final: Optional[bool] = None,
+) -> str:
+    msg: Dict[str, Any] = {
         "session_id": session_id,
         "type": "stt",
         "text": text
+    }
+    if is_final is not None:
+        msg["is_final"] = is_final
+    if speech_final is not None:
+        msg["speech_final"] = speech_final
+    return json.dumps(msg)
+
+def make_vad_message(session_id: str, state: str) -> str:
+    return json.dumps({
+        "session_id": session_id,
+        "type": "vad",
+        "state": state,
     })
 
 def make_llm_message(session_id: str, emotion: str, text: str) -> str:

@@ -84,8 +84,11 @@ class DeepgramStreamASR(BaseASR):
                             if alternatives:
                                 transcript = alternatives[0].get("transcript", "").strip()
                                 is_final = data.get("is_final", False)
-                                speech_final = data.get("speech_final", False)
-                                if transcript and self.on_transcript_callback:
+                                # Explicit Finalize flushes any buffered audio. Treat that
+                                # response as an utterance boundary even if Deepgram doesn't
+                                # also mark speech_final on the same payload.
+                                speech_final = data.get("speech_final", False) or data.get("from_finalize", False)
+                                if (transcript or speech_final) and self.on_transcript_callback:
                                     await self.on_transcript_callback(transcript, is_final, speech_final)
                 elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSING):
                     logger.debug(f"Deepgram WebSocket closed: {msg}")
@@ -106,6 +109,14 @@ class DeepgramStreamASR(BaseASR):
                 await self.ws.send_bytes(pcm_bytes)
             except Exception as e:
                 logger.error(f"Failed to send audio to Deepgram: {e}")
+
+    async def finalize(self):
+        """Force Deepgram to process buffered live audio without closing the socket."""
+        if self.ws and not self.ws.closed:
+            try:
+                await self.ws.send_str(json.dumps({"type": "Finalize"}))
+            except Exception as e:
+                logger.error(f"Failed to finalize Deepgram stream: {e}")
 
     async def stop(self):
         self.is_running = False

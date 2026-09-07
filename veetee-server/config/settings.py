@@ -36,6 +36,7 @@ class LLMConfig:
 class TTSConfig:
     provider: str = "vieneu"
     voice: str = "Xuân Vĩnh"
+    source_voice: str = "Xuân Vĩnh"
     sample_rate: int = 24000
     frame_duration_ms: int = 60
     denoise: bool = True
