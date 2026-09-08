@@ -1,18 +1,40 @@
+# Copy file này thành config.yaml rồi chỉnh theo máy chạy server.
+# config.yaml được .gitignore bỏ qua; không commit API key thật.
+
 server:
   host: "0.0.0.0"
   ws_port: 8000
   http_port: 8003
   log_level: "INFO"
+  # Tương thích firmware Xiaozhi nguyên bản: chỉ ngắt khi client gửi abort/listen:start.
+  barge_in_policy: "client_only"
 
 asr:
-  provider: "deepgram"
-  api_key: "YOUR_DEEPGRAM_API_KEY"
-  model: "nova-2"
+  # Mặc định: Parakeet Vietnamese local + Silero VAD.
+  # Có thể đổi thành "deepgram"; khi đó cần api_key và các option Deepgram bên dưới.
+  provider: "parakeet_silero"
+  api_key: ""
+  model: "nvidia/parakeet-ctc-0.6b-vi"
   language: "vi"
   smart_format: true
   interim_results: true
   endpointing_ms: 250
   sample_rate: 16000
+
+  # Parakeet + Silero VAD
+  device: "cuda"
+  vad_model_path: "models/silero-vad/silero_vad.onnx"
+  vad_threshold: 0.5
+  vad_threshold_low: 0.3
+  min_silence_duration_ms: 450
+  min_speech_duration_ms: 160
+  speech_start_frames: 2
+  pre_speech_pad_ms: 512
+
+  # Hiệu chỉnh transcript bằng LLM sau ASR.
+  text_correction_enabled: true
+  text_correction_confidence_threshold: 0.78
+  text_correction_timeout_ms: 900
 
 llm:
   provider: "omniroute"
@@ -27,9 +49,13 @@ llm:
 
 tts:
   provider: "vieneu"
-  voice: "Trúc Ly"
+  voice: "Xuân Vĩnh"
   source_voice: "Xuân Vĩnh"
   sample_rate: 24000
   frame_duration_ms: 60
+  # Giới hạn audio gửi trước để giảm đuôi âm khi client ngắt lượt.
+  send_ahead_ms: 120
+  # Backpressure cho bridge VieNeu thread -> async.
+  stream_queue_max_chunks: 4
   denoise: true
   temperature: 0.7

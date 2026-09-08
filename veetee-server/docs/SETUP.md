@@ -45,7 +45,7 @@ pip install transformers accelerate
 
 ## 3. Cấu Hình Hệ Thống (`config.yaml`)
 
-Sao chép `config.example.yaml` thành `config.yaml`, sau đó điền API key cục bộ. `config.yaml` được Git bỏ qua để tránh commit credential.
+Sao chép `config.example.yaml` thành `config.yaml`, sau đó chỉnh theo máy chạy server. `config.yaml` được Git bỏ qua để tránh commit credential. Mặc định hiện tại dùng Parakeet Vietnamese + Silero VAD local; Deepgram chỉ là provider thay thế.
 
 ```yaml
 server:
@@ -53,16 +53,28 @@ server:
   ws_port: 8000      # Cổng WebSocket cho thiết bị ESP32
   http_port: 8003    # Cổng HTTP cho OTA và Web UI
   log_level: "INFO"
+  barge_in_policy: "client_only"
 
 asr:
-  provider: "deepgram"
-  api_key: "YOUR_DEEPGRAM_API_KEY"
-  model: "nova-2"
+  provider: "parakeet_silero"
+  api_key: ""
+  model: "nvidia/parakeet-ctc-0.6b-vi"
   language: "vi"
   smart_format: true
   interim_results: true
   endpointing_ms: 250
   sample_rate: 16000
+  device: "cuda"
+  vad_model_path: "models/silero-vad/silero_vad.onnx"
+  vad_threshold: 0.5
+  vad_threshold_low: 0.3
+  min_silence_duration_ms: 450
+  min_speech_duration_ms: 160
+  speech_start_frames: 2
+  pre_speech_pad_ms: 512
+  text_correction_enabled: true
+  text_correction_confidence_threshold: 0.78
+  text_correction_timeout_ms: 900
 
 llm:
   provider: "omniroute"
@@ -70,7 +82,7 @@ llm:
   api_key: "local-omniroute"
   model: "groq/qwen/qwen3.6-27b"
   temperature: 0.6
-  max_tokens: 350
+  max_tokens: 600
   reasoning_format: "hidden"
   base_prompt: "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
   prompt_template: "agent-base-prompt.txt"
@@ -78,11 +90,16 @@ llm:
 tts:
   provider: "vieneu"
   voice: "Xuân Vĩnh"  # Các giọng: Xuân Vĩnh, Trúc Ly, Minh Đức, Thái Sơn, Thùy Dung, Đoan Trang
+  source_voice: "Xuân Vĩnh"
   sample_rate: 24000
   frame_duration_ms: 60
+  send_ahead_ms: 120
+  stream_queue_max_chunks: 4
   denoise: true
   temperature: 0.7
 ```
+
+Nếu chuyển `asr.provider` sang `deepgram`, đặt `model: "nova-2"` (hoặc model Deepgram phù hợp) và điền `api_key`; các key `smart_format`, `interim_results`, `endpointing_ms`, `language` và `sample_rate` sẽ được truyền vào kết nối Deepgram.
 
 ---
 

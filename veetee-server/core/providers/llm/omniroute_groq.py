@@ -139,9 +139,10 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
         self,
         base_url: str = "http://127.0.0.1:20128/v1",
         api_key: str = "local-omniroute",
-        model: str = "qwen/qwen3.6-27b",
+        model: str = "groq/qwen/qwen3.6-27b",
         temperature: float = 0.7,
         max_tokens: int = 256,
+        reasoning_format: str = "hidden",
         base_prompt: str = "",
         prompt_template_path: Optional[str] = None,
         base_prompt_state_path: Optional[str] = None,
@@ -151,6 +152,7 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_format = reasoning_format
         self.prompt_template_path = prompt_template_path
         self.base_prompt_state_path = base_prompt_state_path
         self.prompt_template = self._load_prompt_template()
@@ -245,7 +247,7 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
             "temperature": 0.0,
             "max_tokens": 96,
             "stream": False,
-            "reasoning_format": "hidden",
+            "reasoning_format": self.reasoning_format,
             "reasoning_effort": "none",
         }
         headers = {
@@ -356,7 +358,7 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": True,
-            "reasoning_format": "hidden",
+            "reasoning_format": self.reasoning_format,
             "reasoning_effort": "none"
         }
         headers = {

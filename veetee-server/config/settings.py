@@ -41,7 +41,7 @@ class LLMConfig:
     provider: str = "omniroute"
     base_url: str = "http://127.0.0.1:20128/v1"
     api_key: str = "local-omniroute"
-    model: str = "qwen/qwen3.6-27b"
+    model: str = "groq/qwen/qwen3.6-27b"
     temperature: float = 0.6
     max_tokens: int = 600
     reasoning_format: str = "hidden"

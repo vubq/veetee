@@ -44,6 +44,7 @@ class VeeTeeServer:
             model=config.llm.model,
             temperature=config.llm.temperature,
             max_tokens=config.llm.max_tokens,
+            reasoning_format=config.llm.reasoning_format,
             base_prompt=config.llm.base_prompt,
             prompt_template_path=os.path.join(server_dir, config.llm.prompt_template),
             base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
@@ -138,6 +139,8 @@ class VeeTeeServer:
 
 async def main():
     config = load_settings()
+    log_level = getattr(logging, str(config.server.log_level).upper(), logging.INFO)
+    logging.getLogger().setLevel(log_level)
     server = VeeTeeServer(config)
     await server.start()
 

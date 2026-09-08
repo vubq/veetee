@@ -113,6 +113,8 @@ class ClientSession:
                 model=self.config.asr.model,
                 sample_rate=self.config.asr.sample_rate,
                 endpointing_ms=self.config.asr.endpointing_ms,
+                smart_format=self.config.asr.smart_format,
+                interim_results=self.config.asr.interim_results,
                 on_transcript_callback=self._on_asr_transcript,
                 on_speech_started_callback=self._on_speech_started,
             )

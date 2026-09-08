@@ -15,6 +15,8 @@ class DeepgramStreamASR(BaseASR):
         model: str = "nova-2",
         sample_rate: int = 16000,
         endpointing_ms: int = 250,
+        smart_format: bool = True,
+        interim_results: bool = True,
         on_transcript_callback: Optional[Callable[..., Awaitable[None]]] = None,
         on_speech_started_callback: Optional[Callable[..., Awaitable[None]]] = None,
     ):
@@ -23,6 +25,8 @@ class DeepgramStreamASR(BaseASR):
         self.model = model
         self.sample_rate = sample_rate
         self.endpointing_ms = endpointing_ms
+        self.smart_format = bool(smart_format)
+        self.interim_results = bool(interim_results)
         self.on_transcript_callback = on_transcript_callback
         self.on_speech_started_callback = on_speech_started_callback
         
@@ -43,8 +47,8 @@ class DeepgramStreamASR(BaseASR):
         params = [
             f"model={self.model}",
             f"language={self.language}",
-            "smart_format=true",
-            "interim_results=true",
+            f"smart_format={str(self.smart_format).lower()}",
+            f"interim_results={str(self.interim_results).lower()}",
             f"endpointing={self.endpointing_ms}",
             "vad_events=true",
             "encoding=linear16",
