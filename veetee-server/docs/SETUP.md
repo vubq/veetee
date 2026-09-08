@@ -107,7 +107,9 @@ conversation:
     - "小美同学"
     - "VeeTee ơi"
   greeting_enabled: true
-  greeting_text: "Mình đây, bạn cần gì nào?"
+  greeting_ai_enabled: true
+  greeting_pool_size: 3
+  greeting_text: ""  # fallback nếu AI greeting không sẵn sàng
   audio_cache_enabled: true
   idle_timeout_seconds: 120  # 0 = tắt idle timeout
   exit_commands:
@@ -115,15 +117,51 @@ conversation:
     - "kết thúc trò chuyện"
     - "thoát trò chuyện"
   goodbye_enabled: true
-  goodbye_text: "Mình nghỉ nhé. Cần gì cứ gọi mình."
+  goodbye_ai_enabled: true
+  end_intent_ai_enabled: true
+  ai_control_timeout_ms: 1800
+  goodbye_text: ""  # fallback nếu AI goodbye không sẵn sàng
   wake_start_wait_ms: 150
   fixed_response_timeout_seconds: 5
   close_grace_ms: 250
+
+latency:
+  unified_turn_enabled: true
+  first_token_timeout_ms: 4000
+  total_turn_timeout_ms: 15000
+  context_lookup_timeout_ms: 10
+
+intent:
+  enabled: true
+  semantic_end_enabled: true
+  confirmation_ttl_seconds: 15
+
+memory:
+  enabled: true
+  durable_enabled: false
+  database_path: "data/memory.sqlite3"
+  trusted_owner_id: ""
+  lookup_timeout_ms: 10
+  top_k: 6
+  max_memory_chars: 2400
+
+tools:
+  enabled: true
+  native_enabled: true
+  mcp_device_enabled: false
+  max_calls_per_turn: 3
+  schema_limit: 16
+  max_llm_rounds_per_turn: 1
+  tool_result_synthesis: false
 ```
 
 Nếu chuyển `asr.provider` sang `deepgram`, đặt `model: "nova-2"` (hoặc model Deepgram phù hợp) và điền `api_key`; các key `smart_format`, `interim_results`, `endpointing_ms`, `language` và `sample_rate` sẽ được truyền vào kết nối Deepgram.
 
-`conversation.enabled=false` giữ nguyên hành vi trước nâng cấp. Khi bật, wake greeting chỉ chạy nếu firmware stock hiện tại thực sự gửi `listen:detect` với text khớp `wake_words`; không cần build/flash firmware mới. Cache greeting/goodbye nằm trong RAM và được prewarm tối đa hai câu khi server khởi động.
+`conversation.enabled=false` giữ nguyên hành vi trước nâng cấp. Khi bật, wake greeting chỉ chạy nếu firmware stock hiện tại thực sự gửi `listen:detect` với text khớp `wake_words`; không cần build/flash firmware mới. AI greeting pool/cache có readiness riêng trong `/api/diagnostics`; `/health=healthy` không có nghĩa greeting cold path đã warm xong.
+
+`latency.unified_turn_enabled=true` yêu cầu `asr.text_correction_enabled=false`, vì fast path không cho phép một LLM correction phụ trước chat. Durable memory chỉ bật khi `memory.trusted_owner_id` được cấu hình phía operator; header `Device-Id`/`Client-Id` tự khai báo không đủ quyền làm owner. Tool mặc định một LLM round; profile tổng hợp kết quả tool chỉ được bật với `max_llm_rounds_per_turn=2`.
+
+Trong môi trường development hiện tại, server được supervisor bằng user unit `veetee-server-bg.service`. Khi unit này đang chạy, dùng `systemctl --user` để kiểm tra/restart và không mở thêm foreground server tranh GPU/port.
 
 ---
 

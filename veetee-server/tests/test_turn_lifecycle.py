@@ -5,6 +5,7 @@ import unittest
 
 from config.settings import AppConfig
 from core.session import ClientSession, SessionState
+from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent, ToolCallReadyEvent
 
 
 class FakeWebSocket:
@@ -57,6 +58,47 @@ class FailingLLM:
     async def stream_chat(self, messages):
         yield "Câu đầu.", "happy"
         raise RuntimeError("simulated producer failure")
+
+
+class NativeToolLLM:
+    def __init__(self, *, second_round_tool_call=False):
+        self.calls = []
+        self.second_round_tool_call = second_round_tool_call
+
+    async def stream_turn(
+        self,
+        messages,
+        *,
+        tools=None,
+        detect_end_intent=True,
+        tool_choice=None,
+    ):
+        self.calls.append({
+            "messages": messages,
+            "tools": tools or [],
+            "detect_end_intent": detect_end_intent,
+            "tool_choice": tool_choice,
+        })
+        if len(self.calls) == 1:
+            yield ControlEvent(intent="tool_request")
+            yield ToolCallReadyEvent(
+                call_id="call-1",
+                name="calculate",
+                arguments={"expression": "2+3"},
+            )
+            yield CompletedEvent(finish_reason="tool_calls")
+            return
+
+        yield ControlEvent()
+        if self.second_round_tool_call:
+            yield ToolCallReadyEvent(
+                call_id="call-2",
+                name="calculate",
+                arguments={"expression": "10+1"},
+            )
+        else:
+            yield SpeechSegmentEvent("Kết quả phép tính là 5.", emotion="happy")
+        yield CompletedEvent(finish_reason="stop")
 
 
 class TwoFrameTTS:
@@ -252,6 +294,57 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(item, bytes) for item in websocket_b.sent))
         self.assertEqual(session_a.dialogue.messages[-1].role, "assistant")
         self.assertEqual(session_b.dialogue.messages[-1].role, "assistant")
+
+    async def test_tool_result_synthesis_is_explicitly_two_rounds(self):
+        config = AppConfig()
+        config.tools.tool_result_synthesis = True
+        config.tools.max_llm_rounds_per_turn = 2
+        llm = NativeToolLLM()
+        websocket = FakeWebSocket()
+        session = SessionForTest(websocket, config, NoAudioTTS(), llm)
+
+        await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIsNone(llm.calls[0]["tool_choice"])
+        self.assertEqual(llm.calls[1]["tool_choice"], "none")
+        self.assertFalse(llm.calls[1]["detect_end_intent"])
+        second_messages = llm.calls[1]["messages"]
+        assistant = next(item for item in second_messages if item.get("tool_calls"))
+        tool_result = next(item for item in second_messages if item.get("role") == "tool")
+        self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(tool_result["tool_call_id"], "call-1")
+        self.assertIn('"status":"succeeded"', tool_result["content"])
+        self.assertEqual(session.dialogue.messages[-1].content, "Kết quả phép tính là 5.")
+        self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
+
+    async def test_tool_result_synthesis_never_executes_round_two_tool_call(self):
+        config = AppConfig()
+        config.tools.tool_result_synthesis = True
+        config.tools.max_llm_rounds_per_turn = 2
+        llm = NativeToolLLM(second_round_tool_call=True)
+        websocket = FakeWebSocket()
+        session = SessionForTest(websocket, config, NoAudioTTS(), llm)
+
+        await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(len(session.tool_executor._receipts), 1)
+        self.assertIn("Kết quả là 5", session.dialogue.messages[-1].content)
+
+    async def test_default_tool_profile_stays_one_round(self):
+        llm = NativeToolLLM()
+        websocket = FakeWebSocket()
+        session = SessionForTest(websocket, AppConfig(), NoAudioTTS(), llm)
+
+        await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 1)
+        self.assertIn("Kết quả là 5", session.dialogue.messages[-1].content)
+        self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 1)
 
 
 if __name__ == "__main__":

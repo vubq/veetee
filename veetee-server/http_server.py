@@ -249,6 +249,63 @@ class HttpServer:
     async def handle_diagnostics(self, request: web.Request) -> web.Response:
         """Expose non-secret runtime capabilities used by the browser test console."""
         conversation = self.config.conversation
+        session_rows = []
+        recent_turns = []
+        total_rounds = 0
+        total_tool_calls = 0
+        for session_id, session in self.active_sessions.items():
+            recorder = getattr(session, "turn_metrics", None)
+            traces = list(getattr(recorder, "recent", []) or [])
+            latest = None
+            if recorder is not None and hasattr(recorder, "latest_summary"):
+                latest = recorder.latest_summary()
+            if latest:
+                recent_turns.append({
+                    "session_id": session_id,
+                    "turn_id": latest.get("turn_id"),
+                    "source": latest.get("source"),
+                    "outcome": latest.get("outcome"),
+                    "llm_rounds": latest.get("llm_rounds"),
+                    "tool_calls": latest.get("tool_calls"),
+                    "turn_start_to_first_ws_binary_ms": latest.get("turn_start_to_first_ws_binary_ms"),
+                })
+            for trace in traces:
+                finish = trace.first("turn_finish") if hasattr(trace, "first") else None
+                if finish is not None:
+                    total_rounds += int(finish.fields.get("llm_rounds") or 0)
+                    total_tool_calls += int(finish.fields.get("tool_calls") or 0)
+
+            mcp = getattr(session, "mcp_device", None)
+            executor = getattr(session, "tool_executor", None)
+            session_rows.append({
+                "session_id": session_id,
+                "state": str(getattr(getattr(session, "state", None), "value", getattr(session, "state", "unknown"))),
+                "turns_recorded": len(traces),
+                "mcp": mcp.snapshot() if mcp is not None and hasattr(mcp, "snapshot") else {
+                    "enabled": False,
+                    "ready": False,
+                },
+                "tools": executor.snapshot() if executor is not None and hasattr(executor, "snapshot") else {
+                    "active_count": 0,
+                    "receipt_count": 0,
+                },
+            })
+
+        tts_scheduler = None
+        if self.tts_engine is not None and hasattr(self.tts_engine, "scheduler_snapshot"):
+            try:
+                tts_scheduler = self.tts_engine.scheduler_snapshot()
+            except Exception:
+                tts_scheduler = {"available": False}
+
+        audio_cache = None
+        if self.response_audio_cache is not None and hasattr(self.response_audio_cache, "snapshot"):
+            audio_cache = self.response_audio_cache.snapshot()
+
+        memory = self.config.memory
+        tools = self.config.tools
+        latency = self.config.latency
+        intent = self.config.intent
         return web.json_response({
             "server": {
                 "barge_in_policy": self.config.server.barge_in_policy,
@@ -274,6 +331,53 @@ class HttpServer:
                 "versions": [1, 2, 3],
                 "listening_modes": ["auto", "manual", "realtime"],
                 "browser_input_format": "pcm16",
+            },
+            "profile": {
+                "latency": {
+                    "unified_turn_enabled": latency.unified_turn_enabled,
+                    "first_token_timeout_ms": latency.first_token_timeout_ms,
+                    "total_turn_timeout_ms": latency.total_turn_timeout_ms,
+                    "context_lookup_timeout_ms": latency.context_lookup_timeout_ms,
+                },
+                "intent": {
+                    "enabled": intent.enabled,
+                    "semantic_end_enabled": intent.semantic_end_enabled,
+                },
+                "memory": {
+                    "enabled": memory.enabled,
+                    "durable_enabled": memory.durable_enabled,
+                    "trusted_owner_bound": bool(memory.trusted_owner_id.strip()),
+                    "lookup_timeout_ms": memory.lookup_timeout_ms,
+                    "top_k": memory.top_k,
+                    "max_memory_chars": memory.max_memory_chars,
+                },
+                "tools": {
+                    "enabled": tools.enabled,
+                    "native_enabled": tools.native_enabled,
+                    "mcp_device_enabled": tools.mcp_device_enabled,
+                    "max_calls_per_turn": tools.max_calls_per_turn,
+                    "schema_limit": tools.schema_limit,
+                    "max_llm_rounds_per_turn": tools.max_llm_rounds_per_turn,
+                    "tool_result_synthesis": tools.tool_result_synthesis,
+                },
+            },
+            "readiness": {
+                "llm": self.llm_engine is not None,
+                "tts": self.tts_engine is not None,
+                "greeting": {
+                    "enabled": conversation.greeting_enabled,
+                    "pool_count": len(self.greeting_pool),
+                    "ready": (not conversation.greeting_enabled) or bool(self.greeting_pool),
+                },
+                "audio_cache": audio_cache,
+                "tts_scheduler": tts_scheduler,
+            },
+            "runtime": {
+                "recent_turn_count": sum(row["turns_recorded"] for row in session_rows),
+                "llm_round_count": total_rounds,
+                "tool_call_count": total_tool_calls,
+                "latest_turns": recent_turns[-20:],
+                "sessions": session_rows,
             },
         })
 

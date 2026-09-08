@@ -110,6 +110,15 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.005)
         self.fail(f"active_sessions did not reach {expected}: {self.active_sessions}")
 
+    async def _wait_conversation_disarmed(self):
+        for _ in range(100):
+            if self.active_sessions:
+                session = next(iter(self.active_sessions.values()))
+                if not session._conversation_armed and session._closing_reason is None:
+                    return session
+            await asyncio.sleep(0.005)
+        self.fail("active session did not return to idle")
+
     async def _connect(self, version):
         ws = await self.client.ws_connect("/ws")
         await self._wait_sessions(1)
@@ -183,6 +192,24 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.llm.chat_calls, 0)
         self.assertEqual(self.llm.greeting_calls, 3)
         self.assertEqual(self.llm.goodbye_calls, 1)
+
+    async def test_idle_timeout_keeps_socket_open_and_allows_second_wake(self):
+        self.config.conversation.goodbye_enabled = False
+        self.config.conversation.idle_timeout_seconds = 0.03
+
+        ws = await self._connect(ProtocolVersion.V1)
+        await self._wake_and_receive_greeting(ws, ProtocolVersion.V1)
+        session = await self._wait_conversation_disarmed()
+
+        self.assertFalse(ws.closed)
+        self.assertTrue(session.is_active)
+        self.assertEqual(len(self.active_sessions), 1)
+
+        await self._wake_and_receive_greeting(ws, ProtocolVersion.V1)
+        self.assertFalse(ws.closed)
+        self.assertEqual(len(self.active_sessions), 1)
+
+        await ws.close()
 
     async def test_browser_diagnostics_health_and_ota_endpoints(self):
         diagnostics_response = await self.client.get("/api/diagnostics")

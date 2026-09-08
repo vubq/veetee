@@ -36,6 +36,9 @@ asr:
   text_correction_enabled: false
   text_correction_confidence_threshold: 0.78
   text_correction_timeout_ms: 900
+  # Bounded queue để lượt capture cũ không chiếm GPU vô hạn.
+  utterance_queue_max: 2
+  max_utterance_ms: 30000
 
 llm:
   provider: "omniroute"
@@ -90,3 +93,35 @@ conversation:
   wake_start_wait_ms: 150
   fixed_response_timeout_seconds: 5
   close_grace_ms: 250
+
+latency:
+  unified_turn_enabled: true
+  first_token_timeout_ms: 4000
+  total_turn_timeout_ms: 15000
+  context_lookup_timeout_ms: 10
+
+intent:
+  enabled: true
+  semantic_end_enabled: true
+  confirmation_ttl_seconds: 15
+
+memory:
+  # Session memory hoạt động local; durable write chỉ bật khi operator gắn
+  # trusted_owner_id từ cấu hình server. Không dùng Device-Id/Client-Id làm owner.
+  enabled: true
+  durable_enabled: false
+  database_path: "data/memory.sqlite3"
+  trusted_owner_id: ""
+  lookup_timeout_ms: 10
+  top_k: 6
+  max_memory_chars: 2400
+
+tools:
+  enabled: true
+  native_enabled: true
+  mcp_device_enabled: false
+  max_calls_per_turn: 3
+  schema_limit: 16
+  # Mặc định strict one-round. Chỉ profile tổng hợp tool-result mới dùng 2.
+  max_llm_rounds_per_turn: 1
+  tool_result_synthesis: false

@@ -169,6 +169,13 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.002)
         self.fail("websocket did not close")
 
+    async def wait_conversation_disarmed(self, session):
+        for _ in range(100):
+            if not session._conversation_armed and session._closing_reason is None:
+                return
+            await asyncio.sleep(0.002)
+        self.fail("conversation did not return to idle")
+
     async def test_wake_then_fast_listen_start_uses_ai_greeting_without_chat_turn(self):
         session, websocket, llm, tts, _ = self.make_session()
         await session._handle_text_json(json.dumps({
@@ -323,17 +330,28 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.chat_calls, 0)
 
     async def test_idle_timeout_needs_no_mic_frames_and_ping_does_not_reset_it(self):
-        session, websocket, _, _, _ = self.make_session(goodbye=False)
+        session, websocket, llm, _, _ = self.make_session(goodbye=False)
         session.config.conversation.idle_timeout_seconds = 0.03
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "auto"
         }))
         await asyncio.sleep(0.015)
         await session._handle_text_json(json.dumps({"type": "ping"}))
-        await self.wait_closed(websocket)
+        await self.wait_conversation_disarmed(session)
 
-        self.assertEqual(websocket.close_code, 1000)
-        self.assertEqual(websocket.close_reason, "idle_timeout")
+        self.assertFalse(websocket.closed)
+        self.assertTrue(session.is_active)
+        self.assertEqual(session.state, SessionState.IDLE)
+
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await session._handle_text_json(json.dumps({"type": "text", "text": "xin chào"}))
+        await self.wait_current_turn(session)
+
+        self.assertEqual(llm.chat_calls, 1)
+        self.assertFalse(websocket.closed)
+        self.assertEqual(session.state, SessionState.LISTENING)
 
     async def test_idle_timeout_waits_while_session_is_speaking(self):
         session, websocket, _, _, _ = self.make_session(goodbye=False)
@@ -344,10 +362,12 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         session.state = SessionState.SPEAKING
         await asyncio.sleep(0.04)
         self.assertFalse(websocket.closed)
+        self.assertTrue(session._conversation_armed)
 
         session.state = SessionState.LISTENING
-        await self.wait_closed(websocket)
-        self.assertEqual(websocket.close_reason, "idle_timeout")
+        await self.wait_conversation_disarmed(session)
+        self.assertFalse(websocket.closed)
+        self.assertEqual(session.state, SessionState.IDLE)
 
 
 if __name__ == "__main__":

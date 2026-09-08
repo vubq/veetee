@@ -9,7 +9,9 @@ import numpy as np
 from typing import AsyncGenerator, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from core.providers.tts.base import BaseTTS
+from core.providers.tts.scheduler import TTSAdmissionScheduler
 from core.audio_utils import AudioCodec
+from core.turn_metrics import mark_current
 
 logger = logging.getLogger("VieneuTTS")
 
@@ -38,10 +40,18 @@ class VieneuLocalTTS(BaseTTS):
             frame_duration_ms=frame_duration_ms
         )
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vieneu_tts")
-        self._engine_lock = threading.Lock()
+        self._scheduler = TTSAdmissionScheduler()
         self._worker_futures = set()
         self.engine = None
         self._init_engine()
+
+    def _get_scheduler(self) -> TTSAdmissionScheduler:
+        """Return the shared scheduler, creating it for legacy/test instances."""
+        scheduler = getattr(self, "_scheduler", None)
+        if scheduler is None:
+            scheduler = TTSAdmissionScheduler()
+            self._scheduler = scheduler
+        return scheduler
 
     def _init_engine(self):
         logger.info(f"Loading local Vieneu Neural TTS engine (preset voice: '{self.voice}')...")
@@ -70,7 +80,13 @@ class VieneuLocalTTS(BaseTTS):
             break
         logger.info(f"Vieneu Neural TTS loaded and warmed up in {time.time() - t0:.2f}s")
 
-    async def synthesize_wav(self, text: str) -> bytes:
+    async def synthesize_wav(
+        self,
+        text: str,
+        *,
+        priority: str = "dashboard",
+        queue_deadline_seconds: Optional[float] = 30.0,
+    ) -> bytes:
         """Generate a complete mono WAV for dashboard source-audio testing."""
         text = (text or "").strip()
         if not text:
@@ -78,15 +94,20 @@ class VieneuLocalTTS(BaseTTS):
 
         loop = asyncio.get_running_loop()
 
+        lease = await self._get_scheduler().acquire(
+            priority,
+            deadline_seconds=queue_deadline_seconds,
+        )
+        mark_current("tts_lock_acquired", priority=lease.priority, queue_wait_ms=round(lease.wait_ms, 3))
+
         def _generate_wav() -> bytes:
-            with self._engine_lock:
-                audio_48k = self.engine.infer(
-                    text,
-                    voice=self.source_voice,
-                    denoise=self.denoise,
-                    temperature=self.temperature,
-                    apply_watermark=False,
-                )
+            audio_48k = self.engine.infer(
+                text,
+                voice=self.source_voice,
+                denoise=self.denoise,
+                temperature=self.temperature,
+                apply_watermark=False,
+            )
             pcm_24k = self.codec.resample_float32_48k_to_pcm16_24k(audio_48k)
             output = io.BytesIO()
             with wave.open(output, "wb") as wav_file:
@@ -96,12 +117,18 @@ class VieneuLocalTTS(BaseTTS):
                 wav_file.writeframes(pcm_24k.tobytes())
             return output.getvalue()
 
-        return await loop.run_in_executor(self.executor, _generate_wav)
+        try:
+            return await loop.run_in_executor(self.executor, _generate_wav)
+        finally:
+            await lease.release()
 
     async def stream_sentence_to_opus(
         self,
         text: str,
-        cancel_event: Optional[asyncio.Event] = None
+        cancel_event: Optional[asyncio.Event] = None,
+        *,
+        priority: str = "live",
+        queue_deadline_seconds: Optional[float] = None,
     ) -> AsyncGenerator[bytes, None]:
         if not text or not text.strip():
             return
@@ -111,6 +138,12 @@ class VieneuLocalTTS(BaseTTS):
         queue: asyncio.Queue = asyncio.Queue(maxsize=self.stream_queue_max_chunks)
         queue_done = object()
         stop_event = threading.Event()
+        lease = await self._get_scheduler().acquire(
+            priority,
+            cancel_event=cancel_event,
+            deadline_seconds=queue_deadline_seconds,
+        )
+        mark_current("tts_lock_acquired", priority=lease.priority, queue_wait_ms=round(lease.wait_ms, 3))
 
         def _put_with_backpressure(item) -> bool:
             if stop_event.is_set():
@@ -130,18 +163,17 @@ class VieneuLocalTTS(BaseTTS):
 
         def _generate():
             try:
-                with self._engine_lock:
-                    for chunk in self.engine.infer_stream(
-                        text,
-                        voice=self.voice,
-                        denoise=self.denoise,
-                        temperature=self.temperature,
-                        apply_watermark=False,
-                    ):
-                        if cancel_event and cancel_event.is_set():
-                            break
-                        if not _put_with_backpressure(chunk):
-                            break
+                for chunk in self.engine.infer_stream(
+                    text,
+                    voice=self.voice,
+                    denoise=self.denoise,
+                    temperature=self.temperature,
+                    apply_watermark=False,
+                ):
+                    if cancel_event and cancel_event.is_set():
+                        break
+                    if not _put_with_backpressure(chunk):
+                        break
             except Exception as e:
                 logger.error(f"Error during Vieneu infer_stream: {e}")
             finally:
@@ -161,6 +193,8 @@ class VieneuLocalTTS(BaseTTS):
         worker_future.add_done_callback(_worker_done)
 
         try:
+            first_pcm = True
+            first_opus = True
             while True:
                 if cancel_event and cancel_event.is_set():
                     break
@@ -191,21 +225,32 @@ class VieneuLocalTTS(BaseTTS):
                 if chunk is queue_done:
                     break
 
+                if first_pcm:
+                    mark_current("tts_first_pcm", priority=lease.priority)
+                    first_pcm = False
+
                 pcm_24k = self.codec.resample_float32_48k_to_pcm16_24k(chunk)
                 opus_frames = self.codec.chunk_pcm_to_opus_frames(pcm_24k, remainder_buffer)
                 for frame in opus_frames:
                     if cancel_event and cancel_event.is_set():
                         break
+                    if first_opus:
+                        mark_current("tts_first_opus", priority=lease.priority)
+                        first_opus = False
                     yield frame
 
             if not (cancel_event and cancel_event.is_set()):
                 final_frames = self.codec.flush_remainder_to_opus_frame(remainder_buffer)
                 for frame in final_frames:
+                    if first_opus:
+                        mark_current("tts_first_opus", priority=lease.priority)
+                        first_opus = False
                     yield frame
         finally:
             stop_event.set()
             if not worker_future.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(worker_future), timeout=0.25)
-                except asyncio.TimeoutError:
-                    logger.info("TTS worker still unwinding after stream cancellation")
+                await asyncio.shield(worker_future)
+            await lease.release()
+
+    def scheduler_snapshot(self) -> dict:
+        return self._get_scheduler().snapshot()

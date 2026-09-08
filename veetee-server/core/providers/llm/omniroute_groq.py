@@ -1,10 +1,21 @@
+import asyncio
 import aiohttp
 import json
 import logging
 import os
 import re
-from typing import List, Dict, AsyncGenerator, Tuple, Optional
+from typing import Any, List, Dict, AsyncGenerator, Tuple, Optional
 from core.providers.llm.base import BaseLLM
+from core.intent import Intent
+from core.providers.llm.stream_parser import SSEDecoder, NativeToolCallAccumulator
+from core.turn_events import (
+    CompletedEvent,
+    ControlEvent,
+    FailedEvent,
+    SpeechSegmentEvent,
+    ToolCallReadyEvent,
+)
+from core.turn_metrics import mark_current
 
 logger = logging.getLogger("OmnirouteGroqLLM")
 
@@ -30,6 +41,12 @@ class SpeechSegmentSplitter:
         self.clause_min_chars = 80
         self.hard_max_segment_chars = 240
         self.hard_cut_search_back = 45
+        self.first_segment_min_chars = 8
+        self.first_segment_min_words = 2
+        self._segments_emitted = 0
+        self._common_abbreviations = {
+            "mr", "mrs", "ms", "dr", "ts", "ths", "tp", "q", "p", "st", "vs",
+        }
 
         # A fallback split immediately around these words sounds especially
         # unnatural in Vietnamese because they bind the two phrases together.
@@ -39,14 +56,43 @@ class SpeechSegmentSplitter:
             "đang", "sẽ", "cuối", "cùng",
         }
 
+    def _is_sentence_boundary(self, index: int) -> bool:
+        char = self.buffer[index]
+        if char != ".":
+            return True
+
+        # A period needs one-character look-ahead. This avoids emitting "3."
+        # before the following token turns it into "3.14", and avoids cuts in
+        # compact abbreviations such as TP.HCM.
+        if index + 1 >= len(self.buffer):
+            return False
+        prev_char = self.buffer[index - 1] if index > 0 else ""
+        next_char = self.buffer[index + 1]
+        if prev_char.isdigit() and next_char.isdigit():
+            return False
+        if next_char.isalpha() and not next_char.isspace():
+            return False
+
+        left = self.buffer[:index].rstrip()
+        match = re.search(r"([^\W\d_]+)$", left, flags=re.UNICODE)
+        if match and match.group(1).lower() in self._common_abbreviations:
+            return False
+        return True
+
     def _find_sentence_cut(self) -> int:
-        """Return a sentence boundary large enough to sound continuous."""
+        """Return a natural sentence boundary, including short first sentences."""
         visible_chars = 0
         for i, char in enumerate(self.buffer):
             if not char.isspace():
                 visible_chars += 1
-            if char in self.end_puncts and visible_chars >= self.min_segment_chars:
+            if char not in self.end_puncts or not self._is_sentence_boundary(i):
+                continue
+            if self._segments_emitted > 0 and visible_chars >= self.min_segment_chars:
                 return i
+            if self._segments_emitted == 0 and visible_chars >= self.first_segment_min_chars:
+                words = re.findall(r"[^\W_]+", self.buffer[: i + 1], flags=re.UNICODE)
+                if len(words) >= self.first_segment_min_words:
+                    return i
         return -1
 
     def _find_clause_cut(self) -> int:
@@ -118,6 +164,7 @@ class SpeechSegmentSplitter:
                 self.buffer = self.buffer[found_idx + 1:]
                 if clause:
                     clauses.append(clause)
+                    self._segments_emitted += 1
             else:
                 break
                 
@@ -127,6 +174,7 @@ class SpeechSegmentSplitter:
         remaining = self.buffer.strip()
         self.buffer = ""
         if remaining:
+            self._segments_emitted += 1
             return [remaining]
         return []
 
@@ -625,6 +673,217 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                 clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
                 if clean_s:
                     yield format_yield(clean_s, None)
+
+    async def stream_turn(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict]] = None,
+        detect_end_intent: bool = True,
+        tool_choice: Optional[str] = None,
+    ):
+        """Stream one typed LLM turn, including native function calls.
+
+        This is the primary low-latency path used by the unified runner. It
+        consumes arbitrary SSE/TCP chunk boundaries and never launches a
+        separate intent-classifier inference.
+        """
+        full_messages = [{"role": "system", "content": self.system_prompt}]
+        if detect_end_intent:
+            full_messages.append({
+                "role": "system",
+                "content": self.INLINE_CONVERSATION_CONTROL_PROMPT,
+            })
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+            "reasoning_format": self.reasoning_format,
+            "reasoning_effort": "none",
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
+        elif tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        url = f"{self.base_url}/chat/completions"
+        splitter = SpeechSegmentSplitter()
+        decoder = SSEDecoder()
+        tool_calls = NativeToolCallAccumulator()
+        enforce_vietnamese = self._should_enforce_vietnamese(messages)
+        control_decided = not detect_end_intent
+        control_emitted = False
+        control_buffer = ""
+        inline_end_intent = False
+        emotion_emitted = False
+        finish_reason = None
+        usage = None
+        saw_content = False
+        first_token_marked = False
+
+        def ensure_control(emotion: str = "neutral", *, tool: bool = False):
+            nonlocal control_emitted
+            if control_emitted:
+                return None
+            control_emitted = True
+            intent = Intent.TOOL_REQUEST.value if tool else (
+                Intent.END_CONVERSATION.value if inline_end_intent else Intent.CHAT.value
+            )
+            return ControlEvent(
+                intent=intent,
+                lifecycle="end" if inline_end_intent else "continue",
+                emotion=emotion,
+            )
+
+        def speech_events(token: str):
+            nonlocal emotion_emitted
+            events = []
+            for clause in splitter.add_token(token):
+                emotion = None
+                if not emotion_emitted:
+                    detected_emotion, cleaned = self._extract_emotion(clause)
+                    emotion_emitted = True
+                    clause = cleaned
+                    emotion = detected_emotion
+                    control = ensure_control(emotion)
+                    if control is not None:
+                        events.append(control)
+                        mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
+                clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+                if clean_s:
+                    events.append(SpeechSegmentEvent(clean_s, emotion=emotion))
+            return events
+
+        session = await self._get_http_session()
+        mark_current("llm_request_start", model=self.model, tool_count=len(tools or []))
+        try:
+            async with session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                mark_current("llm_headers", status=resp.status)
+                if resp.status != 200:
+                    err_body = await resp.text()
+                    logger.error("Omniroute LLM request failed (%s): %s", resp.status, err_body)
+                    yield FailedEvent(f"LLM HTTP {resp.status}")
+                    return
+
+                async def consume_event(data_text: str):
+                    nonlocal control_decided, control_buffer, inline_end_intent
+                    nonlocal finish_reason, usage, saw_content, first_token_marked
+                    if data_text == "[DONE]":
+                        return []
+                    chunk = json.loads(data_text)
+                    usage = chunk.get("usage") or usage
+                    choice = (chunk.get("choices") or [{}])[0]
+                    if choice.get("finish_reason") is not None:
+                        finish_reason = choice.get("finish_reason")
+                    delta = choice.get("delta") or {}
+                    native_calls = delta.get("tool_calls") or []
+                    if native_calls:
+                        tool_calls.add_delta(native_calls)
+                    token = delta.get("content") or ""
+                    if not token or "<think>" in token:
+                        return []
+                    saw_content = True
+                    if not first_token_marked:
+                        first_token_marked = True
+                        mark_current("llm_first_content_token")
+                    if not control_decided:
+                        control_buffer += token
+                        decided, inline_end_intent, content = self._parse_inline_control_prefix(control_buffer)
+                        if not decided:
+                            return []
+                        control_decided = True
+                        token = content
+                    return speech_events(token)
+
+                async for raw_chunk in resp.content.iter_any():
+                    for event_text in decoder.feed(raw_chunk):
+                        try:
+                            for event in await consume_event(event_text):
+                                if isinstance(event, SpeechSegmentEvent):
+                                    mark_current("llm_speech_segment", chars=len(event.text))
+                                yield event
+                        except (ValueError, json.JSONDecodeError) as exc:
+                            logger.warning("Invalid LLM stream event: %s", exc)
+                            yield FailedEvent(str(exc))
+                            return
+
+                for event_text in decoder.flush():
+                    try:
+                        for event in await consume_event(event_text):
+                            if isinstance(event, SpeechSegmentEvent):
+                                mark_current("llm_speech_segment", chars=len(event.text))
+                            yield event
+                    except (ValueError, json.JSONDecodeError) as exc:
+                        logger.warning("Invalid trailing LLM stream event: %s", exc)
+                        yield FailedEvent(str(exc))
+                        return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Error communicating with Omniroute LLM: %s", exc)
+            yield FailedEvent(str(exc))
+            return
+
+        if not control_decided and control_buffer:
+            control_decided = True
+            inline_end_intent = False
+            for event in speech_events(control_buffer):
+                if isinstance(event, SpeechSegmentEvent):
+                    mark_current("llm_speech_segment", chars=len(event.text))
+                yield event
+
+        for clause in splitter.flush():
+            emotion = None
+            if not emotion_emitted:
+                detected_emotion, cleaned = self._extract_emotion(clause)
+                emotion_emitted = True
+                clause = cleaned
+                emotion = detected_emotion
+                control = ensure_control(emotion)
+                if control is not None:
+                    mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
+                    yield control
+            clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+            if clean_s:
+                mark_current("llm_speech_segment", chars=len(clean_s))
+                yield SpeechSegmentEvent(clean_s, emotion=emotion)
+
+        try:
+            ready_calls = tool_calls.finalize()
+        except ValueError as exc:
+            yield FailedEvent(str(exc))
+            return
+
+        if ready_calls:
+            control = ensure_control(tool=True)
+            if control is not None:
+                mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
+                yield control
+            for call_id, name, arguments in ready_calls:
+                mark_current("llm_tool_call_ready", tool=name)
+                yield ToolCallReadyEvent(call_id=call_id, name=name, arguments=arguments)
+        elif not control_emitted:
+            control = ensure_control()
+            if control is not None:
+                mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
+                yield control
+
+        mark_current("llm_stream_end", finish_reason=finish_reason, saw_content=saw_content)
+        yield CompletedEvent(finish_reason=finish_reason, usage=usage)
 
     async def stream_chat(
         self,

@@ -4,7 +4,7 @@ Cập nhật: **2026-09-08**
 
 ## Trạng thái tổng thể
 
-Hướng triển khai hiện tại là **server-only, firmware nguyên bản**. Phần code server cho contract stock FW, cancellation, pacing, bounded queue/backpressure và stale-ASR protection đã hoàn thành ở mức regression. Hardware ESP32 stock FW và runtime model thật chưa được chứng nhận nên trạng thái tổng vẫn là **PARTIAL / hardware PENDING**.
+Hướng triển khai hiện tại là **server-only, firmware nguyên bản**. Unified turn, semantic intent, local memory, tool executor/native tool parsing, MCP stock adapter, TTS scheduler và telemetry đã có code + regression. Runtime service hiện healthy, nhưng latency corpus lớn và hardware ESP32/acoustic chưa được chứng nhận nên trạng thái tổng vẫn là **PARTIAL / hardware PENDING**.
 
 ## Đã hoàn thành
 
@@ -26,22 +26,28 @@ Hướng triển khai hiện tại là **server-only, firmware nguyên bản**. 
 | P1 | Exit + goodbye + close lifecycle | ✅ | Whole-command match, WebSocket close `1000`, cancel-aware |
 | P2 | Idle conversation timeout | ✅ | Monotonic watchdog, không cần mic frame |
 | P2 | WebSocket integration | ✅ | V1/V2/V3, shared cache qua reconnect, close cleanup |
+| P1 | Unified turn + semantic end | ✅ | Chat thường một LLM stream; semantic goodbye dùng speech cùng lượt |
+| P1 | Local memory | ✅ | SQLite WAL/FTS fallback, revision/tombstone; durable chỉ với trusted owner |
+| P1 | Tool executor | ✅ | Safe calculator/time, schema validation, receipts, timeout `unknown`, side-effect serialization |
+| P2 | Stock MCP adapter | ✅ mock | Numeric IDs, init/list pagination/call; hardware tool vẫn PENDING |
+| P1 | TTS priority scheduler | ✅ | live > dashboard > prewarm, shared engine vẫn serialized |
+| P1 | Turn telemetry/benchmark client | ✅ | Speech-end fixture contract + raw JSONL/percentiles; SLA corpus lớn chưa chạy |
 | P2 | Docs server-only | ✅ | Không yêu cầu patch/build FW tùy biến |
 
 ## Regression hiện tại
 
 Suite hiện bao phủ protocol stock, audio pacing, lifecycle/cancel, stale ASR, TTS backpressure, conversation routing/cache/idle/exit và E2E contract.
 
-Kết quả gần nhất trước khi đồng bộ tài liệu:
+Kết quả regression gần nhất:
 
 ```text
-50/50 tests PASS
+82/82 tests PASS
 compileall PASS
 config.example.yaml load PASS
 git diff --check PASS
 ```
 
-Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng minh build mới vì process server đang chạy được khởi động trước các thay đổi gần nhất. Không coi process cũ là bằng chứng cho code mới.
+`veetee-server-bg.service` đã được kiểm tra `active/running` và `/health` trả healthy trên code hiện tại. `/api/diagnostics` cho thấy unified turn/intent/memory/tools đã nạp; durable memory hiện không bật vì chưa có trusted owner, MCP device đang tắt và greeting pool hiện chưa ready. Đây là bằng chứng liveness/config, chưa phải benchmark SLA.
 
 ## Quyết định kỹ thuật
 
@@ -54,20 +60,28 @@ Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng 
 
 ### LLM/TTS
 
-- LLM producer -> `asyncio.Queue(maxsize=3)`.
-- TTS consumer tổng hợp từng clause tuần tự.
+- Unified turn là đường mặc định: intent/control/speech và tool request đi cùng stream; memory lookup local không tạo LLM call phụ.
+- Tool mặc định một round; profile `tool_result_synthesis` mới được phép dùng round thứ hai và bị chặn ở tổng tối đa 2.
+- LLM producer -> bounded event/speech queue; TTS consumer tổng hợp từng segment tuần tự.
 - VieNeu thread -> async bridge có bounded queue và cancel-aware shutdown.
-- Không chạy concurrent inference trên engine TTS dùng chung chỉ để giảm pause.
+- Scheduler ưu tiên live > dashboard > prewarm và vẫn chỉ cho một inference trên engine TTS dùng chung.
 
 ### Conversation lifecycle
 
 - `conversation.enabled` mặc định `false`; bật/tắt không yêu cầu sửa FW.
 - Wake chỉ nhận exact `listen:detect` allowlist; detect có thêm câu hỏi vẫn là chat.
-- Greeting/goodbye bỏ LLM và có shared raw-Opus RAM cache; prewarm tối đa hai câu.
-- Exit exact-match nhận từ detect/text/chat/raw ASR final; ASR correction không được tạo exit giả.
+- Greeting có AI pool/prewarm và raw-Opus cache; `greeting_text` là fallback. Greeting readiness tách khỏi `/health`, cold miss không được cam kết 600 ms.
+- Exit exact-match nhận từ detect/text/chat/raw ASR final; semantic end dùng unified stream. Exact/idle goodbye có thể dùng AI goodbye generator hoặc fallback cấu hình.
 - Idle watchdog per-session dùng monotonic time, không reset bởi ping/silence/stale/echo.
 - Conversation close dùng WebSocket code `1000`; close grace chỉ là playback estimate, không phải ACK từ loa.
 - Nếu firmware stock không gửi `listen:detect`, server không tự suy wake; greeting server-side không chạy trên board đó.
+
+### Intent / Memory / Tools
+
+- `intent.semantic_end_enabled` mở semantic goodbye trong main stream; exact wake/exit aliases vẫn route local để giữ compatibility.
+- Memory dùng SQLite local với WAL, FTS5 khi có và lexical fallback. Durable personal memory không tin `Device-Id`/`Client-Id`; thiếu `memory.trusted_owner_id` thì chỉ giữ session memory.
+- Native streamed `delta.tool_calls` là đường chính ở code; arguments chỉ publish sau khi JSON hoàn chỉnh và qua schema validation. Runtime capability spike trên route/model thật hiện chưa có kết luận vì bị lớp automatic approval chặn.
+- Built-in `calculate` và `get_current_time` chạy qua registry/executor. MCP device chỉ expose status/volume nếu board quảng bá đúng schema; mock stock protocol đã pass, board thật vẫn PENDING.
 
 ### Barge-in stock FW
 
@@ -82,9 +96,11 @@ Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng 
 
 | Ưu tiên | Task | Trạng thái |
 | :--- | :--- | :---: |
-| P2 | Runtime E2E trên code mới với model/API thật | PENDING |
+| P1 | ≥100 warm auto Vietnamese latency corpus + p50/p95 | PENDING |
+| P2 | Native tool capability spike trên route/model runtime | BLOCKED (automatic approval layer) |
 | P2 | Runtime profile wake cache nóng/cold, p50/p95 detect -> first binary | PENDING |
-| P2 | Đo ASR correction bật/tắt | PENDING |
+| P2 | Load 1/2/4 session + dashboard/prewarm contention | PENDING |
+| P2 | ≥100 intent / ≥30 memory dialogues / ≥30 tool turns runtime corpus | PENDING |
 | P1 | Test ESP32 bằng firmware nguyên bản đang có | PENDING |
 | P1 | Xác nhận actual wake `listen:detect` text trên board | PENDING |
 | P1 | Test wake -> greeting -> câu hỏi / greeting off nói ngay | PENDING |
@@ -95,6 +111,8 @@ Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng 
 | P1 | Đo thao tác ngắt -> loa vật lý dừng | PENDING |
 | P2 | 20 normal + 20 interrupt, báo lỗi/p50/p95 | PENDING |
 | P3 | Optional speech barge-in cho device profile có AEC xác minh độc lập | backlog |
+
+Một log runtime trước đây từng có `Post-ASR first TTS binary sent in 10.220s`; vì vậy chưa có cơ sở tuyên bố p95 < 1 giây hoặc p50 ≤ 600 ms. `speech_end_to_first_audio_received_ms` phải được đo từ fixture/acoustic speech-end thật; first binary server-side không thay thế metric loa vật lý.
 
 Không có task build/flash patched FW trong đường nghiệm thu hiện tại.
 

@@ -3,6 +3,7 @@ import logging
 import time
 import wave
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -10,9 +11,18 @@ import numpy as np
 import onnxruntime as ort
 
 from core.providers.asr.base import BaseASR
+from core.turn_metrics import TurnMetricsRecorder
 
 
 logger = logging.getLogger("ParakeetSileroASR")
+
+
+@dataclass
+class _QueuedUtterance:
+    generation: int
+    pcm: np.ndarray
+    enqueued_perf: float
+    audio_ms: float
 
 
 class _ParakeetRuntime:
@@ -112,14 +122,36 @@ class _ParakeetRuntime:
 
     @classmethod
     async def transcribe(cls, pcm_float32: np.ndarray) -> tuple[str, Optional[float]]:
+        text, confidence, _ = await cls.transcribe_if_current(
+            pcm_float32,
+            is_current=lambda: True,
+        )
+        return text, confidence
+
+    @classmethod
+    async def transcribe_if_current(
+        cls,
+        pcm_float32: np.ndarray,
+        *,
+        is_current: Callable[[], bool],
+        on_lock_acquired: Optional[Callable[[float], None]] = None,
+    ) -> tuple[str, Optional[float], bool]:
         if cls._model is None:
             raise RuntimeError("Parakeet model has not been loaded")
 
         _, infer_lock = cls._locks()
-        async with infer_lock:
+        wait_started = time.perf_counter()
+        await infer_lock.acquire()
+        try:
+            if on_lock_acquired is not None:
+                on_lock_acquired((time.perf_counter() - wait_started) * 1000.0)
+            if not is_current():
+                return "", None, True
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, cls._transcribe_sync, pcm_float32)
-            return result
+            return result[0], result[1], False
+        finally:
+            infer_lock.release()
 
     @classmethod
     def _transcribe_sync(cls, pcm_float32: np.ndarray) -> str:
@@ -186,6 +218,9 @@ class ParakeetSileroASR(BaseASR):
         min_speech_duration_ms: int = 160,
         speech_start_frames: int = 2,
         pre_speech_pad_ms: int = 512,
+        utterance_queue_max: int = 2,
+        max_utterance_ms: int = 30000,
+        metrics_recorder: Optional[TurnMetricsRecorder] = None,
         on_transcript_callback: Optional[
             Callable[..., Awaitable[None]]
         ] = None,
@@ -204,6 +239,9 @@ class ParakeetSileroASR(BaseASR):
         self.min_speech_duration_ms = max(int(min_speech_duration_ms), 64)
         self.speech_start_frames = max(int(speech_start_frames), 1)
         self.pre_speech_pad_ms = max(int(pre_speech_pad_ms), 0)
+        self.utterance_queue_max = max(1, int(utterance_queue_max))
+        self.max_utterance_ms = max(self.min_speech_duration_ms, int(max_utterance_ms))
+        self.metrics_recorder = metrics_recorder
         self.on_transcript_callback = on_transcript_callback
         self.on_speech_started_callback = on_speech_started_callback
 
@@ -221,7 +259,7 @@ class ParakeetSileroASR(BaseASR):
         self._vad_state = np.zeros((2, 1, 128), dtype=np.float32)
         self._vad_context = np.zeros((1, 64), dtype=np.float32)
 
-        self._utterance_queue: asyncio.Queue = asyncio.Queue()
+        self._utterance_queue: asyncio.Queue = asyncio.Queue(maxsize=self.utterance_queue_max)
         self._worker_task: Optional[asyncio.Task] = None
         self._running = False
         self._start_error: Optional[str] = None
@@ -341,6 +379,9 @@ class ParakeetSileroASR(BaseASR):
 
         if self._silence_ms >= self.min_silence_duration_ms:
             await self._finish_utterance(endpoint_reason="silence")
+        elif len(self._speech_buffer) * 1000 / (self.sample_rate * 2) >= self.max_utterance_ms:
+            logger.warning("Finalizing ASR utterance at max duration=%dms", self.max_utterance_ms)
+            await self._finish_utterance(endpoint_reason="max_duration")
 
     async def _finish_utterance(self, endpoint_reason: str = "unknown"):
         if not self._speech_active:
@@ -359,6 +400,23 @@ class ParakeetSileroASR(BaseASR):
             voiced_ms,
             utterance_generation,
         )
+        endpoint_perf = time.perf_counter()
+        if self.metrics_recorder is not None:
+            self.metrics_recorder.record_capture_event(
+                utterance_generation,
+                "speech_endpoint",
+                event_perf=endpoint_perf,
+                reason=endpoint_reason,
+                trailing_silence_ms=round(trailing_silence_ms, 3),
+                voiced_ms=round(voiced_ms, 3),
+            )
+            if trailing_silence_ms > 0:
+                self.metrics_recorder.record_capture_event(
+                    utterance_generation,
+                    "last_voiced_sample_estimate",
+                    event_perf=endpoint_perf - trailing_silence_ms / 1000.0,
+                    frame_error_ms=self.FRAME_MS,
+                )
 
         if voiced_ms < self.min_speech_duration_ms:
             logger.debug("Silero rejected short speech candidate (%.0f ms)", voiced_ms)
@@ -389,7 +447,65 @@ class ParakeetSileroASR(BaseASR):
                 peak,
                 gain,
             )
-        await self._utterance_queue.put((utterance_generation, pcm))
+        await self._enqueue_utterance(utterance_generation, pcm)
+
+    async def _enqueue_utterance(self, generation: int, pcm: np.ndarray) -> None:
+        audio_ms = pcm.size * 1000.0 / self.sample_rate
+        if self._utterance_queue.full():
+            kept = []
+            while True:
+                try:
+                    item = self._utterance_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                self._utterance_queue.task_done()
+                if item is None or item.generation == self._capture_generation:
+                    kept.append(item)
+                else:
+                    logger.info(
+                        "Dropped stale ASR job before inference generation=%s current=%s",
+                        item.generation,
+                        self._capture_generation,
+                    )
+                    if self.metrics_recorder is not None:
+                        self.metrics_recorder.record_capture_event(
+                            item.generation,
+                            "asr_drop_stale_queue",
+                            age_ms=round((time.perf_counter() - item.enqueued_perf) * 1000.0, 3),
+                        )
+            for item in kept:
+                self._utterance_queue.put_nowait(item)
+
+        if self._utterance_queue.full():
+            logger.warning(
+                "ASR queue full; rejecting utterance generation=%s audio_ms=%.0f",
+                generation,
+                audio_ms,
+            )
+            if self.metrics_recorder is not None:
+                self.metrics_recorder.record_capture_event(
+                    generation,
+                    "asr_queue_rejected",
+                    audio_ms=round(audio_ms, 3),
+                )
+            if self.on_transcript_callback:
+                await self.on_transcript_callback("", True, True, generation)
+            return
+
+        item = _QueuedUtterance(
+            generation=generation,
+            pcm=pcm,
+            enqueued_perf=time.perf_counter(),
+            audio_ms=audio_ms,
+        )
+        self._utterance_queue.put_nowait(item)
+        if self.metrics_recorder is not None:
+            self.metrics_recorder.record_capture_event(
+                generation,
+                "asr_enqueue",
+                audio_ms=round(audio_ms, 3),
+                queue_size=self._utterance_queue.qsize(),
+            )
 
     def _reset_utterance_state(self):
         self._speech_buffer.clear()
@@ -406,9 +522,55 @@ class ParakeetSileroASR(BaseASR):
             try:
                 if queued is None:
                     return
-                utterance_generation, pcm = queued
+                utterance_generation = queued.generation
+                pcm = queued.pcm
+                if utterance_generation != self._capture_generation:
+                    logger.info(
+                        "Dropped stale ASR job before lock generation=%s current=%s",
+                        utterance_generation,
+                        self._capture_generation,
+                    )
+                    if self.metrics_recorder is not None:
+                        self.metrics_recorder.record_capture_event(
+                            utterance_generation,
+                            "asr_drop_stale_before_lock",
+                            age_ms=round((time.perf_counter() - queued.enqueued_perf) * 1000.0, 3),
+                        )
+                    continue
                 try:
-                    text, confidence = await _ParakeetRuntime.transcribe(pcm)
+                    def _on_lock_acquired(wait_ms: float):
+                        if self.metrics_recorder is not None:
+                            self.metrics_recorder.record_capture_event(
+                                utterance_generation,
+                                "asr_lock_acquired",
+                                wait_ms=round(wait_ms, 3),
+                                queue_age_ms=round((time.perf_counter() - queued.enqueued_perf) * 1000.0, 3),
+                            )
+
+                    infer_started = time.perf_counter()
+                    text, confidence, skipped = await _ParakeetRuntime.transcribe_if_current(
+                        pcm,
+                        is_current=lambda: utterance_generation == self._capture_generation,
+                        on_lock_acquired=_on_lock_acquired,
+                    )
+                    if skipped:
+                        logger.info(
+                            "Dropped stale ASR job after lock generation=%s current=%s",
+                            utterance_generation,
+                            self._capture_generation,
+                        )
+                        if self.metrics_recorder is not None:
+                            self.metrics_recorder.record_capture_event(
+                                utterance_generation,
+                                "asr_drop_stale_after_lock",
+                            )
+                        continue
+                    if self.metrics_recorder is not None:
+                        self.metrics_recorder.record_capture_event(
+                            utterance_generation,
+                            "asr_infer_end",
+                            infer_ms=round((time.perf_counter() - infer_started) * 1000.0, 3),
+                        )
                     self.last_word_confidence = confidence
                     logger.info(
                         "Parakeet final transcript: %r (min_word_confidence=%s)",

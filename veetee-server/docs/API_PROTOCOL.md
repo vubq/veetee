@@ -125,8 +125,8 @@ Khi `conversation.enabled=true`, server route `listen:detect` trước khi mở 
 
 | Input | Hành vi |
 | :--- | :--- |
-| Toàn bộ text khớp `conversation.wake_words` | Wake event; có thể phát greeting cố định |
-| Toàn bộ text khớp `conversation.exit_commands` | Bỏ LLM, phát goodbye nếu bật rồi đóng WebSocket |
+| Toàn bộ text khớp `conversation.wake_words` | Wake event; có thể phát greeting từ AI pool/cache hoặc fallback cấu hình |
+| Toàn bộ text khớp `conversation.exit_commands` | Exact exit alias; route local rồi phát goodbye nếu bật và đóng WebSocket |
 | Text khác | Chat bình thường như trước |
 
 Match dùng Unicode NFC + casefold, bỏ khoảng trắng/dấu câu ở biên và **không** fuzzy/substr. Vì vậy `VeeTee ơi, thời tiết thế nào?` vẫn là chat; `Giải thích từ tạm biệt` không đóng phiên.
@@ -206,7 +206,7 @@ Sau binary audio cuối của turn bình thường:
 
 Đường hỗ trợ stock FW dùng cùng message `tts:stop` chuẩn khi client yêu cầu ngắt. Server dừng gửi audio mới càng sớm càng tốt; không phụ thuộc trường extension riêng để flush decoder.
 
-Greeting/goodbye cố định cũng dùng đúng thứ tự stock:
+Greeting/goodbye server-side cũng dùng đúng thứ tự stock:
 
 ```text
 tts:start
@@ -215,15 +215,23 @@ tts:start
 -> tts:stop
 ```
 
-Khi `conversation.audio_cache_enabled=true`, server cache **raw Opus frame** của greeting/goodbye trong RAM và đóng gói theo protocol version của từng session lúc phát. Cache hit bỏ cả LLM và TTS inference; cache key bao gồm text/voice/format cấu hình để tránh phát nhầm audio cũ sau khi đổi giọng.
+Khi `conversation.audio_cache_enabled=true`, server cache **raw Opus frame** của response phù hợp trong RAM và đóng gói theo protocol version của từng session lúc phát. Greeting có thể đến từ AI pool đã chuẩn bị sẵn; `greeting_text` chỉ là fallback. Readiness của greeting/cache được expose riêng trong `/api/diagnostics`, không nhập chung với liveness `/health`.
 
 ### Conversation close
 
-Exit command có thể đến từ `listen:detect`, `text`, `chat` hoặc ASR final. Với ASR, server kiểm tra raw final text trước bước LLM correction để correction không thể biến một câu thường thành lệnh đóng.
+Exact exit command có thể đến từ `listen:detect`, `text`, `chat` hoặc ASR final. Với ASR, server kiểm tra raw final text trước mọi correction. Trong unified turn, semantic end được quyết định trong chính LLM stream cùng speech của lượt đó; server dùng speech đã chọn rồi mới drain/close, không gọi thêm semantic classifier.
 
-Nếu goodbye bật, server phát câu cố định, chờ playback tail **ước tính** từ `AudioPacer` cộng `conversation.close_grace_ms`, gửi `tts:stop`, rồi đóng WebSocket với code `1000`. `listen:start`/input mới hợp lệ trước lúc close commit có thể hủy pending goodbye/close.
+Với exact exit alias/idle close, nếu goodbye bật thì server có thể dùng AI goodbye generator (tối đa một control response) hoặc `goodbye_text` fallback. Sau audio, server chờ playback tail **ước tính** từ `AudioPacer` cộng `conversation.close_grace_ms` rồi gửi `tts:stop`. Exact exit alias đóng WebSocket với code `1000`. `idle_timeout` chỉ kết thúc hội thoại logic và đưa session về `IDLE`, giữ WebSocket mở để firmware stock có thể `listen:start`/wake lại trên cùng transport. `listen:start`/input mới hợp lệ trước lúc close commit vẫn có thể hủy pending goodbye/close.
 
-`conversation.idle_timeout_seconds > 0` bật watchdog per-session. Ping/heartbeat, silent/stale/echo không reset đồng hồ; watchdog không đóng khi đang pending wake, speech/final ASR, THINKING/SPEAKING hoặc đang kết thúc. `0` tắt idle timeout.
+## 5.1. Intent, Memory và Tools là nội bộ server
+
+ESP32 không cần field/capability riêng cho Intent hoặc Memory. Session memory chạy local; durable personal memory chỉ được bật khi operator gắn `memory.trusted_owner_id`, không dùng `Device-Id`/`Client-Id` tự khai báo làm namespace tin cậy.
+
+Tool calling cũng không thay đổi protocol speech stock. Mặc định VeeTee dùng tối đa một LLM round; `tools.tool_result_synthesis=true` chỉ hợp lệ khi `max_llm_rounds_per_turn=2`. Native `delta.tool_calls` được validate đầy đủ trước execution. Built-in tool chạy phía server; device tools chỉ được expose khi MCP stock được board quảng bá và `tools/list` thực sự công bố tool tương ứng.
+
+MCP device dùng wrapper `type=mcp` với JSON-RPC 2.0, numeric request ID và baseline protocol `2024-11-05`: `initialize -> tools/list(withUserTools=false, pagination) -> tools/call`. Thiếu `features.mcp` hoặc discovery lỗi không chặn hội thoại thường.
+
+`conversation.idle_timeout_seconds > 0` bật watchdog per-session. Ping/heartbeat, silent/stale/echo không reset đồng hồ; watchdog không timeout khi đang pending wake, speech/final ASR, THINKING/SPEAKING hoặc đang kết thúc. Khi hết hạn, logical conversation được disarm/reset nhưng WebSocket vẫn sống để lần kích hoạt kế tiếp re-arm session. `0` tắt idle timeout.
 
 ## 5. Barge-in policy
 

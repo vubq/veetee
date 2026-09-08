@@ -6,7 +6,7 @@ import time
 from typing import Optional
 
 from config.settings import TTSConfig
-from core.providers.tts.base import BaseTTS
+from core.providers.tts.base import BaseTTS, open_tts_stream
 
 
 logger = logging.getLogger("ResponseAudioCache")
@@ -48,6 +48,7 @@ class ResponseAudioCache:
         self._entry_bytes: dict[AudioCacheKey, int] = {}
         self._total_bytes = 0
         self._inflight: dict[AudioCacheKey, asyncio.Task] = {}
+        self._inflight_priority: dict[AudioCacheKey, str] = {}
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -68,7 +69,13 @@ class ResponseAudioCache:
             temperature=float(getattr(self.tts_engine, "temperature", self.tts_config.temperature)),
         )
 
-    async def get_or_fill(self, text: str, timeout_seconds: float) -> AudioCacheResult:
+    async def get_or_fill(
+        self,
+        text: str,
+        timeout_seconds: float,
+        *,
+        priority: str = "live",
+    ) -> AudioCacheResult:
         if self._closed:
             raise RuntimeError("response audio cache is closed")
         key = self.make_key(text)
@@ -83,9 +90,14 @@ class ResponseAudioCache:
                 return AudioCacheResult(cached, True, 0.0)
 
             task = self._inflight.get(key)
+            existing_priority = self._inflight_priority.get(key)
+            if task is not None and priority == "live" and existing_priority == "prewarm":
+                task.cancel()
+                task = None
             if task is None:
-                task = asyncio.create_task(self._fill(key))
+                task = asyncio.create_task(self._fill(key, priority=priority))
                 self._inflight[key] = task
+                self._inflight_priority[key] = priority
                 logger.info("fixed_audio_cache miss/fill text=%r", key.text)
             else:
                 logger.info("fixed_audio_cache wait_existing_fill text=%r", key.text)
@@ -100,14 +112,20 @@ class ResponseAudioCache:
             logger.warning("fixed_audio_cache waiter timeout text=%r", key.text)
             raise
 
-    async def _fill(self, key: AudioCacheKey) -> tuple[tuple[bytes, ...], float]:
+    async def _fill(self, key: AudioCacheKey, *, priority: str) -> tuple[tuple[bytes, ...], float]:
         started = time.perf_counter()
         cancel_event = asyncio.Event()
         frames: list[bytes] = []
         total_bytes = 0
         max_frames = max(1, int(MAX_CLIP_SECONDS * 1000 // max(1, key.frame_duration_ms)))
         try:
-            async for frame in self.tts_engine.stream_sentence_to_opus(key.text, cancel_event):
+            async for frame in open_tts_stream(
+                self.tts_engine,
+                key.text,
+                cancel_event,
+                priority=priority,
+                queue_deadline_seconds=None,
+            ):
                 payload = bytes(frame)
                 if not payload:
                     continue
@@ -145,6 +163,7 @@ class ResponseAudioCache:
                 current = self._inflight.get(key)
                 if current is asyncio.current_task():
                     self._inflight.pop(key, None)
+                    self._inflight_priority.pop(key, None)
 
     def _publish(self, key: AudioCacheKey, frames: tuple[bytes, ...], total_bytes: int) -> None:
         existing = self._entries.pop(key, None)
@@ -174,7 +193,7 @@ class ResponseAudioCache:
         # own bounded waiter timeout.
         for text in unique_texts:
             try:
-                await self.get_or_fill(text, timeout_seconds)
+                await self.get_or_fill(text, timeout_seconds, priority="prewarm")
             except Exception as exc:
                 logger.warning("fixed_audio_cache prewarm_failed text=%r error=%s", text, exc)
 
@@ -183,8 +202,21 @@ class ResponseAudioCache:
         async with self._lock:
             tasks = list(self._inflight.values())
             self._inflight.clear()
+            self._inflight_priority.clear()
         for task in tasks:
             if not task.done():
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    def snapshot(self) -> dict:
+        return {
+            "closed": self._closed,
+            "entries": len(self._entries),
+            "bytes": self._total_bytes,
+            "inflight": len(self._inflight),
+            "inflight_priorities": {
+                priority: sum(1 for value in self._inflight_priority.values() if value == priority)
+                for priority in {"live", "dashboard", "prewarm"}
+            },
+        }
