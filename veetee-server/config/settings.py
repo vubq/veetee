@@ -12,14 +12,25 @@ class ServerConfig:
 
 @dataclass
 class ASRConfig:
-    provider: str = "deepgram"
+    provider: str = "parakeet_silero"
     api_key: str = field(default_factory=lambda: os.getenv("DEEPGRAM_API_KEY", ""))
-    model: str = "nova-2"
+    model: str = "nvidia/parakeet-ctc-0.6b-vi"
     language: str = "vi"
     smart_format: bool = True
     interim_results: bool = True
     endpointing_ms: int = 250
     sample_rate: int = 16000
+    device: str = "cuda"
+    vad_model_path: str = "models/silero-vad/silero_vad.onnx"
+    vad_threshold: float = 0.5
+    vad_threshold_low: float = 0.3
+    min_silence_duration_ms: int = 450
+    min_speech_duration_ms: int = 160
+    speech_start_frames: int = 2
+    pre_speech_pad_ms: int = 512
+    text_correction_enabled: bool = True
+    text_correction_confidence_threshold: float = 0.78
+    text_correction_timeout_ms: int = 900
 
 @dataclass
 class LLMConfig:

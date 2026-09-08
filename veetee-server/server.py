@@ -6,6 +6,7 @@ import logging
 import websockets
 
 from config.settings import load_settings, AppConfig
+from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.tts.vieneu_local import VieneuLocalTTS
 from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
 from core.session import ClientSession
@@ -81,6 +82,20 @@ class VeeTeeServer:
         warmup = getattr(self.llm_engine, "warmup", None)
         if warmup is not None:
             await warmup()
+
+        # Parakeet is a large local model. Load it before opening the web/WS
+        # listeners so the first microphone connection cannot time out while
+        # waiting for a cold model restore.
+        if self.config.asr.provider.strip().lower() in {
+            "parakeet_silero",
+            "parakeet",
+            "silero_parakeet",
+        }:
+            logger.info("Preloading Parakeet ASR before accepting clients...")
+            await ParakeetSileroASR.preload(
+                self.config.asr.model,
+                self.config.asr.device,
+            )
 
         # 1. Start HTTP & OTA server
         await self.http_server.start()

@@ -1,0 +1,60 @@
+diff --git a/main/application.cc b/main/application.cc
+index d5f28b0..b592883 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -616,7 +616,14 @@ void Application::InitializeProtocol() {
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+-                Schedule([this]() {
++                auto interrupt = cJSON_GetObjectItem(root, "interrupt");
++                bool discard_playback = cJSON_IsTrue(interrupt);
++                Schedule([this, discard_playback]() {
++                    if (discard_playback) {
++                        // Interruptions flush queued audio immediately. Normal
++                        // tts:stop still lets the final sentence drain.
++                        audio_service_.ResetDecoder();
++                    }
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+                             SetDeviceState(kDeviceStateIdle);
+diff --git a/main/protocols/mqtt_protocol.cc b/main/protocols/mqtt_protocol.cc
+index 9809d5a..35529f6 100644
+--- a/main/protocols/mqtt_protocol.cc
++++ b/main/protocols/mqtt_protocol.cc
+@@ -355,9 +355,12 @@ std::string MqttProtocol::GetHelloMessage() {
+     cJSON_AddNumberToObject(root, "version", 3);
+     cJSON_AddStringToObject(root, "transport", "udp");
+     cJSON* features = cJSON_CreateObject();
+-#if CONFIG_USE_SERVER_AEC
+-    cJSON_AddBoolToObject(features, "aec", true);
+-#endif
++    auto aec_mode = Application::GetInstance().GetAecMode();
++    if (aec_mode == kAecOnServerSide) {
++        cJSON_AddBoolToObject(features, "aec", true);
++    } else if (aec_mode == kAecOnDeviceSide) {
++        cJSON_AddBoolToObject(features, "device_aec", true);
++    }
+     cJSON_AddBoolToObject(features, "mcp", true);
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
+diff --git a/main/protocols/websocket_protocol.cc b/main/protocols/websocket_protocol.cc
+index 9586c6d..52f91b6 100644
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -201,9 +201,12 @@ std::string WebsocketProtocol::GetHelloMessage() {
+     cJSON_AddStringToObject(root, "type", "hello");
+     cJSON_AddNumberToObject(root, "version", version_);
+     cJSON* features = cJSON_CreateObject();
+-#if CONFIG_USE_SERVER_AEC
+-    cJSON_AddBoolToObject(features, "aec", true);
+-#endif
++    auto aec_mode = Application::GetInstance().GetAecMode();
++    if (aec_mode == kAecOnServerSide) {
++        cJSON_AddBoolToObject(features, "aec", true);
++    } else if (aec_mode == kAecOnDeviceSide) {
++        cJSON_AddBoolToObject(features, "device_aec", true);
++    }
+     cJSON_AddBoolToObject(features, "mcp", true);
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);

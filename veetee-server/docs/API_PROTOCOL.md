@@ -1,63 +1,29 @@
-# Đặc Tả Giao Thức VeeTee Protocol (Protocol Specification)
+# Đặc Tả Giao Thức VeeTee Protocol
 
-Tài liệu này mô tả chi tiết giao thức giao tiếp giữa thiết bị phần cứng (ESP32) và VeeTee Server.
+Tài liệu này mô tả giao thức giữa ESP32/Xiaozhi và VeeTee Server, gồm handshake, audio binary, listening mode, AEC capability và semantics ngắt TTS.
 
----
+## 1. WebSocket handshake & headers
 
-## 1. WebSocket Handshake & Headers
-
-Khi thiết lập kết nối WebSocket tới `ws://<server>:8000/`, client gửi các header:
+Client kết nối tới `ws://<server>:8000/` và có thể gửi:
 
 | Header | Mô tả | Ví dụ |
 | :--- | :--- | :--- |
-| `Authorization` | Token xác thực (tùy chọn) | `Bearer my-token` |
-| `Protocol-Version`| Phiên bản giao thức | `1`, `2`, hoặc `3` |
-| `Device-Id` | Địa chỉ MAC phần cứng của ESP32 | `84:F7:03:12:34:56` |
-| `Client-Id` | UUID của thiết bị | `550e8400-e29b-41d4-a716-446655440000` |
+| `Authorization` | Token xác thực nếu được cấu hình | `Bearer my-token` |
+| `Protocol-Version` | Phiên bản binary protocol | `1`, `2`, `3` |
+| `Device-Id` | ID/MAC thiết bị | `84:F7:03:12:34:56` |
+| `Client-Id` | UUID client | `550e8400-e29b-41d4-a716-446655440000` |
 
----
+Sau khi WebSocket mở, firmware gửi `hello`:
 
-## 2. Giao Thức Nhị Phân (Binary Audio Protocol)
-
-### 2.1 Phiên bản 1 (Version 1 - Mặc định)
-- Dữ liệu binary là gói Opus thuần túy (Raw Opus Frame) không có phần header bổ sung.
-- Chiều Client -> Server: 16000Hz mono, 60ms/frame (960 samples).
-- Chiều Server -> Client: 24000Hz mono, 60ms/frame (1440 samples).
-
-### 2.2 Phiên bản 2 (Version 2)
-```c
-struct BinaryProtocol2 {
-    uint16_t version;        // 2 (Big Endian)
-    uint16_t type;           // 0: OPUS, 1: JSON
-    uint32_t reserved;       // 0
-    uint32_t timestamp;      // Timestamp mili-giây
-    uint32_t payload_size;   // Kích thước payload (bytes)
-    uint8_t  payload[];      // Dữ liệu Opus
-} __attribute__((packed));
-```
-
-### 2.3 Phiên bản 3 (Version 3)
-```c
-struct BinaryProtocol3 {
-    uint8_t  type;           // 0: OPUS, 1: JSON
-    uint8_t  reserved;       // 0
-    uint16_t payload_size;   // Kích thước payload (bytes)
-    uint8_t  payload[];      // Dữ liệu Opus
-} __attribute__((packed));
-```
-
----
-
-## 3. Các Loại Tin Nhắn JSON (Text Frames)
-
-### 3.1 Client -> Server
-
-#### a) Hello Handshake
 ```json
 {
   "type": "hello",
   "version": 1,
   "transport": "websocket",
+  "features": {
+    "device_aec": true,
+    "mcp": true
+  },
   "audio_params": {
     "format": "opus",
     "sample_rate": 16000,
@@ -67,47 +33,17 @@ struct BinaryProtocol3 {
 }
 ```
 
-#### b) Listen (Bắt đầu / Dừng thu âm)
-```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "start",
-  "mode": "auto"
-}
-```
-Hoặc khi phát hiện từ khóa đánh thức:
-```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "detect",
-  "text": "Hey VeeTee"
-}
-```
-Hoặc khi dừng thu âm:
-```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "stop"
-}
-```
+### AEC capability
 
-#### c) Abort (Ngắt câu trả lời / Hủy lượt)
-```json
-{
-  "session_id": "xxx",
-  "type": "abort",
-  "reason": "wake_word_detected"
-}
-```
+Hai cờ AEC có ý nghĩa khác nhau:
 
----
+- `features.device_aec=true`: firmware xác nhận echo cancellation đang chạy **trên thiết bị**. Đây là điều kiện VeeTee dùng để cho phép automatic realtime barge-in trong khi loa đang phát.
+- `features.aec=true`: firmware chọn **server-side AEC**. VeeTee hiện chưa triển khai server-side AEC, vì vậy cờ này không đủ để bật automatic realtime barge-in.
 
-### 3.2 Server -> Client
+Firmware không nên gửi đồng thời hai cờ cho cùng một AEC mode.
 
-#### a) Hello Handshake Acknowledge
+Server phản hồi:
+
 ```json
 {
   "type": "hello",
@@ -122,16 +58,128 @@ Hoặc khi dừng thu âm:
 }
 ```
 
-#### b) STT Result (Văn bản nhận diện giọng nói)
+## 2. Giao thức audio binary
+
+### Version 1
+
+- Client -> Server: raw Opus 16 kHz mono, mặc định 60 ms/frame.
+- Server -> Client: raw Opus 24 kHz mono, mặc định 60 ms/frame.
+- Web diagnostic client có thể khai báo `audio_params.format=pcm16` để gửi PCM16 16 kHz trực tiếp.
+
+### Version 2
+
+```c
+struct BinaryProtocol2 {
+    uint16_t version;
+    uint16_t type;
+    uint32_t reserved;
+    uint32_t timestamp;
+    uint32_t payload_size;
+    uint8_t  payload[];
+} __attribute__((packed));
+```
+
+### Version 3
+
+```c
+struct BinaryProtocol3 {
+    uint8_t  type;
+    uint8_t  reserved;
+    uint16_t payload_size;
+    uint8_t  payload[];
+} __attribute__((packed));
+```
+
+## 3. Client -> Server JSON
+
+### Listen start
+
+```json
+{
+  "session_id": "xxx",
+  "type": "listen",
+  "state": "start",
+  "mode": "realtime"
+}
+```
+
+`mode` có thể là:
+
+- `realtime`: mic tiếp tục hoạt động trong lúc TTS phát. Automatic VAD barge-in chỉ được bật khi `device_aec=true`.
+- `auto`: luồng nghe tự động thông thường.
+- `manual`: thiết bị tự điều khiển thời điểm bắt đầu/dừng capture.
+
+Nếu `listen:start` đến trong lúc server đang `SPEAKING`, VeeTee coi đây là yêu cầu ngắt lượt hiện tại và gửi interrupting TTS stop.
+
+### Listen detect
+
+```json
+{
+  "session_id": "xxx",
+  "type": "listen",
+  "state": "detect",
+  "text": "Hey VeeTee"
+}
+```
+
+### Listen stop
+
+```json
+{
+  "session_id": "xxx",
+  "type": "listen",
+  "state": "stop"
+}
+```
+
+Server finalize utterance hiện tại để không phải chờ thêm VAD silence khi thiết bị đã chủ động kết thúc capture.
+
+### Abort
+
+```json
+{
+  "session_id": "xxx",
+  "type": "abort",
+  "reason": "wake_word_detected"
+}
+```
+
+Khi nhận `abort`, server hủy LLM/TTS turn hiện tại, gửi `tts:stop` với `interrupt=true`, reset ASR/VAD bookkeeping và đưa state về `LISTENING` cho `auto/realtime` hoặc `IDLE` cho `manual`.
+
+## 4. Server -> Client JSON
+
+### STT
+
 ```json
 {
   "session_id": "xxx",
   "type": "stt",
-  "text": "Hà Nội là thủ đô của nước nào?"
+  "text": "Hà Nội là thủ đô của nước nào?",
+  "is_final": true,
+  "speech_final": true
 }
 ```
 
-#### c) LLM Emotion / Display State
+### VAD
+
+```json
+{
+  "session_id": "xxx",
+  "type": "vad",
+  "state": "speech_started"
+}
+```
+
+```json
+{
+  "session_id": "xxx",
+  "type": "vad",
+  "state": "speech_ended"
+}
+```
+
+### LLM display/emotion
+
 ```json
 {
   "session_id": "xxx",
@@ -140,10 +188,9 @@ Hoặc khi dừng thu âm:
   "text": "😊"
 }
 ```
-*(Các cảm xúc hỗ trợ: `happy`, `neutral`, `surprised`, `sad`, `thinking`, `angry`, `relaxed`)*
 
-#### d) TTS State & Subtitles
-Bắt đầu phát TTS:
+### TTS start
+
 ```json
 {
   "session_id": "xxx",
@@ -151,7 +198,9 @@ Bắt đầu phát TTS:
   "state": "start"
 }
 ```
-Hiển thị câu đang nói (subtitles):
+
+### TTS sentence start
+
 ```json
 {
   "session_id": "xxx",
@@ -160,7 +209,9 @@ Hiển thị câu đang nói (subtitles):
   "text": "Hà Nội là thủ đô của Việt Nam."
 }
 ```
-Kết thúc phát TTS:
+
+### TTS stop bình thường
+
 ```json
 {
   "session_id": "xxx",
@@ -168,3 +219,28 @@ Kết thúc phát TTS:
   "state": "stop"
 }
 ```
+
+Stop bình thường đánh dấu LLM/TTS turn đã hoàn tất. Firmware Xiaozhi nên để audio đã nằm trong decoder/playback queue phát hết để không cắt mất đuôi câu.
+
+### TTS stop do interruption
+
+```json
+{
+  "session_id": "xxx",
+  "type": "tts",
+  "state": "stop",
+  "interrupt": true
+}
+```
+
+`interrupt=true` chỉ dùng cho barge-in, `abort`, hoặc `listen:start` trong lúc đang nói. Firmware tham khảo xử lý bằng `audio_service_.ResetDecoder()` để bỏ ngay audio cũ đã đệm.
+
+## 5. Quy tắc barge-in
+
+Automatic speech-start barge-in của server chỉ chạy khi đồng thời thỏa:
+
+1. Session đang `SPEAKING`.
+2. Listening mode là `realtime`.
+3. Client hello đã xác nhận `features.device_aec=true`.
+
+Nếu không đủ ba điều kiện trên, server giữ echo guard để tránh tiếng loa lọt vào mic tạo thành một user turn giả.

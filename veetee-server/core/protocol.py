@@ -99,7 +99,12 @@ def make_llm_message(session_id: str, emotion: str, text: str) -> str:
         "text": text
     })
 
-def make_tts_message(session_id: str, state: str, text: Optional[str] = None) -> str:
+def make_tts_message(
+    session_id: str,
+    state: str,
+    text: Optional[str] = None,
+    interrupt: bool = False,
+) -> str:
     msg: Dict[str, Any] = {
         "session_id": session_id,
         "type": "tts",
@@ -107,6 +112,8 @@ def make_tts_message(session_id: str, state: str, text: Optional[str] = None) ->
     }
     if text is not None:
         msg["text"] = text
+    if interrupt:
+        msg["interrupt"] = True
     return json.dumps(msg)
 
 def parse_incoming_json(data: str) -> Optional[Dict[str, Any]]:

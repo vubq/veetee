@@ -2,9 +2,10 @@
 
 Server backend trợ lý ảo giọng nói thời gian thực cho phần cứng ESP32 và Web Client, được xây dựng theo chuẩn kiến trúc AI hiện đại:
 - **LLM:** Omniroute Groq Qwen 3.6 27B (Streaming SSE, `reasoning_format: hidden`).
-- **ASR:** Deepgram Nova-2 Live WebSocket Streaming (Vietnamese `vi`).
+- **ASR mặc định:** NVIDIA Parakeet CTC 0.6B Vietnamese + Silero VAD local. Deepgram vẫn được giữ làm provider dự phòng.
 - **TTS:** Vieneu-TTS v3 Turbo Neural TTS chạy trực tiếp trên GPU/CPU cục bộ.
-- **Tiêu chí:** Realtime, Streaming toàn trình, độ trễ phản hồi đàm thoại **< 1.0 giây**, hỗ trợ ngắt lời (Barge-in).
+- **Pipeline:** LLM sinh clause vào bounded queue để chạy chồng lấp với TTS; VAD end silence hiện là 450 ms.
+- **Barge-in:** Realtime automatic barge-in chỉ bật khi firmware xác nhận `device_aec=true`; interruption dùng `tts:stop` + `interrupt=true` để flush audio buffer.
 - **Môi trường:** Chạy trực tiếp trên máy trần (100% Non-Docker).
 
 ---
@@ -23,7 +24,8 @@ veetee/veetee-server/
 │   ├── providers/
 │   │   ├── asr/
 │   │   │   ├── base.py              # Interface BaseASR
-│   │   │   └── deepgram_stream.py   # Deepgram Nova-2 Live WebSocket Provider
+│   │   │   ├── parakeet_silero.py   # Parakeet CTC VI + Silero VAD local
+│   │   │   └── deepgram_stream.py   # Deepgram provider dự phòng
 │   │   ├── llm/
 │   │   │   ├── base.py              # Interface BaseLLM
 │   │   │   └── omniroute_groq.py    # Groq / Omniroute Qwen 3.6 27B Streaming Provider
@@ -35,7 +37,10 @@ veetee/veetee-server/
 │   ├── PLAN.md              # Kế hoạch kiến trúc & Phân tích độ trễ < 1s
 │   ├── SETUP.md             # Hướng dẫn cài đặt chi tiết trên Linux/Ubuntu
 │   ├── ESP32_CONFIG.md      # Hướng dẫn cấu hình phần cứng ESP32
-│   └── API_PROTOCOL.md      # Đặc tả kỹ thuật chi tiết giao thức truyền thông
+│   ├── API_PROTOCOL.md      # Đặc tả kỹ thuật chi tiết giao thức truyền thông
+│   └── VOICE_PIPELINE_STATUS.md # Tiến độ, task hoàn thành và checklist ESP32
+├── patches/
+│   └── xiaozhi-esp32-barge-in.patch # Patch cho firmware Xiaozhi tham khảo
 ├── static/
 │   └── index.html           # Web Dashboard & Trình giả lập Client
 ├── http_server.py           # Server HTTP cho OTA config (/ota/) & Web UI
@@ -68,6 +73,7 @@ PYTHONPATH=. /home/quangvu/Project/venv/bin/python test_e2e.py
 
 ## 📚 Tài Liệu Kèm Theo
 - [Kế hoạch & Thiết kế Hệ thống](docs/PLAN.md)
+- [Trạng thái Voice Pipeline & Task](docs/VOICE_PIPELINE_STATUS.md)
 - [Hướng dẫn Cài đặt & Systemd Service](docs/SETUP.md)
 - [Hướng dẫn Kết nối ESP32](docs/ESP32_CONFIG.md)
 - [Đặc tả Giao thức Truyền Thông](docs/API_PROTOCOL.md)
