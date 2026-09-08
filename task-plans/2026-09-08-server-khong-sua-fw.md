@@ -162,3 +162,4 @@ Bước 7 là mở rộng tùy chọn, không chặn nghiệm thu đường tư�
 - Deviations from plan: test runner dùng `unittest` có sẵn trong Python thay vì thêm dependency mới; semantics acceptance giữ nguyên.
 - Không sửa source FW tham khảo. Kiểm tra môi trường hiện không thấy `/dev/ttyUSB*`, `/dev/ttyACM*` hoặc USB bridge ESP32 qua `lsusb`; hardware chưa được chứng nhận và giữ `PENDING`. Kết quả hiện tại là server/unit simulation.
 - Git handoff được dựng lại trên worktree sạch từ `master`, chỉ mang các thay đổi thuộc task; chạy lại **26/26 tests PASS**, `py_compile` PASS và `git diff --check` PASS trước commit.
+- Implementation commit `4105d44` (`feat: support stock xiaozhi firmware voice flow`) đã push lên `origin/master`; các chỉnh sửa local không thuộc task không được đưa vào commit.
