@@ -72,7 +72,7 @@ asr:
   min_speech_duration_ms: 160
   speech_start_frames: 2
   pre_speech_pad_ms: 512
-  text_correction_enabled: true
+  text_correction_enabled: false
   text_correction_confidence_threshold: 0.78
   text_correction_timeout_ms: 900
 
@@ -97,9 +97,33 @@ tts:
   stream_queue_max_chunks: 4
   denoise: true
   temperature: 0.7
+
+# Hội thoại tự nhiên phía server. Mặc định false để giữ luồng cũ.
+conversation:
+  enabled: false
+  wake_words:
+    - "你好小智"
+    - "小爱同学"
+    - "小美同学"
+    - "VeeTee ơi"
+  greeting_enabled: true
+  greeting_text: "Mình đây, bạn cần gì nào?"
+  audio_cache_enabled: true
+  idle_timeout_seconds: 120  # 0 = tắt idle timeout
+  exit_commands:
+    - "tạm biệt"
+    - "kết thúc trò chuyện"
+    - "thoát trò chuyện"
+  goodbye_enabled: true
+  goodbye_text: "Mình nghỉ nhé. Cần gì cứ gọi mình."
+  wake_start_wait_ms: 150
+  fixed_response_timeout_seconds: 5
+  close_grace_ms: 250
 ```
 
 Nếu chuyển `asr.provider` sang `deepgram`, đặt `model: "nova-2"` (hoặc model Deepgram phù hợp) và điền `api_key`; các key `smart_format`, `interim_results`, `endpointing_ms`, `language` và `sample_rate` sẽ được truyền vào kết nối Deepgram.
+
+`conversation.enabled=false` giữ nguyên hành vi trước nâng cấp. Khi bật, wake greeting chỉ chạy nếu firmware stock hiện tại thực sự gửi `listen:detect` với text khớp `wake_words`; không cần build/flash firmware mới. Cache greeting/goodbye nằm trong RAM và được prewarm tối đa hai câu khi server khởi động.
 
 ---
 

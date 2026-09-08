@@ -29,14 +29,23 @@ class AiohttpWsAdapter:
 
     async def send(self, data):
         if self.ws.closed:
-            return
+            return False
         try:
             if isinstance(data, str):
                 await self.ws.send_str(data)
             elif isinstance(data, bytes):
                 await self.ws.send_bytes(data)
+            else:
+                return False
+            return True
         except Exception as e:
             logger.debug(f"Aiohttp WS send error: {e}")
+            return False
+
+    async def close(self, code=1000, reason=""):
+        if self.ws.closed:
+            return
+        await self.ws.close(code=code, message=str(reason or "").encode("utf-8"))
 
     def __aiter__(self):
         return self
@@ -56,11 +65,21 @@ class AiohttpWsAdapter:
                 pass
 
 class HttpServer:
-    def __init__(self, app_config: AppConfig, active_sessions_ref, tts_engine=None, llm_engine=None):
+    def __init__(
+        self,
+        app_config: AppConfig,
+        active_sessions_ref,
+        tts_engine=None,
+        llm_engine=None,
+        response_audio_cache=None,
+        greeting_pool_ref=None,
+    ):
         self.config = app_config
         self.active_sessions = active_sessions_ref
         self.tts_engine = tts_engine
         self.llm_engine = llm_engine
+        self.response_audio_cache = response_audio_cache
+        self.greeting_pool = greeting_pool_ref if greeting_pool_ref is not None else []
         self.local_ip = get_local_ip()
         self.app = web.Application()
         self._setup_routes()
@@ -74,6 +93,7 @@ class HttpServer:
         self.app.router.add_post("/api/ota/", self.handle_ota)
         self.app.router.add_get("/api/ota/", self.handle_ota)
         self.app.router.add_get("/health", self.handle_health)
+        self.app.router.add_get("/api/diagnostics", self.handle_diagnostics)
         self.app.router.add_post("/api/test-voice", self.handle_test_voice)
         self.app.router.add_get("/api/prompt", self.handle_get_prompt)
         self.app.router.add_post("/api/prompt", self.handle_set_prompt)
@@ -106,7 +126,9 @@ class HttpServer:
             websocket=adapter,
             app_config=self.config,
             tts_engine=self.tts_engine,
-            llm_engine=self.llm_engine
+            llm_engine=self.llm_engine,
+            response_audio_cache=self.response_audio_cache,
+            greeting_pool=self.greeting_pool,
         )
         await session.initialize()
         self.active_sessions[session.session_id] = session
@@ -208,6 +230,9 @@ class HttpServer:
             if dialogue is not None:
                 dialogue.clear()
             session.processed_transcript = ""
+            refresh_greetings = getattr(session, "refresh_ai_greetings", None)
+            if refresh_greetings is not None:
+                refresh_greetings()
 
         return web.json_response({"ok": True, "base_prompt": self.llm_engine.get_base_prompt()})
 
@@ -219,6 +244,37 @@ class HttpServer:
             "asr": self.config.asr.provider,
             "llm": self.config.llm.model,
             "tts": self.config.tts.provider
+        })
+
+    async def handle_diagnostics(self, request: web.Request) -> web.Response:
+        """Expose non-secret runtime capabilities used by the browser test console."""
+        conversation = self.config.conversation
+        return web.json_response({
+            "server": {
+                "barge_in_policy": self.config.server.barge_in_policy,
+                "ws_port": self.config.server.ws_port,
+                "http_port": self.config.server.http_port,
+                "active_sessions": len(self.active_sessions),
+            },
+            "conversation": {
+                "enabled": conversation.enabled,
+                "wake_words": conversation.wake_words,
+                "greeting_enabled": conversation.greeting_enabled,
+                "greeting_text": conversation.greeting_text,
+                "audio_cache_enabled": conversation.audio_cache_enabled,
+                "idle_timeout_seconds": conversation.idle_timeout_seconds,
+                "exit_commands": conversation.exit_commands,
+                "goodbye_enabled": conversation.goodbye_enabled,
+                "goodbye_text": conversation.goodbye_text,
+                "wake_start_wait_ms": conversation.wake_start_wait_ms,
+                "fixed_response_timeout_seconds": conversation.fixed_response_timeout_seconds,
+                "close_grace_ms": conversation.close_grace_ms,
+            },
+            "protocol": {
+                "versions": [1, 2, 3],
+                "listening_modes": ["auto", "manual", "realtime"],
+                "browser_input_format": "pcm16",
+            },
         })
 
     async def start(self):

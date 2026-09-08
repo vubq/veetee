@@ -10,6 +10,8 @@ VeeTee Server phục vụ ESP32/Xiaozhi firmware nguyên bản và Web Client qu
 - **Barge-in mặc định:** `barge_in_policy=client_only`. ESP32 ngắt lượt bằng các message chuẩn đã có như `abort` hoặc `listen:start`.
 - **Audio pacing:** server giới hạn lượng TTS gửi trước bằng `tts.send_ahead_ms`, mặc định 120 ms, thay cho fixed sleep 5 ms.
 - **TTS backpressure:** queue stream VieNeu có giới hạn, mặc định `tts.stream_queue_max_chunks=4`.
+- **Wake/greeting server-side:** tùy chọn exact `listen:detect` allowlist; greeting cố định bỏ LLM và có RAM Opus cache.
+- **Kết thúc tự nhiên:** exact exit command + goodbye tùy chọn + idle timeout; đóng WebSocket chuẩn code `1000`.
 - **Môi trường:** chạy trực tiếp trên máy, không Docker.
 
 ## Cấu trúc chính
@@ -21,7 +23,9 @@ veetee-server/
 ├── core/
 │   ├── audio_pacing.py
 │   ├── audio_utils.py
+│   ├── conversation.py
 │   ├── protocol.py
+│   ├── response_audio_cache.py
 │   ├── session.py
 │   └── providers/
 ├── docs/
@@ -66,6 +70,23 @@ PYTHONPATH=. /home/quangvu/Project/venv/bin/python test_e2e.py
 ```
 
 `test_e2e.py` trả exit code lỗi khi thiếu marker/thứ tự sai và trả `BLOCKED` khi runtime/model cần thiết chưa sẵn sàng; không coi timeout là PASS.
+
+## Hội thoại tự nhiên phía server
+
+Trong `config.yaml`, bật:
+
+```yaml
+conversation:
+  enabled: true
+  greeting_enabled: true
+  audio_cache_enabled: true
+  idle_timeout_seconds: 120
+  goodbye_enabled: true
+```
+
+Wake greeting chỉ được route từ exact `listen:detect` mà firmware stock đang dùng đã gửi. Nếu board không phát event này, server không tự suy wake từ `hello`/`listen:start`; hội thoại chính vẫn hoạt động bình thường và không cần sửa firmware.
+
+Greeting/goodbye dùng cùng protocol TTS stock và cache raw Opus dùng chung giữa session. Exit command được nhận từ detect/text/chat/ASR final theo whole-command match; câu chứa từ `tạm biệt` bên trong câu hỏi không bị đóng nhầm.
 
 ## Tương thích firmware nguyên bản
 

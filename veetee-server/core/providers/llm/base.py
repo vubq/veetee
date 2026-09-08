@@ -6,6 +6,29 @@ class BaseLLM(ABC):
         """Optionally clean up a final ASR transcript before the AI turn."""
         return transcript
 
+
+    async def generate_greetings(self, count: int = 3) -> List[str]:
+        """Generate short wake greetings that match the active assistant persona."""
+        return []
+
+    async def generate_goodbye(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        reason: str,
+        user_text: str = "",
+    ) -> str:
+        """Generate a contextual goodbye that matches the active assistant persona."""
+        return ""
+
+    async def classify_end_intent(
+        self,
+        user_text: str,
+        messages: List[Dict[str, str]],
+    ) -> bool:
+        """Return True only when the user clearly intends to end the conversation."""
+        return False
+
     @abstractmethod
     async def stream_chat(
         self,

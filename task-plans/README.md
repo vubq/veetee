@@ -23,4 +23,5 @@ Mẫu chuẩn: [`_TEMPLATE.md`](_TEMPLATE.md).
 
 ## Plan đã lập
 
+- [Hội thoại tự nhiên: wake cache, lời chào, idle timeout và thoát](2026-09-08-hoi-thoai-tu-nhien-khong-sua-fw.md) — `PARTIAL`: phần server + unit/regression/WebSocket + browser/runtime smoke đã hoàn tất; runtime profile 20 lượt và kiểm thử ESP32 thật còn `PENDING`.
 - [Server tương thích FW nguyên bản](2026-09-08-server-khong-sua-fw.md) — `PARTIAL`: phần server + regression đã hoàn thành; runtime/hardware trên ESP32 nguyên bản còn `PENDING`.

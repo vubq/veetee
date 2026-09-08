@@ -31,8 +31,9 @@ asr:
   speech_start_frames: 2
   pre_speech_pad_ms: 512
 
-  # Hiệu chỉnh transcript bằng LLM sau ASR.
-  text_correction_enabled: true
+  # Tắt mặc định để giữ critical path ASR -> 1 LLM -> TTS.
+  # Chỉ bật khi muốn ưu tiên sửa transcript confidence thấp hơn latency.
+  text_correction_enabled: false
   text_correction_confidence_threshold: 0.78
   text_correction_timeout_ms: 900
 
@@ -59,3 +60,33 @@ tts:
   stream_queue_max_chunks: 4
   denoise: true
   temperature: 0.7
+
+# Hành vi hội thoại tự nhiên phía server. Mặc định tắt để giữ luồng cũ.
+# Không yêu cầu sửa/build firmware Xiaozhi nguyên bản.
+conversation:
+  enabled: false
+  wake_words:
+    - "你好小智"
+    - "小爱同学"
+    - "小美同学"
+    - "VeeTee ơi"
+  greeting_enabled: true
+  greeting_ai_enabled: true
+  greeting_pool_size: 3
+  greeting_text: ""  # fallback only if AI generation is unavailable
+  audio_cache_enabled: true
+  # 0 = tắt tự kết thúc do im lặng.
+  idle_timeout_seconds: 120
+  exit_commands:
+    - "tạm biệt"
+    - "kết thúc trò chuyện"
+    - "thoát trò chuyện"
+  goodbye_enabled: true
+  goodbye_ai_enabled: true
+  end_intent_ai_enabled: true
+  ai_control_timeout_ms: 1800
+  goodbye_text: ""  # fallback only if AI generation is unavailable
+  # Giá trị khởi điểm cần đo trên thiết bị thật.
+  wake_start_wait_ms: 150
+  fixed_response_timeout_seconds: 5
+  close_grace_ms: 250

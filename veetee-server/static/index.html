@@ -478,6 +478,79 @@
         }
         .save-btn { min-width: 112px; }
 
+        .diagnostic-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .diagnostic-field {
+            display: grid;
+            gap: 5px;
+        }
+        .diagnostic-field label {
+            color: var(--muted-2);
+            font-size: 9px;
+            font-weight: 750;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+        .diagnostic-select,
+        .diagnostic-input,
+        .diagnostic-raw {
+            width: 100%;
+            color: #dbeafe;
+            background: #091522;
+            border: 1px solid var(--border-strong);
+            border-radius: 10px;
+        }
+        .diagnostic-select,
+        .diagnostic-input {
+            min-height: 38px;
+            padding: 0 10px;
+        }
+        .diagnostic-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+            margin-top: 10px;
+        }
+        .diagnostic-actions .action-btn {
+            min-height: 38px;
+            padding: 0 9px;
+            font-size: 11px;
+        }
+        .diagnostic-meta {
+            margin-top: 10px;
+            padding: 9px 10px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: rgba(9, 21, 34, .72);
+            color: var(--muted);
+            font: 9.5px/1.5 "SFMono-Regular", Consolas, monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .diagnostic-raw {
+            min-height: 76px;
+            margin-top: 10px;
+            padding: 9px 10px;
+            resize: vertical;
+            font: 10px/1.45 "SFMono-Regular", Consolas, monospace;
+        }
+        .protocol-log {
+            max-height: 190px;
+            overflow: auto;
+            margin: 10px 0 0;
+            padding: 9px 10px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: #07111f;
+            color: #a7f3d0;
+            font: 9.5px/1.5 "SFMono-Regular", Consolas, monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
         .sound-wave {
             display: inline-flex;
             align-items: center;
@@ -553,6 +626,7 @@
             .stack-badges { display: none; }
             .quick-actions { grid-template-columns: 1fr; }
             .quick-actions .action-danger { grid-column: auto; }
+            .diagnostic-grid, .diagnostic-actions { grid-template-columns: 1fr; }
             .stage-value { font-size: 9.8px; }
         }
 
@@ -669,6 +743,54 @@
                 <section class="panel">
                     <div class="panel-header">
                         <div>
+                            <h2 class="panel-title">Protocol & lifecycle test</h2>
+                            <p class="panel-subtitle">Giả lập các event FW nguyên bản để test wake, mode nghe, idle, exit và packet V1/V2/V3.</p>
+                        </div>
+                        <span id="conversationFeatureTag" class="panel-tag">Đang tải...</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="diagnostic-grid">
+                            <div class="diagnostic-field">
+                                <label for="protocolVersion">Protocol</label>
+                                <select id="protocolVersion" class="diagnostic-select">
+                                    <option value="1">V1</option>
+                                    <option value="2">V2</option>
+                                    <option value="3">V3</option>
+                                </select>
+                            </div>
+                            <div class="diagnostic-field">
+                                <label for="listenMode">Listen mode</label>
+                                <select id="listenMode" class="diagnostic-select">
+                                    <option value="auto">auto</option>
+                                    <option value="manual">manual</option>
+                                    <option value="realtime">realtime</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="diagnostic-actions">
+                            <button id="btnHealth" class="action-btn action-secondary" type="button">Health</button>
+                            <button id="btnOta" class="action-btn action-secondary" type="button">OTA config</button>
+                            <button id="btnWakeStart" class="action-btn action-primary" type="button">Wake → Start</button>
+                            <button id="btnWakeOnly" class="action-btn action-secondary" type="button">Wake detect</button>
+                            <button id="btnListenStart" class="action-btn action-cyan" type="button">Listen start</button>
+                            <button id="btnListenStop" class="action-btn action-secondary" type="button">Listen stop</button>
+                            <button id="btnPing" class="action-btn action-secondary" type="button">Ping</button>
+                            <button id="btnExit" class="action-btn action-danger" type="button">Exit + close</button>
+                            <button id="btnReconnect" class="action-btn action-secondary" type="button">Reconnect</button>
+                            <button id="btnDirectTts" class="action-btn action-secondary" type="button">TTS endpoint</button>
+                        </div>
+
+                        <div id="diagnosticMeta" class="diagnostic-meta">Đang tải cấu hình runtime...</div>
+                        <textarea id="rawProtocolJson" class="diagnostic-raw" spellcheck="false">{"type":"chat","text":"Xin chào từ raw protocol"}</textarea>
+                        <button id="btnSendRaw" class="action-btn action-secondary" type="button" style="width:100%; margin-top:7px;">Gửi raw JSON</button>
+                        <pre id="protocolLog" class="protocol-log">Protocol log sẵn sàng.</pre>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
                             <h2 class="panel-title">Vai trò trợ lý</h2>
                             <p class="panel-subtitle">Tên, cách xưng hô, tính cách và phong cách trả lời.</p>
                         </div>
@@ -724,6 +846,8 @@
         let syntheticCancelled = false;
         let isSyntheticAudioRunning = false;
         let activeSyntheticSource = null;
+        let activeProtocolVersion = 1;
+        let runtimeDiagnostics = null;
 
         const btnConnect = document.getElementById('btnConnect');
         const btnAbort = document.getElementById('btnAbort');
@@ -745,6 +869,87 @@
         const emotionStat = document.getElementById('emotionStat');
         const soundWave = document.getElementById('soundWave');
         const chatLogs = document.getElementById('chatLogs');
+        const protocolVersion = document.getElementById('protocolVersion');
+        const listenMode = document.getElementById('listenMode');
+        const conversationFeatureTag = document.getElementById('conversationFeatureTag');
+        const diagnosticMeta = document.getElementById('diagnosticMeta');
+        const rawProtocolJson = document.getElementById('rawProtocolJson');
+        const protocolLog = document.getElementById('protocolLog');
+        const btnHealth = document.getElementById('btnHealth');
+        const btnOta = document.getElementById('btnOta');
+        const btnWakeStart = document.getElementById('btnWakeStart');
+        const btnWakeOnly = document.getElementById('btnWakeOnly');
+        const btnListenStart = document.getElementById('btnListenStart');
+        const btnListenStop = document.getElementById('btnListenStop');
+        const btnPing = document.getElementById('btnPing');
+        const btnExit = document.getElementById('btnExit');
+        const btnReconnect = document.getElementById('btnReconnect');
+        const btnDirectTts = document.getElementById('btnDirectTts');
+        const btnSendRaw = document.getElementById('btnSendRaw');
+
+        function logProtocol(direction, payload) {
+            const stamp = new Date().toLocaleTimeString();
+            const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+            const line = `[${stamp}] ${direction} ${text}`;
+            if (protocolLog.innerText === 'Protocol log sẵn sàng.') protocolLog.innerText = '';
+            protocolLog.innerText += `${protocolLog.innerText ? '\n' : ''}${line}`;
+            protocolLog.scrollTop = protocolLog.scrollHeight;
+        }
+
+        function sendProtocolMessage(payload, label = 'WS →') {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                logProtocol('ERR', 'WebSocket chưa kết nối');
+                return false;
+            }
+            const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
+            ws.send(text);
+            logProtocol(label, text);
+            return true;
+        }
+
+        async function loadRuntimeDiagnostics() {
+            try {
+                const response = await fetch('/api/diagnostics', { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                runtimeDiagnostics = await response.json();
+                const conversation = runtimeDiagnostics.conversation || {};
+                conversationFeatureTag.innerText = conversation.enabled ? 'Conversation ON' : 'Conversation OFF';
+                diagnosticMeta.innerText = [
+                    `wake: ${(conversation.wake_words || []).join(' | ') || '—'}`,
+                    `exit: ${(conversation.exit_commands || []).join(' | ') || '—'}`,
+                    `greeting: ${conversation.greeting_enabled ? 'on' : 'off'} · cache: ${conversation.audio_cache_enabled ? 'on' : 'off'}`,
+                    `idle: ${conversation.idle_timeout_seconds ?? '—'}s · wake wait: ${conversation.wake_start_wait_ms ?? '—'}ms`,
+                    `barge-in: ${runtimeDiagnostics.server?.barge_in_policy || '—'} · active sessions: ${runtimeDiagnostics.server?.active_sessions ?? '—'}`,
+                ].join('\n');
+            } catch (err) {
+                conversationFeatureTag.innerText = 'Diagnostics lỗi';
+                diagnosticMeta.innerText = `Không tải được /api/diagnostics: ${err.message || err}`;
+            }
+        }
+
+        async function runHttpDiagnostic(label, url, options = undefined) {
+            try {
+                const response = await fetch(url, { cache: 'no-store', ...(options || {}) });
+                const contentType = response.headers.get('content-type') || '';
+                const payload = contentType.includes('application/json')
+                    ? await response.json()
+                    : await response.text();
+                logProtocol(`${label} ← HTTP ${response.status}`, payload);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return payload;
+            } catch (err) {
+                logProtocol(`${label} ERR`, err.message || String(err));
+                throw err;
+            }
+        }
+
+        function configuredWakeWord() {
+            return runtimeDiagnostics?.conversation?.wake_words?.[0] || 'VeeTee ơi';
+        }
+
+        function configuredExitCommand() {
+            return runtimeDiagnostics?.conversation?.exit_commands?.[0] || 'tạm biệt';
+        }
 
         async function loadBasePrompt() {
             try {
@@ -791,6 +996,7 @@
         }
 
         loadBasePrompt();
+        loadRuntimeDiagnostics();
 
         // Initialize Opus WebAssembly decoder and Web Audio Context
         async function initAudioSystem() {
@@ -894,6 +1100,24 @@
             currentUserBubble = null;
             tTurnStart = null;
             firstAudioPending = false;
+        }
+
+        function extractServerOpusPayload(buffer) {
+            const bytes = new Uint8Array(buffer);
+            const view = new DataView(buffer);
+            if (activeProtocolVersion === 2) {
+                if (bytes.byteLength < 16) throw new Error('V2 packet ngắn hơn header 16 byte');
+                const payloadSize = view.getUint32(12, false);
+                if (payloadSize > bytes.byteLength - 16) throw new Error('V2 payload bị truncate');
+                return bytes.slice(16, 16 + payloadSize);
+            }
+            if (activeProtocolVersion === 3) {
+                if (bytes.byteLength < 4) throw new Error('V3 packet ngắn hơn header 4 byte');
+                const payloadSize = view.getUint16(2, false);
+                if (payloadSize > bytes.byteLength - 4) throw new Error('V3 payload bị truncate');
+                return bytes.slice(4, 4 + payloadSize);
+            }
+            return bytes;
         }
 
         function resampleToPcm16(input, sourceRate, targetRate = 16000) {
@@ -1295,6 +1519,7 @@
             }
 
             ws.onopen = () => {
+                activeProtocolVersion = Number(protocolVersion.value) || 1;
                 connStatus.innerText = 'Đã kết nối';
                 connStatus.className = 'status-value status-ok';
                 statusDot.className = 'status-dot dot-ok';
@@ -1305,9 +1530,9 @@
                 btnMic.disabled = false;
 
                 // Send Hello handshake
-                ws.send(JSON.stringify({
+                sendProtocolMessage({
                     type: "hello",
-                    version: 1,
+                    version: activeProtocolVersion,
                     transport: "websocket",
                     audio_params: {
                         format: "pcm16",
@@ -1315,12 +1540,20 @@
                         channels: 1,
                         frame_duration: 20
                     }
-                }));
+                }, 'HELLO →');
+                loadRuntimeDiagnostics();
             };
 
             ws.onmessage = async (event) => {
                 if (typeof event.data === 'string') {
-                    const data = JSON.parse(event.data);
+                    logProtocol('WS ←', event.data);
+                    let data;
+                    try {
+                        data = JSON.parse(event.data);
+                    } catch (err) {
+                        logProtocol('ERR', `JSON server không hợp lệ: ${err.message || err}`);
+                        return;
+                    }
                     if (data.type === 'vad') {
                         if (data.state === 'speech_started') {
                             stageVad.innerText = '🟢 Có giọng nói';
@@ -1379,7 +1612,8 @@
                                     stageTts.innerText = '🔊 Đang phát';
                                 }
                             }
-                            const rawBytes = new Uint8Array(event.data);
+                            const rawBytes = extractServerOpusPayload(event.data);
+                            logProtocol('WS ← BIN', `${event.data.byteLength} bytes · opus ${rawBytes.byteLength} bytes · V${activeProtocolVersion}`);
                             const decoded = await opusDecoder.decodeFrame(rawBytes);
                             if (decoded && decoded.channelData) {
                                 playDecodedAudio(decoded.channelData);
@@ -1391,7 +1625,8 @@
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                logProtocol('WS CLOSED', `code=${event.code}${event.reason ? ` reason=${event.reason}` : ''}`);
                 connStatus.innerText = 'Đã ngắt kết nối';
                 connStatus.className = 'status-value status-error';
                 statusDot.className = 'status-dot dot-error';
@@ -1407,11 +1642,26 @@
                 }
                 stopMic(false);
                 soundWave.classList.add('hidden');
+                loadRuntimeDiagnostics();
             };
 
             ws.onerror = (err) => {
                 console.error("WS error:", err);
+                logProtocol('WS ERR', 'WebSocket error');
             };
+        }
+
+        async function reconnectWS() {
+            const current = ws;
+            if (current && current.readyState !== WebSocket.CLOSED) {
+                current.close(1000, 'browser_reconnect');
+                const deadline = performance.now() + 1500;
+                while (current.readyState !== WebSocket.CLOSED && performance.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 25));
+                }
+            }
+            ws = null;
+            await connectWS();
         }
 
         btnConnect.addEventListener('click', connectWS);
@@ -1428,9 +1678,7 @@
                 try { activeSyntheticSource.stop(); } catch (_) {}
                 activeSyntheticSource = null;
             }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "abort", reason: "user_cancel" }));
-            }
+            sendProtocolMessage({ type: "abort", reason: "user_cancel" }, 'ABORT →');
             if (audioCtx) {
                 nextPlayTime = audioCtx.currentTime;
             }
@@ -1460,10 +1708,91 @@
             stageLlm.innerText = 'Đang suy nghĩ...';
             stageTts.innerText = 'Chờ LLM';
 
-            ws.send(JSON.stringify({
+            sendProtocolMessage({
                 type: "chat",
                 text: query
-            }));
+            }, 'CHAT →');
+        });
+
+        btnHealth.addEventListener('click', async () => {
+            try {
+                await runHttpDiagnostic('HEALTH', '/health');
+                await loadRuntimeDiagnostics();
+            } catch (_) {}
+        });
+
+        btnOta.addEventListener('click', async () => {
+            try { await runHttpDiagnostic('OTA', '/ota/'); } catch (_) {}
+        });
+
+        btnWakeOnly.addEventListener('click', () => {
+            sendProtocolMessage({ type: 'listen', state: 'detect', text: configuredWakeWord() }, 'WAKE →');
+        });
+
+        btnWakeStart.addEventListener('click', async () => {
+            if (!sendProtocolMessage({ type: 'listen', state: 'detect', text: configuredWakeWord() }, 'WAKE →')) return;
+            await new Promise(resolve => setTimeout(resolve, 50));
+            sendProtocolMessage({ type: 'listen', state: 'start', mode: listenMode.value }, 'LISTEN →');
+        });
+
+        btnListenStart.addEventListener('click', () => {
+            sendProtocolMessage({ type: 'listen', state: 'start', mode: listenMode.value }, 'LISTEN →');
+        });
+
+        btnListenStop.addEventListener('click', () => {
+            sendProtocolMessage({ type: 'listen', state: 'stop' }, 'LISTEN →');
+        });
+
+        btnPing.addEventListener('click', () => {
+            sendProtocolMessage({ type: 'ping' }, 'PING →');
+        });
+
+        btnExit.addEventListener('click', () => {
+            sendProtocolMessage({ type: 'chat', text: configuredExitCommand() }, 'EXIT →');
+        });
+
+        btnReconnect.addEventListener('click', reconnectWS);
+
+        btnDirectTts.addEventListener('click', async () => {
+            const text = inputQuery.value.trim()
+                || runtimeDiagnostics?.conversation?.greeting_text
+                || 'Xin chào, đây là bài kiểm tra TTS trực tiếp.';
+            try {
+                await initAudioSystem();
+                const response = await fetch('/api/test-voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                    cache: 'no-store',
+                });
+                logProtocol('TTS → HTTP', text);
+                const { playbackBuffer } = await decodeGeneratedVoice(response);
+                const source = audioCtx.createBufferSource();
+                source.buffer = playbackBuffer;
+                source.connect(audioCtx.destination);
+                source.start();
+                logProtocol('TTS ← HTTP', `audio ${Math.round(playbackBuffer.duration * 1000)} ms`);
+            } catch (err) {
+                logProtocol('TTS ERR', err.message || String(err));
+            }
+        });
+
+        btnSendRaw.addEventListener('click', () => {
+            const raw = rawProtocolJson.value.trim();
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                sendProtocolMessage(parsed, 'RAW →');
+            } catch (err) {
+                logProtocol('RAW ERR', `JSON không hợp lệ: ${err.message || err}`);
+            }
+        });
+
+        protocolVersion.addEventListener('change', () => {
+            const nextVersion = Number(protocolVersion.value) || 1;
+            if (ws && ws.readyState === WebSocket.OPEN && nextVersion !== activeProtocolVersion) {
+                logProtocol('INFO', `Đổi protocol sang V${nextVersion}; bấm Reconnect để handshake lại.`);
+            }
         });
 
         inputQuery.addEventListener('keydown', (e) => {

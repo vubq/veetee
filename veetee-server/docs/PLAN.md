@@ -35,6 +35,8 @@ ESP32 stock speaker
 
 Deepgram được giữ làm ASR dự phòng. TTS dùng engine chung và xử lý từng clause tuần tự; queue cho phép LLM sinh trước clause tiếp theo nhưng không chạy nhiều TTS inference song song trên cùng engine.
 
+Wake/greeting/exit/idle là lớp lifecycle phía server đứng trước LLM khi `conversation.enabled=true`. Firmware nguyên bản không phải hiểu thêm message riêng.
+
 ## 2. Các tối ưu đã triển khai
 
 ### VAD endpointing
@@ -64,6 +66,16 @@ Deepgram được giữ làm ASR dự phòng. TTS dùng engine chung và xử l�
 - Bridge thread -> async của VieNeu dùng queue bounded, mặc định `tts.stream_queue_max_chunks=4`.
 - Worker bị chặn bởi queue được giải phóng khi turn cancel.
 - Inference GPU/native đang chạy chỉ dừng khi engine trả quyền điều khiển; không cam kết preempt tức thời.
+
+### Wake/greeting cache và kết thúc hội thoại
+
+- `listen:detect` chỉ được coi là wake khi toàn bộ text khớp allowlist sau normalize; detect câu hỏi khác vẫn đi LLM.
+- Wake có pending window ngắn để phối hợp `listen:start`; không phát greeting ở hello/reconnect/plain listen-start.
+- Greeting/goodbye là fixed response dùng TTS stock sequence và `AudioPacer`, không gọi LLM.
+- RAM cache lưu raw Opus frame theo key text/voice/format; packet V1/V2/V3 được đóng gói lại theo từng session.
+- Exit exact-match được kiểm tra trên raw ASR final trước LLM correction; goodbye có thể hủy nếu input mới thắng trước close commit.
+- Idle watchdog dùng monotonic time, không phụ thuộc mic frame và không reset bởi ping/echo/stale callback.
+- WebSocket kết thúc hội thoại bằng close code `1000`; playback drain chỉ là estimate vì stock FW không có ACK loa phát xong.
 
 ## 3. Barge-in trên firmware nguyên bản
 
@@ -99,8 +111,12 @@ Regression hiện có bao phủ:
 - two-session ownership isolation;
 - TTS bounded backpressure;
 - E2E contract thiếu marker/thứ tự sai phải fail.
+- conversation policy/config exact match;
+- fixed-response cache hit/miss/cancel/LRU/error/shutdown;
+- wake/listen-start/greeting, exit, idle và cancellation lifecycle;
+- aiohttp WebSocket integration: shared cache qua reconnect, V1/V2/V3 và normal close code `1000`.
 
-Kết quả gần nhất trước bước tài liệu: **26/26 unit tests PASS**, `py_compile` và `git diff --check` PASS. Runtime E2E với model thật và board ESP32 vẫn là bài kiểm tra có điều kiện môi trường.
+Kết quả gần nhất: **50/50 tests PASS**, `compileall`, config-example load và `git diff --check` PASS. Runtime E2E với model thật và board ESP32 vẫn là bài kiểm tra có điều kiện môi trường.
 
 ## 6. Nghiệm thu còn lại
 

@@ -117,9 +117,23 @@ Nếu `listen:start` đến khi server đang speaking, VeeTee coi đây là yêu
   "session_id": "xxx",
   "type": "listen",
   "state": "detect",
-  "text": "Hey VeeTee"
+  "text": "VeeTee ơi"
 }
 ```
+
+Khi `conversation.enabled=true`, server route `listen:detect` trước khi mở LLM turn:
+
+| Input | Hành vi |
+| :--- | :--- |
+| Toàn bộ text khớp `conversation.wake_words` | Wake event; có thể phát greeting cố định |
+| Toàn bộ text khớp `conversation.exit_commands` | Bỏ LLM, phát goodbye nếu bật rồi đóng WebSocket |
+| Text khác | Chat bình thường như trước |
+
+Match dùng Unicode NFC + casefold, bỏ khoảng trắng/dấu câu ở biên và **không** fuzzy/substr. Vì vậy `VeeTee ơi, thời tiết thế nào?` vẫn là chat; `Giải thích từ tạm biệt` không đóng phiên.
+
+Wake greeting không chạy ở `hello`, reconnect hay một `listen:start` đứng riêng. Khi nhận wake detect hợp lệ, server chờ tối đa `conversation.wake_start_wait_ms` (mặc định 150 ms) để phối hợp `listen:start` mà firmware stock thường gửi ngay sau wake. Nếu `listen:start` đến trong cửa sổ này, greeting bắt đầu sau khi session đã vào listening; nếu không có start, server dùng fallback có giới hạn và vẫn phát greeting nếu pending wake còn hợp lệ.
+
+Nếu firmware đang dùng không gửi `listen:detect`, server không có tín hiệu đáng tin cậy để biết đó là wake word và sẽ không tự phát greeting. Không có capability hoặc field giao thức riêng được thêm để bù cho event này.
 
 ### Listen stop
 
@@ -192,6 +206,25 @@ Sau binary audio cuối của turn bình thường:
 
 Đường hỗ trợ stock FW dùng cùng message `tts:stop` chuẩn khi client yêu cầu ngắt. Server dừng gửi audio mới càng sớm càng tốt; không phụ thuộc trường extension riêng để flush decoder.
 
+Greeting/goodbye cố định cũng dùng đúng thứ tự stock:
+
+```text
+tts:start
+-> tts:sentence_start
+-> binary Opus V1/V2/V3
+-> tts:stop
+```
+
+Khi `conversation.audio_cache_enabled=true`, server cache **raw Opus frame** của greeting/goodbye trong RAM và đóng gói theo protocol version của từng session lúc phát. Cache hit bỏ cả LLM và TTS inference; cache key bao gồm text/voice/format cấu hình để tránh phát nhầm audio cũ sau khi đổi giọng.
+
+### Conversation close
+
+Exit command có thể đến từ `listen:detect`, `text`, `chat` hoặc ASR final. Với ASR, server kiểm tra raw final text trước bước LLM correction để correction không thể biến một câu thường thành lệnh đóng.
+
+Nếu goodbye bật, server phát câu cố định, chờ playback tail **ước tính** từ `AudioPacer` cộng `conversation.close_grace_ms`, gửi `tts:stop`, rồi đóng WebSocket với code `1000`. `listen:start`/input mới hợp lệ trước lúc close commit có thể hủy pending goodbye/close.
+
+`conversation.idle_timeout_seconds > 0` bật watchdog per-session. Ping/heartbeat, silent/stale/echo không reset đồng hồ; watchdog không đóng khi đang pending wake, speech/final ASR, THINKING/SPEAKING hoặc đang kết thúc. `0` tắt idle timeout.
+
 ## 5. Barge-in policy
 
 Mặc định:
@@ -214,5 +247,6 @@ TTS output được pace theo duration frame bằng monotonic clock. `tts.send_a
 Firmware stock không cung cấp playback queue depth hoặc flush ACK chung. Vì vậy:
 
 - `tts:stop`/last binary đo được ở server không tương đương thời điểm loa vật lý dừng;
+- close grace/goodbye drain cũng chỉ là ước tính server-side, không phải playback ACK;
 - send-ahead 120 ms là giá trị khởi đầu để test board, không phải cam kết latency;
 - cần đo trên ESP32 thật trước khi tune xuống thấp hơn hoặc cao hơn.

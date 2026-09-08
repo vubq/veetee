@@ -51,7 +51,25 @@ server.barge_in_policy = client_only
 
 Robot chỉ bị server ngắt turn khi client chủ động gửi message chuẩn như `abort` hoặc `listen:start`. Automatic speech-start barge-in trong lúc loa đang phát được giữ tắt mặc định.
 
-## 3. Ngắt robot bằng firmware stock
+## 3. Wake greeting và lệnh kết thúc không cần sửa FW
+
+Tính năng hội thoại tự nhiên mới chạy hoàn toàn phía server khi bật `conversation.enabled=true`:
+
+- `listen:detect` có text khớp wake allowlist -> greeting cố định, bỏ LLM;
+- `text`/`chat`/ASR final hoặc detect khớp exit command -> goodbye tùy chọn rồi close code `1000`;
+- idle timeout có thể tự kết thúc session khi không còn hoạt động hợp lệ.
+
+Điều kiện duy nhất cho wake greeting là firmware **đang dùng vốn đã gửi** event stock dạng:
+
+```json
+{"type":"listen","state":"detect","text":"VeeTee ơi"}
+```
+
+Một số build/config stock có thể chỉ phát âm báo wake và vào listening mà không gửi `listen:detect`. Trong trường hợp đó, VeeTee vẫn hội thoại bình thường nhưng không thể biết chắc wake event để phát greeting server-side. Không cần patch/build FW để dùng server; hãy để greeting tắt hoặc dùng hành vi wake/audio sẵn có của firmware đó.
+
+Không khai báo server-side AEC chỉ để bật greeting. Greeting và exit routing độc lập với AEC/barge-in.
+
+## 4. Ngắt robot bằng firmware stock
 
 Khi board/wake word/nút của firmware stock gửi:
 
@@ -75,7 +93,7 @@ server sẽ:
 
 Không cần firmware hiểu `interrupt=true`.
 
-## 4. Vì sao vẫn có thể còn một ít audio sau khi ngắt
+## 5. Vì sao vẫn có thể còn một ít audio sau khi ngắt
 
 Firmware stock có decoder/playback queue riêng và protocol không cung cấp flush ACK chung cho server. Server không biết chính xác còn bao nhiêu audio đã nằm phía thiết bị.
 
@@ -89,22 +107,26 @@ Với frame 60 ms, server mặc định chỉ gửi trước khoảng 2 frame th
 
 Không nên giảm send-ahead quá thấp trước khi test vì có thể gây underrun/ngắt tiếng trên Wi-Fi kém ổn định.
 
-## 5. Checklist test board stock FW
+## 6. Checklist test board stock FW
 
 Không build/flash FW mới. Dùng đúng firmware đang có trên board và ghi lại board/model, version/config nếu xem được.
 
 1. Kết nối OTA/WS, xác nhận server nhận hello.
 2. Test mic -> ASR -> LLM -> TTS -> loa ít nhất vài lượt liên tiếp.
-3. Test câu dài và nghe hết bình thường để xác nhận đuôi câu không bị cắt.
-4. Trong lúc robot nói, dùng nút hoặc wake word mà firmware hiện tại hỗ trợ để tạo `abort`/`listen:start`.
-5. Xác nhận server ngừng gửi binary cũ và gửi stop chuẩn.
-6. Quan sát/ghi âm để đo thời gian từ thao tác ngắt đến loa thật sự dừng.
-7. Xác nhận lượt nói tiếp theo không bị transcript cũ/echo tạo turn giả.
-8. Lặp tối thiểu 20 lượt normal và 20 lượt interrupt; ghi số lỗi, p50 và p95.
+3. Nếu firmware có `listen:detect`, ghi lại **text thực tế** và thêm đúng text đó vào `conversation.wake_words`; test wake -> greeting -> câu hỏi.
+4. Tắt greeting rồi nói ngay sau wake để xác nhận không có VAD block cố định làm mất câu.
+5. Test exit command + goodbye on/off và reconnect sau close code `1000`.
+6. Test idle timeout, gồm trường hợp nói sát deadline.
+7. Test câu dài và nghe hết bình thường để xác nhận đuôi câu không bị cắt.
+8. Trong lúc robot nói, dùng nút hoặc wake word mà firmware hiện tại hỗ trợ để tạo `abort`/`listen:start`.
+9. Xác nhận server ngừng gửi binary cũ và gửi stop chuẩn.
+10. Quan sát/ghi âm để đo thời gian từ thao tác ngắt/close đến loa thật sự dừng hoặc phát hết goodbye.
+11. Xác nhận lượt nói tiếp theo không bị transcript cũ/echo tạo turn giả.
+12. Lặp tối thiểu 20 lượt normal và 20 lượt interrupt; ghi số lỗi, p50 và p95.
 
 Nếu board không có nút/wake word tạo abort trong firmware hiện tại, baseline vẫn có thể nghiệm thu hội thoại stock FW; automatic voice barge-in là hạng mục tùy chọn sau này và cần AEC được xác minh độc lập.
 
-## 6. Patch lịch sử
+## 7. Patch lịch sử
 
 `veetee-server/patches/xiaozhi-esp32-barge-in.patch` là artifact từ thử nghiệm trước đây. **Không áp patch này cho đường hỗ trợ hiện tại.** Nó được giữ để truy vết lịch sử thiết kế.
 

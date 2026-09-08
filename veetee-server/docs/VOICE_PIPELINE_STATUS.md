@@ -21,17 +21,23 @@ Hướng triển khai hiện tại là **server-only, firmware nguyên bản**. 
 | P1 | TTS bounded backpressure | ✅ | VieNeu queue mặc định 4 chunk |
 | P2 | LLM clause pipelining | ✅ | Queue `maxsize=3`, TTS vẫn tuần tự |
 | P2 | E2E contract fail đúng | ✅ | Missing marker/order sai fail; runtime thiếu -> BLOCKED |
+| P1 | Wake routing + greeting tùy chọn | ✅ | Exact `listen:detect`, không greeting ở hello/reconnect |
+| P1 | Fixed-response Opus cache | ✅ | Shared RAM cache, bounded, cache hit bỏ LLM/TTS inference |
+| P1 | Exit + goodbye + close lifecycle | ✅ | Whole-command match, WebSocket close `1000`, cancel-aware |
+| P2 | Idle conversation timeout | ✅ | Monotonic watchdog, không cần mic frame |
+| P2 | WebSocket integration | ✅ | V1/V2/V3, shared cache qua reconnect, close cleanup |
 | P2 | Docs server-only | ✅ | Không yêu cầu patch/build FW tùy biến |
 
 ## Regression hiện tại
 
-Suite hiện bao phủ protocol stock, audio pacing, lifecycle/cancel, stale ASR, TTS backpressure và E2E contract.
+Suite hiện bao phủ protocol stock, audio pacing, lifecycle/cancel, stale ASR, TTS backpressure, conversation routing/cache/idle/exit và E2E contract.
 
 Kết quả gần nhất trước khi đồng bộ tài liệu:
 
 ```text
-26/26 tests PASS
-py_compile PASS
+50/50 tests PASS
+compileall PASS
+config.example.yaml load PASS
 git diff --check PASS
 ```
 
@@ -53,6 +59,16 @@ Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng 
 - VieNeu thread -> async bridge có bounded queue và cancel-aware shutdown.
 - Không chạy concurrent inference trên engine TTS dùng chung chỉ để giảm pause.
 
+### Conversation lifecycle
+
+- `conversation.enabled` mặc định `false`; bật/tắt không yêu cầu sửa FW.
+- Wake chỉ nhận exact `listen:detect` allowlist; detect có thêm câu hỏi vẫn là chat.
+- Greeting/goodbye bỏ LLM và có shared raw-Opus RAM cache; prewarm tối đa hai câu.
+- Exit exact-match nhận từ detect/text/chat/raw ASR final; ASR correction không được tạo exit giả.
+- Idle watchdog per-session dùng monotonic time, không reset bởi ping/silence/stale/echo.
+- Conversation close dùng WebSocket code `1000`; close grace chỉ là playback estimate, không phải ACK từ loa.
+- Nếu firmware stock không gửi `listen:detect`, server không tự suy wake; greeting server-side không chạy trên board đó.
+
 ### Barge-in stock FW
 
 - Mặc định `server.barge_in_policy=client_only`.
@@ -67,8 +83,12 @@ Runtime E2E với VieNeu/Parakeet/API thật chưa được dùng để chứng 
 | Ưu tiên | Task | Trạng thái |
 | :--- | :--- | :---: |
 | P2 | Runtime E2E trên code mới với model/API thật | PENDING |
+| P2 | Runtime profile wake cache nóng/cold, p50/p95 detect -> first binary | PENDING |
 | P2 | Đo ASR correction bật/tắt | PENDING |
 | P1 | Test ESP32 bằng firmware nguyên bản đang có | PENDING |
+| P1 | Xác nhận actual wake `listen:detect` text trên board | PENDING |
+| P1 | Test wake -> greeting -> câu hỏi / greeting off nói ngay | PENDING |
+| P1 | Test exit + goodbye + idle timeout trên board | PENDING |
 | P1 | Test nhiều lượt + normal tail | PENDING |
 | P1 | Test nút/wake-word abort nếu FW hỗ trợ | PENDING |
 | P1 | Đo request-abort -> last binary server | PENDING |

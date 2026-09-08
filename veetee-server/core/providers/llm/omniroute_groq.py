@@ -135,6 +135,15 @@ class OmnirouteGroqLLM(BaseLLM):
 
 Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
 
+    INLINE_CONVERSATION_CONTROL_PROMPT = """Đây là ràng buộc kỹ thuật riêng cho lượt chat hiện tại. Hãy tự quyết định trong CHÍNH câu trả lời này xem người dùng có đang muốn kết thúc phiên trò chuyện hay không; không cần một lượt phân loại riêng.
+
+Đầu ra bắt buộc bắt đầu bằng đúng một trong hai nhãn sau, rồi mới đến thẻ cảm xúc và nội dung nói:
+- [end] nếu lời mới nhất thể hiện rõ ý muốn dừng/kết thúc phiên hiện tại, ví dụ: "nói chuyện sau nhé", "để mai nói tiếp", "thôi mình đi ngủ đây", "hẹn gặp lại", "không cần gì nữa". Nội dung sau đó phải là một câu chào kết thúc ngắn, tự nhiên, đúng persona và phù hợp ngữ cảnh.
+- [continue] cho mọi trường hợp còn lại, kể cả khi người dùng chỉ nhắc đến chủ đề kết thúc, ví dụ: "giải thích từ tạm biệt", "tôi có nên đi ngủ không?", "sau này nói chuyện về chủ đề này nhé".
+
+Định dạng chính xác: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung...
+Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại trong nội dung nói."""
+
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:20128/v1",
@@ -296,6 +305,139 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
 
         return corrected
 
+    async def _control_completion(
+        self,
+        instruction: str,
+        user_content: str,
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 160,
+        timeout_seconds: float = 2.0,
+        include_persona: bool = True,
+    ) -> str:
+        messages = []
+        if include_persona:
+            messages.append({"role": "system", "content": self.system_prompt})
+        messages.extend([
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": user_content},
+        ])
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+            "reasoning_format": self.reasoning_format,
+            "reasoning_effort": "none",
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        session = await self._get_http_session()
+        try:
+            async with session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning("AI conversation control returned HTTP %s", resp.status)
+                    return ""
+                data = await resp.json(content_type=None)
+        except Exception as exc:
+            logger.warning("AI conversation control request failed: %s", exc)
+            return ""
+
+        content = str(data.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<think>.*", "", content, flags=re.DOTALL)
+        return content.strip()
+
+    @staticmethod
+    def _clean_control_sentence(text: str, max_chars: int = 180) -> str:
+        cleaned = str(text or "").strip().strip('"“”').strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
+            return ""
+        return cleaned
+
+    async def generate_greetings(self, count: int = 3) -> List[str]:
+        count = max(1, min(int(count), 5))
+        instruction = (
+            "Bạn đang tạo câu wake greeting cho trợ lý giọng nói dựa trên personality/system prompt hiện tại. "
+            "Câu phải tự nhiên, ngắn, phù hợp tính cách, không nhắc đến quy tắc hệ thống và không hỏi nhiều ý. "
+            "Chỉ trả về JSON array các chuỗi, không markdown, không giải thích."
+        )
+        raw = await self._control_completion(
+            instruction,
+            f"Tạo đúng {count} câu chào khác nhau để nói ngay khi người dùng vừa gọi trợ lý.",
+            temperature=max(0.55, self.temperature),
+            max_tokens=220,
+        )
+        try:
+            start, end = raw.find("["), raw.rfind("]")
+            values = json.loads(raw[start:end + 1]) if start >= 0 and end > start else []
+        except Exception:
+            values = []
+        greetings = []
+        for value in values if isinstance(values, list) else []:
+            sentence = self._clean_control_sentence(value, max_chars=140)
+            if sentence and sentence not in greetings:
+                greetings.append(sentence)
+            if len(greetings) >= count:
+                break
+        return greetings
+
+    async def generate_goodbye(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        reason: str,
+        user_text: str = "",
+    ) -> str:
+        recent = messages[-6:]
+        context = json.dumps(recent, ensure_ascii=False)
+        instruction = (
+            "Bạn đang tạo đúng một câu kết thúc hội thoại cho trợ lý giọng nói. "
+            "Hãy dựa vào personality/system prompt hiện tại và ngữ cảnh gần nhất. "
+            "Câu phải ngắn, tự nhiên, phù hợp điều người dùng vừa nói; không giải thích và không thêm nhãn."
+        )
+        raw = await self._control_completion(
+            instruction,
+            f"Lý do đóng: {reason}\nLời người dùng kích hoạt đóng: {user_text or '(không có)'}\nNgữ cảnh: {context}",
+            temperature=max(0.45, self.temperature),
+            max_tokens=96,
+        )
+        return self._clean_control_sentence(raw)
+
+    async def classify_end_intent(
+        self,
+        user_text: str,
+        messages: List[Dict[str, str]],
+    ) -> bool:
+        recent = messages[-4:]
+        context = json.dumps(recent, ensure_ascii=False)
+        instruction = (
+            "Bạn là bộ phân loại ý định, không phải nhân vật trợ lý. Phân loại xem lời mới nhất có thể hiện rõ "
+            "ý muốn kết thúc phiên trò chuyện hiện tại hay không. Trả TRUE cho các cách nói tự nhiên như "
+            "'nói chuyện sau nhé', 'để mai nói tiếp', 'thôi mình đi ngủ đây', 'hẹn gặp lại', 'không cần gì nữa'. "
+            "Trả FALSE cho câu hỏi hoặc khi người dùng chỉ nhắc tới chủ đề kết thúc, ví dụ 'giải thích từ tạm biệt', "
+            "'tôi có nên đi ngủ không?', 'sau này nói chuyện về chủ đề này nhé'. Chỉ xuất đúng TRUE hoặc FALSE."
+        )
+        raw = await self._control_completion(
+            instruction,
+            f"Ngữ cảnh gần nhất: {context}\nLời người dùng mới nhất: {user_text}",
+            temperature=0.0,
+            max_tokens=4,
+            timeout_seconds=1.2,
+            include_persona=False,
+        )
+        normalized = re.sub(r"^\[[a-zA-Z]+\]\s*", "", raw.strip())
+        return normalized.upper().rstrip(".") == "TRUE"
+
     def _should_enforce_vietnamese(self, messages: List[Dict[str, str]]) -> bool:
         """Keep default Vietnamese replies free of accidental CJK leakage."""
         latest_user = ""
@@ -345,11 +487,34 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
             return "neutral", remaining
         return "neutral", text
 
-    async def stream_chat(
+    @staticmethod
+    def _parse_inline_control_prefix(buffer: str) -> Tuple[bool, bool, str]:
+        """Parse the hidden [end]/[continue] prefix without leaking it to TTS."""
+        stripped = buffer.lstrip()
+        match = re.match(r"^\[(end|continue)\]\s*", stripped, flags=re.IGNORECASE)
+        if match:
+            return True, match.group(1).lower() == "end", stripped[match.end():]
+
+        # While the model is still streaming the first few characters, keep
+        # buffering. If it ignored the contract, fail open as a normal chat
+        # response instead of delaying the turn indefinitely.
+        if "]" not in stripped and len(stripped) < 24:
+            return False, False, ""
+        return True, False, stripped
+
+    async def _stream_chat_impl(
         self,
-        messages: List[Dict[str, str]]
-    ) -> AsyncGenerator[Tuple[str, Optional[str]], None]:
-        full_messages = [{"role": "system", "content": self.system_prompt}] + messages
+        messages: List[Dict[str, str]],
+        *,
+        detect_end_intent: bool,
+    ):
+        full_messages = [{"role": "system", "content": self.system_prompt}]
+        if detect_end_intent:
+            full_messages.append({
+                "role": "system",
+                "content": self.INLINE_CONVERSATION_CONTROL_PROMPT,
+            })
+        full_messages.extend(messages)
         
         # All LLM traffic goes through local OmniRoute; it owns key/provider fallback.
         payload = {
@@ -368,7 +533,37 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
         url = f"{self.base_url}/chat/completions"
         splitter = SpeechSegmentSplitter()
         emotion_emitted = False
+        control_decided = not detect_end_intent
+        control_buffer = ""
+        inline_end_intent = False
+        control_result_emitted = False
         enforce_vietnamese = self._should_enforce_vietnamese(messages)
+
+        def format_yield(clause: str, emotion: Optional[str]):
+            nonlocal control_result_emitted
+            result = (
+                inline_end_intent
+                if detect_end_intent and not control_result_emitted
+                else None
+            )
+            control_result_emitted = True
+            return clause, emotion, result
+
+        def add_content_token(token: str):
+            nonlocal emotion_emitted
+            items = []
+            for clause in splitter.add_token(token):
+                if not emotion_emitted:
+                    detected_emotion, cleaned = self._extract_emotion(clause)
+                    emotion_emitted = True
+                    clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
+                    if clean_s:
+                        items.append(format_yield(clean_s, detected_emotion))
+                else:
+                    clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+                    if clean_s:
+                        items.append(format_yield(clean_s, None))
+            return items
 
         session = await self._get_http_session()
         try:
@@ -376,7 +571,7 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
                     if resp.status != 200:
                         err_body = await resp.text()
                         logger.error(f"Omniroute LLM request failed ({resp.status}): {err_body}")
-                        yield "Xin lỗi, đã xảy ra lỗi kết nối.", "sad"
+                        yield "Xin lỗi, đã xảy ra lỗi kết nối.", "sad", False if detect_end_intent else None
                         return
 
                     async for line in resp.content:
@@ -389,25 +584,35 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
                             token = delta.get("content", "")
                             if not token or "<think>" in token:
                                 continue
-                            
-                            for clause in splitter.add_token(token):
-                                if not emotion_emitted:
-                                    detected_emotion, cleaned = self._extract_emotion(clause)
-                                    emotion_emitted = True
-                                    clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
-                                    if clean_s:
-                                        yield clean_s, detected_emotion
-                                else:
-                                    clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
-                                    if clean_s:
-                                        yield clean_s, None
+
+                            if not control_decided:
+                                control_buffer += token
+                                decided, inline_end_intent, token = self._parse_inline_control_prefix(
+                                    control_buffer
+                                )
+                                if not decided:
+                                    continue
+                                control_decided = True
+                                logger.info(
+                                    "Inline conversation control decided end_intent=%s",
+                                    inline_end_intent,
+                                )
+                            for item in add_content_token(token):
+                                yield item
                         except Exception as e:
                             logger.debug(f"Error parsing SSE chunk: {e}")
 
         except Exception as e:
             logger.error(f"Error communicating with Omniroute LLM: {e}")
-            yield "Xin lỗi, không thể kết nối tới mô hình AI.", "sad"
+            yield "Xin lỗi, không thể kết nối tới mô hình AI.", "sad", False if detect_end_intent else None
             return
+
+        if not control_decided and control_buffer:
+            control_decided = True
+            inline_end_intent = False
+            logger.warning("LLM response ended before inline conversation control prefix was complete")
+            for item in add_content_token(control_buffer):
+                yield item
 
         for clause in splitter.flush():
             if not emotion_emitted:
@@ -415,8 +620,23 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
                 emotion_emitted = True
                 clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
                 if clean_s:
-                    yield clean_s, detected_emotion
+                    yield format_yield(clean_s, detected_emotion)
             else:
                 clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
                 if clean_s:
-                    yield clean_s, None
+                    yield format_yield(clean_s, None)
+
+    async def stream_chat(
+        self,
+        messages: List[Dict[str, str]]
+    ) -> AsyncGenerator[Tuple[str, Optional[str]], None]:
+        async for clause, emotion, _ in self._stream_chat_impl(
+            messages,
+            detect_end_intent=False,
+        ):
+            yield clause, emotion
+
+    async def stream_chat_with_control(self, messages: List[Dict[str, str]]):
+        """Use one streamed LLM call for both response text and end-intent."""
+        async for item in self._stream_chat_impl(messages, detect_end_intent=True):
+            yield item
