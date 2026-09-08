@@ -131,6 +131,10 @@ class SpeechSegmentSplitter:
         return []
 
 class OmnirouteGroqLLM(BaseLLM):
+    ASR_CORRECTION_PROMPT = """Bạn là tầng hiệu chỉnh cuối của ASR cho một trợ lý giọng nói tiếng Việt. Đầu vào là transcript máy nhận dạng âm thanh, có thể sai 1-3 từ vì các âm gần nhau, nhất là từ đầu câu, tên riêng, thương hiệu, từ tiếng Anh và chữ cái đọc rời.
+
+Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
+
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:20128/v1",
@@ -226,10 +230,104 @@ class OmnirouteGroqLLM(BaseLLM):
             await self._http_session.close()
         self._http_session = None
 
-    def _clean_text(self, text: str) -> str:
+    async def correct_transcript(self, transcript: str) -> str:
+        """Use the fast LLM path only as a conservative ASR post-corrector."""
+        original = (transcript or "").strip()
+        if not original:
+            return original
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.ASR_CORRECTION_PROMPT},
+                {"role": "user", "content": original},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 96,
+            "stream": False,
+            "reasoning_format": "hidden",
+            "reasoning_effort": "none",
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        session = await self._get_http_session()
+        try:
+            async with session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=2.0),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning("ASR correction skipped because OmniRoute returned HTTP %s", resp.status)
+                    return original
+                data = await resp.json(content_type=None)
+        except Exception as exc:
+            logger.warning("ASR correction request failed: %s", exc)
+            return original
+
+        corrected = str(
+            data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        )
+        corrected = re.sub(r"<think>.*?</think>", "", corrected, flags=re.DOTALL)
+        corrected = re.sub(r"<think>.*", "", corrected, flags=re.DOTALL).strip()
+        corrected = corrected.strip('"“”').strip()
+        if not corrected or "\n" in corrected:
+            return original
+
+        # The corrector may repair a few acoustically confused words, but it
+        # must never turn the transcript into a fresh answer or long rewrite.
+        min_len = max(1, int(len(original) * 0.55))
+        max_len = max(len(original) + 24, int(len(original) * 1.45))
+        if not (min_len <= len(corrected) <= max_len):
+            logger.warning("Rejected oversized ASR correction: %r -> %r", original, corrected)
+            return original
+
+        if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", corrected) and not re.search(
+            r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", original
+        ):
+            logger.warning("Rejected ASR correction containing an unexpected CJK/Hangul script")
+            return original
+
+        return corrected
+
+    def _should_enforce_vietnamese(self, messages: List[Dict[str, str]]) -> bool:
+        """Keep default Vietnamese replies free of accidental CJK leakage."""
+        latest_user = ""
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                latest_user = str(message.get("content", ""))
+                break
+
+        lowered = latest_user.lower()
+        foreign_language_markers = (
+            "tiếng trung", "tiếng hoa", "tiếng nhật", "tiếng hàn",
+            "chinese", "japanese", "korean", "中文", "日本語", "한국어",
+            "kanji", "hiragana", "katakana",
+        )
+        if any(marker in lowered for marker in foreign_language_markers):
+            return False
+
+        # If the user themselves supplied CJK/Hangul text, preserve those
+        # scripts so translation/explanation requests still work naturally.
+        if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", latest_user):
+            return False
+        return True
+
+    def _clean_text(self, text: str, enforce_vietnamese: bool = False) -> str:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         text = text.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
+        if enforce_vietnamese:
+            cleaned = re.sub(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+", " ", text)
+            if cleaned != text:
+                logger.warning("Removed unrequested CJK/Hangul characters from Vietnamese LLM output")
+            text = cleaned
+            text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+            text = re.sub(r"\s{2,}", " ", text)
         return text.strip()
 
     def _extract_emotion(self, text: str) -> Tuple[str, str]:
@@ -240,6 +338,9 @@ class OmnirouteGroqLLM(BaseLLM):
             valid_emotions = {"happy", "neutral", "sad", "surprised", "thinking", "angry", "relaxed"}
             if emotion in valid_emotions:
                 return emotion, remaining
+            # Never send an invented technical tag such as [chinh] to TTS.
+            logger.warning(f"Ignoring invalid emotion tag: [{emotion}]")
+            return "neutral", remaining
         return "neutral", text
 
     async def stream_chat(
@@ -265,6 +366,7 @@ class OmnirouteGroqLLM(BaseLLM):
         url = f"{self.base_url}/chat/completions"
         splitter = SpeechSegmentSplitter()
         emotion_emitted = False
+        enforce_vietnamese = self._should_enforce_vietnamese(messages)
 
         session = await self._get_http_session()
         try:
@@ -290,11 +392,11 @@ class OmnirouteGroqLLM(BaseLLM):
                                 if not emotion_emitted:
                                     detected_emotion, cleaned = self._extract_emotion(clause)
                                     emotion_emitted = True
-                                    clean_s = self._clean_text(cleaned)
+                                    clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
                                     if clean_s:
                                         yield clean_s, detected_emotion
                                 else:
-                                    clean_s = self._clean_text(clause)
+                                    clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
                                     if clean_s:
                                         yield clean_s, None
                         except Exception as e:
@@ -309,10 +411,10 @@ class OmnirouteGroqLLM(BaseLLM):
             if not emotion_emitted:
                 detected_emotion, cleaned = self._extract_emotion(clause)
                 emotion_emitted = True
-                clean_s = self._clean_text(cleaned)
+                clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
                 if clean_s:
                     yield clean_s, detected_emotion
             else:
-                clean_s = self._clean_text(clause)
+                clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
                 if clean_s:
                     yield clean_s, None

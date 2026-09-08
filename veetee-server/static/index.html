@@ -38,7 +38,7 @@
             </h1>
         </div>
         <div class="flex items-center gap-3 text-xs text-slate-400">
-            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">ASR: Deepgram Nova-2</span>
+            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">ASR: Parakeet CTC 0.6B VI + Silero VAD</span>
             <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">LLM: Groq Qwen 3.6 27B</span>
             <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">TTS: Vieneu Local GPU</span>
         </div>
@@ -130,7 +130,7 @@
                     <button id="btnMic" disabled class="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 font-medium text-sm rounded-xl transition shadow">
                         🎙️ Bắt đầu Mic
                     </button>
-                    <span class="text-xs text-slate-500">Mic vẫn chạy trực tiếp qua Deepgram VAD/ASR như trước.</span>
+                    <span class="text-xs text-slate-500">Mic chạy trực tiếp qua Silero VAD → Parakeet CTC 0.6B Vietnamese.</span>
                 </div>
 
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
@@ -147,7 +147,7 @@
                         <div class="text-slate-500">TTS</div><div id="stageTts" class="text-emerald-300 mt-1">Chờ LLM</div>
                     </div>
                 </div>
-                <div id="audioInputStatus" class="text-xs text-slate-400">Mic hoặc âm thanh VieNeu từ ô chat được chuyển thành PCM16 16 kHz và đi qua Deepgram VAD → ASR → LLM → VieNeu TTS.</div>
+                <div id="audioInputStatus" class="text-xs text-slate-400">Mic hoặc âm thanh VieNeu từ ô chat được chuyển thành PCM16 16 kHz và đi qua Silero VAD → Parakeet ASR → LLM → VieNeu TTS.</div>
             </div>
         </div>
     </main>
@@ -181,7 +181,13 @@
         let micSource = null;
         let micProcessor = null;
         let micMute = null;
+        let micResampler = null;
         let isMicRecording = false;
+        let micFrameCount = 0;
+        let micLastFrameAt = 0;
+        let micDebugTimer = null;
+        let micRecoveryInProgress = false;
+        const activeTtsSources = new Set();
         let syntheticCancelled = false;
         let isSyntheticAudioRunning = false;
         let activeSyntheticSource = null;
@@ -257,7 +263,12 @@
         async function initAudioSystem() {
             if (!audioCtx) {
                 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                audioCtx = new AudioContextClass({ sampleRate: 24000 });
+                // Let WebKit use the device-native rate (normally 48 kHz on iOS).
+                // Forcing one context to 24 kHz while a second mic context runs at
+                // 16 kHz can corrupt MediaStream audio on iPhone/Safari/Brave.
+                // TTS buffers still carry their real 24 kHz rate and Web Audio
+                // resamples them for playback automatically.
+                audioCtx = new AudioContextClass();
             }
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
@@ -297,6 +308,14 @@
             const source = audioCtx.createBufferSource();
             source.buffer = buffer;
             source.connect(audioCtx.destination);
+            activeTtsSources.add(source);
+            source.onended = () => {
+                activeTtsSources.delete(source);
+                if (activeTtsSources.size === 0 && audioCtx) {
+                    soundWave.classList.add('hidden');
+                    void ensureMicCaptureActive('tts_playback_ended');
+                }
+            };
 
             const now = audioCtx.currentTime;
             if (nextPlayTime < now) {
@@ -370,27 +389,207 @@
             return output;
         }
 
+        class StreamingPcm16Resampler {
+            constructor(targetRate = 16000) {
+                this.targetRate = targetRate;
+                this.reset();
+            }
+
+            reset(sourceRate = null) {
+                this.sourceRate = sourceRate;
+                this.inputSamplesSeen = 0;
+                this.nextSourcePosition = 0;
+                this.previousSample = 0;
+                this.hasPreviousSample = false;
+            }
+
+            process(input, sourceRate) {
+                if (!input?.length || !sourceRate) return new Int16Array(0);
+                if (this.sourceRate !== sourceRate) this.reset(sourceRate);
+                if (sourceRate === this.targetRate) {
+                    this.inputSamplesSeen += input.length;
+                    this.previousSample = input[input.length - 1];
+                    this.hasPreviousSample = true;
+                    return resampleToPcm16(input, sourceRate, this.targetRate);
+                }
+
+                const ratio = sourceRate / this.targetRate;
+                const chunkStart = this.inputSamplesSeen;
+                const chunkEnd = chunkStart + input.length;
+                const output = [];
+
+                while (this.nextSourcePosition < chunkEnd) {
+                    const leftIndex = Math.floor(this.nextSourcePosition);
+                    const fraction = this.nextSourcePosition - leftIndex;
+                    const rightIndex = fraction > 0 ? leftIndex + 1 : leftIndex;
+
+                    // If interpolation needs the first sample from the next
+                    // callback, retain this source position until it arrives.
+                    if (rightIndex >= chunkEnd) break;
+
+                    const sampleAt = (absoluteIndex) => {
+                        if (absoluteIndex === chunkStart - 1 && this.hasPreviousSample) {
+                            return this.previousSample;
+                        }
+                        return input[absoluteIndex - chunkStart];
+                    };
+
+                    const left = sampleAt(leftIndex);
+                    const right = sampleAt(rightIndex);
+                    if (!Number.isFinite(left) || !Number.isFinite(right)) break;
+
+                    const value = left + (right - left) * fraction;
+                    const sample = Math.max(-1, Math.min(1, value));
+                    output.push(sample < 0 ? sample * 0x8000 : sample * 0x7fff);
+                    this.nextSourcePosition += ratio;
+                }
+
+                this.inputSamplesSeen = chunkEnd;
+                this.previousSample = input[input.length - 1];
+                this.hasPreviousSample = true;
+                return Int16Array.from(output);
+            }
+        }
+
         function sendPcm16(pcm16) {
             if (!ws || ws.readyState !== WebSocket.OPEN || !pcm16?.length) return;
             ws.send(pcm16.buffer.slice(pcm16.byteOffset, pcm16.byteOffset + pcm16.byteLength));
         }
 
+        function sendMicDebug(reason) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const track = micStream?.getAudioTracks?.()[0] || null;
+            ws.send(JSON.stringify({
+                type: 'browser_audio_debug',
+                reason,
+                recording: isMicRecording,
+                frame_count: micFrameCount,
+                last_frame_age_ms: micLastFrameAt ? Math.round(performance.now() - micLastFrameAt) : null,
+                mic_context_state: micAudioCtx?.state || null,
+                mic_context_rate: micAudioCtx?.sampleRate || null,
+                track_state: track?.readyState || null,
+                track_muted: track?.muted ?? null,
+                track_enabled: track?.enabled ?? null,
+                tts_sources: activeTtsSources.size,
+            }));
+        }
+
+        async function buildMicAudioGraph() {
+            if (!micStream) throw new Error('Microphone stream is unavailable');
+
+            if (micProcessor) {
+                micProcessor.onaudioprocess = null;
+                try { micProcessor.disconnect(); } catch (_) {}
+            }
+            if (micSource) {
+                try { micSource.disconnect(); } catch (_) {}
+            }
+            if (micMute) {
+                try { micMute.disconnect(); } catch (_) {}
+            }
+            if (micAudioCtx && micAudioCtx.state !== 'closed') {
+                try { await micAudioCtx.close(); } catch (_) {}
+            }
+
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            // Keep microphone capture on its own native-rate WebAudio graph.
+            // iOS/WebKit can stop ScriptProcessor callbacks after speaker playback
+            // when microphone capture and TTS share the same AudioContext.
+            micAudioCtx = new AudioContextClass();
+            if (micAudioCtx.state === 'suspended') {
+                await micAudioCtx.resume();
+            }
+            micAudioCtx.onstatechange = () => {
+                sendMicDebug(`mic_context_${micAudioCtx?.state || 'unknown'}`);
+            };
+
+            micResampler = new StreamingPcm16Resampler(16000);
+            micSource = micAudioCtx.createMediaStreamSource(micStream);
+            micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+            micMute = micAudioCtx.createGain();
+            micMute.gain.value = 0;
+            micSource.connect(micProcessor);
+            micProcessor.connect(micMute);
+            micMute.connect(micAudioCtx.destination);
+
+            micProcessor.onaudioprocess = (event) => {
+                if (!isMicRecording) return;
+                const mono = event.inputBuffer.getChannelData(0);
+                const sourceRate = event.inputBuffer.sampleRate || micAudioCtx.sampleRate;
+                const pcm16 = micResampler.process(mono, sourceRate);
+                micFrameCount += 1;
+                micLastFrameAt = performance.now();
+                sendPcm16(pcm16);
+            };
+        }
+
+        async function ensureMicCaptureActive(reason) {
+            if (!isMicRecording || !micStream || micRecoveryInProgress) return;
+            const track = micStream.getAudioTracks()[0];
+            if (!track || track.readyState !== 'live') {
+                sendMicDebug(`${reason}_track_not_live`);
+                return;
+            }
+
+            const frameAge = micLastFrameAt ? performance.now() - micLastFrameAt : Infinity;
+            if (micAudioCtx?.state === 'running' && frameAge < 1500) {
+                sendMicDebug(`${reason}_healthy`);
+                return;
+            }
+
+            micRecoveryInProgress = true;
+            sendMicDebug(`${reason}_recovering`);
+            try {
+                if (micAudioCtx?.state === 'suspended') {
+                    try { await micAudioCtx.resume(); } catch (_) {}
+                    await new Promise(resolve => setTimeout(resolve, 120));
+                }
+                const resumedAge = micLastFrameAt ? performance.now() - micLastFrameAt : Infinity;
+                if (micAudioCtx?.state !== 'running' || resumedAge >= 1500) {
+                    await buildMicAudioGraph();
+                }
+                sendMicDebug(`${reason}_recovered`);
+            } catch (err) {
+                console.error('Mic recovery error:', err);
+                sendMicDebug(`${reason}_recovery_failed`);
+            } finally {
+                micRecoveryInProgress = false;
+            }
+        }
+
         async function stopMic(sendStop = true) {
             if (!isMicRecording && !micStream) return;
             isMicRecording = false;
+            if (micDebugTimer) {
+                clearInterval(micDebugTimer);
+                micDebugTimer = null;
+            }
             if (micProcessor) {
                 micProcessor.onaudioprocess = null;
                 micProcessor.disconnect();
             }
             if (micSource) micSource.disconnect();
             if (micMute) micMute.disconnect();
-            if (micStream) micStream.getTracks().forEach(track => track.stop());
-            if (micAudioCtx && micAudioCtx.state !== 'closed') await micAudioCtx.close();
+            if (micStream) {
+                micStream.getTracks().forEach(track => {
+                    track.onended = null;
+                    track.onmute = null;
+                    track.onunmute = null;
+                    track.stop();
+                });
+            }
+            if (micAudioCtx && micAudioCtx.state !== 'closed') {
+                await micAudioCtx.close();
+            }
             micProcessor = null;
             micSource = null;
             micMute = null;
+            micResampler = null;
             micStream = null;
             micAudioCtx = null;
+            micFrameCount = 0;
+            micLastFrameAt = 0;
+            micRecoveryInProgress = false;
             btnMic.innerText = '🎙️ Bắt đầu Mic';
             if (sendStop && ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'listen', state: 'stop' }));
@@ -410,29 +609,41 @@
 
             try {
                 micStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                    audio: {
+                        channelCount: 1,
+                        // iOS WebKit's voice-processing path can attenuate and
+                        // smear speech enough that Parakeet collapses to the
+                        // unknown token. Capture the cleanest signal we can and
+                        // handle echo by suppressing mic frames while TTS plays.
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                    }
                 });
-                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                micAudioCtx = new AudioContextClass({ sampleRate: 16000 });
-                await micAudioCtx.resume();
-                micSource = micAudioCtx.createMediaStreamSource(micStream);
-                micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
-                micMute = micAudioCtx.createGain();
-                micMute.gain.value = 0;
-                micSource.connect(micProcessor);
-                micProcessor.connect(micMute);
-                micMute.connect(micAudioCtx.destination);
-
-                ws.send(JSON.stringify({ type: 'listen', state: 'start' }));
                 isMicRecording = true;
-                btnMic.innerText = '⏹ Dừng Mic';
-                audioInputStatus.innerText = `Mic đang stream PCM16 ${micAudioCtx.sampleRate} Hz → Deepgram VAD/ASR`;
+                micFrameCount = 0;
+                micLastFrameAt = performance.now();
 
-                micProcessor.onaudioprocess = (event) => {
-                    if (!isMicRecording) return;
-                    const mono = event.inputBuffer.getChannelData(0);
-                    sendPcm16(resampleToPcm16(mono, micAudioCtx.sampleRate));
-                };
+                const track = micStream.getAudioTracks()[0];
+                if (track) {
+                    track.onended = () => sendMicDebug('track_ended');
+                    track.onmute = () => sendMicDebug('track_muted');
+                    track.onunmute = () => sendMicDebug('track_unmuted');
+                }
+
+                await buildMicAudioGraph();
+                ws.send(JSON.stringify({ type: 'listen', state: 'start' }));
+                btnMic.innerText = '⏹ Dừng Mic';
+                const trackSettings = micStream.getAudioTracks()[0]?.getSettings?.() || {};
+                const hardwareRate = trackSettings.sampleRate || 'auto';
+                audioInputStatus.innerText = `Mic ${hardwareRate} Hz / WebAudio ${micAudioCtx.sampleRate} Hz → PCM16 16000 Hz → Silero VAD → Parakeet ASR`;
+                sendMicDebug('mic_started');
+                micDebugTimer = setInterval(() => {
+                    sendMicDebug('heartbeat');
+                    if (activeTtsSources.size === 0) {
+                        void ensureMicCaptureActive('heartbeat');
+                    }
+                }, 3000);
             } catch (err) {
                 console.error('Mic error:', err);
                 audioInputStatus.innerText = `Không mở được mic: ${err.message || err}`;
@@ -617,9 +828,9 @@
                         } else if (data.state === 'stop') {
                             stageTts.innerText = '✅ Hoàn tất';
                             currentAssistantBubble = null;
-                            setTimeout(() => {
+                            if (activeTtsSources.size === 0 && audioCtx) {
                                 soundWave.classList.add('hidden');
-                            }, 500);
+                            }
                         }
                     }
                 } else if (event.data instanceof ArrayBuffer) {
@@ -691,6 +902,10 @@
             if (audioCtx) {
                 nextPlayTime = audioCtx.currentTime;
             }
+            for (const source of activeTtsSources) {
+                try { source.stop(); } catch (_) {}
+            }
+            activeTtsSources.clear();
             soundWave.classList.add('hidden');
         });
 
