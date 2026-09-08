@@ -138,6 +138,7 @@ class VieneuLocalTTS(BaseTTS):
         queue: asyncio.Queue = asyncio.Queue(maxsize=self.stream_queue_max_chunks)
         queue_done = object()
         stop_event = threading.Event()
+        worker_errors = []
         lease = await self._get_scheduler().acquire(
             priority,
             cancel_event=cancel_event,
@@ -176,6 +177,7 @@ class VieneuLocalTTS(BaseTTS):
                         break
             except Exception as e:
                 logger.error(f"Error during Vieneu infer_stream: {e}")
+                worker_errors.append(e)
             finally:
                 if not stop_event.is_set() and not (cancel_event and cancel_event.is_set()):
                     _put_with_backpressure(queue_done)
@@ -223,6 +225,8 @@ class VieneuLocalTTS(BaseTTS):
                     chunk = get_task.result()
 
                 if chunk is queue_done:
+                    if worker_errors:
+                        raise RuntimeError("Vieneu worker failed") from worker_errors[0]
                     break
 
                 if first_pcm:

@@ -32,6 +32,7 @@ class IntentDecision:
 @dataclass(frozen=True)
 class PendingAction:
     action_id: str
+    turn_id: str
     tool_name: str
     arguments: Dict[str, Any]
     args_hash: str
@@ -104,6 +105,7 @@ class PendingActionStore:
         self,
         *,
         action_id: str,
+        turn_id: str = "",
         tool_name: str,
         arguments: Dict[str, Any],
         session_id: str,
@@ -115,6 +117,7 @@ class PendingActionStore:
         copied_arguments = dict(arguments)
         pending = PendingAction(
             action_id=str(action_id),
+            turn_id=str(turn_id or "legacy"),
             tool_name=str(tool_name),
             arguments=copied_arguments,
             args_hash=_canonical_args_hash(copied_arguments),

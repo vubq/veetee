@@ -137,11 +137,43 @@ class TurnTrace:
         }
 
 
+def summarize_trace(trace: TurnTrace) -> Dict[str, Any]:
+    payload = trace.to_dict()
+    finish = trace.first("turn_finish")
+    if finish is not None:
+        payload.update(finish.fields)
+    first_binary = trace.first("first_ws_binary_sent")
+    if first_binary is not None:
+        payload["turn_start_to_first_ws_binary_ms"] = round(first_binary.at_ms, 3)
+    return payload
+
+
+class TurnTraceStore:
+    """Bounded server-level trace retention that survives session disconnects."""
+
+    def __init__(self, *, max_recent: int = 100):
+        self.max_recent = max(1, int(max_recent))
+        self.recent: list[TurnTrace] = []
+
+    def add(self, trace: TurnTrace) -> None:
+        self.recent.append(trace)
+        if len(self.recent) > self.max_recent:
+            del self.recent[:-self.max_recent]
+
+
 class TurnMetricsRecorder:
-    def __init__(self, session_id: str, config: Any, *, max_recent: int = 20):
+    def __init__(
+        self,
+        session_id: str,
+        config: Any,
+        *,
+        max_recent: int = 20,
+        shared_store: Optional[TurnTraceStore] = None,
+    ):
         self.session_id = session_id
         self.config_fingerprint = config_fingerprint(config)
         self.max_recent = max(1, int(max_recent))
+        self.shared_store = shared_store
         self.recent: list[TurnTrace] = []
         self.capture_events: Dict[int, list[Dict[str, Any]]] = {}
         self._turn_counter = 0
@@ -183,20 +215,14 @@ class TurnMetricsRecorder:
         self.recent.append(trace)
         if len(self.recent) > self.max_recent:
             del self.recent[:-self.max_recent]
+        if self.shared_store is not None:
+            self.shared_store.add(trace)
         return trace
 
     def latest_summary(self) -> Optional[Dict[str, Any]]:
         if not self.recent:
             return None
-        trace = self.recent[-1]
-        payload = trace.to_dict()
-        finish = trace.first("turn_finish")
-        if finish is not None:
-            payload.update(finish.fields)
-        first_binary = trace.first("first_ws_binary_sent")
-        if first_binary is not None:
-            payload["turn_start_to_first_ws_binary_ms"] = round(first_binary.at_ms, 3)
-        return payload
+        return summarize_trace(self.recent[-1])
 
 
 def activate_trace(trace: TurnTrace):

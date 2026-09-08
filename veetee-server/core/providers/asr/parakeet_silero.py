@@ -577,6 +577,15 @@ class ParakeetSileroASR(BaseASR):
                         text,
                         f"{confidence:.3f}" if confidence is not None else "n/a",
                     )
+                    if self.metrics_recorder is not None:
+                        self.metrics_recorder.record_capture_event(
+                            utterance_generation,
+                            "asr_final",
+                            text_chars=len(text or ""),
+                            min_word_confidence=(
+                                round(float(confidence), 4) if confidence is not None else None
+                            ),
+                        )
                     if text and not any(char.isalnum() for char in text):
                         # Keep only failing utterances, in /tmp, so a real browser
                         # sample can be replayed through Parakeet during debugging.
@@ -590,6 +599,12 @@ class ParakeetSileroASR(BaseASR):
                         logger.warning("Saved failed ASR utterance for diagnosis: %s", debug_path)
                 except Exception as exc:
                     logger.error("Parakeet transcription failed: %s", exc, exc_info=True)
+                    if self.metrics_recorder is not None:
+                        self.metrics_recorder.record_capture_event(
+                            queued.generation,
+                            "asr_infer_failed",
+                            error=type(exc).__name__,
+                        )
                     text = ""
                     self.last_word_confidence = None
                 if self.on_transcript_callback:

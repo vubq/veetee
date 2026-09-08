@@ -61,9 +61,10 @@ class FailingLLM:
 
 
 class NativeToolLLM:
-    def __init__(self, *, second_round_tool_call=False):
+    def __init__(self, *, second_round_tool_call=False, second_round_delay=0.0):
         self.calls = []
         self.second_round_tool_call = second_round_tool_call
+        self.second_round_delay = second_round_delay
 
     async def stream_turn(
         self,
@@ -89,6 +90,8 @@ class NativeToolLLM:
             yield CompletedEvent(finish_reason="tool_calls")
             return
 
+        if self.second_round_delay:
+            await asyncio.sleep(self.second_round_delay)
         yield ControlEvent()
         if self.second_round_tool_call:
             yield ToolCallReadyEvent(
@@ -123,6 +126,53 @@ class NoAudioTTS:
     async def stream_sentence_to_opus(self, text, cancel_event=None):
         if False:
             yield b"unused"
+
+
+class FirstFrameThenBlockTTS:
+    def __init__(self):
+        self.first_frame_sent = asyncio.Event()
+
+    async def stream_sentence_to_opus(self, text, cancel_event=None):
+        yield b"frame-1"
+        self.first_frame_sent.set()
+        if cancel_event is not None:
+            await cancel_event.wait()
+
+
+class RecordingTwoTurnLLM:
+    def __init__(self):
+        self.calls = []
+
+    async def stream_chat(self, messages):
+        self.calls.append([dict(item) for item in messages])
+        if len(self.calls) == 1:
+            yield "ESP32 là một vi điều khiển dùng cho thiết bị nhúng.", "neutral"
+        else:
+            yield "Mình giải thích kỹ hơn nhé.", "neutral"
+
+
+class SlowLLM:
+    async def stream_chat(self, messages):
+        await asyncio.sleep(0.05)
+        yield "Phản hồi quá chậm.", "neutral"
+
+
+class ControlThenSlowLLM:
+    async def stream_turn(self, messages, *, tools=None, detect_end_intent=True, tool_choice=None):
+        yield ControlEvent()
+        await asyncio.sleep(0.05)
+        yield SpeechSegmentEvent("Phản hồi quá chậm.", emotion="neutral")
+        yield CompletedEvent(finish_reason="stop")
+
+
+class CachedFallback:
+    class Result:
+        frames = (b"fallback-frame",)
+        hit = True
+        synthesis_ms = 0.0
+
+    async def get_cached(self, text):
+        return self.Result()
 
 
 class StallingBinaryWebSocket(FakeWebSocket):
@@ -217,7 +267,9 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.sent, [])
 
     async def test_full_clause_queue_can_finish_normally(self):
-        session, websocket = self.make_session(llm=BurstLLM(), tts=NoAudioTTS())
+        session, websocket = self.make_session(llm=BurstLLM(), tts=TwoFrameTTS())
+        session.config.tts.frame_duration_ms = 1
+        session.config.tts.send_ahead_ms = 1000
         await session._trigger_ai_turn("Bắt đầu")
         task = session.current_turn_task
         await asyncio.wait_for(task, timeout=1.0)
@@ -230,6 +282,77 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sentence_starts), 100)
         self.assertEqual(messages[-1].get("state"), "stop")
 
+    async def test_empty_tts_stream_is_failed_not_completed(self):
+        session, _ = self.make_session(tts=NoAudioTTS())
+        await session._trigger_ai_turn("Bắt đầu")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
+        self.assertEqual([m.role for m in session.dialogue.messages], ["user"])
+
+    async def test_pre_audio_llm_timeout_uses_cached_vietnamese_fallback(self):
+        config = AppConfig()
+        config.latency.first_token_timeout_ms = 10
+        config.latency.total_turn_timeout_ms = 100
+        websocket = FakeWebSocket()
+        session = SessionForTest(
+            websocket,
+            config,
+            TwoFrameTTS(),
+            SlowLLM(),
+            response_audio_cache=CachedFallback(),
+        )
+        await session._trigger_ai_turn("Bạn nghe rõ không?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
+
+    async def test_control_event_does_not_satisfy_first_usable_event_timeout(self):
+        config = AppConfig()
+        config.latency.first_token_timeout_ms = 10
+        config.latency.total_turn_timeout_ms = 100
+        websocket = FakeWebSocket()
+        session = SessionForTest(websocket, config, TwoFrameTTS(), ControlThenSlowLLM())
+
+        await session._trigger_ai_turn("Bạn nghe rõ không?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertFalse(any(isinstance(item, bytes) for item in websocket.sent))
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
+
+    async def test_interrupted_turn_preserves_user_and_sent_partial_for_followup(self):
+        tts = FirstFrameThenBlockTTS()
+        llm = RecordingTwoTurnLLM()
+        session, _ = self.make_session(llm=llm, tts=tts)
+
+        await session._trigger_ai_turn("Giải thích về ESP32")
+        first_task = session.current_turn_task
+        await asyncio.wait_for(tts.first_frame_sent.wait(), timeout=1.0)
+        session._abort_turn()
+        await asyncio.wait_for(first_task, timeout=1.0)
+
+        session.tts_engine = TwoFrameTTS()
+        await session._trigger_ai_turn("Giải thích kỹ hơn ý vừa nói")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        second_messages = llm.calls[1]
+        self.assertTrue(any(
+            item["role"] == "user" and item["content"] == "Giải thích về ESP32"
+            for item in second_messages
+        ))
+        self.assertTrue(any(
+            item["role"] == "assistant" and "bị ngắt" in item["content"].lower()
+            for item in second_messages
+        ))
+
+    async def test_same_transcript_is_allowed_in_new_capture(self):
+        llm = RecordingTwoTurnLLM()
+        session, _ = self.make_session(llm=llm)
+        await session._trigger_ai_turn("Nói lại")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        session._invalidate_capture()
+        await session._trigger_ai_turn("Nói lại")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        self.assertEqual(len(llm.calls), 2)
+
     async def test_llm_producer_error_finishes_without_deadlock(self):
         session, websocket = self.make_session(llm=FailingLLM())
         await session._trigger_ai_turn("Bắt đầu")
@@ -241,7 +364,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             if item.get("type") == "tts" and item.get("state") == "stop"
         ]
         self.assertEqual(len(stops), 1)
-        self.assertEqual(session.state, SessionState.IDLE)
+        self.assertEqual(session.state, SessionState.LISTENING)
 
     async def test_network_send_stall_is_cancelled_by_client_abort(self):
         websocket = StallingBinaryWebSocket()
@@ -301,7 +424,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         config.tools.max_llm_rounds_per_turn = 2
         llm = NativeToolLLM()
         websocket = FakeWebSocket()
-        session = SessionForTest(websocket, config, NoAudioTTS(), llm)
+        session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
 
         await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
@@ -319,13 +442,37 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.dialogue.messages[-1].content, "Kết quả phép tính là 5.")
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
 
+    async def test_tool_synthesis_uses_remaining_generation_budget(self):
+        config = AppConfig()
+        config.tools.tool_result_synthesis = True
+        config.tools.max_llm_rounds_per_turn = 2
+        config.latency.first_token_timeout_ms = 100
+        config.latency.total_turn_timeout_ms = 50
+        llm = NativeToolLLM(second_round_delay=0.03)
+        websocket = FakeWebSocket()
+        session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
+        original_execute = session.tool_executor.execute
+
+        async def delayed_execute(*args, **kwargs):
+            await asyncio.sleep(0.03)
+            return await original_execute(*args, **kwargs)
+
+        session.tool_executor.execute = delayed_execute
+
+        await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "completed")
+        self.assertIn("Kết quả là 5", session.dialogue.messages[-1].content)
+
     async def test_tool_result_synthesis_never_executes_round_two_tool_call(self):
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
         llm = NativeToolLLM(second_round_tool_call=True)
         websocket = FakeWebSocket()
-        session = SessionForTest(websocket, config, NoAudioTTS(), llm)
+        session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
 
         await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
@@ -337,7 +484,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_tool_profile_stays_one_round(self):
         llm = NativeToolLLM()
         websocket = FakeWebSocket()
-        session = SessionForTest(websocket, AppConfig(), NoAudioTTS(), llm)
+        session = SessionForTest(websocket, AppConfig(), TwoFrameTTS(), llm)
 
         await session._trigger_ai_turn("Hai cộng ba bằng bao nhiêu?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)

@@ -15,6 +15,7 @@ CACHE_SCHEMA_VERSION = 1
 MAX_CACHE_ENTRIES = 16
 MAX_CACHE_BYTES = 4 * 1024 * 1024
 MAX_CLIP_SECONDS = 5.0
+DEFAULT_ERROR_FALLBACK_TEXT = "Mình gặp lỗi, bạn thử nói lại nhé."
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,22 @@ class ResponseAudioCache:
         except asyncio.TimeoutError:
             logger.warning("fixed_audio_cache waiter timeout text=%r", key.text)
             raise
+
+    async def get_cached(self, text: str) -> AudioCacheResult:
+        """Return an already-generated clip without invoking TTS.
+
+        Error recovery uses this path so a TTS failure cannot recursively call
+        the same failed engine while trying to speak the fallback.
+        """
+        if self._closed:
+            raise RuntimeError("response audio cache is closed")
+        key = self.make_key(text)
+        async with self._lock:
+            cached = self._entries.get(key)
+            if cached is None:
+                raise KeyError("fixed response is not cached")
+            self._entries.move_to_end(key)
+            return AudioCacheResult(cached, True, 0.0)
 
     async def _fill(self, key: AudioCacheKey, *, priority: str) -> tuple[tuple[bytes, ...], float]:
         started = time.perf_counter()

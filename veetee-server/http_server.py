@@ -2,10 +2,13 @@ import os
 import time
 import socket
 import logging
+import hmac
+from collections import deque
 import aiohttp
 from aiohttp import web
 from config.settings import AppConfig
 from core.session import ClientSession
+from core.turn_metrics import TurnTraceStore, summarize_trace
 
 logger = logging.getLogger("HttpServer")
 
@@ -73,6 +76,8 @@ class HttpServer:
         llm_engine=None,
         response_audio_cache=None,
         greeting_pool_ref=None,
+        recent_turn_store=None,
+        runtime_readiness_ref=None,
     ):
         self.config = app_config
         self.active_sessions = active_sessions_ref
@@ -80,6 +85,10 @@ class HttpServer:
         self.llm_engine = llm_engine
         self.response_audio_cache = response_audio_cache
         self.greeting_pool = greeting_pool_ref if greeting_pool_ref is not None else []
+        self.recent_turn_store = recent_turn_store or TurnTraceStore(max_recent=100)
+        self.runtime_readiness = runtime_readiness_ref if runtime_readiness_ref is not None else {}
+        self._test_voice_active = 0
+        self._test_voice_recent = deque()
         self.local_ip = get_local_ip()
         self.app = web.Application()
         self._setup_routes()
@@ -129,6 +138,7 @@ class HttpServer:
             llm_engine=self.llm_engine,
             response_audio_cache=self.response_audio_cache,
             greeting_pool=self.greeting_pool,
+            turn_trace_store=self.recent_turn_store,
         )
         await session.initialize()
         self.active_sessions[session.session_id] = session
@@ -171,7 +181,39 @@ class HttpServer:
         }
         return web.json_response(response_data)
 
+    def _management_access_allowed(self, request: web.Request) -> bool:
+        token = self.config.management.token.strip()
+        if not token:
+            return False
+        supplied = request.headers.get("X-Veetee-Management-Token", "").strip()
+        authorization = request.headers.get("Authorization", "").strip()
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        return bool(supplied) and hmac.compare_digest(supplied, token)
+
+    def _management_denied(self) -> web.Response:
+        return web.json_response(
+            {"error": "Management access denied"},
+            status=401,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    def _admit_test_voice(self) -> bool:
+        now = time.monotonic()
+        cutoff = now - 60.0
+        while self._test_voice_recent and self._test_voice_recent[0] < cutoff:
+            self._test_voice_recent.popleft()
+        if len(self._test_voice_recent) >= self.config.management.test_voice_requests_per_minute:
+            return False
+        if self._test_voice_active >= self.config.management.test_voice_max_concurrency:
+            return False
+        self._test_voice_recent.append(now)
+        self._test_voice_active += 1
+        return True
+
     async def handle_test_voice(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
         if self.tts_engine is None:
             return web.json_response({"error": "TTS unavailable"}, status=503)
         try:
@@ -185,11 +227,16 @@ class HttpServer:
         if len(text) > 1000:
             return web.json_response({"error": "Text is too long"}, status=400)
 
+        if not self._admit_test_voice():
+            return web.json_response({"error": "Test voice is busy or rate limited"}, status=429)
+
         try:
             wav_bytes = await self.tts_engine.synthesize_wav(text)
         except Exception as e:
             logger.error(f"VieNeu test voice generation failed: {e}", exc_info=True)
             return web.json_response({"error": "TTS generation failed"}, status=500)
+        finally:
+            self._test_voice_active = max(0, self._test_voice_active - 1)
 
         return web.Response(
             body=wav_bytes,
@@ -198,11 +245,15 @@ class HttpServer:
         )
 
     async def handle_get_prompt(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
         if self.llm_engine is None or not hasattr(self.llm_engine, "get_base_prompt"):
             return web.json_response({"error": "LLM prompt unavailable"}, status=503)
         return web.json_response({"base_prompt": self.llm_engine.get_base_prompt()})
 
     async def handle_set_prompt(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
         if self.llm_engine is None or not hasattr(self.llm_engine, "set_base_prompt"):
             return web.json_response({"error": "LLM prompt unavailable"}, status=503)
         try:
@@ -236,9 +287,68 @@ class HttpServer:
 
         return web.json_response({"ok": True, "base_prompt": self.llm_engine.get_base_prompt()})
 
+    async def _readiness_snapshot(self) -> dict:
+        conversation = self.config.conversation
+        fallback_ready = None
+        if self.response_audio_cache is not None:
+            try:
+                from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT
+
+                await self.response_audio_cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+                fallback_ready = True
+            except Exception:
+                fallback_ready = False
+
+        llm_ready = bool(self.runtime_readiness.get("llm_warm", self.llm_engine is not None))
+        asr_ready = bool(self.runtime_readiness.get("asr_ready", True))
+        tts_ready = self.tts_engine is not None
+        greeting_required = bool(
+            conversation.enabled
+            and conversation.greeting_enabled
+            and conversation.greeting_ai_enabled
+        )
+        greeting_ready = bool(
+            self.runtime_readiness.get(
+                "greeting_ready",
+                (not greeting_required) or bool(self.greeting_pool),
+            )
+        )
+        error_fallback_ready = bool(
+            self.runtime_readiness.get("error_fallback_ready", fallback_ready)
+        )
+
+        reasons = []
+        if not llm_ready:
+            reasons.append("llm_not_warm")
+        if not asr_ready:
+            reasons.append("asr_not_ready")
+        if not tts_ready:
+            reasons.append("tts_unavailable")
+        if not error_fallback_ready:
+            reasons.append("error_fallback_audio_unavailable")
+        if not greeting_ready:
+            reasons.append("greeting_pool_unavailable")
+        return {
+            "status": "ready" if not reasons else "degraded",
+            "degraded_reasons": reasons,
+            "llm": llm_ready,
+            "asr": asr_ready,
+            "tts": tts_ready,
+            "error_fallback_audio": error_fallback_ready,
+            "greeting": {
+                "enabled": conversation.greeting_enabled,
+                "pool_count": len(self.greeting_pool),
+                "ready": greeting_ready,
+            },
+        }
+
     async def handle_health(self, request: web.Request) -> web.Response:
+        readiness = await self._readiness_snapshot()
         return web.json_response({
             "status": "healthy",
+            "liveness": "alive",
+            "readiness": readiness["status"],
+            "degraded_reasons": readiness["degraded_reasons"],
             "active_sessions": len(self.active_sessions),
             "ip": self.local_ip,
             "asr": self.config.asr.provider,
@@ -250,30 +360,18 @@ class HttpServer:
         """Expose non-secret runtime capabilities used by the browser test console."""
         conversation = self.config.conversation
         session_rows = []
-        recent_turns = []
+        retained_traces = list(self.recent_turn_store.recent)
+        recent_turns = [summarize_trace(trace) for trace in retained_traces]
         total_rounds = 0
         total_tool_calls = 0
+        for trace in retained_traces:
+            finish = trace.first("turn_finish")
+            if finish is not None:
+                total_rounds += int(finish.fields.get("llm_rounds") or 0)
+                total_tool_calls += int(finish.fields.get("tool_calls") or 0)
         for session_id, session in self.active_sessions.items():
             recorder = getattr(session, "turn_metrics", None)
             traces = list(getattr(recorder, "recent", []) or [])
-            latest = None
-            if recorder is not None and hasattr(recorder, "latest_summary"):
-                latest = recorder.latest_summary()
-            if latest:
-                recent_turns.append({
-                    "session_id": session_id,
-                    "turn_id": latest.get("turn_id"),
-                    "source": latest.get("source"),
-                    "outcome": latest.get("outcome"),
-                    "llm_rounds": latest.get("llm_rounds"),
-                    "tool_calls": latest.get("tool_calls"),
-                    "turn_start_to_first_ws_binary_ms": latest.get("turn_start_to_first_ws_binary_ms"),
-                })
-            for trace in traces:
-                finish = trace.first("turn_finish") if hasattr(trace, "first") else None
-                if finish is not None:
-                    total_rounds += int(finish.fields.get("llm_rounds") or 0)
-                    total_tool_calls += int(finish.fields.get("tool_calls") or 0)
 
             mcp = getattr(session, "mcp_device", None)
             executor = getattr(session, "tool_executor", None)
@@ -301,6 +399,7 @@ class HttpServer:
         audio_cache = None
         if self.response_audio_cache is not None and hasattr(self.response_audio_cache, "snapshot"):
             audio_cache = self.response_audio_cache.snapshot()
+        readiness = await self._readiness_snapshot()
 
         memory = self.config.memory
         tools = self.config.tools
@@ -362,21 +461,27 @@ class HttpServer:
                 },
             },
             "readiness": {
-                "llm": self.llm_engine is not None,
-                "tts": self.tts_engine is not None,
-                "greeting": {
-                    "enabled": conversation.greeting_enabled,
-                    "pool_count": len(self.greeting_pool),
-                    "ready": (not conversation.greeting_enabled) or bool(self.greeting_pool),
-                },
+                **readiness,
                 "audio_cache": audio_cache,
                 "tts_scheduler": tts_scheduler,
             },
             "runtime": {
-                "recent_turn_count": sum(row["turns_recorded"] for row in session_rows),
+                "recent_turn_count": len(retained_traces),
+                "recent_turn_capacity": self.recent_turn_store.max_recent,
                 "llm_round_count": total_rounds,
                 "tool_call_count": total_tool_calls,
-                "latest_turns": recent_turns[-20:],
+                "latest_turns": [
+                    {
+                        "session_id": item.get("session_id"),
+                        "turn_id": item.get("turn_id"),
+                        "source": item.get("source"),
+                        "outcome": item.get("outcome"),
+                        "llm_rounds": item.get("llm_rounds"),
+                        "tool_calls": item.get("tool_calls"),
+                        "turn_start_to_first_ws_binary_ms": item.get("turn_start_to_first_ws_binary_ms"),
+                    }
+                    for item in recent_turns[-20:]
+                ],
                 "sessions": session_rows,
             },
         })

@@ -28,10 +28,10 @@ from core.providers.llm.base import BaseLLM
 from core.providers.tts.base import BaseTTS
 from core.providers.tts.base import open_tts_stream
 from core.conversation import classify_conversation_text
-from core.response_audio_cache import ResponseAudioCache
+from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT, ResponseAudioCache
 from core.context_builder import ContextBuilder
 from core.intent import PendingAction, PendingActionStore
-from core.memory.models import MemoryProposal
+from core.memory.models import MemoryApplyResult, MemoryProposal
 from core.memory.policy import MemoryPolicy
 from core.memory.retrieval import MemoryRetriever
 from core.memory.store import MemoryStore
@@ -49,7 +49,7 @@ from core.turn_events import (
     SpeechSegmentEvent,
     ToolCallReadyEvent,
 )
-from core.turn_metrics import TurnMetricsRecorder, activate_trace, mark_current, reset_trace
+from core.turn_metrics import TurnMetricsRecorder, TurnTraceStore, activate_trace, mark_current, reset_trace
 from core.turn_runner import TurnRunner
 from config.settings import AppConfig
 
@@ -70,6 +70,7 @@ class ClientSession:
         llm_engine: BaseLLM,
         response_audio_cache: Optional[ResponseAudioCache] = None,
         greeting_pool: Optional[list[str]] = None,
+        turn_trace_store: Optional[TurnTraceStore] = None,
     ):
         self.websocket = websocket
         self.config = app_config
@@ -78,7 +79,11 @@ class ClientSession:
         self.response_audio_cache = response_audio_cache
         
         self.session_id = str(uuid.uuid4()).replace("-", "")
-        self.turn_metrics = TurnMetricsRecorder(self.session_id, app_config)
+        self.turn_metrics = TurnMetricsRecorder(
+            self.session_id,
+            app_config,
+            shared_store=turn_trace_store,
+        )
         self.version = ProtocolVersion.V1
         self.device_id = "unknown"
         self.client_id = "unknown"
@@ -204,6 +209,35 @@ class ClientSession:
                 on_speech_started_callback=self._on_speech_started,
             )
         raise ValueError(f"Unsupported ASR provider: {self.config.asr.provider}")
+
+    def _fit_llm_context(
+        self,
+        messages: list[Dict[str, Any]],
+        *,
+        tools: list[Dict[str, Any]],
+        detect_end_intent: bool,
+    ) -> list[Dict[str, Any]]:
+        fixed_system_messages = []
+        base_system_prompt = str(getattr(self.llm_engine, "system_prompt", "") or "").strip()
+        if base_system_prompt:
+            fixed_system_messages.append(base_system_prompt)
+        if detect_end_intent:
+            control_prompt = str(
+                getattr(self.llm_engine, "INLINE_CONVERSATION_CONTROL_PROMPT", "") or ""
+            ).strip()
+            if control_prompt:
+                fixed_system_messages.append(control_prompt)
+
+        fitted = self.context_builder.fit_to_budget(
+            messages,
+            system_messages=fixed_system_messages,
+            tools=tools,
+            max_context_tokens=self.config.latency.context_max_tokens,
+            reserve_output_tokens=self.config.llm.max_tokens,
+            chars_per_token=self.config.latency.context_chars_per_token,
+        )
+        mark_current("context_budget", **self.context_builder.last_budget)
+        return fitted
 
     async def initialize(self):
         if hasattr(self.websocket, "request") and self.websocket.request is not None:
@@ -434,6 +468,9 @@ class ClientSession:
 
     def _invalidate_capture(self):
         self._capture_generation += 1
+        # Transcript de-duplication is scoped to one capture. The same phrase
+        # spoken again after a new capture is a new user turn.
+        self.processed_transcript = ""
         invalidate = getattr(self.asr, "invalidate_capture", None)
         if invalidate is not None:
             invalidate(self._capture_generation)
@@ -905,6 +942,69 @@ class ClientSession:
             return False
         except asyncio.TimeoutError:
             return not cancel_event.is_set()
+
+    async def _send_cached_error_fallback(
+        self,
+        cancel_event: asyncio.Event,
+        turn_generation: int,
+    ) -> bool:
+        """Send a pre-generated Vietnamese error clip without invoking TTS."""
+        if self.response_audio_cache is None:
+            return False
+        try:
+            cached = await self.response_audio_cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+        except (KeyError, RuntimeError) as exc:
+            logger.info("cached_error_fallback_unavailable session=%s reason=%s", self.session_id, exc)
+            return False
+        except Exception as exc:
+            logger.warning("cached_error_fallback_lookup_failed session=%s error=%s", self.session_id, exc)
+            return False
+
+        frames = tuple(cached.frames or ())
+        if not frames or cancel_event.is_set() or not self._owns_turn(turn_generation):
+            return False
+
+        pacer = AudioPacer(
+            frame_duration_ms=self.config.tts.frame_duration_ms,
+            send_ahead_ms=self.config.tts.send_ahead_ms,
+        )
+        sent_start = False
+        sent_audio = False
+        try:
+            if not await self.send_text(make_tts_message(self.session_id, "start")):
+                return False
+            sent_start = True
+            if not await self.send_text(
+                make_tts_message(self.session_id, "sentence_start", DEFAULT_ERROR_FALLBACK_TEXT)
+            ):
+                return False
+            self.state = SessionState.SPEAKING
+            for opus_frame in frames:
+                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                    return False
+                if not await pacer.wait_for_send(cancel_event):
+                    return False
+                if not await self.send_binary(pack_audio_payload(opus_frame, self.version)):
+                    return False
+                sent_audio = True
+                pacer.record_frame_sent()
+                if pacer.playback_end is not None:
+                    self._playback_guard_until = max(
+                        self._playback_guard_until,
+                        pacer.playback_end,
+                    )
+            if sent_audio and self._owns_turn(turn_generation) and not cancel_event.is_set():
+                await self.send_text(make_tts_message(self.session_id, "stop"))
+                self._mark_response_complete(self._playback_guard_until)
+                mark_current("error_fallback_sent", cached=True)
+                return True
+            return False
+        except Exception as exc:
+            logger.warning("cached_error_fallback_send_failed session=%s error=%s", self.session_id, exc)
+            return False
+        finally:
+            if sent_start and not sent_audio and self._owns_turn(turn_generation):
+                await self.send_text(make_tts_message(self.session_id, "stop"))
 
     async def _process_fixed_response(
         self,
@@ -1396,6 +1496,8 @@ class ClientSession:
                     pending.action_id,
                     pending.tool_name,
                     pending.arguments,
+                    turn_id=pending.turn_id,
+                    cancel_event=cancel_event,
                 )
             response = self.tool_executor.render(descriptor, result).strip()
         else:
@@ -1418,9 +1520,9 @@ class ClientSession:
         proposal: Optional[MemoryProposal],
         *,
         turn_id: str,
-    ) -> bool:
+    ) -> MemoryApplyResult:
         if proposal is None or not self.config.memory.enabled:
-            return False
+            return MemoryApplyResult("ignored")
 
         action = str(proposal.action or "").strip()
         value = " ".join(str(proposal.value or "").split())
@@ -1441,24 +1543,35 @@ class ClientSession:
                     source_turn_id=turn_id,
                     evidence=evidence,
                 )
-            if value not in self._session_memory:
+            changed = value not in self._session_memory
+            if changed:
                 self._session_memory.append(value)
                 max_items = max(6, self.config.memory.top_k * 2)
                 if len(self._session_memory) > max_items:
                     del self._session_memory[:-max_items]
-            return True
+            return MemoryApplyResult(
+                "applied",
+                changed=changed or self._memory_store is not None,
+            )
 
         if action == "forget_all":
+            session_changed = bool(self._session_memory)
+            durable_changed = 0
             if self._memory_store is not None and self._memory_owner_id:
-                await self._memory_store.tombstone(
+                durable_changed = await self._memory_store.tombstone(
                     owner_id=self._memory_owner_id,
                     scope="personal",
                 )
             self._session_memory.clear()
-            return True
+            changed = session_changed or durable_changed > 0
+            return MemoryApplyResult(
+                "applied" if changed else "not_found",
+                changed=changed,
+            )
 
         if action == "forget" and value:
             needle = value.casefold()
+            durable_changed = 0
             if self._memory_store is not None and self._memory_owner_id:
                 facts = await self._memory_store.list_active(
                     owner_id=self._memory_owner_id,
@@ -1471,19 +1584,25 @@ class ClientSession:
                     if needle in fact.value.casefold() or fact.value.casefold() in needle
                 ]
                 if keys:
-                    await self._memory_store.tombstone(
+                    durable_changed = await self._memory_store.tombstone(
                         owner_id=self._memory_owner_id,
                         scope="personal",
                         keys=keys,
                     )
+            previous_session_size = len(self._session_memory)
             self._session_memory[:] = [
                 item
                 for item in self._session_memory
                 if needle not in item.casefold() and item.casefold() not in needle
             ]
-            return True
+            session_changed = len(self._session_memory) != previous_session_size
+            changed = session_changed or durable_changed > 0
+            return MemoryApplyResult(
+                "applied" if changed else "not_found",
+                changed=changed,
+            )
 
-        return False
+        return MemoryApplyResult("ignored")
 
     async def _process_ai_response(
         self,
@@ -1514,6 +1633,9 @@ class ClientSession:
         tts_started = False
         first_binary_sent = False
         reply_segments: list[str] = []
+        fully_sent_segments: list[str] = []
+        active_segment_text: Optional[str] = None
+        active_segment_had_audio = False
         tool_calls_seen = 0
         llm_rounds = 1
         tool_round_records: list[dict] = []
@@ -1534,7 +1656,9 @@ class ClientSession:
                 mark_current(
                     "memory_write_end",
                     action=explicit_proposal.action,
-                    applied=applied,
+                    applied=applied.applied,
+                    status=applied.status,
+                    changed=applied.changed,
                     durable=bool(self._memory_owner_id),
                 )
 
@@ -1545,24 +1669,39 @@ class ClientSession:
                 owner_id=self._memory_owner_id,
                 session_memory=self._session_memory,
             )
-            mark_current("context_lookup_end", message_count=len(messages))
-
             tools = (
                 self.tool_registry.openai_tools(limit=self.config.tools.schema_limit)
                 if self.config.tools.enabled and self.config.tools.native_enabled
                 else []
             )
+            detect_end_intent = bool(
+                check_end_intent
+                and self.config.intent.enabled
+                and self.config.intent.semantic_end_enabled
+                and self.config.conversation.end_intent_ai_enabled
+            )
+            messages = self._fit_llm_context(
+                messages,
+                tools=tools,
+                detect_end_intent=detect_end_intent,
+            )
+            mark_current("context_lookup_end", message_count=len(messages))
+            generation_deadline = (
+                time.monotonic() + self.config.latency.total_turn_timeout_ms / 1000.0
+            )
+
+            def remaining_generation_timeout_ms() -> int:
+                remaining = generation_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("LLM total turn timeout")
+                return max(1, int(remaining * 1000.0))
+
             stream = self.turn_runner.stream(
                 messages,
                 tools=tools,
-                detect_end_intent=(
-                    check_end_intent
-                    and self.config.intent.enabled
-                    and self.config.intent.semantic_end_enabled
-                    and self.config.conversation.end_intent_ai_enabled
-                ),
+                detect_end_intent=detect_end_intent,
                 first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
-                total_timeout_ms=self.config.latency.total_turn_timeout_ms,
+                total_timeout_ms=remaining_generation_timeout_ms(),
             )
 
             async def produce_events():
@@ -1586,6 +1725,7 @@ class ClientSession:
 
             async def speak_segment(text: str, emotion: Optional[str] = None):
                 nonlocal tts_started, first_binary_sent
+                nonlocal active_segment_text, active_segment_had_audio
                 cleaned = str(text or "").strip()
                 if not cleaned:
                     return
@@ -1608,6 +1748,9 @@ class ClientSession:
 
                 mark_current("tts_enqueue", chars=len(cleaned), priority="live")
                 first_opus_for_segment = True
+                segment_audio_sent = False
+                active_segment_text = cleaned
+                active_segment_had_audio = False
                 async for opus_frame in open_tts_stream(
                     self.tts_engine,
                     cleaned,
@@ -1625,6 +1768,8 @@ class ClientSession:
                     packet = pack_audio_payload(opus_frame, self.version)
                     if not await self.send_binary(packet):
                         raise ConnectionError("failed to send TTS audio")
+                    segment_audio_sent = True
+                    active_segment_had_audio = True
                     pacer.record_frame_sent()
                     if pacer.playback_end is not None:
                         self._playback_guard_until = max(
@@ -1638,6 +1783,13 @@ class ClientSession:
                             "Post-ASR first TTS binary sent in %.3fs",
                             time.perf_counter() - t_start,
                         )
+                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                    return
+                if not segment_audio_sent:
+                    raise RuntimeError("TTS produced no audio for speech segment")
+                fully_sent_segments.append(cleaned)
+                active_segment_text = None
+                active_segment_had_audio = False
 
             while True:
                 if producer_task.done() and event_queue.empty():
@@ -1698,7 +1850,9 @@ class ClientSession:
                     mark_current(
                         "memory_write_end",
                         action=event.action,
-                        applied=applied,
+                        applied=applied.applied,
+                        status=applied.status,
+                        changed=applied.changed,
                         durable=bool(self._memory_owner_id),
                     )
                     continue
@@ -1743,6 +1897,7 @@ class ClientSession:
                                 if requires_confirmation:
                                     self.pending_actions.prepare(
                                         action_id=event.call_id,
+                                        turn_id=trace.turn_id,
                                         tool_name=event.name,
                                         arguments=event.arguments,
                                         session_id=self.session_id,
@@ -1767,6 +1922,8 @@ class ClientSession:
                                     event.call_id,
                                     event.name,
                                     event.arguments,
+                                    turn_id=trace.turn_id,
+                                    cancel_event=cancel_event,
                                 )
                                 mark_current(
                                     "tool_execute_end",
@@ -1851,6 +2008,11 @@ class ClientSession:
                 synthesis_completed = False
                 synthesis_failed = False
                 try:
+                    synthesis_messages = self._fit_llm_context(
+                        synthesis_messages,
+                        tools=tools,
+                        detect_end_intent=False,
+                    )
                     mark_current("llm_round_start", round=2, purpose="tool_result_synthesis")
                     async for event in self.turn_runner.stream(
                         synthesis_messages,
@@ -1858,7 +2020,7 @@ class ClientSession:
                         detect_end_intent=False,
                         tool_choice="none",
                         first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
-                        total_timeout_ms=self.config.latency.total_turn_timeout_ms,
+                        total_timeout_ms=remaining_generation_timeout_ms(),
                     ):
                         if cancel_event.is_set() or not self._owns_turn(turn_generation):
                             return
@@ -1964,6 +2126,19 @@ class ClientSession:
 
         except asyncio.CancelledError:
             logger.info("Response task cancelled")
+            if first_binary_sent:
+                sent_text = " ".join(fully_sent_segments).strip()
+                details = []
+                if sent_text:
+                    details.append(f"server đã gửi trọn các đoạn: {sent_text}")
+                if active_segment_had_audio and active_segment_text:
+                    details.append(f"đoạn đang phát: {active_segment_text}")
+                detail_text = "; ".join(details)
+                interrupted_note = "[Phản hồi bị ngắt khi đang phát"
+                if detail_text:
+                    interrupted_note += f"; {detail_text}"
+                interrupted_note += "; không xác định người dùng đã nghe được bao nhiêu.]"
+                self.dialogue.add_assistant_message(interrupted_note)
             if trace.outcome == "running":
                 trace.finish("cancelled")
             return
@@ -1974,7 +2149,16 @@ class ClientSession:
             if self._owns_turn(turn_generation):
                 if tts_started:
                     await self.send_text(make_tts_message(self.session_id, "stop"))
-                self.state = SessionState.IDLE
+                if not first_binary_sent:
+                    await self._send_cached_error_fallback(cancel_event, turn_generation)
+                self.state = (
+                    SessionState.IDLE
+                    if self.listening_mode == "manual"
+                    else SessionState.LISTENING
+                )
+                # A failed turn must not suppress the same utterance on the
+                # next genuine capture.
+                self.processed_transcript = ""
                 self._discard_asr_until_speech_final = False
                 self._speech_active = False
                 self.final_transcript_parts.clear()

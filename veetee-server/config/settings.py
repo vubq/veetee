@@ -94,6 +94,10 @@ class LatencyConfig:
     first_token_timeout_ms: int = 4000
     total_turn_timeout_ms: int = 15000
     context_lookup_timeout_ms: int = 10
+    # Request budgeting uses a conservative character/token estimate so the
+    # realtime path stays bounded without adding a tokenizer dependency.
+    context_max_tokens: int = 16384
+    context_chars_per_token: int = 4
 
 
 @dataclass
@@ -127,6 +131,15 @@ class ToolsConfig:
     max_llm_rounds_per_turn: int = 1
     tool_result_synthesis: bool = False
 
+
+@dataclass
+class ManagementConfig:
+    # Management endpoints stay disabled until the operator configures a
+    # token. Stock OTA/WebSocket clients never need this credential.
+    token: str = field(default_factory=lambda: os.getenv("VEETEE_MANAGEMENT_TOKEN", ""))
+    test_voice_max_concurrency: int = 1
+    test_voice_requests_per_minute: int = 12
+
 @dataclass
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -138,6 +151,7 @@ class AppConfig:
     intent: IntentConfig = field(default_factory=IntentConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
+    management: ManagementConfig = field(default_factory=ManagementConfig)
 
 
 def _validate_conversation_config(config: ConversationConfig) -> None:
@@ -206,10 +220,18 @@ def _validate_app_config(config: AppConfig) -> None:
     for name in ("unified_turn_enabled",):
         if type(getattr(config.latency, name)) is not bool:
             raise ValueError(f"latency.{name} must be a boolean")
-    for name in ("first_token_timeout_ms", "total_turn_timeout_ms", "context_lookup_timeout_ms"):
+    for name in (
+        "first_token_timeout_ms",
+        "total_turn_timeout_ms",
+        "context_lookup_timeout_ms",
+        "context_max_tokens",
+        "context_chars_per_token",
+    ):
         value = getattr(config.latency, name)
         if type(value) is not int or value < 1:
             raise ValueError(f"latency.{name} must be a positive integer")
+    if config.latency.context_max_tokens <= config.llm.max_tokens:
+        raise ValueError("latency.context_max_tokens must exceed llm.max_tokens")
 
     for group_name, group, fields in (
         ("intent", config.intent, ("enabled", "semantic_end_enabled")),
@@ -253,6 +275,13 @@ def _validate_app_config(config: AppConfig) -> None:
     if config.asr.text_correction_enabled and config.latency.unified_turn_enabled:
         raise ValueError("fast unified-turn profile requires asr.text_correction_enabled=false")
 
+    if not isinstance(config.management.token, str):
+        raise ValueError("management.token must be a string")
+    for name in ("test_voice_max_concurrency", "test_voice_requests_per_minute"):
+        value = getattr(config.management, name)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"management.{name} must be a positive integer")
+
 def load_settings(config_file: Optional[str] = None) -> AppConfig:
     if config_file is None:
         config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml")
@@ -272,6 +301,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
     intent_data = raw.get("intent", {})
     memory_data = raw.get("memory", {})
     tools_data = raw.get("tools", {})
+    management_data = raw.get("management", {})
 
     if conversation_data is None:
         conversation_data = {}
@@ -288,6 +318,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         ("intent", intent_data),
         ("memory", memory_data),
         ("tools", tools_data),
+        ("management", management_data),
     ):
         if section_data is None:
             section_data = {}
@@ -297,6 +328,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         elif section_name == "intent": intent_data = section_data
         elif section_name == "memory": memory_data = section_data
         elif section_name == "tools": tools_data = section_data
+        elif section_name == "management": management_data = section_data
 
     config = AppConfig(
         server=ServerConfig(**{k: v for k, v in server_data.items() if k in ServerConfig.__annotations__}),
@@ -308,6 +340,9 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         intent=IntentConfig(**{k: v for k, v in intent_data.items() if k in IntentConfig.__annotations__}),
         memory=MemoryConfig(**{k: v for k, v in memory_data.items() if k in MemoryConfig.__annotations__}),
         tools=ToolsConfig(**{k: v for k, v in tools_data.items() if k in ToolsConfig.__annotations__}),
+        management=ManagementConfig(
+            **{k: v for k, v in management_data.items() if k in ManagementConfig.__annotations__}
+        ),
     )
     _validate_app_config(config)
     return config

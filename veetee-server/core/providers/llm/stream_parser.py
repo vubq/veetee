@@ -85,6 +85,8 @@ class NativeToolCallAccumulator:
         ready = []
         for index in sorted(self.calls):
             call = self.calls[index]
+            if not call.call_id:
+                raise ValueError("tool call missing model id")
             if not call.name:
                 raise ValueError("tool call missing function name")
             try:
@@ -93,5 +95,5 @@ class NativeToolCallAccumulator:
                 raise ValueError(f"invalid tool arguments JSON: {exc}") from exc
             if not isinstance(arguments, dict):
                 raise ValueError("tool arguments must be a JSON object")
-            ready.append((call.call_id or f"call_{index}", call.name, arguments))
+            ready.append((call.call_id, call.name, arguments))
         return ready

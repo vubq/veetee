@@ -37,6 +37,7 @@ class CountingLLM:
         self.end_intent_calls = 0
         self.greeting = "Chào bạn, mình đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
+        self.base_prompt = "Bạn là VeeTee."
 
     async def stream_chat(self, messages):
         self.chat_calls += 1
@@ -54,6 +55,12 @@ class CountingLLM:
         self.end_intent_calls += 1
         return False
 
+    def get_base_prompt(self):
+        return self.base_prompt
+
+    def set_base_prompt(self, value, persist=True):
+        self.base_prompt = value
+
 
 class CountingTTS:
     def __init__(self):
@@ -68,6 +75,10 @@ class CountingTTS:
     async def stream_sentence_to_opus(self, text, cancel_event=None):
         self.calls += 1
         yield b"opus:" + text.encode("utf-8")
+
+    async def synthesize_wav(self, text):
+        self.calls += 1
+        return b"RIFF-test-wav"
 
 
 class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -232,6 +243,67 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ota = await ota_response.json()
         self.assertEqual(ota["websocket"]["version"], 1)
         self.assertIn("url", ota["websocket"])
+
+    async def test_management_token_protects_prompt_and_test_voice_without_affecting_stock_ota_ws(self):
+        self.config.management.token = "integration-secret"
+        headers = {"X-Veetee-Management-Token": "integration-secret"}
+
+        denied_prompt = await self.client.get("/api/prompt")
+        self.assertEqual(denied_prompt.status, 401)
+        allowed_prompt = await self.client.get("/api/prompt", headers=headers)
+        self.assertEqual(allowed_prompt.status, 200)
+
+        denied_voice = await self.client.post("/api/test-voice", json={"text": "xin chào"})
+        self.assertEqual(denied_voice.status, 401)
+        allowed_voice = await self.client.post(
+            "/api/test-voice",
+            json={"text": "xin chào"},
+            headers=headers,
+        )
+        self.assertEqual(allowed_voice.status, 200)
+
+        ota_response = await self.client.get("/ota/")
+        self.assertEqual(ota_response.status, 200)
+        ws = await self._connect(ProtocolVersion.V1)
+        await ws.close()
+
+    async def test_management_endpoints_are_disabled_when_token_is_unset(self):
+        self.config.management.token = ""
+
+        denied_prompt = await self.client.get("/api/prompt")
+        denied_voice = await self.client.post("/api/test-voice", json={"text": "xin chào"})
+
+        self.assertEqual(denied_prompt.status, 401)
+        self.assertEqual(denied_voice.status, 401)
+
+    async def test_test_voice_rate_limit_is_bounded(self):
+        self.config.management.token = "integration-secret"
+        self.config.management.test_voice_requests_per_minute = 1
+        headers = {"X-Veetee-Management-Token": "integration-secret"}
+
+        first = await self.client.post("/api/test-voice", json={"text": "một"}, headers=headers)
+        second = await self.client.post("/api/test-voice", json={"text": "hai"}, headers=headers)
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 429)
+
+    async def test_diagnostics_retains_bounded_turn_trace_after_disconnect(self):
+        ws = await self._connect(ProtocolVersion.V1)
+        await self._wait_sessions(1)
+        session = next(iter(self.active_sessions.values()))
+        trace = session.turn_metrics.start_turn(7, "integration")
+        trace.mark("first_ws_binary_sent")
+        trace.finish("completed", llm_rounds=1, tool_calls=0)
+        turn_id = trace.turn_id
+
+        await ws.close()
+        await self._wait_sessions(0)
+
+        response = await self.client.get("/api/diagnostics")
+        self.assertEqual(response.status, 200)
+        diagnostics = await response.json()
+        self.assertEqual(diagnostics["runtime"]["recent_turn_count"], 1)
+        self.assertEqual(diagnostics["runtime"]["latest_turns"][-1]["turn_id"], turn_id)
+        self.assertEqual(diagnostics["runtime"]["latest_turns"][-1]["outcome"], "completed")
 
 
 if __name__ == "__main__":

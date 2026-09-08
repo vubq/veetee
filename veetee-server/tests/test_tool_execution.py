@@ -127,6 +127,127 @@ class ToolExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.status, ToolStatus.FAILED)
         self.assertIn("reused", second.error)
 
+    async def test_cancel_while_waiting_for_group_lock_never_dispatches(self):
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_called = asyncio.Event()
+
+        async def first_handler(arguments):
+            first_started.set()
+            await release_first.wait()
+            return {"ok": True}
+
+        async def second_handler(arguments):
+            second_called.set()
+            return {"ok": True}
+
+        descriptors = [
+            ToolDescriptor(
+                name="first", description="test",
+                input_schema={"type": "object", "additionalProperties": False},
+                handler=first_handler, read_only=False, idempotent=False,
+                concurrency_group="shared",
+            ),
+            ToolDescriptor(
+                name="second", description="test",
+                input_schema={"type": "object", "additionalProperties": False},
+                handler=second_handler, read_only=False, idempotent=False,
+                concurrency_group="shared",
+            ),
+        ]
+        executor = ToolExecutor(ToolRegistry(descriptors))
+        first_task = asyncio.create_task(executor.execute("a", "first", {}, turn_id="turn-1"))
+        await asyncio.wait_for(first_started.wait(), timeout=0.2)
+
+        cancel_event = asyncio.Event()
+        second_task = asyncio.create_task(
+            executor.execute("b", "second", {}, turn_id="turn-1", cancel_event=cancel_event)
+        )
+        await asyncio.sleep(0)
+        cancel_event.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await second_task
+
+        release_first.set()
+        await asyncio.wait_for(first_task, timeout=0.2)
+        await asyncio.sleep(0)
+        self.assertFalse(second_called.is_set())
+        self.assertEqual(executor.snapshot()["active_count"], 0)
+
+    async def test_same_model_call_id_is_scoped_to_turn(self):
+        calls = []
+
+        async def handler(arguments):
+            calls.append(arguments["value"])
+            return {"value": arguments["value"]}
+
+        descriptor = ToolDescriptor(
+            name="mutate", description="test",
+            input_schema={
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+            handler=handler, read_only=False, idempotent=False,
+        )
+        executor = ToolExecutor(ToolRegistry([descriptor]))
+        first = await executor.execute("same", "mutate", {"value": 1}, turn_id="turn-1")
+        second = await executor.execute("same", "mutate", {"value": 2}, turn_id="turn-2")
+        self.assertEqual(first.status, ToolStatus.SUCCEEDED)
+        self.assertEqual(second.status, ToolStatus.SUCCEEDED)
+        self.assertEqual(calls, [1, 2])
+
+    async def test_receipt_retention_caps_settled_calls_and_ttl_expires_unknown(self):
+        now = [100.0]
+
+        async def ok_handler(arguments):
+            return {"value": arguments["value"]}
+
+        async def slow_handler(arguments):
+            await asyncio.sleep(0.1)
+
+        descriptors = [
+            ToolDescriptor(
+                name="ok", description="test",
+                input_schema={
+                    "type": "object",
+                    "properties": {"value": {"type": "integer"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+                handler=ok_handler, read_only=False, idempotent=True,
+            ),
+            ToolDescriptor(
+                name="slow", description="test",
+                input_schema={"type": "object", "additionalProperties": False},
+                handler=slow_handler, timeout_ms=50, read_only=False, idempotent=False,
+            ),
+        ]
+        executor = ToolExecutor(
+            ToolRegistry(descriptors),
+            receipt_cap=2,
+            receipt_ttl_seconds=10,
+            retention_clock=lambda: now[0],
+        )
+
+        unknown = await executor.execute("u", "slow", {}, turn_id="turn-u")
+        self.assertEqual(unknown.status, ToolStatus.UNKNOWN)
+        for value in (1, 2, 3):
+            await executor.execute(str(value), "ok", {"value": value}, turn_id=f"turn-{value}")
+
+        snapshot = executor.snapshot()
+        self.assertGreaterEqual(snapshot["receipt_count"], 2)
+        self.assertEqual(snapshot["receipt_status_counts"].get("unknown", 0), 1)
+
+        # Cap pressure alone cannot evict a recent UNKNOWN side effect.
+        duplicate = await executor.execute("u", "slow", {}, turn_id="turn-u")
+        self.assertEqual(duplicate.status, ToolStatus.UNKNOWN)
+
+        now[0] += 11
+        await executor.execute("4", "ok", {"value": 4}, turn_id="turn-4")
+        self.assertEqual(executor.snapshot()["receipt_status_counts"].get("unknown", 0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

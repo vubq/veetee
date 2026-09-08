@@ -943,6 +943,34 @@
             }
         }
 
+        function managementHeaders(headers = {}) {
+            const token = sessionStorage.getItem('veeteeManagementToken') || '';
+            return token
+                ? { ...headers, 'X-Veetee-Management-Token': token }
+                : { ...headers };
+        }
+
+        async function managementFetch(url, options = {}, allowPrompt = true) {
+            const requestOptions = {
+                ...options,
+                headers: managementHeaders(options.headers || {}),
+            };
+            let response = await fetch(url, requestOptions);
+            if (response.status !== 401 || !allowPrompt) return response;
+
+            const token = window.prompt('Nhập management token của VeeTee:');
+            if (!token) return response;
+            sessionStorage.setItem('veeteeManagementToken', token.trim());
+            response = await fetch(url, {
+                ...options,
+                headers: managementHeaders(options.headers || {}),
+            });
+            if (response.status === 401) {
+                sessionStorage.removeItem('veeteeManagementToken');
+            }
+            return response;
+        }
+
         function configuredWakeWord() {
             return runtimeDiagnostics?.conversation?.wake_words?.[0] || 'VeeTee ơi';
         }
@@ -953,7 +981,7 @@
 
         async function loadBasePrompt() {
             try {
-                const response = await fetch('/api/prompt', { cache: 'no-store' });
+                const response = await managementFetch('/api/prompt', { cache: 'no-store' });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 inputBasePrompt.value = data.base_prompt || '';
@@ -976,7 +1004,7 @@
             promptStatus.innerText = 'Đang lưu...';
             promptStatus.className = 'helper-text info';
             try {
-                const response = await fetch('/api/prompt', {
+                const response = await managementFetch('/api/prompt', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ base_prompt: basePrompt }),
@@ -1466,7 +1494,7 @@
             audioInputStatus.innerText = 'VieNeu đang tạo âm thanh từ câu vừa nhập...';
 
             try {
-                const response = await fetch('/api/test-voice', {
+                const response = await managementFetch('/api/test-voice', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: query }),
@@ -1759,7 +1787,7 @@
                 || 'Xin chào, đây là bài kiểm tra TTS trực tiếp.';
             try {
                 await initAudioSystem();
-                const response = await fetch('/api/test-voice', {
+                const response = await managementFetch('/api/test-voice', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text }),

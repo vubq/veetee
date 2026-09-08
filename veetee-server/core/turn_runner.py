@@ -6,7 +6,14 @@ import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from core.intent import Intent
-from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent, TurnEvent
+from core.turn_events import (
+    CompletedEvent,
+    ControlEvent,
+    FailedEvent,
+    SpeechSegmentEvent,
+    ToolCallReadyEvent,
+    TurnEvent,
+)
 
 
 class TurnRunner:
@@ -52,6 +59,10 @@ class TurnRunner:
                 source,
                 first_event_timeout_ms=first_event_timeout_ms,
                 total_timeout_ms=total_timeout_ms,
+                first_event_predicate=lambda event: isinstance(
+                    event,
+                    (SpeechSegmentEvent, ToolCallReadyEvent, CompletedEvent, FailedEvent),
+                ),
             ):
                 yield event
             return
@@ -88,22 +99,31 @@ class TurnRunner:
         *,
         first_event_timeout_ms: Optional[int],
         total_timeout_ms: Optional[int],
+        first_event_predicate=None,
     ):
         """Iterate an async stream with cancellable first-event/total deadlines."""
         iterator = stream.__aiter__()
         started = time.monotonic()
-        first = True
+        awaiting_first = first_event_timeout_ms is not None
+        first_deadline = (
+            started + max(0.001, first_event_timeout_ms / 1000.0)
+            if first_event_timeout_ms is not None
+            else None
+        )
         try:
             while True:
                 timeout: Optional[float] = None
+                now = time.monotonic()
                 if total_timeout_ms is not None:
-                    remaining = total_timeout_ms / 1000.0 - (time.monotonic() - started)
+                    remaining = total_timeout_ms / 1000.0 - (now - started)
                     if remaining <= 0:
                         raise asyncio.TimeoutError("LLM total turn timeout")
                     timeout = remaining
-                if first and first_event_timeout_ms is not None:
-                    first_timeout = max(0.001, first_event_timeout_ms / 1000.0)
-                    timeout = first_timeout if timeout is None else min(timeout, first_timeout)
+                if awaiting_first and first_deadline is not None:
+                    first_remaining = first_deadline - now
+                    if first_remaining <= 0:
+                        raise asyncio.TimeoutError("LLM first usable event timeout")
+                    timeout = first_remaining if timeout is None else min(timeout, first_remaining)
                 try:
                     if timeout is None:
                         event = await anext(iterator)
@@ -112,9 +132,16 @@ class TurnRunner:
                 except StopAsyncIteration:
                     return
                 except asyncio.TimeoutError as exc:
-                    label = "first event" if first else "total turn"
+                    label = "first usable event" if awaiting_first else "total turn"
                     raise asyncio.TimeoutError(f"LLM {label} timeout") from exc
-                first = False
+                if awaiting_first:
+                    usable = (
+                        True
+                        if first_event_predicate is None
+                        else bool(first_event_predicate(event))
+                    )
+                    if usable:
+                        awaiting_first = False
                 yield event
         finally:
             aclose = getattr(iterator, "aclose", None)

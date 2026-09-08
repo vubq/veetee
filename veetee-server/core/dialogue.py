@@ -16,11 +16,9 @@ class DialogueContext:
     def add_user_message(self, text: str):
         if not text or not text.strip():
             return
-        # If previous message is already user (e.g. unanswered turn), replace it
-        if self.messages and self.messages[-1].role == "user":
-            self.messages[-1].content = text.strip()
-        else:
-            self.messages.append(ChatMessage(role="user", content=text.strip()))
+        # Preserve unanswered/interrupted user turns. A later follow-up may
+        # depend on the exact request that was interrupted.
+        self.messages.append(ChatMessage(role="user", content=text.strip()))
         self._trim()
 
     def add_assistant_message(self, text: str):

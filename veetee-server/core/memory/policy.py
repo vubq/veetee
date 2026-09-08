@@ -8,6 +8,25 @@ from core.memory.models import MemoryProposal
 
 _SECRET_RE = re.compile(r"\b(password|mật khẩu|api\s*key|token|secret|otp|mã xác thực)\b", re.IGNORECASE)
 
+_FORGET_ALL_RE = re.compile(
+    r"^(?:hãy\s+|hay\s+)?(?:quên|quen)\s+"
+    r"(?:hết|het|mọi\s+thứ|moi\s+thu|tất\s+cả|tat\s+ca)"
+    r"(?:\s+(?:giúp\s+)?(?:tôi|toi|mình|minh))?\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_FORGET_RE = re.compile(
+    r"^(?:hãy\s+|hay\s+)?(?:quên|quen)"
+    r"(?:\s+(?:đi|di)|\s+giúp\s+(?:tôi|toi|mình|minh))?"
+    r"\s+(?:rằng\s+|rang\s+)?(.+)$",
+    re.IGNORECASE,
+)
+_REMEMBER_RE = re.compile(
+    r"^(?:hãy\s+|hay\s+)?(?:nhớ|nho)"
+    r"(?:\s+giúp\s+(?:tôi|toi|mình|minh))?"
+    r"(?:\s+(?:rằng|rang|là|la))?\s+(.+)$",
+    re.IGNORECASE,
+)
+
 
 class MemoryPolicy:
     @staticmethod
@@ -15,18 +34,15 @@ class MemoryPolicy:
         cleaned = " ".join((text or "").strip().split())
         if not cleaned:
             return None
-        lower = cleaned.lower()
-        if re.search(r"\bquên\s+(?:hết|mọi\s+thứ|tất\s+cả)\b", lower):
+        if _FORGET_ALL_RE.fullmatch(cleaned):
             return MemoryProposal(action="forget_all", evidence=cleaned)
-        forget = re.search(r"\bquên(?:\s+đi|\s+giúp\s+(?:tôi|mình))?\s+(?:rằng\s+)?(.+)$", cleaned, re.IGNORECASE)
+        forget = _FORGET_RE.fullmatch(cleaned)
         if forget:
             value = forget.group(1).strip(" .,!?")
+            if not value:
+                return None
             return MemoryProposal(action="forget", value=value, evidence=cleaned)
-        remember = re.search(
-            r"\bnhớ(?:\s+giúp\s+(?:tôi|mình))?(?:\s+rằng|\s+là)?\s+(.+)$",
-            cleaned,
-            re.IGNORECASE,
-        )
+        remember = _REMEMBER_RE.fullmatch(cleaned)
         if remember:
             value = remember.group(1).strip(" .,!?")
             if not value or _SECRET_RE.search(value):

@@ -27,3 +27,13 @@ class MemoryProposal:
     value: str = ""
     key: str = ""
     evidence: str = ""
+
+
+@dataclass(frozen=True)
+class MemoryApplyResult:
+    status: str
+    changed: bool = False
+
+    @property
+    def applied(self) -> bool:
+        return self.status == "applied"

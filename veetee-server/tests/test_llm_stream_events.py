@@ -4,6 +4,7 @@ import unittest
 
 from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
 from core.providers.llm.stream_parser import NativeToolCallAccumulator, SSEDecoder
+from core.turn_events import FailedEvent, ToolCallReadyEvent
 
 
 class LLMStreamEventTests(unittest.TestCase):
@@ -47,8 +48,58 @@ class LLMStreamEventTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             accumulator.add_delta([{"index": 1, "function": {"name": "b", "arguments": "{}"}}])
 
+    def test_native_tool_call_requires_model_call_id(self):
+        accumulator = NativeToolCallAccumulator()
+        accumulator.add_delta([{
+            "index": 0,
+            "function": {"name": "calculate", "arguments": '{"expression":"2+3"}'},
+        }])
+        with self.assertRaisesRegex(ValueError, "missing.*id"):
+            accumulator.finalize()
+
 
 class LLMStreamCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_truncated_tool_stream_never_publishes_side_effect_call(self):
+        payload = (
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1",'
+            '"function":{"name":"calculate","arguments":"{\\"expression\\":\\"2+3\\"}"}}]}}]}\n\n'
+        ).encode("utf-8")
+
+        class Content:
+            async def iter_any(self):
+                yield payload
+
+        class FakeResponse:
+            status = 200
+            content = Content()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        llm = OmnirouteGroqLLM(base_prompt="Bạn là trợ lý tiếng Việt.")
+
+        async def get_fake_session():
+            return FakeSession()
+
+        llm._get_http_session = get_fake_session
+        events = [
+            event
+            async for event in llm.stream_turn(
+                [{"role": "user", "content": "Hai cộng ba"}],
+                tools=[{"type": "function", "function": {"name": "calculate"}}],
+                detect_end_intent=False,
+            )
+        ]
+        self.assertFalse(any(isinstance(event, ToolCallReadyEvent) for event in events))
+        self.assertTrue(any(isinstance(event, FailedEvent) for event in events))
+
     async def test_stream_turn_propagates_cancelled_error_cleanly(self):
         class CancelledContent:
             async def iter_any(self):

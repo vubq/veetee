@@ -1,8 +1,10 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 
 from config.settings import TTSConfig
-from core.response_audio_cache import MAX_CACHE_ENTRIES, ResponseAudioCache
+from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT, MAX_CACHE_ENTRIES, ResponseAudioCache
+from server import VeeTeeServer
 
 
 class CountingTTS:
@@ -89,6 +91,23 @@ class ResponseAudioCacheTests(unittest.IsolatedAsyncioTestCase):
         await cache.shutdown()
         with self.assertRaises(asyncio.CancelledError):
             await waiter
+
+    async def test_server_error_fallback_prewarm_makes_cached_clip_available(self):
+        cache, tts = self.make_cache()
+        server = object.__new__(VeeTeeServer)
+        server.response_audio_cache = cache
+        server.config = SimpleNamespace(
+            conversation=SimpleNamespace(fixed_response_timeout_seconds=1.0)
+        )
+        server.runtime_readiness = {"error_fallback_ready": False}
+
+        ready = await server._prewarm_error_fallback()
+        cached = await cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+
+        self.assertTrue(ready)
+        self.assertTrue(server.runtime_readiness["error_fallback_ready"])
+        self.assertTrue(cached.hit)
+        self.assertEqual(tts.calls, 1)
 
 
 if __name__ == "__main__":

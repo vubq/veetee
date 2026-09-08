@@ -153,7 +153,9 @@ class IntentPolicyTests(unittest.IsolatedAsyncioTestCase):
         await session._trigger_ai_turn("Đặt mức 7")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
         self.assertEqual(executed, [])
-        self.assertIsNotNone(session.pending_actions.peek())
+        pending = session.pending_actions.peek()
+        self.assertIsNotNone(pending)
+        self.assertNotEqual(pending.turn_id, "legacy")
         self.assertEqual(llm.calls, 1)
 
         await session._trigger_ai_turn("ừ")

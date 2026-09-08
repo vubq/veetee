@@ -108,6 +108,22 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(proposal)
         self.assertEqual(proposal.action, "upsert")
 
+    def test_explicit_memory_parser_rejects_negation_quotes_and_ambiguous_mentions(self):
+        rejected = [
+            "Đừng quên mọi thứ tôi đã nói.",
+            "Tôi không nhớ tên bạn.",
+            'Giải thích câu "nhớ tôi thích cà phê".',
+            "Giả sử tôi nói nhớ rằng tôi thích màu đỏ thì sao?",
+        ]
+        for text in rejected:
+            with self.subTest(text=text):
+                self.assertIsNone(MemoryPolicy.explicit_proposal(text))
+
+        proposal = MemoryPolicy.explicit_proposal("Nhớ rằng tôi không thích cà phê.")
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.action, "upsert")
+        self.assertEqual(proposal.value, "tôi không thích cà phê")
+
     async def test_durable_write_failure_does_not_mutate_session_memory(self):
         class BrokenStore:
             async def upsert(self, **kwargs):
@@ -161,6 +177,20 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
                 turn_id="t3",
             )
         self.assertEqual(session._session_memory, ["thích trà", "thích cà phê"])
+
+    async def test_forget_not_found_is_not_reported_as_applied(self):
+        session = _MemorySession(_FakeWebSocket(), AppConfig(), _UnusedTTS(), _UnusedLLM())
+        session._session_memory[:] = ["thích trà"]
+
+        result = await session._apply_memory_proposal(
+            MemoryProposal(action="forget", value="thích cà phê"),
+            turn_id="t4",
+        )
+
+        self.assertEqual(result.status, "not_found")
+        self.assertFalse(result.applied)
+        self.assertFalse(result.changed)
+        self.assertEqual(session._session_memory, ["thích trà"])
 
 
 if __name__ == "__main__":

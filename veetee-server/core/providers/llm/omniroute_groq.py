@@ -726,6 +726,7 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         inline_end_intent = False
         emotion_emitted = False
         finish_reason = None
+        saw_done = False
         usage = None
         saw_content = False
         first_token_marked = False
@@ -781,8 +782,9 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
 
                 async def consume_event(data_text: str):
                     nonlocal control_decided, control_buffer, inline_end_intent
-                    nonlocal finish_reason, usage, saw_content, first_token_marked
+                    nonlocal finish_reason, saw_done, usage, saw_content, first_token_marked
                     if data_text == "[DONE]":
+                        saw_done = True
                         return []
                     chunk = json.loads(data_text)
                     usage = chunk.get("usage") or usage
@@ -862,6 +864,10 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                 mark_current("llm_speech_segment", chars=len(clean_s))
                 yield SpeechSegmentEvent(clean_s, emotion=emotion)
 
+        if not saw_done or finish_reason not in {"stop", "tool_calls"}:
+            yield FailedEvent("LLM stream ended without a valid terminal event")
+            return
+
         try:
             ready_calls = tool_calls.finalize()
         except ValueError as exc:
@@ -869,6 +875,9 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             return
 
         if ready_calls:
+            if finish_reason != "tool_calls":
+                yield FailedEvent("tool calls require finish_reason=tool_calls")
+                return
             control = ensure_control(tool=True)
             if control is not None:
                 mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
@@ -876,6 +885,9 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             for call_id, name, arguments in ready_calls:
                 mark_current("llm_tool_call_ready", tool=name)
                 yield ToolCallReadyEvent(call_id=call_id, name=name, arguments=arguments)
+        elif finish_reason == "tool_calls":
+            yield FailedEvent("finish_reason=tool_calls without a complete tool call")
+            return
         elif not control_emitted:
             control = ensure_control()
             if control is not None:

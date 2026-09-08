@@ -12,6 +12,12 @@ class FastFakeEngine:
             yield index
 
 
+class FailingFakeEngine:
+    def infer_stream(self, *args, **kwargs):
+        raise RuntimeError("simulated vieneu failure")
+        yield  # pragma: no cover
+
+
 class FakeCodec:
     def resample_float32_48k_to_pcm16_24k(self, chunk):
         return chunk
@@ -49,6 +55,23 @@ class TTSBackpressureTests(unittest.IsolatedAsyncioTestCase):
         while tts._worker_futures and asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.02)
         self.assertEqual(tts._worker_futures, set())
+        tts.executor.shutdown(wait=True)
+
+    async def test_worker_exception_is_propagated_to_stream_consumer(self):
+        tts = object.__new__(VieneuLocalTTS)
+        tts.voice = "test"
+        tts.denoise = False
+        tts.temperature = 0.0
+        tts.stream_queue_max_chunks = 1
+        tts.codec = FakeCodec()
+        tts.engine = FailingFakeEngine()
+        tts.executor = ThreadPoolExecutor(max_workers=1)
+        tts._worker_futures = set()
+
+        with self.assertRaisesRegex(RuntimeError, "Vieneu worker failed"):
+            async for _ in tts.stream_sentence_to_opus("test", asyncio.Event()):
+                pass
+
         tts.executor.shutdown(wait=True)
 
 

@@ -99,6 +99,18 @@ latency:
   first_token_timeout_ms: 4000
   total_turn_timeout_ms: 15000
   context_lookup_timeout_ms: 10
+  # Toàn request LLM được giữ trong budget này. Server ước lượng 4 ký tự/token
+  # để tránh thêm tokenizer vào đường realtime; llm.max_tokens được giữ lại làm
+  # output reserve trước khi history/memory/tool schema được nhét vào request.
+  context_max_tokens: 16384
+  context_chars_per_token: 4
+
+# API quản trị (/api/prompt, /api/test-voice). Nên cấp token bằng biến môi
+# trường VEETEE_MANAGEMENT_TOKEN, không ghi secret vào file cấu hình/repo.
+# Khi token trống, các endpoint quản trị trả 401; OTA/WebSocket vẫn hoạt động.
+management:
+  test_voice_max_concurrency: 1
+  test_voice_requests_per_minute: 12
 
 intent:
   enabled: true

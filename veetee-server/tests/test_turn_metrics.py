@@ -1,6 +1,6 @@
 import unittest
 
-from core.turn_metrics import TurnMetricsRecorder, config_fingerprint
+from core.turn_metrics import TurnMetricsRecorder, TurnTraceStore, config_fingerprint
 
 
 class TurnMetricsTests(unittest.TestCase):
@@ -26,6 +26,42 @@ class TurnMetricsTests(unittest.TestCase):
         left = config_fingerprint({"api_key": "one", "token": "a", "mode": "fast"})
         right = config_fingerprint({"api_key": "two", "token": "b", "mode": "fast"})
         self.assertEqual(left, right)
+
+    def test_shared_trace_store_is_bounded_and_keeps_finished_trace_objects(self):
+        store = TurnTraceStore(max_recent=2)
+        recorder = TurnMetricsRecorder("session", {}, shared_store=store)
+
+        first = recorder.start_turn(1, "chat")
+        first.finish("completed", llm_rounds=1, tool_calls=0)
+        second = recorder.start_turn(2, "chat")
+        second.finish("cancelled", llm_rounds=1, tool_calls=0)
+        third = recorder.start_turn(3, "chat")
+        third.finish("failed", llm_rounds=1, tool_calls=0)
+
+        self.assertEqual(len(store.recent), 2)
+        self.assertIs(store.recent[0], second)
+        self.assertIs(store.recent[1], third)
+        self.assertEqual(store.recent[1].outcome, "failed")
+
+    def test_capture_pipeline_events_are_attached_to_turn_trace(self):
+        store = TurnTraceStore(max_recent=2)
+        recorder = TurnMetricsRecorder("session", {}, shared_store=store)
+        recorder.record_capture_event(9, "speech_endpoint", reason="silence")
+        recorder.record_capture_event(9, "asr_enqueue", queue_size=1)
+        recorder.record_capture_event(9, "asr_lock_acquired", wait_ms=2.5)
+        recorder.record_capture_event(9, "asr_infer_end", infer_ms=12.5)
+        recorder.record_capture_event(9, "asr_final", text_chars=8)
+
+        trace = recorder.start_turn(9, "chat")
+        trace.finish("completed", llm_rounds=1, tool_calls=0)
+
+        names = [event.name for event in trace.events]
+        self.assertEqual(
+            names[:5],
+            ["speech_endpoint", "asr_enqueue", "asr_lock_acquired", "asr_infer_end", "asr_final"],
+        )
+        self.assertIs(store.recent[-1], trace)
+        self.assertEqual(trace.first("asr_infer_end").fields["infer_ms"], 12.5)
 
 
 if __name__ == "__main__":
