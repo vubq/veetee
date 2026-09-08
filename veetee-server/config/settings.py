@@ -9,6 +9,10 @@ class ServerConfig:
     ws_port: int = 8000
     http_port: int = 8003
     log_level: str = "INFO"
+    # Stock Xiaozhi firmware can explicitly interrupt with abort/listen:start.
+    # Automatic speech-triggered barge-in remains disabled until a device AEC
+    # profile has been verified independently.
+    barge_in_policy: str = "client_only"
 
 @dataclass
 class ASRConfig:
@@ -51,6 +55,8 @@ class TTSConfig:
     source_voice: str = "Xuân Vĩnh"
     sample_rate: int = 24000
     frame_duration_ms: int = 60
+    send_ahead_ms: int = 120
+    stream_queue_max_chunks: int = 4
     denoise: bool = True
     temperature: float = 0.7
 

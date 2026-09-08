@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Awaitable
+from typing import Optional
 
 class BaseASR(ABC):
     @abstractmethod
@@ -8,9 +8,13 @@ class BaseASR(ABC):
         pass
 
     @abstractmethod
-    async def send_audio(self, pcm_bytes: bytes):
+    async def send_audio(self, pcm_bytes: bytes, capture_generation: Optional[int] = None):
         """Streams raw PCM audio chunks into the ASR engine."""
         pass
+
+    def invalidate_capture(self, capture_generation: int):
+        """Invalidate buffered/callback work from older microphone captures."""
+        return None
 
     async def finalize(self):
         """Flushes buffered audio while keeping the streaming ASR session open."""

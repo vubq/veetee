@@ -1,29 +1,25 @@
 # Đặc Tả Giao Thức VeeTee Protocol
 
-Tài liệu này mô tả giao thức giữa ESP32/Xiaozhi và VeeTee Server, gồm handshake, audio binary, listening mode, AEC capability và semantics ngắt TTS.
+Tài liệu này mô tả đường tương thích mặc định giữa VeeTee Server và ESP32/Xiaozhi firmware nguyên bản. Server không yêu cầu extension riêng trong hello hoặc TTS stop.
 
-## 1. WebSocket handshake & headers
+## 1. WebSocket handshake
 
-Client kết nối tới `ws://<server>:8000/` và có thể gửi:
+Client kết nối tới `ws://<server>:8000/` và có thể gửi các header chuẩn đang hỗ trợ:
 
 | Header | Mô tả | Ví dụ |
 | :--- | :--- | :--- |
-| `Authorization` | Token xác thực nếu được cấu hình | `Bearer my-token` |
-| `Protocol-Version` | Phiên bản binary protocol | `1`, `2`, `3` |
+| `Authorization` | Token nếu server cấu hình auth | `Bearer my-token` |
+| `Protocol-Version` | Binary protocol | `1`, `2`, `3` |
 | `Device-Id` | ID/MAC thiết bị | `84:F7:03:12:34:56` |
 | `Client-Id` | UUID client | `550e8400-e29b-41d4-a716-446655440000` |
 
-Sau khi WebSocket mở, firmware gửi `hello`:
+Hello firmware stock có thể không có `features`:
 
 ```json
 {
   "type": "hello",
   "version": 1,
   "transport": "websocket",
-  "features": {
-    "device_aec": true,
-    "mcp": true
-  },
   "audio_params": {
     "format": "opus",
     "sample_rate": 16000,
@@ -33,16 +29,21 @@ Sau khi WebSocket mở, firmware gửi `hello`:
 }
 ```
 
-### AEC capability
+Hoặc có các cờ firmware nguyên bản hỗ trợ, ví dụ:
 
-Hai cờ AEC có ý nghĩa khác nhau:
+```json
+{
+  "type": "hello",
+  "features": {
+    "mcp": true,
+    "aec": true
+  }
+}
+```
 
-- `features.device_aec=true`: firmware xác nhận echo cancellation đang chạy **trên thiết bị**. Đây là điều kiện VeeTee dùng để cho phép automatic realtime barge-in trong khi loa đang phát.
-- `features.aec=true`: firmware chọn **server-side AEC**. VeeTee hiện chưa triển khai server-side AEC, vì vậy cờ này không đủ để bật automatic realtime barge-in.
+`features.aec=true` biểu thị firmware chọn hướng server-side AEC. VeeTee hiện chưa có server-side AEC hoàn chỉnh, nên cờ này không tự bật automatic speech barge-in. `mode=realtime` cũng không được dùng như bằng chứng AEC hiệu quả.
 
-Firmware không nên gửi đồng thời hai cờ cho cùng một AEC mode.
-
-Server phản hồi:
+Server phản hồi hello với session và audio output:
 
 ```json
 {
@@ -58,13 +59,13 @@ Server phản hồi:
 }
 ```
 
-## 2. Giao thức audio binary
+## 2. Audio binary
 
 ### Version 1
 
-- Client -> Server: raw Opus 16 kHz mono, mặc định 60 ms/frame.
-- Server -> Client: raw Opus 24 kHz mono, mặc định 60 ms/frame.
-- Web diagnostic client có thể khai báo `audio_params.format=pcm16` để gửi PCM16 16 kHz trực tiếp.
+- Client -> Server: raw Opus 16 kHz mono, baseline 60 ms/frame.
+- Server -> Client: raw Opus 24 kHz mono, baseline 60 ms/frame.
+- Web diagnostic client có thể khai báo `audio_params.format=pcm16` để gửi PCM16 16 kHz.
 
 ### Version 2
 
@@ -90,6 +91,8 @@ struct BinaryProtocol3 {
 } __attribute__((packed));
 ```
 
+Server validate packet size/header và bỏ packet truncated thay vì đọc payload không đầy đủ.
+
 ## 3. Client -> Server JSON
 
 ### Listen start
@@ -103,13 +106,9 @@ struct BinaryProtocol3 {
 }
 ```
 
-`mode` có thể là:
+`mode` có thể là `realtime`, `auto` hoặc `manual`. Server ghi nhận mode client báo, không tự ép firmware đổi mode.
 
-- `realtime`: mic tiếp tục hoạt động trong lúc TTS phát. Automatic VAD barge-in chỉ được bật khi `device_aec=true`.
-- `auto`: luồng nghe tự động thông thường.
-- `manual`: thiết bị tự điều khiển thời điểm bắt đầu/dừng capture.
-
-Nếu `listen:start` đến trong lúc server đang `SPEAKING`, VeeTee coi đây là yêu cầu ngắt lượt hiện tại và gửi interrupting TTS stop.
+Nếu `listen:start` đến khi server đang speaking, VeeTee coi đây là yêu cầu ngắt turn hiện tại: cancel LLM/TTS, invalidate capture cũ và gửi `tts:stop` chuẩn.
 
 ### Listen detect
 
@@ -132,7 +131,7 @@ Nếu `listen:start` đến trong lúc server đang `SPEAKING`, VeeTee coi đây
 }
 ```
 
-Server finalize utterance hiện tại để không phải chờ thêm VAD silence khi thiết bị đã chủ động kết thúc capture.
+Server finalize utterance hiện tại để không phải chờ thêm VAD silence khi client đã chủ động kết thúc capture.
 
 ### Abort
 
@@ -144,7 +143,7 @@ Server finalize utterance hiện tại để không phải chờ thêm VAD silen
 }
 ```
 
-Khi nhận `abort`, server hủy LLM/TTS turn hiện tại, gửi `tts:stop` với `interrupt=true`, reset ASR/VAD bookkeeping và đưa state về `LISTENING` cho `auto/realtime` hoặc `IDLE` cho `manual`.
+Khi nhận `abort`, server cancel turn, invalidate capture generation, reset bookkeeping liên quan và gửi `tts:stop` chuẩn nếu đang phát. State được đưa về listening/idle theo listening mode hiện tại.
 
 ## 4. Server -> Client JSON
 
@@ -163,43 +162,18 @@ Khi nhận `abort`, server hủy LLM/TTS turn hiện tại, gửi `tts:stop` v�
 ### VAD
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "vad",
-  "state": "speech_started"
-}
+{"session_id":"xxx","type":"vad","state":"speech_started"}
 ```
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "vad",
-  "state": "speech_ended"
-}
+{"session_id":"xxx","type":"vad","state":"speech_ended"}
 ```
 
-### LLM display/emotion
+### TTS
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "llm",
-  "emotion": "happy",
-  "text": "😊"
-}
+{"session_id":"xxx","type":"tts","state":"start"}
 ```
-
-### TTS start
-
-```json
-{
-  "session_id": "xxx",
-  "type": "tts",
-  "state": "start"
-}
-```
-
-### TTS sentence start
 
 ```json
 {
@@ -210,37 +184,35 @@ Khi nhận `abort`, server hủy LLM/TTS turn hiện tại, gửi `tts:stop` v�
 }
 ```
 
-### TTS stop bình thường
+Sau binary audio cuối của turn bình thường:
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "tts",
-  "state": "stop"
-}
+{"session_id":"xxx","type":"tts","state":"stop"}
 ```
 
-Stop bình thường đánh dấu LLM/TTS turn đã hoàn tất. Firmware Xiaozhi nên để audio đã nằm trong decoder/playback queue phát hết để không cắt mất đuôi câu.
+Đường hỗ trợ stock FW dùng cùng message `tts:stop` chuẩn khi client yêu cầu ngắt. Server dừng gửi audio mới càng sớm càng tốt; không phụ thuộc trường extension riêng để flush decoder.
 
-### TTS stop do interruption
+## 5. Barge-in policy
 
-```json
-{
-  "session_id": "xxx",
-  "type": "tts",
-  "state": "stop",
-  "interrupt": true
-}
+Mặc định:
+
+```text
+server.barge_in_policy = client_only
 ```
 
-`interrupt=true` chỉ dùng cho barge-in, `abort`, hoặc `listen:start` trong lúc đang nói. Firmware tham khảo xử lý bằng `audio_service_.ResetDecoder()` để bỏ ngay audio cũ đã đệm.
+Quy tắc:
 
-## 5. Quy tắc barge-in
+- `abort` và explicit `listen:start` từ client có thể ngắt turn đang nói.
+- VAD speech-start trong lúc TTS phát không tự động cancel turn dưới policy mặc định.
+- Echo guard kéo dài qua estimated playback tail để transcript do loa lọt vào mic không tạo turn mới.
+- Automatic speech barge-in chỉ có thể được xem xét sau này bằng profile thiết bị đã xác minh AEC độc lập; không suy ra từ hello `aec=true` hoặc `mode=realtime`.
 
-Automatic speech-start barge-in của server chỉ chạy khi đồng thời thỏa:
+## 6. Pacing và giới hạn protocol
 
-1. Session đang `SPEAKING`.
-2. Listening mode là `realtime`.
-3. Client hello đã xác nhận `features.device_aec=true`.
+TTS output được pace theo duration frame bằng monotonic clock. `tts.send_ahead_ms` mặc định 120 ms giới hạn lượng audio server gửi trước theo mô hình playback estimate.
 
-Nếu không đủ ba điều kiện trên, server giữ echo guard để tránh tiếng loa lọt vào mic tạo thành một user turn giả.
+Firmware stock không cung cấp playback queue depth hoặc flush ACK chung. Vì vậy:
+
+- `tts:stop`/last binary đo được ở server không tương đương thời điểm loa vật lý dừng;
+- send-ahead 120 ms là giá trị khởi đầu để test board, không phải cam kết latency;
+- cần đo trên ESP32 thật trước khi tune xuống thấp hơn hoặc cao hơn.

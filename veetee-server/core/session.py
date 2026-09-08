@@ -19,6 +19,7 @@ from core.protocol import (
     parse_incoming_json,
 )
 from core.audio_utils import AudioCodec
+from core.audio_pacing import AudioPacer
 from core.dialogue import DialogueContext
 from core.providers.asr.base import BaseASR
 from core.providers.asr.deepgram_stream import DeepgramStreamASR
@@ -65,6 +66,9 @@ class ClientSession:
         self.current_turn_task: Optional[asyncio.Task] = None
         self.current_cancel_event: Optional[asyncio.Event] = None
         self.is_active = True
+        self._turn_generation = 0
+        self._capture_generation = 0
+        self._playback_guard_until = 0.0
         
         self.last_transcript = ""
         self.processed_transcript = ""
@@ -74,8 +78,14 @@ class ClientSession:
         # Xiaozhi keeps voice processing enabled while speaking only in
         # realtime mode. Auto/manual therefore retain the echo guard below.
         self.listening_mode = "auto"
-        self.device_side_aec = False
         self.server_side_aec_requested = False
+        self.barge_in_policy = str(self.config.server.barge_in_policy or "client_only").strip().lower()
+        if self.barge_in_policy != "client_only":
+            logger.warning(
+                "Unsupported barge_in_policy=%r; falling back to client_only",
+                self.barge_in_policy,
+            )
+            self.barge_in_policy = "client_only"
         
         self.asr: BaseASR = self._create_asr()
 
@@ -134,7 +144,7 @@ class ClientSession:
     async def _handle_binary_audio(self, data: bytes):
         if self.input_audio_format in ("pcm16", "linear16"):
             # Browser diagnostics and ESP32 both feed the same PCM16 ASR path.
-            await self.asr.send_audio(data)
+            await self.asr.send_audio(data, self._capture_generation)
             return
 
         opus_payload, timestamp = unpack_audio_payload(data, self.version)
@@ -143,7 +153,7 @@ class ClientSession:
         
         pcm_bytes = self.codec.decode_opus_to_pcm16(opus_payload)
         if pcm_bytes:
-            await self.asr.send_audio(pcm_bytes)
+            await self.asr.send_audio(pcm_bytes, self._capture_generation)
 
     async def _handle_text_json(self, text: str):
         data = parse_incoming_json(text)
@@ -157,12 +167,18 @@ class ClientSession:
             if client_ver:
                 self.version = int(client_ver)
             features = data.get("features") or {}
-            self.device_side_aec = features.get("device_aec") is True
             self.server_side_aec_requested = features.get("aec") is True
             audio_params = data.get("audio_params") or {}
             requested_format = str(audio_params.get("format", "opus")).lower()
             if requested_format in ("opus", "pcm16", "linear16"):
                 self.input_audio_format = requested_format
+            input_frame_duration = audio_params.get("frame_duration", 60)
+            if self.input_audio_format == "opus" and not self.codec.configure_input_frame_duration(input_frame_duration):
+                logger.warning(
+                    "Unsupported client Opus frame_duration=%r; keeping %d ms input decoder setting",
+                    input_frame_duration,
+                    self.codec.in_frame_duration_ms,
+                )
             
             hello_resp = make_hello_response(
                 self.session_id,
@@ -171,11 +187,13 @@ class ClientSession:
             )
             await self.send_text(hello_resp)
             logger.info(
-                "Handshake acknowledged for session %s (Ver=%s, device_aec=%s, server_aec=%s)",
+                "Handshake acknowledged for session %s (Ver=%s, mode=%s, reported_server_aec=%s, barge_in_policy=%s, input_frame=%sms)",
                 self.session_id,
                 self.version,
-                self.device_side_aec,
+                self.listening_mode,
                 self.server_side_aec_requested,
+                self.barge_in_policy,
+                self.codec.in_frame_duration_ms,
             )
 
         elif msg_type == MessageType.LISTEN:
@@ -186,12 +204,14 @@ class ClientSession:
                 if requested_mode in {"realtime", "auto", "manual"}:
                     self.listening_mode = requested_mode
                 self._abort_turn()
+                self._invalidate_capture()
+                self._playback_guard_until = 0.0
                 if was_speaking:
                     # Reference FW accepts tts:stop and moves from speaking to
                     # listening (except manual-stop mode, where it owns the
                     # subsequent state transition itself). Explicit listening
                     # start interrupts any buffered playback.
-                    await self.send_text(make_tts_message(self.session_id, "stop", interrupt=True))
+                    await self.send_text(make_tts_message(self.session_id, "stop"))
                 self.state = SessionState.LISTENING
                 self.final_transcript_parts.clear()
                 self._speech_active = False
@@ -204,6 +224,7 @@ class ClientSession:
                 user_text = data.get("text", "").strip()
                 logger.info(f"Listen detect received: '{user_text}'")
                 self._abort_turn()
+                self._invalidate_capture()
                 if user_text:
                     await self._trigger_ai_turn(user_text)
                 else:
@@ -223,7 +244,9 @@ class ClientSession:
             reason = data.get("reason", "")
             logger.info(f"Client requested abort (reason: {reason})")
             self._abort_turn()
-            await self.send_text(make_tts_message(self.session_id, "stop", interrupt=True))
+            self._invalidate_capture()
+            self._playback_guard_until = 0.0
+            await self.send_text(make_tts_message(self.session_id, "stop"))
             self.state = (
                 SessionState.IDLE
                 if self.listening_mode == "manual"
@@ -255,6 +278,7 @@ class ClientSession:
             pass
 
     def _abort_turn(self):
+        self._turn_generation += 1
         if self.current_cancel_event:
             self.current_cancel_event.set()
             self.current_cancel_event = None
@@ -262,42 +286,68 @@ class ClientSession:
             self.current_turn_task.cancel()
             self.current_turn_task = None
 
-    async def _on_speech_started(self):
-        if self.state == SessionState.SPEAKING:
-            if self.listening_mode == "realtime" and self.device_side_aec:
-                # Realtime is the Xiaozhi full-duplex/AEC path: mic audio keeps
-                # flowing while TTS is playing, so speech-start is a real
-                # barge-in signal. Cancel playback but keep this utterance so
-                # the same Silero/Parakeet capture can finish normally.
-                logger.info("Realtime barge-in detected; stopping current TTS turn")
-                self._abort_turn()
-                await self.send_text(make_tts_message(self.session_id, "stop", interrupt=True))
-                self.state = SessionState.LISTENING
-                self._discard_asr_until_speech_final = False
-                self.final_transcript_parts.clear()
-                self.processed_transcript = ""
-                self._speech_active = True
-                await self.send_text(make_vad_message(self.session_id, "speech_started"))
-                return
+    def _invalidate_capture(self):
+        self._capture_generation += 1
+        invalidate = getattr(self.asr, "invalidate_capture", None)
+        if invalidate is not None:
+            invalidate(self._capture_generation)
 
-            # Auto/manual disable voice processing while speaking. Realtime is
-            # also guarded unless the firmware explicitly confirms device-side
-            # AEC; this server does not implement server-side echo cancellation.
+    def _owns_turn(self, turn_generation: int) -> bool:
+        return self.is_active and self._turn_generation == turn_generation
+
+    async def _on_speech_started(self, capture_generation: Optional[int] = None):
+        if capture_generation is not None and capture_generation != self._capture_generation:
+            logger.info(
+                "Discarding stale ASR speech-start generation=%s current=%s",
+                capture_generation,
+                self._capture_generation,
+            )
+            return
+
+        if self.state == SessionState.SPEAKING:
+            # Stock FW has no runtime proof that device-side AEC is effective.
+            # Under client_only policy, speech detected while TTS is playing is
+            # treated as possible echo. Explicit abort/listen:start from the FW
+            # remains the supported interruption path.
             self._discard_asr_until_speech_final = True
             self._speech_active = False
             self.final_transcript_parts.clear()
             if self.listening_mode == "realtime":
                 logger.info(
-                    "Ignoring realtime ASR during TTS because device-side AEC was not confirmed"
+                    "Ignoring realtime ASR during TTS under client_only barge-in policy"
                 )
             else:
                 logger.info("Ignoring ASR speech while TTS is playing (echo guard)")
             return
 
+        if (
+            self.listening_mode == "realtime"
+            and self.barge_in_policy == "client_only"
+            and time.monotonic() < self._playback_guard_until
+        ):
+            self._discard_asr_until_speech_final = True
+            self._speech_active = False
+            self.final_transcript_parts.clear()
+            logger.info("Ignoring ASR during estimated playback tail under client_only policy")
+            return
+
         self._speech_active = True
         await self.send_text(make_vad_message(self.session_id, "speech_started"))
 
-    async def _on_asr_transcript(self, transcript: str, is_final: bool, speech_final: bool):
+    async def _on_asr_transcript(
+        self,
+        transcript: str,
+        is_final: bool,
+        speech_final: bool,
+        capture_generation: Optional[int] = None,
+    ):
+        if capture_generation is not None and capture_generation != self._capture_generation:
+            logger.info(
+                "Discarding stale ASR transcript generation=%s current=%s",
+                capture_generation,
+                self._capture_generation,
+            )
+            return
         transcript = (transcript or "").strip()
 
         # CTC can occasionally emit only punctuation/unknown-token glyphs for
@@ -341,9 +391,14 @@ class ClientSession:
             ))
         
         if speech_final:
+            final_stage_started = time.perf_counter()
             final_text = " ".join(self.final_transcript_parts).strip() or transcript.strip()
             self.final_transcript_parts.clear()
             final_text = await self._maybe_correct_asr_transcript(final_text)
+            logger.info(
+                "ASR final stage completed in %.0f ms after speech-final callback (correction included when enabled)",
+                (time.perf_counter() - final_stage_started) * 1000,
+            )
             if final_text:
                 self.last_transcript = final_text
                 await self.send_text(make_stt_message(
@@ -404,20 +459,33 @@ class ClientSession:
         
         # Launch AI streaming response pipeline with dedicated cancel event
         turn_cancel_event = asyncio.Event()
+        turn_generation = self._turn_generation
         self.current_cancel_event = turn_cancel_event
         self.current_turn_task = asyncio.create_task(
-            self._process_ai_response(transcript, turn_cancel_event)
+            self._process_ai_response(transcript, turn_cancel_event, turn_generation)
         )
 
-    async def _process_ai_response(self, user_text: str, cancel_event: asyncio.Event):
+    async def _process_ai_response(
+        self,
+        user_text: str,
+        cancel_event: asyncio.Event,
+        turn_generation: int,
+    ):
+        if not self._owns_turn(turn_generation):
+            return
         self.state = SessionState.THINKING
-        t_start = time.time()
+        t_start = time.perf_counter()
+        pacer = AudioPacer(
+            frame_duration_ms=self.config.tts.frame_duration_ms,
+            send_ahead_ms=self.config.tts.send_ahead_ms,
+        )
         
         self.dialogue.add_user_message(user_text)
         messages = self.dialogue.get_messages_for_llm()
         
         full_reply_clauses = []
         is_first_clause = True
+        first_binary_sent = False
         clause_queue: asyncio.Queue = asyncio.Queue(maxsize=3)
         queue_done = object()
         producer_errors = []
@@ -456,15 +524,21 @@ class ClientSession:
                     break
 
                 clause, emotion = queued_item
-                if cancel_event.is_set():
+                if cancel_event.is_set() or not self._owns_turn(turn_generation):
                     logger.info("Turn cancelled.")
                     return
 
                 if is_first_clause:
-                    ttft = time.time() - t_start
-                    logger.info(f"LLM first clause ready in {ttft:.3f}s: '{clause}'")
+                    post_asr_first_clause = time.perf_counter() - t_start
+                    logger.info(
+                        "Post-ASR first LLM clause ready in %.3fs: %r",
+                        post_asr_first_clause,
+                        clause,
+                    )
                     
                     emo = emotion or "happy"
+                    if not self._owns_turn(turn_generation):
+                        return
                     await self.send_text(make_llm_message(self.session_id, emo, "😊"))
                     await self.send_text(make_tts_message(self.session_id, "start"))
                     self.state = SessionState.SPEAKING
@@ -474,36 +548,53 @@ class ClientSession:
                 await self.send_text(make_tts_message(self.session_id, "sentence_start", clause))
                 
                 # Stream TTS Opus frames for this clause
-                first_audio = True
                 async for opus_frame in self.tts_engine.stream_sentence_to_opus(clause, cancel_event):
-                    if cancel_event.is_set():
+                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                        break
+
+                    if not await pacer.wait_for_send(cancel_event):
                         break
                     
-                    if first_audio:
-                        ttfa = time.time() - t_start
-                        logger.info(f"🚀 Time-to-first-audio (TTFA): {ttfa:.3f}s")
-                        first_audio = False
-                    
                     packet = pack_audio_payload(opus_frame, self.version)
+                    if not self._owns_turn(turn_generation):
+                        break
                     await self.send_binary(packet)
-                    await asyncio.sleep(0.005)
+                    if not first_binary_sent:
+                        logger.info(
+                            "Post-ASR first TTS binary sent in %.3fs",
+                            time.perf_counter() - t_start,
+                        )
+                        first_binary_sent = True
+                    pacer.record_frame_sent()
+                    if pacer.playback_end is not None:
+                        self._playback_guard_until = max(
+                            self._playback_guard_until,
+                            pacer.playback_end,
+                        )
 
                 if cancel_event.is_set():
                     break
 
-            if not cancel_event.is_set() and not is_first_clause:
+            if (
+                not cancel_event.is_set()
+                and self._owns_turn(turn_generation)
+                and not is_first_clause
+            ):
                 await self.send_text(make_tts_message(self.session_id, "stop"))
+                logger.info(
+                    "Post-ASR tts:stop sent in %.3fs",
+                    time.perf_counter() - t_start,
+                )
                 self.state = (
                     SessionState.IDLE
                     if self.listening_mode == "manual"
                     else SessionState.LISTENING
                 )
-                # With unverified realtime AEC, keep the echo guard until the
+                # With realtime input, keep the echo guard until the
                 # current VAD utterance reaches speech_final. Clearing it at
                 # tts:stop can let the speaker tail become a new user turn.
                 if not (
                     self.listening_mode == "realtime"
-                    and not self.device_side_aec
                     and self._discard_asr_until_speech_final
                 ):
                     self._discard_asr_until_speech_final = False
@@ -512,17 +603,39 @@ class ClientSession:
                 
                 complete_text = " ".join(full_reply_clauses)
                 self.dialogue.add_assistant_message(complete_text)
-                logger.info(f"Completed turn in {time.time() - t_start:.3f}s: '{complete_text}'")
+                logger.info(
+                    "Completed post-ASR response pipeline in %.3fs: %r",
+                    time.perf_counter() - t_start,
+                    complete_text,
+                )
+                logger.info(
+                    "Audio pacing: sent=%.0fms max_lead=%.0fms wait=%.0fms tail=%.0fms",
+                    pacer.total_audio_ms,
+                    pacer.max_estimated_lead_ms,
+                    pacer.total_wait_ms,
+                    pacer.estimated_lead_ms(),
+                )
+            elif (
+                not cancel_event.is_set()
+                and self._owns_turn(turn_generation)
+                and is_first_clause
+            ):
+                self.state = (
+                    SessionState.IDLE
+                    if self.listening_mode == "manual"
+                    else SessionState.LISTENING
+                )
 
         except asyncio.CancelledError:
             logger.info("Response task cancelled")
         except Exception as e:
             logger.error(f"Error during AI response processing: {e}", exc_info=True)
-            await self.send_text(make_tts_message(self.session_id, "stop", interrupt=True))
-            self.state = SessionState.IDLE
-            self._discard_asr_until_speech_final = False
-            self._speech_active = False
-            self.final_transcript_parts.clear()
+            if self._owns_turn(turn_generation):
+                await self.send_text(make_tts_message(self.session_id, "stop"))
+                self.state = SessionState.IDLE
+                self._discard_asr_until_speech_final = False
+                self._speech_active = False
+                self.final_transcript_parts.clear()
         finally:
             if not producer_task.done():
                 producer_task.cancel()
@@ -533,6 +646,9 @@ class ClientSession:
             aclose = getattr(llm_stream, "aclose", None)
             if aclose is not None:
                 await aclose()
+            if self.current_turn_task is asyncio.current_task():
+                self.current_turn_task = None
+                self.current_cancel_event = None
 
     async def send_text(self, text: str):
         if not self.is_active:
@@ -553,5 +669,6 @@ class ClientSession:
     async def close(self):
         self.is_active = False
         self._abort_turn()
+        self._invalidate_capture()
         await self.asr.stop()
         logger.info(f"Session {self.session_id} closed")

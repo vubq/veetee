@@ -15,8 +15,8 @@ class DeepgramStreamASR(BaseASR):
         model: str = "nova-2",
         sample_rate: int = 16000,
         endpointing_ms: int = 250,
-        on_transcript_callback: Optional[Callable[[str, bool, bool], Awaitable[None]]] = None,
-        on_speech_started_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        on_transcript_callback: Optional[Callable[..., Awaitable[None]]] = None,
+        on_speech_started_callback: Optional[Callable[..., Awaitable[None]]] = None,
     ):
         self.api_key = api_key
         self.language = language
@@ -31,6 +31,9 @@ class DeepgramStreamASR(BaseASR):
         self.is_running = False
         self.receive_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._capture_generation = 0
+        self._utterance_generation = 0
+        self._drop_results_until_speech_started = False
 
     def _build_url(self) -> str:
         params = [
@@ -75,9 +78,13 @@ class DeepgramStreamASR(BaseASR):
                     
                     if msg_type == "SpeechStarted":
                         logger.debug("Deepgram VAD: SpeechStarted detected")
+                        self._utterance_generation = self._capture_generation
+                        self._drop_results_until_speech_started = False
                         if self.on_speech_started_callback:
-                            await self.on_speech_started_callback()
+                            await self.on_speech_started_callback(self._utterance_generation)
                     elif msg_type == "Results":
+                        if self._drop_results_until_speech_started:
+                            continue
                         channel = data.get("channel", {})
                         if isinstance(channel, dict):
                             alternatives = channel.get("alternatives", [])
@@ -89,7 +96,12 @@ class DeepgramStreamASR(BaseASR):
                                 # also mark speech_final on the same payload.
                                 speech_final = data.get("speech_final", False) or data.get("from_finalize", False)
                                 if (transcript or speech_final) and self.on_transcript_callback:
-                                    await self.on_transcript_callback(transcript, is_final, speech_final)
+                                    await self.on_transcript_callback(
+                                        transcript,
+                                        is_final,
+                                        speech_final,
+                                        self._utterance_generation,
+                                    )
                 elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSING):
                     logger.debug(f"Deepgram WebSocket closed: {msg}")
                     break
@@ -100,7 +112,9 @@ class DeepgramStreamASR(BaseASR):
         finally:
             self.is_running = False
 
-    async def send_audio(self, pcm_bytes: bytes):
+    async def send_audio(self, pcm_bytes: bytes, capture_generation: Optional[int] = None):
+        if capture_generation is not None:
+            self._capture_generation = int(capture_generation)
         if not self.is_running or self.ws is None or self.ws.closed:
             await self.start()
         
@@ -109,6 +123,11 @@ class DeepgramStreamASR(BaseASR):
                 await self.ws.send_bytes(pcm_bytes)
             except Exception as e:
                 logger.error(f"Failed to send audio to Deepgram: {e}")
+
+    def invalidate_capture(self, capture_generation: int):
+        self._capture_generation = int(capture_generation)
+        self._utterance_generation = self._capture_generation
+        self._drop_results_until_speech_started = True
 
     async def finalize(self):
         """Force Deepgram to process buffered live audio without closing the socket."""

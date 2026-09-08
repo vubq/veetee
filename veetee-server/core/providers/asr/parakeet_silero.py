@@ -187,9 +187,9 @@ class ParakeetSileroASR(BaseASR):
         speech_start_frames: int = 2,
         pre_speech_pad_ms: int = 512,
         on_transcript_callback: Optional[
-            Callable[[str, bool, bool], Awaitable[None]]
+            Callable[..., Awaitable[None]]
         ] = None,
-        on_speech_started_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        on_speech_started_callback: Optional[Callable[..., Awaitable[None]]] = None,
     ):
         if sample_rate != 16000:
             raise ValueError("Silero VAD provider currently requires PCM16 16 kHz input")
@@ -221,11 +221,13 @@ class ParakeetSileroASR(BaseASR):
         self._vad_state = np.zeros((2, 1, 128), dtype=np.float32)
         self._vad_context = np.zeros((1, 64), dtype=np.float32)
 
-        self._utterance_queue: asyncio.Queue[Optional[np.ndarray]] = asyncio.Queue()
+        self._utterance_queue: asyncio.Queue = asyncio.Queue()
         self._worker_task: Optional[asyncio.Task] = None
         self._running = False
         self._start_error: Optional[str] = None
         self.last_word_confidence: Optional[float] = None
+        self._capture_generation = 0
+        self._utterance_generation = 0
 
     async def start(self):
         if self._running:
@@ -262,13 +264,16 @@ class ParakeetSileroASR(BaseASR):
             self._start_error = str(exc)
             raise
 
-    async def send_audio(self, pcm_bytes: bytes):
+    async def send_audio(self, pcm_bytes: bytes, capture_generation: Optional[int] = None):
         if not pcm_bytes:
             return
         if self._start_error is not None:
             return
         if not self._running:
             await self.start()
+
+        if capture_generation is not None:
+            self._capture_generation = int(capture_generation)
 
         self._pcm_pending.extend(pcm_bytes)
         while len(self._pcm_pending) >= self.FRAME_BYTES:
@@ -317,13 +322,14 @@ class ParakeetSileroASR(BaseASR):
 
             if self._candidate_voice_frames >= self.speech_start_frames:
                 self._speech_active = True
+                self._utterance_generation = self._capture_generation
                 self._speech_buffer = bytearray().join(self._pre_roll)
                 self._pre_roll.clear()
                 self._voiced_ms = self._candidate_voice_frames * self.FRAME_MS
                 self._silence_ms = 0.0
                 logger.debug("Silero VAD speech started (p=%.3f)", probability)
                 if self.on_speech_started_callback:
-                    await self.on_speech_started_callback()
+                    await self.on_speech_started_callback(self._utterance_generation)
             return
 
         self._speech_buffer.extend(frame)
@@ -334,20 +340,30 @@ class ParakeetSileroASR(BaseASR):
             self._silence_ms += self.FRAME_MS
 
         if self._silence_ms >= self.min_silence_duration_ms:
-            await self._finish_utterance()
+            await self._finish_utterance(endpoint_reason="silence")
 
-    async def _finish_utterance(self):
+    async def _finish_utterance(self, endpoint_reason: str = "unknown"):
         if not self._speech_active:
             return
 
         audio_bytes = bytes(self._speech_buffer)
         voiced_ms = self._voiced_ms
+        trailing_silence_ms = self._silence_ms
+        utterance_generation = self._utterance_generation
         self._reset_utterance_state()
+
+        logger.info(
+            "Silero utterance endpoint: reason=%s trailing_silence=%.0fms voiced=%.0fms generation=%s",
+            endpoint_reason,
+            trailing_silence_ms,
+            voiced_ms,
+            utterance_generation,
+        )
 
         if voiced_ms < self.min_speech_duration_ms:
             logger.debug("Silero rejected short speech candidate (%.0f ms)", voiced_ms)
             if self.on_transcript_callback:
-                await self.on_transcript_callback("", True, True)
+                await self.on_transcript_callback("", True, True, utterance_generation)
             return
 
         pcm = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
@@ -373,7 +389,7 @@ class ParakeetSileroASR(BaseASR):
                 peak,
                 gain,
             )
-        await self._utterance_queue.put(pcm)
+        await self._utterance_queue.put((utterance_generation, pcm))
 
     def _reset_utterance_state(self):
         self._speech_buffer.clear()
@@ -386,10 +402,11 @@ class ParakeetSileroASR(BaseASR):
 
     async def _transcription_worker(self):
         while True:
-            pcm = await self._utterance_queue.get()
+            queued = await self._utterance_queue.get()
             try:
-                if pcm is None:
+                if queued is None:
                     return
+                utterance_generation, pcm = queued
                 try:
                     text, confidence = await _ParakeetRuntime.transcribe(pcm)
                     self.last_word_confidence = confidence
@@ -414,9 +431,15 @@ class ParakeetSileroASR(BaseASR):
                     text = ""
                     self.last_word_confidence = None
                 if self.on_transcript_callback:
-                    await self.on_transcript_callback(text, True, True)
+                    await self.on_transcript_callback(text, True, True, utterance_generation)
             finally:
                 self._utterance_queue.task_done()
+
+    def invalidate_capture(self, capture_generation: int):
+        self._capture_generation = int(capture_generation)
+        self._utterance_generation = self._capture_generation
+        self._pcm_pending.clear()
+        self._reset_utterance_state()
 
     async def finalize(self):
         if not self._running:
@@ -429,7 +452,7 @@ class ParakeetSileroASR(BaseASR):
         self._pcm_pending.clear()
 
         if self._speech_active:
-            await self._finish_utterance()
+            await self._finish_utterance(endpoint_reason="client_finalize")
 
     async def stop(self):
         if not self._running and self._worker_task is None:

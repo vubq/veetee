@@ -32,6 +32,7 @@ class VeeTeeServer:
             source_voice=config.tts.source_voice,
             sample_rate=config.tts.sample_rate,
             frame_duration_ms=config.tts.frame_duration_ms,
+            stream_queue_max_chunks=config.tts.stream_queue_max_chunks,
             denoise=config.tts.denoise,
             temperature=config.tts.temperature
         )

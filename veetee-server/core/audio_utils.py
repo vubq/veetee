@@ -7,18 +7,40 @@ from typing import List, Generator
 logger = logging.getLogger("AudioUtils")
 
 class AudioCodec:
-    def __init__(self, in_sample_rate: int = 16000, out_sample_rate: int = 24000, frame_duration_ms: int = 60):
+    SUPPORTED_OPUS_FRAME_DURATIONS_MS = {5, 10, 20, 40, 60}
+
+    def __init__(
+        self,
+        in_sample_rate: int = 16000,
+        out_sample_rate: int = 24000,
+        frame_duration_ms: int = 60,
+        in_frame_duration_ms: int = 60,
+    ):
         self.in_sample_rate = in_sample_rate
         self.out_sample_rate = out_sample_rate
         self.frame_duration_ms = frame_duration_ms
-        
+
         # 16kHz Opus decoder for microphone input
         self.decoder_16k = opuslib_next.Decoder(in_sample_rate, 1)
-        self.in_frame_size = int(in_sample_rate * frame_duration_ms / 1000) # 960 samples @ 16kHz 60ms
+        self.in_frame_duration_ms = 60
+        self.in_frame_size = int(in_sample_rate * 60 / 1000)
+        self.configure_input_frame_duration(in_frame_duration_ms)
         
         # 24kHz Opus encoder for speaker output
         self.encoder_24k = opuslib_next.Encoder(out_sample_rate, 1, opuslib_next.APPLICATION_VOIP)
         self.out_frame_size = int(out_sample_rate * frame_duration_ms / 1000) # 1440 samples @ 24kHz 60ms
+
+    def configure_input_frame_duration(self, frame_duration_ms: int) -> bool:
+        """Apply a client-reported Opus frame duration when it is supported."""
+        try:
+            duration = int(frame_duration_ms)
+        except (TypeError, ValueError):
+            return False
+        if duration not in self.SUPPORTED_OPUS_FRAME_DURATIONS_MS:
+            return False
+        self.in_frame_duration_ms = duration
+        self.in_frame_size = int(self.in_sample_rate * duration / 1000)
+        return True
 
     def decode_opus_to_pcm16(self, opus_bytes: bytes) -> bytes:
         """

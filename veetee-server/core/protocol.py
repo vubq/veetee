@@ -30,13 +30,22 @@ def unpack_audio_payload(data: bytes, version: int = 1) -> Tuple[bytes, int]:
     if version == 2 and len(data) >= 16:
         # >HHIII : version (2), type (2), reserved (4), timestamp (4), payload_size (4)
         ver, msg_type, reserved, timestamp, payload_size = struct.unpack(">HHIII", data[:16])
+        if payload_size > len(data) - 16:
+            logger.warning("Dropping truncated protocol v2 audio packet")
+            return b"", timestamp
         payload = data[16:16 + payload_size]
         return payload, timestamp
     elif version == 3 and len(data) >= 4:
         # >BBH : type (1), reserved (1), payload_size (2)
         msg_type, reserved, payload_size = struct.unpack(">BBH", data[:4])
+        if payload_size > len(data) - 4:
+            logger.warning("Dropping truncated protocol v3 audio packet")
+            return b"", 0
         payload = data[4:4 + payload_size]
         return payload, 0
+    elif version in (2, 3):
+        logger.warning("Dropping undersized protocol v%s audio packet", version)
+        return b"", 0
     else:
         # Version 1: raw opus frame
         return data, 0
@@ -103,7 +112,6 @@ def make_tts_message(
     session_id: str,
     state: str,
     text: Optional[str] = None,
-    interrupt: bool = False,
 ) -> str:
     msg: Dict[str, Any] = {
         "session_id": session_id,
@@ -112,8 +120,6 @@ def make_tts_message(
     }
     if text is not None:
         msg["text"] = text
-    if interrupt:
-        msg["interrupt"] = True
     return json.dumps(msg)
 
 def parse_incoming_json(data: str) -> Optional[Dict[str, Any]]:

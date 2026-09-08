@@ -7,7 +7,7 @@ import time
 import wave
 import numpy as np
 from typing import AsyncGenerator, Optional
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from core.providers.tts.base import BaseTTS
 from core.audio_utils import AudioCodec
 
@@ -20,6 +20,7 @@ class VieneuLocalTTS(BaseTTS):
         source_voice: str = "Xuân Vĩnh",
         sample_rate: int = 24000,
         frame_duration_ms: int = 60,
+        stream_queue_max_chunks: int = 4,
         denoise: bool = True,
         temperature: float = 0.7
     ):
@@ -27,6 +28,7 @@ class VieneuLocalTTS(BaseTTS):
         self.source_voice = source_voice
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
+        self.stream_queue_max_chunks = max(1, int(stream_queue_max_chunks))
         self.denoise = denoise
         self.temperature = temperature
         
@@ -37,6 +39,7 @@ class VieneuLocalTTS(BaseTTS):
         )
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vieneu_tts")
         self._engine_lock = threading.Lock()
+        self._worker_futures = set()
         self.engine = None
         self._init_engine()
 
@@ -105,7 +108,25 @@ class VieneuLocalTTS(BaseTTS):
         
         remainder_buffer = bytearray()
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=self.stream_queue_max_chunks)
+        queue_done = object()
+        stop_event = threading.Event()
+
+        def _put_with_backpressure(item) -> bool:
+            if stop_event.is_set():
+                return False
+            put_future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+            while True:
+                try:
+                    put_future.result(timeout=0.1)
+                    return True
+                except FutureTimeoutError:
+                    if stop_event.is_set() or (cancel_event and cancel_event.is_set()):
+                        put_future.cancel()
+                        return False
+                except Exception as exc:
+                    logger.debug("TTS queue bridge stopped: %s", exc)
+                    return False
 
         def _generate():
             try:
@@ -119,30 +140,72 @@ class VieneuLocalTTS(BaseTTS):
                     ):
                         if cancel_event and cancel_event.is_set():
                             break
-                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                        if not _put_with_backpressure(chunk):
+                            break
             except Exception as e:
                 logger.error(f"Error during Vieneu infer_stream: {e}")
             finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                if not stop_event.is_set() and not (cancel_event and cancel_event.is_set()):
+                    _put_with_backpressure(queue_done)
 
-        _ = loop.run_in_executor(self.executor, _generate)
+        worker_future = loop.run_in_executor(self.executor, _generate)
+        self._worker_futures.add(worker_future)
 
-        while True:
-            if cancel_event and cancel_event.is_set():
-                break
+        def _worker_done(future):
+            self._worker_futures.discard(future)
+            try:
+                future.result()
+            except Exception as exc:
+                logger.debug("TTS worker finished with error: %s", exc)
 
-            chunk = await queue.get()
-            if chunk is None:
-                break
+        worker_future.add_done_callback(_worker_done)
 
-            pcm_24k = self.codec.resample_float32_48k_to_pcm16_24k(chunk)
-            opus_frames = self.codec.chunk_pcm_to_opus_frames(pcm_24k, remainder_buffer)
-            for frame in opus_frames:
+        try:
+            while True:
                 if cancel_event and cancel_event.is_set():
                     break
-                yield frame
 
-        if not (cancel_event and cancel_event.is_set()):
-            final_frames = self.codec.flush_remainder_to_opus_frame(remainder_buffer)
-            for frame in final_frames:
-                yield frame
+                if cancel_event is None:
+                    chunk = await queue.get()
+                else:
+                    get_task = asyncio.create_task(queue.get())
+                    cancel_task = asyncio.create_task(cancel_event.wait())
+                    done, pending = await asyncio.wait(
+                        (get_task, cancel_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task in done and cancel_event.is_set():
+                        get_task.cancel()
+                        try:
+                            await get_task
+                        except asyncio.CancelledError:
+                            pass
+                        break
+                    cancel_task.cancel()
+                    try:
+                        await cancel_task
+                    except asyncio.CancelledError:
+                        pass
+                    chunk = get_task.result()
+
+                if chunk is queue_done:
+                    break
+
+                pcm_24k = self.codec.resample_float32_48k_to_pcm16_24k(chunk)
+                opus_frames = self.codec.chunk_pcm_to_opus_frames(pcm_24k, remainder_buffer)
+                for frame in opus_frames:
+                    if cancel_event and cancel_event.is_set():
+                        break
+                    yield frame
+
+            if not (cancel_event and cancel_event.is_set()):
+                final_frames = self.codec.flush_remainder_to_opus_frame(remainder_buffer)
+                for frame in final_frames:
+                    yield frame
+        finally:
+            stop_event.set()
+            if not worker_future.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(worker_future), timeout=0.25)
+                except asyncio.TimeoutError:
+                    logger.info("TTS worker still unwinding after stream cancellation")
