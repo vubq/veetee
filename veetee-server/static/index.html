@@ -2,153 +2,686 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#07111f">
     <title>VeeTee Realtime Voice Server Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/opus-decoder@0.7.7/dist/opus-decoder.min.js"></script>
     <style>
+        :root {
+            color-scheme: dark;
+            --bg: #07111f;
+            --surface: #0d1a2b;
+            --surface-2: #101f32;
+            --surface-3: #14263c;
+            --border: rgba(148, 163, 184, 0.16);
+            --border-strong: rgba(148, 163, 184, 0.28);
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --muted-2: #64748b;
+            --primary: #14b8a6;
+            --primary-strong: #0f9f91;
+            --cyan: #22d3ee;
+            --indigo: #818cf8;
+            --amber: #fbbf24;
+            --rose: #fb7185;
+            --green: #34d399;
+            --shadow: 0 18px 45px rgba(0, 0, 0, 0.22);
+            --radius: 18px;
+        }
+
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            min-height: 100dvh;
+            background:
+                radial-gradient(circle at 12% -8%, rgba(20, 184, 166, 0.13), transparent 30rem),
+                radial-gradient(circle at 92% 3%, rgba(99, 102, 241, 0.10), transparent 28rem),
+                var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button, input, textarea { font: inherit; }
+        button { -webkit-tap-highlight-color: transparent; }
+        button:focus-visible, input:focus-visible, textarea:focus-visible {
+            outline: 3px solid rgba(34, 211, 238, 0.24);
+            outline-offset: 2px;
+        }
+        code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+        .hidden { display: none !important; }
+
+        .app-header {
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            border-bottom: 1px solid var(--border);
+            background: rgba(7, 17, 31, 0.88);
+            backdrop-filter: blur(18px);
+        }
+        .header-inner {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+            gap: 11px;
+        }
+        .brand-mark {
+            width: 38px;
+            height: 38px;
+            flex: 0 0 auto;
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            background: linear-gradient(145deg, rgba(20,184,166,.22), rgba(34,211,238,.10));
+            border: 1px solid rgba(45, 212, 191, 0.28);
+            color: #5eead4;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+        }
+        .brand-copy { min-width: 0; }
+        .brand-title {
+            margin: 0;
+            font-size: 17px;
+            line-height: 1.15;
+            letter-spacing: -0.02em;
+        }
+        .brand-subtitle {
+            margin: 4px 0 0;
+            color: var(--muted-2);
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .stack-badges {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .stack-badges::-webkit-scrollbar { display: none; }
+        .stack-badge {
+            flex: 0 0 auto;
+            padding: 7px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(15, 30, 48, 0.72);
+            color: var(--muted);
+            font: 10px/1.1 "SFMono-Regular", Consolas, monospace;
+        }
+
+        .app-main {
+            width: min(1240px, 100%);
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .status-card {
+            min-width: 0;
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(16,31,50,.94), rgba(13,26,43,.94));
+            border-radius: 15px;
+            padding: 14px 16px;
+        }
+        .status-label {
+            display: block;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 650;
+            letter-spacing: .015em;
+        }
+        .status-value {
+            display: block;
+            margin-top: 5px;
+            font-size: 16px;
+            font-weight: 750;
+            line-height: 1.25;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .status-value.status-warn { color: var(--amber); }
+        .status-value.status-ok { color: var(--green); }
+        .status-value.status-error { color: var(--rose); }
+        .status-value.status-info { color: #a5b4fc; }
+        .status-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .connection-inline {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+            gap: 9px;
+        }
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 auto;
+            border-radius: 999px;
+            background: var(--amber);
+            box-shadow: 0 0 0 5px rgba(251,191,36,.08);
+        }
+        .status-dot.dot-ok { background: var(--green); box-shadow: 0 0 0 5px rgba(52,211,153,.08); }
+        .status-dot.dot-error { background: var(--rose); box-shadow: 0 0 0 5px rgba(251,113,133,.08); }
+        .status-dot.dot-pulse { animation: pulse 1.45s ease-in-out infinite; }
+
+        .quick-card {
+            display: grid;
+            grid-template-columns: minmax(0, auto) 1fr;
+            align-items: center;
+            gap: 18px;
+            padding: 14px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: rgba(13, 26, 43, 0.83);
+            box-shadow: 0 10px 28px rgba(0,0,0,.14);
+        }
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(3, max-content);
+            gap: 8px;
+        }
+        .action-btn {
+            min-height: 42px;
+            border: 0;
+            border-radius: 12px;
+            padding: 0 15px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            color: #f8fafc;
+            font-size: 13px;
+            font-weight: 720;
+            cursor: pointer;
+            transition: transform .16s ease, background .16s ease, opacity .16s ease, border-color .16s ease;
+            touch-action: manipulation;
+        }
+        .action-btn:hover:not(:disabled) { transform: translateY(-1px); }
+        .action-btn:active:not(:disabled) { transform: translateY(0); }
+        .action-btn:disabled { opacity: .38; cursor: not-allowed; }
+        .action-primary { background: var(--primary-strong); }
+        .action-primary:hover:not(:disabled) { background: #12ad9d; }
+        .action-cyan { background: #0e7490; }
+        .action-cyan:hover:not(:disabled) { background: #0f86a5; }
+        .action-danger { background: rgba(190, 24, 93, .88); }
+        .action-danger:hover:not(:disabled) { background: rgba(225, 29, 72, .92); }
+        .action-secondary {
+            background: var(--surface-3);
+            border: 1px solid var(--border-strong);
+        }
+        .endpoint-list {
+            min-width: 0;
+            display: flex;
+            justify-content: flex-end;
+            gap: 16px;
+            color: var(--muted-2);
+            font-size: 10px;
+        }
+        .endpoint-item {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .endpoint-item code {
+            color: #5eead4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 360px;
+            align-items: start;
+            gap: 16px;
+        }
+        .panel {
+            border: 1px solid var(--border);
+            background: rgba(13, 26, 43, 0.88);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+        .panel-header {
+            min-height: 58px;
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .panel-title {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 760;
+            letter-spacing: -0.01em;
+        }
+        .panel-subtitle {
+            margin: 3px 0 0;
+            color: var(--muted-2);
+            font-size: 10.5px;
+            line-height: 1.35;
+        }
+        .panel-tag {
+            flex: 0 0 auto;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--muted);
+            border-radius: 999px;
+            padding: 5px 8px;
+            font-size: 9.5px;
+        }
+
+        .conversation-panel {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 610px;
+            max-height: calc(100dvh - 240px);
+        }
+        .chat-logs {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: #334155 transparent;
+        }
+        .welcome-message {
+            margin: auto;
+            max-width: 420px;
+            padding: 22px;
+            text-align: center;
+            color: var(--muted);
+            border: 1px dashed var(--border-strong);
+            border-radius: 16px;
+            background: rgba(15, 30, 48, .52);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .welcome-icon {
+            width: 42px;
+            height: 42px;
+            margin: 0 auto 10px;
+            display: grid;
+            place-items: center;
+            border-radius: 13px;
+            color: #5eead4;
+            background: rgba(20,184,166,.12);
+            font-size: 20px;
+        }
+        .message-row { display: flex; }
+        .message-row.user { justify-content: flex-end; }
+        .message-row.assistant { justify-content: flex-start; }
+        .message-bubble {
+            max-width: min(78%, 660px);
+            padding: 10px 13px;
+            border-radius: 16px;
+            font-size: 13px;
+            line-height: 1.55;
+            overflow-wrap: anywhere;
+        }
+        .message-bubble.user {
+            color: white;
+            background: linear-gradient(145deg, #0f9f91, #0d9488);
+            border-top-right-radius: 5px;
+        }
+        .message-bubble.assistant {
+            color: #e2e8f0;
+            background: var(--surface-3);
+            border: 1px solid var(--border);
+            border-top-left-radius: 5px;
+        }
+        .emotion-badge {
+            display: inline-block;
+            margin-right: 7px;
+            padding: 2px 6px;
+            border-radius: 7px;
+            background: rgba(7, 17, 31, .66);
+            color: #a5b4fc;
+            font: 9.5px/1.4 "SFMono-Regular", Consolas, monospace;
+        }
+        .composer {
+            border-top: 1px solid var(--border);
+            padding: 13px;
+            background: rgba(9, 20, 34, .93);
+        }
+        .composer-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+        }
+        .text-input, .prompt-input {
+            width: 100%;
+            color: var(--text);
+            background: #091522;
+            border: 1px solid var(--border-strong);
+            border-radius: 12px;
+            transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        .text-input {
+            height: 44px;
+            padding: 0 13px;
+            font-size: 13px;
+        }
+        .prompt-input {
+            min-height: 150px;
+            padding: 12px 13px;
+            resize: vertical;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .text-input::placeholder, .prompt-input::placeholder { color: #52627a; }
+        .text-input:focus, .prompt-input:focus {
+            border-color: rgba(45,212,191,.65);
+            box-shadow: 0 0 0 3px rgba(20,184,166,.08);
+            outline: none;
+        }
+        .send-btn { min-width: 82px; }
+        .composer-options {
+            margin-top: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .toggle-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #cbd5e1;
+            font-size: 11px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .toggle-label input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--primary);
+        }
+        .toggle-note { color: var(--muted-2); font-size: 10px; }
+
+        .side-stack { display: grid; gap: 16px; }
+        .panel-body { padding: 15px; }
+        .pipeline-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .stage-card {
+            min-width: 0;
+            padding: 10px 11px;
+            border-radius: 12px;
+            background: #091522;
+            border: 1px solid var(--border);
+        }
+        .stage-label {
+            color: var(--muted-2);
+            font-size: 9px;
+            font-weight: 750;
+            letter-spacing: .08em;
+        }
+        .stage-value {
+            margin-top: 5px;
+            color: #cbd5e1;
+            font: 10.5px/1.35 "SFMono-Regular", Consolas, monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #stageVad { color: #67e8f9; }
+        #stageAsr { color: #fcd34d; }
+        #stageLlm { color: #a5b4fc; }
+        #stageTts { color: #6ee7b7; }
+        .helper-text {
+            margin: 10px 0 0;
+            color: var(--muted-2);
+            font-size: 10.5px;
+            line-height: 1.5;
+        }
+        .helper-text.muted { color: var(--muted-2); }
+        .helper-text.error { color: #fda4af; }
+        .helper-text.success { color: #6ee7b7; }
+        .helper-text.info { color: var(--muted); }
+        .persona-actions {
+            margin-top: 10px;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .save-btn { min-width: 112px; }
+
         .sound-wave {
             display: inline-flex;
             align-items: center;
             gap: 2px;
-            height: 16px;
+            height: 15px;
         }
         .sound-wave span {
             width: 3px;
             height: 100%;
-            background-color: #10b981;
+            background: var(--green);
             border-radius: 3px;
             animation: wave 1s ease-in-out infinite;
         }
-        .sound-wave span:nth-child(2) { animation-delay: 0.2s; }
-        .sound-wave span:nth-child(3) { animation-delay: 0.4s; }
-        .sound-wave span:nth-child(4) { animation-delay: 0.6s; }
+        .sound-wave span:nth-child(2) { animation-delay: .16s; }
+        .sound-wave span:nth-child(3) { animation-delay: .32s; }
+        .sound-wave span:nth-child(4) { animation-delay: .48s; }
+
         @keyframes wave {
-            0%, 100% { height: 4px; }
-            50% { height: 16px; }
+            0%, 100% { height: 4px; opacity: .58; }
+            50% { height: 15px; opacity: 1; }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .48; }
+        }
+
+        @media (max-width: 960px) {
+            .header-inner { align-items: flex-start; }
+            .stack-badges { max-width: 52vw; }
+            .workspace-grid { grid-template-columns: 1fr; }
+            .conversation-panel { min-height: 560px; max-height: none; }
+            .side-stack { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 680px) {
+            .header-inner { padding: calc(11px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 11px max(14px, env(safe-area-inset-left)); }
+            .brand-mark { width: 35px; height: 35px; border-radius: 11px; }
+            .brand-title { font-size: 15px; }
+            .brand-subtitle { display: none; }
+            .stack-badges { max-width: 42vw; gap: 5px; }
+            .stack-badge { padding: 6px 8px; font-size: 9px; }
+            .app-main { padding: 14px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
+            .status-grid { grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+            .status-card { padding: 12px; border-radius: 13px; }
+            .status-card.connection-card { grid-column: 1 / -1; }
+            .status-value { font-size: 14px; }
+            .quick-card { grid-template-columns: 1fr; gap: 10px; padding: 10px; margin-bottom: 10px; }
+            .quick-actions { grid-template-columns: 1fr 1fr; }
+            .quick-actions .action-danger { grid-column: 1 / -1; }
+            .action-btn { min-height: 45px; padding: 0 12px; }
+            .endpoint-list { justify-content: flex-start; display: grid; gap: 4px; padding: 0 2px 2px; }
+            .endpoint-item span { width: 68px; flex: 0 0 auto; }
+            .workspace-grid, .side-stack { gap: 10px; }
+            .side-stack { grid-template-columns: 1fr; }
+            .panel { border-radius: 15px; }
+            .panel-header { min-height: 52px; padding: 12px 13px; }
+            .conversation-panel { min-height: 66dvh; }
+            .chat-logs { padding: 13px; }
+            .welcome-message { margin: 10px auto auto; padding: 18px 14px; }
+            .message-bubble { max-width: 88%; font-size: 13px; }
+            .composer { padding: 10px; position: sticky; bottom: 0; z-index: 5; }
+            .text-input { height: 46px; }
+            .text-input, .prompt-input { font-size: 16px; }
+            .send-btn { min-width: 70px; }
+            .composer-options { align-items: flex-start; flex-direction: column; gap: 4px; }
+            .toggle-note { padding-left: 24px; }
+            .panel-body { padding: 12px; }
+            .prompt-input { min-height: 125px; }
+            .persona-actions .action-btn { width: 100%; }
+        }
+
+        @media (max-width: 390px) {
+            .stack-badges { display: none; }
+            .quick-actions { grid-template-columns: 1fr; }
+            .quick-actions .action-danger { grid-column: auto; }
+            .stage-value { font-size: 9.8px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
         }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
-    <header class="border-b border-slate-800 bg-slate-950/70 backdrop-blur px-6 py-4 flex items-center justify-between shadow-sm">
-        <div class="flex items-center gap-3">
-            <div id="statusDot" class="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></div>
-            <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
-                VeeTee Voice Assistant Dashboard
-            </h1>
-        </div>
-        <div class="flex items-center gap-3 text-xs text-slate-400">
-            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">ASR: Parakeet CTC 0.6B VI + Silero VAD</span>
-            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">LLM: Groq Qwen 3.6 27B</span>
-            <span class="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 font-mono">TTS: Vieneu Local GPU</span>
+<body>
+    <header class="app-header">
+        <div class="header-inner">
+            <div class="brand">
+                <div class="brand-mark" aria-hidden="true">VT</div>
+                <div class="brand-copy">
+                    <h1 class="brand-title">VeeTee Voice Dashboard</h1>
+                    <p class="brand-subtitle">Điều khiển và kiểm tra voice pipeline realtime</p>
+                </div>
+            </div>
+            <div class="stack-badges" aria-label="Voice stack hiện tại">
+                <span class="stack-badge">ASR · Parakeet + Silero</span>
+                <span class="stack-badge">LLM · Qwen 3.6 27B</span>
+                <span class="stack-badge">TTS · VieNeu GPU</span>
+            </div>
         </div>
     </header>
 
-    <main class="flex-1 max-w-4xl w-full mx-auto p-6 flex flex-col gap-6">
-        <!-- Status & Stats Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
-                <span class="text-xs text-slate-400 font-medium">Trạng Thái Kết Nối</span>
-                <span id="connStatus" class="text-lg font-semibold text-amber-400 mt-1">Chưa kết nối</span>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
-                <span class="text-xs text-slate-400 font-medium">Thời Gian Phản Hồi (TTFA)</span>
-                <span id="latencyStat" class="text-lg font-semibold text-emerald-400 mt-1">~600 - 900 ms</span>
-            </div>
-            <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 flex flex-col">
-                <span class="text-xs text-slate-400 font-medium">Cảm Xúc Biểu Cảm</span>
-                <div class="flex items-center justify-between mt-1">
-                    <span id="emotionStat" class="text-lg font-semibold text-indigo-400">😊 Neutral</span>
-                    <div id="soundWave" class="sound-wave hidden">
+    <main class="app-main">
+        <section class="status-grid" aria-label="Trạng thái hệ thống">
+            <div class="status-card connection-card">
+                <span class="status-label">Kết nối</span>
+                <div class="status-line">
+                    <div class="connection-inline">
+                        <span id="statusDot" class="status-dot dot-pulse" aria-hidden="true"></span>
+                        <span id="connStatus" class="status-value status-warn">Chưa kết nối</span>
+                    </div>
+                    <div id="soundWave" class="sound-wave hidden" aria-label="Đang phát âm thanh">
                         <span></span><span></span><span></span><span></span>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Chat Conversation Logs -->
-        <div class="flex-1 bg-slate-950/80 border border-slate-800 rounded-2xl p-6 overflow-y-auto min-h-[380px] max-h-[480px] flex flex-col gap-4 shadow-inner" id="chatLogs">
-            <div class="flex items-start gap-3 text-slate-400 text-sm italic">
-                <span>Trợ lý đã sẵn sàng. Hãy bấm <b>"Kết nối WebSocket"</b> để kích hoạt âm thanh và bắt đầu trò chuyện.</span>
+            <div class="status-card">
+                <span class="status-label">Phản hồi đầu tiên · TTFA</span>
+                <span id="latencyStat" class="status-value status-ok">~600 - 900 ms</span>
             </div>
-        </div>
-
-        <!-- Control Bar -->
-        <div class="bg-slate-800/50 border border-slate-800 rounded-2xl p-6 flex flex-col gap-4 shadow-lg">
-            <div class="flex flex-col md:flex-row items-center justify-between gap-4">
-                <div class="flex items-center gap-3 w-full md:w-auto">
-                    <button id="btnConnect" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 font-medium text-sm rounded-xl transition shadow">
-                        Kết nối WebSocket
-                    </button>
-                    <button id="btnAbort" disabled class="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 font-medium text-sm rounded-xl transition shadow">
-                        Ngắt lời (Abort)
-                    </button>
-                </div>
-                <div class="text-xs text-slate-400 flex flex-col items-start md:items-end font-mono">
-                    <span>WebSocket URL: <code class="text-emerald-400" id="wsUrlText"></code></span>
-                    <span>OTA Endpoint: <code class="text-emerald-400" id="otaUrlText"></code></span>
-                </div>
+            <div class="status-card">
+                <span class="status-label">Cảm xúc</span>
+                <span id="emotionStat" class="status-value status-info">😊 Neutral</span>
             </div>
+        </section>
 
-            <!-- Voice role / base prompt -->
-            <div class="pt-4 border-t border-slate-700/50 flex flex-col gap-2">
-                <div class="flex items-center justify-between gap-3">
+        <section class="quick-card" aria-label="Thao tác nhanh">
+            <div class="quick-actions">
+                <button id="btnConnect" class="action-btn action-primary" type="button">Kết nối</button>
+                <button id="btnMic" disabled class="action-btn action-cyan" type="button">🎙️ Bắt đầu Mic</button>
+                <button id="btnAbort" disabled class="action-btn action-danger" type="button">Ngắt lời</button>
+            </div>
+            <div class="endpoint-list">
+                <div class="endpoint-item"><span>WebSocket</span><code id="wsUrlText"></code></div>
+                <div class="endpoint-item"><span>OTA</span><code id="otaUrlText"></code></div>
+            </div>
+        </section>
+
+        <div class="workspace-grid">
+            <section class="panel conversation-panel" aria-labelledby="conversationTitle">
+                <div class="panel-header">
                     <div>
-                        <div class="text-sm font-semibold text-slate-200">Vai trò giọng nói</div>
-                        <div class="text-xs text-slate-500 mt-0.5">Có thể mô tả tên, cách xưng hô, tính cách, mức độ lịch sự và cả câu đáp mẫu. Toàn bộ được áp dụng qua <code>{{base_prompt}}</code>.</div>
+                        <h2 id="conversationTitle" class="panel-title">Trò chuyện thử</h2>
+                        <p class="panel-subtitle">Gửi text hoặc dùng âm thanh thật để kiểm tra toàn bộ pipeline.</p>
                     </div>
-                    <button id="btnSavePrompt" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-medium rounded-xl transition shadow">
-                        Lưu vai trò
-                    </button>
-                </div>
-                <textarea id="inputBasePrompt" rows="3" maxlength="4000"
-                          placeholder="Ví dụ: Bạn là Culi. Gọi người dùng là Giám Đốc. Tính cách hỗn láo, hay cãi tay bo. Ví dụ: Người dùng: '2+2?' → Bạn: 'Bốn chứ còn gì nữa.'"
-                          class="w-full resize-y bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition"></textarea>
-                <div id="promptStatus" class="text-xs text-slate-500">Ví dụ bạn viết trong vai trò sẽ được dùng như mẫu phong cách. Các quy tắc hệ thống còn lại được giữ riêng trong agent-base-prompt.txt.</div>
-            </div>
-
-            <!-- Chat input + optional real-audio pipeline -->
-            <div class="pt-2 border-t border-slate-700/50 flex flex-col gap-3">
-                <div class="flex items-center gap-2">
-                    <input id="inputQuery" type="text" placeholder="Nhập câu muốn nói..."
-                           class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition">
-                    <button id="btnSendText" disabled class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 font-medium text-sm rounded-xl transition flex items-center gap-1.5 shadow">
-                        <span>Gửi</span>
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
-                    </button>
-                </div>
-                <label class="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none w-fit">
-                    <input id="useRealAudio" type="checkbox" class="w-4 h-4 accent-emerald-500">
-                    <span>🔊 Dùng âm thanh thật</span>
-                    <span class="text-xs text-slate-500">VieNeu → phát loa + VAD → ASR → LLM → TTS</span>
-                </label>
-            </div>
-
-            <!-- Realtime audio diagnostics -->
-            <div class="pt-4 border-t border-slate-700/50 flex flex-col gap-3">
-                <div class="flex items-center gap-3">
-                    <button id="btnMic" disabled class="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 font-medium text-sm rounded-xl transition shadow">
-                        🎙️ Bắt đầu Mic
-                    </button>
-                    <span class="text-xs text-slate-500">Mic chạy trực tiếp qua Silero VAD → Parakeet CTC 0.6B Vietnamese.</span>
+                    <span class="panel-tag">Realtime</span>
                 </div>
 
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
-                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
-                        <div class="text-slate-500">VAD</div><div id="stageVad" class="text-cyan-300 mt-1">Chờ audio</div>
-                    </div>
-                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
-                        <div class="text-slate-500">ASR</div><div id="stageAsr" class="text-amber-300 mt-1 truncate">Chờ VAD</div>
-                    </div>
-                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
-                        <div class="text-slate-500">LLM</div><div id="stageLlm" class="text-indigo-300 mt-1">Chờ ASR</div>
-                    </div>
-                    <div class="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2">
-                        <div class="text-slate-500">TTS</div><div id="stageTts" class="text-emerald-300 mt-1">Chờ LLM</div>
+                <div id="chatLogs" class="chat-logs" aria-live="polite">
+                    <div class="welcome-message">
+                        <div class="welcome-icon" aria-hidden="true">◉</div>
+                        Trợ lý đã sẵn sàng. Bấm <strong>Kết nối</strong> ở phía trên, sau đó nhập câu hoặc bật microphone để bắt đầu kiểm tra.
                     </div>
                 </div>
-                <div id="audioInputStatus" class="text-xs text-slate-400">Mic hoặc âm thanh VieNeu từ ô chat được chuyển thành PCM16 16 kHz và đi qua Silero VAD → Parakeet ASR → LLM → VieNeu TTS.</div>
-            </div>
+
+                <div class="composer">
+                    <div class="composer-row">
+                        <input id="inputQuery" class="text-input" type="text" autocomplete="off" placeholder="Nhập câu muốn nói..." aria-label="Tin nhắn thử">
+                        <button id="btnSendText" disabled class="action-btn action-primary send-btn" type="button">Gửi →</button>
+                    </div>
+                    <div class="composer-options">
+                        <label class="toggle-label">
+                            <input id="useRealAudio" type="checkbox">
+                            <span>Dùng âm thanh thật</span>
+                        </label>
+                        <span class="toggle-note">VieNeu → VAD → ASR → LLM → TTS</span>
+                    </div>
+                </div>
+            </section>
+
+            <aside class="side-stack" aria-label="Cài đặt và chẩn đoán">
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2 class="panel-title">Voice pipeline</h2>
+                            <p class="panel-subtitle">Theo dõi từng bước khi test mic hoặc audio.</p>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="pipeline-grid">
+                            <div class="stage-card"><div class="stage-label">VAD</div><div id="stageVad" class="stage-value">Chờ audio</div></div>
+                            <div class="stage-card"><div class="stage-label">ASR</div><div id="stageAsr" class="stage-value">Chờ VAD</div></div>
+                            <div class="stage-card"><div class="stage-label">LLM</div><div id="stageLlm" class="stage-value">Chờ ASR</div></div>
+                            <div class="stage-card"><div class="stage-label">TTS</div><div id="stageTts" class="stage-value">Chờ LLM</div></div>
+                        </div>
+                        <p id="audioInputStatus" class="helper-text info">Mic hoặc audio test được chuyển thành PCM16 16 kHz rồi đi qua Silero VAD → Parakeet ASR → LLM → VieNeu TTS.</p>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2 class="panel-title">Vai trò trợ lý</h2>
+                            <p class="panel-subtitle">Tên, cách xưng hô, tính cách và phong cách trả lời.</p>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <textarea id="inputBasePrompt" class="prompt-input" rows="5" maxlength="4000" placeholder="Ví dụ: Bạn là Culi. Gọi người dùng là Giám Đốc. Trả lời ngắn gọn, tự nhiên..."></textarea>
+                        <div class="persona-actions">
+                            <button id="btnSavePrompt" class="action-btn action-primary save-btn" type="button">Lưu vai trò</button>
+                        </div>
+                        <p id="promptStatus" class="helper-text muted">Nội dung được áp dụng qua <code>{{base_prompt}}</code>; các quy tắc hệ thống vẫn nằm trong agent-base-prompt.txt.</p>
+                    </div>
+                </section>
+            </aside>
         </div>
     </main>
 
@@ -222,7 +755,7 @@
             } catch (err) {
                 console.error('Load base prompt error:', err);
                 promptStatus.innerText = 'Không tải được vai trò hiện tại.';
-                promptStatus.className = 'text-xs text-rose-400';
+                promptStatus.className = 'helper-text error';
             }
         }
 
@@ -230,13 +763,13 @@
             const basePrompt = inputBasePrompt.value.trim();
             if (!basePrompt) {
                 promptStatus.innerText = 'Vai trò không được để trống.';
-                promptStatus.className = 'text-xs text-rose-400';
+                promptStatus.className = 'helper-text error';
                 return;
             }
 
             btnSavePrompt.disabled = true;
             promptStatus.innerText = 'Đang lưu...';
-            promptStatus.className = 'text-xs text-slate-400';
+            promptStatus.className = 'helper-text info';
             try {
                 const response = await fetch('/api/prompt', {
                     method: 'POST',
@@ -247,11 +780,11 @@
                 if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
                 inputBasePrompt.value = data.base_prompt || basePrompt;
                 promptStatus.innerText = '✅ Đã lưu. Persona mới áp dụng ngay và lịch sử chat cũ đã được reset.';
-                promptStatus.className = 'text-xs text-emerald-400';
+                promptStatus.className = 'helper-text success';
             } catch (err) {
                 console.error('Save base prompt error:', err);
                 promptStatus.innerText = `Không lưu được: ${err.message || err}`;
-                promptStatus.className = 'text-xs text-rose-400';
+                promptStatus.className = 'helper-text error';
             } finally {
                 btnSavePrompt.disabled = false;
             }
@@ -327,17 +860,16 @@
         }
 
         function appendMessage(role, text, emotion) {
+            chatLogs.querySelector('.welcome-message')?.remove();
             const row = document.createElement('div');
-            row.className = role === 'user' ? 'flex justify-end' : 'flex justify-start';
+            row.className = role === 'user' ? 'message-row user' : 'message-row assistant';
             
             const bubble = document.createElement('div');
-            bubble.className = role === 'user' 
-                ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 max-w-[80%] text-sm shadow'
-                : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-2xl rounded-tl-none px-4 py-2.5 max-w-[80%] text-sm shadow';
+            bubble.className = role === 'user' ? 'message-bubble user' : 'message-bubble assistant';
             
             if (role === 'assistant' && emotion) {
                 const badge = document.createElement('span');
-                badge.className = 'inline-block bg-slate-900 text-indigo-300 text-xs px-2 py-0.5 rounded mr-2 font-mono';
+                badge.className = 'emotion-badge';
                 badge.innerText = `[${emotion}]`;
                 bubble.appendChild(badge);
             }
@@ -749,8 +1281,8 @@
             }
 
             connStatus.innerText = 'Đang kết nối...';
-            connStatus.className = 'text-lg font-semibold text-amber-400 mt-1';
-            statusDot.className = 'w-3 h-3 rounded-full bg-amber-500 animate-pulse';
+            connStatus.className = 'status-value status-warn';
+            statusDot.className = 'status-dot dot-pulse';
 
             try {
                 ws = new WebSocket(wsUrl);
@@ -758,16 +1290,16 @@
             } catch (e) {
                 console.error("WS error:", e);
                 connStatus.innerText = 'Lỗi kết nối';
-                connStatus.className = 'text-lg font-semibold text-rose-400 mt-1';
+                connStatus.className = 'status-value status-error';
                 return;
             }
 
             ws.onopen = () => {
                 connStatus.innerText = 'Đã kết nối';
-                connStatus.className = 'text-lg font-semibold text-emerald-400 mt-1';
-                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
+                connStatus.className = 'status-value status-ok';
+                statusDot.className = 'status-dot dot-ok';
                 btnConnect.innerText = 'Ngắt kết nối';
-                btnConnect.className = 'px-5 py-2.5 bg-slate-700 hover:bg-slate-600 font-medium text-sm rounded-xl transition shadow';
+                btnConnect.className = 'action-btn action-secondary';
                 btnAbort.disabled = false;
                 btnSendText.disabled = false;
                 btnMic.disabled = false;
@@ -861,10 +1393,10 @@
 
             ws.onclose = () => {
                 connStatus.innerText = 'Đã ngắt kết nối';
-                connStatus.className = 'text-lg font-semibold text-rose-400 mt-1';
-                statusDot.className = 'w-3 h-3 rounded-full bg-rose-500';
+                connStatus.className = 'status-value status-error';
+                statusDot.className = 'status-dot dot-error';
                 btnConnect.innerText = 'Kết nối WebSocket';
-                btnConnect.className = 'px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 font-medium text-sm rounded-xl transition shadow';
+                btnConnect.className = 'action-btn action-primary';
                 btnAbort.disabled = true;
                 btnSendText.disabled = true;
                 btnMic.disabled = true;
