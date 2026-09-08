@@ -1,16 +1,35 @@
+# Upstream source used only for local comparison
 references/
 
+# Local configuration / secrets
 veetee-server/config.yaml
+.env
+.env.*
+!.env.example
+
+# Runtime-generated files
 veetee-server/server.log
 veetee-server/data/base-prompt.txt
+*.pid
 
+# Python caches / test artifacts
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
+# Local virtual environments
 .venv/
 venv/
 
+# IDE / editor / OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .DS_Store

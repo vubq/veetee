@@ -14,10 +14,10 @@ User đã yêu cầu thực thi plan. Tiến độ được cập nhật trực 
 
 ### Baseline và cách đối chiếu
 
-- VeeTee HEAD lúc rà: `acbc848abe3577803e3dd26a1972853e435400ee`.
+- VeeTee HEAD lúc bắt đầu rà task: `acbc848abe3577803e3dd26a1972853e435400ee`; trạng thái tích hợp sau các commit liên quan hiện ở `bd7a337d7e76d0b02432d4376e4c1704f8b7e331`.
 - FW nguyên bản: `78/xiaozhi-esp32`, commit `c7241272f2d5fd140c77542f3cf12d09e717fc2f`, theo `REFERENCE_BASELINES.md`.
-- Đã đọc FW bằng `git -C references/xiaozhi-esp32 show <commit>:<file>`. Ba file C++ trong working tree tham khảo có patch thử nghiệm; không lấy chúng làm chuẩn và không reset chúng.
-- Các thay đổi local có sẵn về prompt, Deepgram, LLM và web/iOS cần được giữ nguyên, không gom vào task này. Kiểm tra lại `git status` khi bắt đầu.
+- Đã đọc FW bằng `git -C references/xiaozhi-esp32 show <commit>:<file>`. Các thay đổi thử nghiệm từng có trong working tree reference đã được loại bỏ theo yêu cầu user; kiểm tra ngày 2026-09-08 xác nhận `xiaozhi-esp32` và `xiaozhi-esp32-server` đều clean đúng baseline.
+- Các thay đổi local từng có về prompt, Deepgram, LLM và web/iOS được tách khỏi implementation commit của task; sau đó đã được rà/test và commit riêng ở `bd7a337`.
 
 ### Phát hiện từ source
 
@@ -157,9 +157,10 @@ Bước 7 là mở rộng tùy chọn, không chặn nghiệm thu đường tư�
 
 - Status: `PARTIAL`
 - Completed: bước 1 contract stock; bước 2 policy `client_only`; bước 3 pacing 120 ms; bước 4 turn/capture ownership + bounded TTS backpressure; phần code/assert/logging + regression của bước 5; phần tài liệu server-only và đánh dấu patch lịch sử của bước 6. Sau cập nhật docs đã rerun **26/26 tests PASS**, `py_compile` PASS và `git diff --check` PASS.
-- Active: chờ runtime measurement và hardware stock-FW test; phần code/docs/regression server đã sẵn sàng cho Git handoff.
+- Runtime bootstrap ngày 2026-09-08 đã xác nhận service chạy, Parakeet ASR ready trên CUDA và WS/HTTP lắng nghe cổng 8000/8003. Đây là kiểm tra startup, chưa thay thế runtime E2E hoặc hardware test.
+- Active: chờ runtime measurement/E2E và hardware stock-FW test; phần code/docs/regression server đã được handoff lên Git.
 - Remaining: runtime measurement correction/E2E của bước 5; hardware checklist/measurement bước 6. Bước 7 là tùy chọn sau baseline.
 - Deviations from plan: test runner dùng `unittest` có sẵn trong Python thay vì thêm dependency mới; semantics acceptance giữ nguyên.
 - Không sửa source FW tham khảo. Kiểm tra môi trường hiện không thấy `/dev/ttyUSB*`, `/dev/ttyACM*` hoặc USB bridge ESP32 qua `lsusb`; hardware chưa được chứng nhận và giữ `PENDING`. Kết quả hiện tại là server/unit simulation.
 - Git handoff được dựng lại trên worktree sạch từ `master`, chỉ mang các thay đổi thuộc task; chạy lại **26/26 tests PASS**, `py_compile` PASS và `git diff --check` PASS trước commit.
-- Implementation commit `4105d44` (`feat: support stock xiaozhi firmware voice flow`) đã push lên `origin/master`; các chỉnh sửa local không thuộc task không được đưa vào commit.
+- Implementation commit `4105d44` (`feat: support stock xiaozhi firmware voice flow`) và docs handoff `0fdddb5` đã push lên `origin/master`. Các thay đổi local trước đó về prompt/Deepgram/LLM/web-iOS được rà riêng và push sau ở `bd7a337` (`feat: improve ASR correction and browser audio`).
