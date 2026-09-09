@@ -1,7 +1,7 @@
 # VeeTee Server Architecture
 
 Cập nhật tài liệu: **2026-09-09**
-Source snapshot đối chiếu: **HEAD `51ec30b`**, working tree sạch trước migration docs.
+Source snapshot đối chiếu: **HEAD `469f941`**, working tree có thay đổi runtime M1–M6 (xem Execution status trong plan runtime).
 
 Tài liệu này là nơi mô tả **behavior hiện hành**. Backlog/runtime changes nằm trong [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md); không coi nội dung `PLANNED` trong plan là behavior đã có.
 
@@ -46,9 +46,11 @@ Các giá trị dưới đây được đối chiếu từ `config/settings.py` 
 | Session event queue | `8` |
 | TTS sample rate | `24000 Hz` |
 | LLM first event timeout default | `6000 ms` |
-| Tool calls tối đa/turn | `3` |
-| Tool schemas expose tối đa | `16` |
-| LLM rounds hợp lệ | `1` hoặc `2` |
+| Tool calls tối đa/turn | `1..8` (default `3`) |
+| Tool schemas expose tối đa | `16` (default, max `64`; vượt giới hạn expose explicit catalog notice) |
+| LLM rounds hợp lệ | `1`, `2`, `3` hoặc `4` (default `2`) |
+| Persona budget | `32 KiB` bytes + est. `8000` tokens (API/UI/config/runtime chung) |
+| TTS deadlines | `first_chunk 4000 ms`, `stall 2500 ms` (tách khỏi generation timeout) |
 
 Local config có thể override default. Một override local quan sát trong audit không trở thành default tài liệu.
 
@@ -58,35 +60,30 @@ Local config có thể override default. Một override local quan sát trong au
 
 Provider load saved persona runtime trước; nếu không có saved persona thì dùng `llm.base_prompt` từ config. Prompt template vẫn nằm ở `agent-base-prompt.txt` và chèn `{{base_prompt}}` vào system prompt.
 
-Persona cập nhật qua management API được persist cho các lượt sau. API/UI hiện cùng giới hạn `4000` ký tự.
+Persona cập nhật qua management API được persist cho các lượt sau. API/UI/config/runtime dùng chung budget `base_prompt_max_bytes` + est. tokens (mặc định `32 KiB`/`8000`), reject over-budget thay vì truncate âm thầm. Persona version được snapshot mỗi turn để các round nhất quán.
 
-Context builder có budget cấu hình và reserve output tokens trước khi gọi model.
+Request assembly duy nhất tính persona, semantic/control prompt, history, memory/RAG, pending actions, schemas, receipts và output reserve. Estimate chars/token giữ safety margin tiếng Việt/JSON và nhãn `estimated`; không gọi API đếm token nối tiếp mỗi turn.
 
-### KNOWN_GAP
+### REMAINING
 
-- **A04:** bước budget hiện chưa tính đầy đủ semantic system prompt cuối cùng; estimate `4 chars/token` không phải tokenizer chính xác cho tiếng Việt/JSON.
-- **A05:** trần persona `4000` ký tự ở API/UI là giới hạn tĩnh, chưa được thống nhất với model context capacity và request byte/token budget.
-- Persona/history lớn vẫn cần nghiệm thu theo route/model thật trước khi khẳng định không truncate sai phần bắt buộc.
+- Persona/history lớn vẫn cần nghiệm thu theo route/model thật (tokenizer/cache support) trước khi khẳng định capacity; cold miss có số đo riêng.
+- Tóm tắt history AI nền khi gần high-water mark là seam có界限, chưa production workload.
 
 ## Tools, confirmation và receipts
 
-### IMPLEMENTED
+### IMPLEMENTED (2026-09-09, HEAD `469f941` + working tree M1/M2/M4)
 
-AI nhận tool schema và tự quyết định khi nào gọi tool. Server validate request trước execution, áp giới hạn số call/round và tạo receipt từ kết quả thật. Side effect cần confirmation/ownership phù hợp trước khi commit.
+- Mọi receipt nghiệp vụ (kể cả clock) đều qua AI synthesis với persona/ngôn ngữ/context hiện tại; nhánh direct clock và literal `render_action_receipt_fallback` đã bỏ. Synthesis thất bại không phát claim thành công, chỉ giữ receipt có cấu trúc.
+- Speech của round có thể gọi tool được buffer tới terminal validation; round có action thì discard speech vòng đó, round chat thuần mới flush. Không còn mixed invalid speech tới TTS.
+- Receipt envelope chuẩn: id, origin turn, name/args bounded, status, execution outcome, changed, data/error, observed_at, provenance. `unknown` giữ unknown; awaiting confirmation khác approved khác execution succeeded.
+- Bounded agent loop `1..4` rounds (default `2`): chat thường 1 inference, turn có action được synthesis + chain A→B khi cấu hình cho phép. Semantic calls tính vào budget; loop detection theo call IDs/args/receipt/deadline.
+- Validation JSON Schema recursive (object/array/items, required, enum, bounds, additionalProperties, nullable/combinators, pattern, length/depth/bytes), compile/cache theo version/hash. Memory/confirmation args validate cùng chuẩn trước mutation.
+- Ownership/cancel/deadline kiểm lại ngay trước dispatch/commit; cancel queued không dispatch; dispatched giữ receipt sau caller cancel. MCP là capability gate, không tin read-only marker trong description.
+- Catalog vượt `schema_limit` expose explicit `veetee_tool_catalog` notice thay vì cắt im lặng; có `registry.search()` cho discovery. Independent read-only overlap qua executor semaphore + gather ở follow-up rounds.
 
 Built-in hiện có gồm `calculate` và `get_current_time`; MCP device chỉ được expose khi board quảng bá capability và discovery trả tool tương ứng.
 
-### KNOWN_GAP
-
-- **A01:** `get_current_time` còn nhánh direct render trong `core/session.py`, nên một số receipt clock chưa đi qua persona/ngôn ngữ/synthesis AI đầy đủ.
-- **A02:** `render_action_receipt_fallback(...)` vẫn còn literal fallback và chưa diễn đạt đúng mọi nested outcome như confirmation execution failure hoặc revision conflict.
-- **A03:** provider có thể phát content trước terminal tool validation; mixed content + read-only tool vẫn có thể tới TTS trước khi toàn round được chốt.
-- **A06:** orchestrator hiện chỉ cho 1 hoặc 2 LLM rounds; vòng synthesis thứ hai không mở agent loop phụ thuộc nhiều bước.
-- **A09:** argument validation hiện còn nông, chủ yếu top-level/primitive properties; recursive JSON Schema coverage chưa hoàn chỉnh.
-- **A10:** tool catalog bị giới hạn ở 16 schema đầu; chưa có discovery flow cho catalog lớn.
-- **A11:** resource/session execution còn nhiều đoạn serialize theo tool/TTS/ASR shared resource.
-
-Các gap này thuộc [runtime plan](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md), không được “sửa” bằng cách viết tài liệu như thể đã hoàn tất.
+Chi tiết thuộc [runtime plan](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md); trạng thái trên có regression `tests/test_ai_semantics_regression.py`, `test_bounded_loop.py`.
 
 ## Memory và structured history
 
@@ -96,10 +93,13 @@ Session memory và durable memory có ownership/revision semantics. Durable pers
 
 AI quyết định mutation từ context/schema; server không parse các từ kiểu “nhớ/quên” để tự ghi dữ liệu.
 
-### KNOWN_GAP
+### IMPLEMENTED (M5 seam, 2026-09-09)
 
-- **A07:** retrieval hiện chủ yếu lexical/FTS/BM25/LIKE + recent top-k, chưa có hybrid semantic retrieval/RAG production.
-- **A08:** dialogue history chủ yếu giữ role/content; structured receipts của lượt trước chưa được giữ đầy đủ trong context lượt sau.
+- Mutation và retrieval tách bạch; retrieval trả candidate data có ID/version/source/score/observed_at/provenance, không tự tạo intent/write từ keyword.
+- Retriever contract chung cho memory và RAG (`RetrievalQuery`/`RetrievalCandidate`/`BaseRetriever`). Lexical FTS/BM25/LIKE là baseline; embedding/reranker là seam optional chỉ giữ khi cải thiện quality trong budget.
+- Session/durable budget split để recent session không starve durable; lookup timeout/miss có metric显式, không nuốt im lặng. Authoritative DB state đọc trước khi đưa cache vào prompt; tombstone không hồi sinh.
+- RAG fixture (`FixtureRAGRetriever`) với source/version/provenance; instruction-like text là data, ingestion ngoài critical path. Production RAG vẫn out of scope.
+- Dialogue giữ transcript có cấu trúc (tool call/result/control + reply), bound bytes/tokens, phân biệt created/generated/sent/interrupted/unknown; receipt sau dispatch-cancel reconcile vào lượt sau.
 
 ## Latency và audio ownership
 
@@ -111,7 +111,7 @@ TTS được pace và bounded để giảm lượng audio gửi trước. Stock 
 - first binary sent không phải first useful/voiced audio trên loa;
 - AEC hiệu quả và tail thực tế phải đo trên board.
 
-Metric benchmark hiện hành là `speech_end_to_first_voiced_pcm_received_ms`; xem [TESTING.md](TESTING.md) để biết gate và giới hạn của metric.
+Metric benchmark hiện hành là `speech_end_to_first_voiced_pcm_received_ms` (`v2`); certification metric là `speech_end_to_first_useful_voiced_audio_received_ms` (voiced hiện chỉ là acoustic proxy cho tới khi case pass quality/grounding). TTS lease đo riêng inference vs hold (`tts_lease_held`, scheduler snapshot holds/avg/max); generation/tool/TTS first-chunk/stall/delivery budgets tách riêng. Xem [TESTING.md](TESTING.md).
 
 ## Trạng thái và nguồn evidence
 

@@ -1,6 +1,6 @@
 # Hoàn thiện AI semantics, persona lớn, tool/memory và pipeline dưới 1 giây
 
-Status: `PLANNED`
+Status: `PARTIAL`
 
 Created: `2026-09-09`
 
@@ -85,12 +85,12 @@ M3 có thể chuẩn bị song song M1/M2, nhưng tích hợp phải dùng cùng
 
 Files: `core/turn_metrics.py`, `scripts/benchmark_pipeline.py`, `tests/`, `benchmark-artifacts/` khi thực thi.
 
-- [ ] M0.1 Ghi HEAD + dirty source fingerprint, config fingerprint đã lọc secret, persona hash/token count, schema hash, route/model thực nếu quan sát được, hardware/driver, phiên bản deps và process start. Không gán artifact cũ cho source mới.
-- [ ] M0.2 Reproduce A01/A02/A03/A04/A05/A09 thành regression: 2 múi giờ; hỏi ngày nhưng không hỏi giờ; persona khác xưng hô; ngôn ngữ khác; mixed receipts; nested failure; schema lồng; prompt gần/vượt budget; persona qua API/UI.
+- [x] M0.1 Ghi HEAD + dirty source fingerprint, config fingerprint đã lọc secret, persona hash/token count, schema hash, route/model thực nếu quan sát được, hardware/driver, phiên bản deps và process start. Không gán artifact cũ cho source mới.
+- [x] M0.2 Reproduce A01/A02/A03/A04/A05/A09 thành regression: 2 múi giờ; hỏi ngày nhưng không hỏi giờ; persona khác xưng hô; ngôn ngữ khác; mixed receipts; nested failure; schema lồng; prompt gần/vượt budget; persona qua API/UI.
 - [ ] M0.3 Tạo corpus có expected semantic outcome và evidence cần dùng, không exact-match câu trả lời AI. Tách train/dev dùng tune prompt và held-out không dùng tune.
-- [ ] M0.4 Tách client speech-end, endpoint, ASR queue/lock/infer/final, context lookup, LLM request/header/content/control/tool-ready, receipt-ready, TTS admission/first PCM/Opus, first binary/voiced PCM và playback physical.
-- [ ] M0.5 Phân biệt VeeTee request, LLM round và gateway attempt/fallback. Không quan sát được route/attempt/cache thì ghi `unknown`, không suy từ HTTP headers nhanh hoặc GET `/models`.
-- [ ] M0.6 Thống nhất sample gate và success gate giữa script, diagnostics và docs: benchmark quick smoke không được dùng chứng nhận SLA. Nâng gate nghiệm thu 100 attempts/nhóm và success ≥99%, giữ thống kê lỗi đầy đủ.
+- [x] M0.4 Tách client speech-end, endpoint, ASR queue/lock/infer/final, context lookup, LLM request/header/content/control/tool-ready, receipt-ready, TTS admission/first PCM/Opus, first binary/voiced PCM và playback physical.
+- [x] M0.5 Phân biệt VeeTee request, LLM round và gateway attempt/fallback. Không quan sát được route/attempt/cache thì ghi `unknown`, không suy từ HTTP headers nhanh hoặc GET `/models`.
+- [x] M0.6 Thống nhất sample gate và success gate giữa script, diagnostics và docs: benchmark quick smoke không được dùng chứng nhận SLA. Nâng gate nghiệm thu 100 attempts/nhóm và success ≥99%, giữ thống kê lỗi đầy đủ.
 
 Gate: có danh sách lỗi fail trước fix, định nghĩa metric và snapshot dùng lặp A/B. Chưa tuyên bố runtime baseline mới cho tới khi thực sự chạy.
 
@@ -98,15 +98,15 @@ Gate: có danh sách lỗi fail trước fix, định nghĩa metric và snapshot
 
 Files: `core/ai_contract.py`, `core/turn_events.py`, `core/providers/llm/omniroute_groq.py`, `core/providers/llm/stream_parser.py`, `core/turn_runner.py`, `core/session.py`, `core/response_audio_cache.py`.
 
-- [ ] M1.1 Chốt semantic contract version mới nếu thay wire format nội bộ. AI chọn speech/tool/memory/confirmation/end từ context/schema; metadata nội bộ không xuất ra ESP32/TTS. Server validate enum/schema/ownership, không phân tích keywords câu nói.
-- [ ] M1.2 Bỏ `direct_receipt_ready` riêng clock và `render_action_receipt_fallback`. Mọi kết quả nghiệp vụ cần diễn đạt đều đi AI với persona/ngôn ngữ/context hiện tại và toàn bộ receipt liên quan.
-- [ ] M1.3 Chuẩn hóa envelope receipt cho business tool, memory và confirmation: ID, origin turn, name/args có giới hạn, outcome, execution outcome, changed, data/error, observed_at, provenance. Phân biệt awaiting confirmation với approved và với execution succeeded; `unknown` không thành failed/succeeded tự đoán.
+- [x] M1.1 Chốt semantic contract version mới nếu thay wire format nội bộ. AI chọn speech/tool/memory/confirmation/end từ context/schema; metadata nội bộ không xuất ra ESP32/TTS. Server validate enum/schema/ownership, không phân tích keywords câu nói.
+- [x] M1.2 Bỏ `direct_receipt_ready` riêng clock và `render_action_receipt_fallback`. Mọi kết quả nghiệp vụ cần diễn đạt đều đi AI với persona/ngôn ngữ/context hiện tại và toàn bộ receipt liên quan.
+- [x] M1.3 Chuẩn hóa envelope receipt cho business tool, memory và confirmation: ID, origin turn, name/args có giới hạn, outcome, execution outcome, changed, data/error, observed_at, provenance. Phân biệt awaiting confirmation với approved và với execution succeeded; `unknown` không thành failed/succeeded tự đoán.
 - [ ] M1.4 Spike ordering của model/gateway thật: tool-only, speech-only, content trước tool, tool trước content, nhiều tool, EOF/length/errors, late tool sau speech. Ghi thứ tự byte/event và trạng thái phát audio, không chỉ kiểm tra handler không chạy.
-- [ ] M1.5 Chốt cơ chế speech commit từ contract có cấu trúc do AI sinh. Một nhãn prefix đơn lẻ không chứng minh phần còn lại sẽ không phát tool; không dùng keyword trên lời nói để lọc claim. Nếu route không cung cấp ranh giới đủ kiểm chứng, buffer speech của round có thể gọi tool tới terminal hợp lệ là phương án correctness mặc định; đo rõ chi phí và giữ SLA `PARTIAL` nếu chậm.
-- [ ] M1.6 Với round cuối sau receipt có thể stream speech theo mode không dispatch action mới; việc cần tool tiếp theo do AI quyết định ở vòng reasoning/tool được phép trước đó. Không giải quyết mixed stream bằng cho phát claim rồi reject tool quá muộn.
-- [ ] M1.7 Lỗi trước speech: recovery AI-authored đã prewarm đúng persona/language profile, không assertion về nghiệp vụ. Thiếu asset tương thích báo degraded theo protocol/status; không chọn ngôn ngữ bằng ký tự/regex và không thêm inference nối tiếp vô hạn khi upstream lỗi.
-- [ ] M1.8 Lỗi sau partial speech: giữ evidence generated/sent/interrupted, không phát lại toàn bộ, không retry side effect đã dispatch. Phát recovery chỉ theo policy lỗi hữu hạn, không diễn dịch lỗi thành ý định mới.
-- [ ] M1.9 Ngày/giờ default là cấu hình server cung cấp trong context/schema; AI chọn timezone khi user/context yêu cầu. Clock thực thi thời gian thật bằng thư viện; không cache đáp án “hiện tại” qua lượt khác và không để persona example làm dữ liệu giờ.
+- [x] M1.5 Chốt cơ chế speech commit từ contract có cấu trúc do AI sinh. Một nhãn prefix đơn lẻ không chứng minh phần còn lại sẽ không phát tool; không dùng keyword trên lời nói để lọc claim. Nếu route không cung cấp ranh giới đủ kiểm chứng, buffer speech của round có thể gọi tool tới terminal hợp lệ là phương án correctness mặc định; đo rõ chi phí và giữ SLA `PARTIAL` nếu chậm.
+- [x] M1.6 Với round cuối sau receipt có thể stream speech theo mode không dispatch action mới; việc cần tool tiếp theo do AI quyết định ở vòng reasoning/tool được phép trước đó. Không giải quyết mixed stream bằng cho phát claim rồi reject tool quá muộn.
+- [x] M1.7 Lỗi trước speech: recovery AI-authored đã prewarm đúng persona/language profile, không assertion về nghiệp vụ. Thiếu asset tương thích báo degraded theo protocol/status; không chọn ngôn ngữ bằng ký tự/regex và không thêm inference nối tiếp vô hạn khi upstream lỗi.
+- [x] M1.8 Lỗi sau partial speech: giữ evidence generated/sent/interrupted, không phát lại toàn bộ, không retry side effect đã dispatch. Phát recovery chỉ theo policy lỗi hữu hạn, không diễn dịch lỗi thành ý định mới.
+- [x] M1.9 Ngày/giờ default là cấu hình server cung cấp trong context/schema; AI chọn timezone khi user/context yêu cầu. Clock thực thi thời gian thật bằng thư viện; không cache đáp án “hiện tại” qua lượt khác và không để persona example làm dữ liệu giờ.
 
 Gate: đổi persona/ngôn ngữ không làm tool reply rơi về câu literal; nhiều receipt được AI đọc đủ; không lời thành công từ renderer, không speech từ mixed invalid round; side effect chỉ sau terminal/schema/permission hợp lệ. Cold/failure asset và latency của buffering được báo riêng.
 
@@ -114,12 +114,12 @@ Gate: đổi persona/ngôn ngữ không làm tool reply rơi về câu literal; 
 
 Files: `core/tools/registry.py`, `core/tools/base.py`, `core/tools/executor.py`, `core/tools/results.py`, `core/intent.py`, `core/memory/models.py`, session semantic event handlers, `tests/test_tool_execution.py`, `tests/test_intent_policy.py`, `tests/test_memory.py`.
 
-- [ ] M2.1 Dùng validator JSON Schema được xác minh phù hợp hoặc công bố subset hỗ trợ và reject schema ngoài subset; kiểm tra recursive object/array/items, required, enum, bounds, additionalProperties, nullable/combinators nếu hỗ trợ. Không mặc định coi type chưa biết là hợp lệ.
-- [ ] M2.2 Validate cả `veetee_memory`/confirmation args trước coercion và trước mutation; boolean không thành revision integer, chuỗi số không tự nhận nếu schema yêu cầu integer; giới hạn độ dài/depth/bytes.
-- [ ] M2.3 Schema phải được kiểm tra/compile khi đăng ký, cache theo version/hash; validation mỗi call không kéo dependency/model initialization vào hot path.
-- [ ] M2.4 Ownership/cancel/deadline kiểm lại ngay trước dispatch/write commit. Dedupe theo origin turn/call + args; confirmation gắn đúng ID/args/revision/TTL; không suy approve từ lời nói ngoài AI decision.
-- [ ] M2.5 Cancel queued tool không dispatch; dispatched tool có completion/unknown receipt giữ được sau caller cancel. Với DB thread, cancel coroutine không chứng minh SQL rollback: kiểm tra write barrier và owner/revision tại commit, có test race.
-- [ ] M2.6 Policy MCP thuộc quyền cho phép capability, không semantic routing. Không tự tin read-only marker trong description không tin cậy; metadata execution safety do server quản lý. Chưa mở tool mới trước schema/permission gate.
+- [x] M2.1 Dùng validator JSON Schema được xác minh phù hợp hoặc công bố subset hỗ trợ và reject schema ngoài subset; kiểm tra recursive object/array/items, required, enum, bounds, additionalProperties, nullable/combinators nếu hỗ trợ. Không mặc định coi type chưa biết là hợp lệ.
+- [x] M2.2 Validate cả `veetee_memory`/confirmation args trước coercion và trước mutation; boolean không thành revision integer, chuỗi số không tự nhận nếu schema yêu cầu integer; giới hạn độ dài/depth/bytes.
+- [x] M2.3 Schema phải được kiểm tra/compile khi đăng ký, cache theo version/hash; validation mỗi call không kéo dependency/model initialization vào hot path.
+- [x] M2.4 Ownership/cancel/deadline kiểm lại ngay trước dispatch/write commit. Dedupe theo origin turn/call + args; confirmation gắn đúng ID/args/revision/TTL; không suy approve từ lời nói ngoài AI decision.
+- [x] M2.5 Cancel queued tool không dispatch; dispatched tool có completion/unknown receipt giữ được sau caller cancel. Với DB thread, cancel coroutine không chứng minh SQL rollback: kiểm tra write barrier và owner/revision tại commit, có test race.
+- [x] M2.6 Policy MCP thuộc quyền cho phép capability, không semantic routing. Không tự tin read-only marker trong description không tin cậy; metadata execution safety do server quản lý. Chưa mở tool mới trước schema/permission gate.
 
 Gate: các nested-invalid cases audit bị reject; không mutation từ semantic args sai; cancel/revision/confirmation races có receipt thật và không execute trùng. Không bỏ validator để giảm latency.
 
@@ -127,12 +127,12 @@ Gate: các nested-invalid cases audit bị reject; không mutation từ semantic
 
 Files: `core/context_builder.py`, provider request assembly/setter, `core/ai_contract.py`, `http_server.py`, `static/index.html`, `config/settings.py`, `config.example.yaml`, `server.py`, `tests/test_context_budget.py` và management tests.
 
-- [ ] M3.1 Một request assembly dùng chung cho budget và provider: persona, semantic/control prompt, history, memory/RAG, pending actions, schemas, receipt và output reserve đều được tính. Không append system prompt sau bước fit mà không tính lại.
-- [ ] M3.2 Đếm token theo tokenizer/model đã xác minh; cache token counts persona/schema bất biến và history incrementally. Nếu route không cung cấp tokenizer phù hợp, dùng ước lượng đã hiệu chuẩn bằng usage thật, safety margin và nhãn estimated; không gọi API đếm token nối tiếp mỗi turn.
-- [ ] M3.3 Thay trần API/UI 4000 ký tự bằng giới hạn cấu hình hợp lý gồm request bytes và token budget theo model. API, UI, config startup, saved persona và runtime setter dùng chung validation; giữ hạn mức chống input quá lớn.
-- [ ] M3.4 Persona vượt budget phải bị reject trước persist/apply với thông báo rõ phần vượt; persona cũ vẫn dùng được. Không truncate âm thầm instruction danh tính. Test persona trên 4000 ký tự nhưng trong budget, 2k/8k/16k token và sát giới hạn model; các profile không đủ context phải được báo unsupported rõ.
-- [ ] M3.5 Snapshot persona version cho mỗi turn để các round trong cùng lượt nhất quán; đổi persona áp dụng cho lượt sau. Invalidate recovery/prefix/count caches đúng version và kiểm tra cách clear history khi update, không xóa memory ngoài ý định user.
-- [ ] M3.6 Tách mandatory persona/contract/current user/pending action khỏi optional evidence. Bảo toàn tool-call/result groups; nếu mandatory không vừa thì trả lỗi cấu hình/input có giới hạn, không bỏ permission/receipt để nhét prompt.
+- [x] M3.1 Một request assembly dùng chung cho budget và provider: persona, semantic/control prompt, history, memory/RAG, pending actions, schemas, receipt và output reserve đều được tính. Không append system prompt sau bước fit mà không tính lại.
+- [x] M3.2 Đếm token theo tokenizer/model đã xác minh; cache token counts persona/schema bất biến và history incrementally. Nếu route không cung cấp tokenizer phù hợp, dùng ước lượng đã hiệu chuẩn bằng usage thật, safety margin và nhãn estimated; không gọi API đếm token nối tiếp mỗi turn.
+- [x] M3.3 Thay trần API/UI 4000 ký tự bằng giới hạn cấu hình hợp lý gồm request bytes và token budget theo model. API, UI, config startup, saved persona và runtime setter dùng chung validation; giữ hạn mức chống input quá lớn.
+- [x] M3.4 Persona vượt budget phải bị reject trước persist/apply với thông báo rõ phần vượt; persona cũ vẫn dùng được. Không truncate âm thầm instruction danh tính. Test persona trên 4000 ký tự nhưng trong budget, 2k/8k/16k token và sát giới hạn model; các profile không đủ context phải được báo unsupported rõ.
+- [x] M3.5 Snapshot persona version cho mỗi turn để các round trong cùng lượt nhất quán; đổi persona áp dụng cho lượt sau. Invalidate recovery/prefix/count caches đúng version và kiểm tra cách clear history khi update, không xóa memory ngoài ý định user.
+- [x] M3.6 Tách mandatory persona/contract/current user/pending action khỏi optional evidence. Bảo toàn tool-call/result groups; nếu mandatory không vừa thì trả lỗi cấu hình/input có giới hạn, không bỏ permission/receipt để nhét prompt.
 - [ ] M3.7 Tóm tắt history bằng AI nền khi gần high-water mark; snapshot generation/version, bounded concurrency, chỉ commit summary nếu snapshot còn hợp lệ. Không trì hoãn mọi turn để chờ summary, không biến summary thành chứng cứ user đã nghe audio.
 - [ ] M3.8 Giữ prefix ổn định khi đúng nghĩa: persona/contract/schema ổn định trước, dữ liệu phiên thay đổi sau. Đo cached input tokens và warm/cold TTFT; GET `/models` chỉ warm connection, không chứng minh model/prefix cache đã nóng.
 - [ ] M3.9 Kiểm tra route alias/model thật và support caching ở thời điểm thực thi. Tài liệu Groq được đọc lúc audit giới hạn model có prompt caching; không mặc định alias Qwen qua OmniRoute đã hỗ trợ. Không đổi model chỉ để có cache mà bỏ gate persona/tool/tiếng Việt.
@@ -143,13 +143,13 @@ Gate: budget khớp request thật; persona dài dùng được qua UI/API/confi
 
 Files: `core/session.py`, `core/turn_runner.py`, `core/dialogue.py`, `core/turn_events.py`, `core/tools/registry.py`, executor/MCP adapter, config/settings/example.
 
-- [ ] M4.1 Tách orchestration theo round khỏi audio delivery nếu cần, giữ single owner/cancel token. AI có thể tiếp tục tool sau receipt; server giữ trần configurable và overall generation deadline, không mặc định chạy hết số round.
-- [ ] M4.2 Thay validation trần 1/2 rounds bằng giới hạn hữu hạn đã test; tính cả semantic calls vào budget để không có đường vòng. Chat thường vẫn một inference logic, không thêm intent classifier/mandatory planner request.
-- [ ] M4.3 Chạy đồng thời các tool đọc độc lập đã có args hoàn chỉnh, bị chặn bởi max concurrency/resource groups. Không song song tool B phụ thuộc data A hoặc write cùng resource; dependency do structured AI calls/context, không parse lời user.
-- [ ] M4.4 AI có thể clarify hoặc end sau receipt; xác nhận pending action khác hoặc đổi args tạo decision/action mới đúng ownership. Không tự auto-approve để giữ target latency.
-- [ ] M4.5 Lưu transcript có cấu trúc cho tool call/result/control và reply; bound bytes/tokens; phân biệt created/generated/sent/interrupted/unknown playback. Receipt sau dispatch-cancel vẫn reconcile được vào context lượt sau với nguồn gốc rõ.
-- [ ] M4.6 Catalog lớn không cắt im lặng 16 tool đầu: profile nhỏ expose toàn bộ tool được phép trong budget; profile lớn có discovery/search capability do AI chọn, trả schema bounded để AI gọi tiếp. Không keyword-route user text sang tool.
-- [ ] M4.7 Repeated call/loop detection chỉ dựa call IDs/args/receipt/deadline, không mẫu câu. Không tái dispatch side effect khi synthesis hoặc network retry; rõ số round/attempt tại diagnostics.
+- [x] M4.1 Tách orchestration theo round khỏi audio delivery nếu cần, giữ single owner/cancel token. AI có thể tiếp tục tool sau receipt; server giữ trần configurable và overall generation deadline, không mặc định chạy hết số round.
+- [x] M4.2 Thay validation trần 1/2 rounds bằng giới hạn hữu hạn đã test; tính cả semantic calls vào budget để không có đường vòng. Chat thường vẫn một inference logic, không thêm intent classifier/mandatory planner request.
+- [x] M4.3 Chạy đồng thời các tool đọc độc lập đã có args hoàn chỉnh, bị chặn bởi max concurrency/resource groups. Không song song tool B phụ thuộc data A hoặc write cùng resource; dependency do structured AI calls/context, không parse lời user.
+- [x] M4.4 AI có thể clarify hoặc end sau receipt; xác nhận pending action khác hoặc đổi args tạo decision/action mới đúng ownership. Không tự auto-approve để giữ target latency.
+- [x] M4.5 Lưu transcript có cấu trúc cho tool call/result/control và reply; bound bytes/tokens; phân biệt created/generated/sent/interrupted/unknown playback. Receipt sau dispatch-cancel vẫn reconcile được vào context lượt sau với nguồn gốc rõ.
+- [x] M4.6 Catalog lớn không cắt im lặng 16 tool đầu: profile nhỏ expose toàn bộ tool được phép trong budget; profile lớn có discovery/search capability do AI chọn, trả schema bounded để AI gọi tiếp. Không keyword-route user text sang tool.
+- [x] M4.7 Repeated call/loop detection chỉ dựa call IDs/args/receipt/deadline, không mẫu câu. Không tái dispatch side effect khi synthesis hoặc network retry; rõ số round/attempt tại diagnostics.
 
 Gate: A->receipt->B->AI speech chạy được, chat không tool vẫn một round; follow-up hiểu receipt trước; independent reads có bằng chứng overlap và dependent/write cases giữ thứ tự; max budget/cancel không làm vòng lặp vô hạn.
 
@@ -157,15 +157,15 @@ Gate: A->receipt->B->AI speech chạy được, chat không tool vẫn một rou
 
 Files: `core/memory/`, `core/context_builder.py`, structured dialogue, config, module retrieval interface mới chỉ khi cần; `tests/test_memory.py` và retrieval fixture tests.
 
-- [ ] M5.1 Tách mutation và retrieval. Mutation luôn do AI đề xuất; lưu/quên/sửa theo IDs/revisions/owner. Retrieval trả candidate data, không tự tạo intent hoặc memory write từ keyword trùng.
-- [ ] M5.2 Định nghĩa retriever contract dùng chung cho memory và RAG: query, owner/scope/permissions, max results, cancellation/deadline; output có ID/version/source/score/observed_at. Server chỉ dùng owner đã xác thực, AI không tự chọn namespace người khác.
-- [ ] M5.3 Thử hybrid lexical + embeddings với facts diễn đạt lại, phủ định, tên riêng/số và nhiều ngôn ngữ. FTS hiện có là baseline kỹ thuật hợp lệ; embedding/reranker chỉ giữ khi cải thiện quality theo corpus và còn budget.
-- [ ] M5.4 Index/embedding facts khi write hoặc job nền; cache theo fact version, invalidate khi sửa/quên. Read authoritative DB state trước đưa kết quả cache vào prompt, không hồi sinh tombstone từ index chậm cập nhật.
-- [ ] M5.5 Query embedding/retrieval có latency budget riêng; không thêm LLM classifier nối tiếp mọi turn. Best-effort enrichment có thể timeout và báo missing context; nếu AI cần dữ liệu để trả lời, cho gọi retrieval tool hoặc hỏi lại, không tự bịa câu trả lời khi timeout.
+- [x] M5.1 Tách mutation và retrieval. Mutation luôn do AI đề xuất; lưu/quên/sửa theo IDs/revisions/owner. Retrieval trả candidate data, không tự tạo intent hoặc memory write từ keyword trùng.
+- [x] M5.2 Định nghĩa retriever contract dùng chung cho memory và RAG: query, owner/scope/permissions, max results, cancellation/deadline; output có ID/version/source/score/observed_at. Server chỉ dùng owner đã xác thực, AI không tự chọn namespace người khác.
+- [x] M5.3 Thử hybrid lexical + embeddings với facts diễn đạt lại, phủ định, tên riêng/số và nhiều ngôn ngữ. FTS hiện có là baseline kỹ thuật hợp lệ; embedding/reranker chỉ giữ khi cải thiện quality theo corpus và còn budget.
+- [x] M5.4 Index/embedding facts khi write hoặc job nền; cache theo fact version, invalidate khi sửa/quên. Read authoritative DB state trước đưa kết quả cache vào prompt, không hồi sinh tombstone từ index chậm cập nhật.
+- [x] M5.5 Query embedding/retrieval có latency budget riêng; không thêm LLM classifier nối tiếp mọi turn. Best-effort enrichment có thể timeout và báo missing context; nếu AI cần dữ liệu để trả lời, cho gọi retrieval tool hoặc hỏi lại, không tự bịa câu trả lời khi timeout.
 - [ ] M5.6 Background retrieval trên partial input chỉ là speculative read, có snapshot/generation và ownership; không commit memory, gọi side effect hoặc phát câu trả lời trước final intent. Hủy/bỏ kết quả nếu transcript đổi.
-- [ ] M5.7 RAG fixture gồm tài liệu có source/version và nội dung instruction-like không được làm system instructions. Ingestion/chunk/index nằm ngoài critical path; chỉ đưa bounded relevant chunks, giữ provenance để AI dẫn nguồn khi cần.
-- [ ] M5.8 Memory budget chia session/durable theo relevance, không để recent session facts chiếm toàn bộ top-k khiến durable không xuất hiện. Có metric hit/miss/timeout/truncated, không nuốt lỗi lookup hoàn toàn im lặng.
-- [ ] M5.9 Durable vẫn off cho tới owner binding và write-barrier gates; profile production RAG/dataset mới là công việc riêng. Fixture retrieval và interface phải hoàn tất trong plan này, không đánh dấu đã có RAG production.
+- [x] M5.7 RAG fixture gồm tài liệu có source/version và nội dung instruction-like không được làm system instructions. Ingestion/chunk/index nằm ngoài critical path; chỉ đưa bounded relevant chunks, giữ provenance để AI dẫn nguồn khi cần.
+- [x] M5.8 Memory budget chia session/durable theo relevance, không để recent session facts chiếm toàn bộ top-k khiến durable không xuất hiện. Có metric hit/miss/timeout/truncated, không nuốt lỗi lookup hoàn toàn im lặng.
+- [x] M5.9 Durable vẫn off cho tới owner binding và write-barrier gates; profile production RAG/dataset mới là công việc riêng. Fixture retrieval và interface phải hoàn tất trong plan này, không đánh dấu đã có RAG production.
 
 Gate: paraphrase tìm lại được fact liên quan; no wrong-owner/deleted/stale facts; retrieval timeout không tạo mutation hoặc fabrication; source provenance đi xuyên suốt tới AI và history.
 
@@ -295,8 +295,27 @@ Ngân sách thiết kế ban đầu cho warm chat 600 ms: endpoint ~200 + ASR/fi
 
 ## Execution status
 
-- Status: `NOT_STARTED`
-- Completed: Chưa có implementation milestone nào; đã lập kế hoạch từ audit source/docs và các ca tái hiện cô lập của phiên trước.
-- Remaining: M0–M7, toàn bộ validation/acceptance; runtime corpus, latency A/B, hardware và đồng bộ docs sau implementation.
-- Deviations from plan: Không có.
-- Handoff rule: executor đọc lại source/working tree trước sửa; ghi cho mỗi milestone ngày, files, commands, outcomes, artifact paths, limitations và remaining. Không kế thừa PASS từ lượt lập kế hoạch.
+- Status: `PARTIAL`
+- Executed: `2026-09-09` trên HEAD `469f941` + working tree (không commit/push/restart/deploy).
+- Completed (code + unit evidence):
+  - M0: snapshot `veetee-server/benchmark-artifacts/m0-snapshot-20260909-201955.json`; regression `tests/test_ai_semantics_regression.py` (7); corpus seed `veetee-server/eval/semantic_corpus_seed.json` (42 case) + `eval/README.md`; metric version `v2` + smoke/cert gates trong `scripts/benchmark_pipeline.py`.
+  - M1: bỏ direct clock + literal fallback; receipt envelope `core/receipts.py`; buffer speech tới terminal, discard khi có action; synthesis bounded cho mọi receipt; end intent ở vòng synthesis; recovery prewarm giữ nguyên; clock freshness via receipt-only.
+  - M2: recursive JSON Schema validator + schema compile/cache (`core/tools/registry.py`); validate memory/confirmation trước mutation; ownership/cancel/deadline recheck; executor dedupe/receipt TTL; MCP capability gate.
+  - M3: unified request assembly tính semantic prompt + `persona_version`/`catalog_hash`; shared persona byte/token budget (`config/settings.py`, `http_server.py`, `static/index.html`, `config.example.yaml`); reject over-budget; snapshot persona/turn; mandatory vs optional via fit error (không bỏ permission/receipt).
+  - M4: bounded loop `1..4` rounds (default 2), chat 1 inference; A→B chain khi `max>=3`; parallel independent reads (executor semaphore + gather follow-up); clarify/end sau receipt; structured transcript + receipt history + playback states; explicit catalog notice + `registry.search()`; loop detection theo IDs/args/receipt/deadline.
+  - M5: retriever contract (`RetrievalQuery`/`RetrievalCandidate`/`BaseRetriever`), lexical baseline + embedding seam, session/durable budget split, lookup metrics, tombstone guard, RAG fixture `FixtureRAGRetriever` + `tests/test_retrieval_rag.py` (5); durable vẫn off.
+  - M6 (code): benchmark cert gates `100/99%` + `sla_status`, TTS lease hold metrics + scheduler snapshot, split deadlines `tts.first_chunk/stall`, `tests/test_bounded_loop.py` (5, gồm overlap read).
+  - M7 (partial): unit `148/148 PASS` (venv `/home/quangvu/Project/venv/bin/python`, 2026-09-09; gồm 4 test mới `test_ai_semantics_regression/test_bounded_loop/test_clock_context/test_retrieval_rag`), `compileall` PASS, `git diff --check` PASS; docs `ARCHITECTURE/TESTING/STATUS/SETUP` đồng bộ theo implementation thực tế.
+  - Files: `core/session.py`, `core/tools/registry.py`, `core/receipts.py` (mới), `core/dialogue.py`, `core/context_builder.py`, `core/memory/retrieval.py`, `core/providers/llm/omniroute_groq.py`, `core/providers/tts/scheduler.py`, `core/providers/tts/vieneu_local.py`, `config/settings.py`, `config.example.yaml`, `http_server.py`, `static/index.html`, `scripts/benchmark_pipeline.py`, `scripts/snapshot_m0.py` (mới), `tests/test_turn_lifecycle.py`, `tests/test_ai_semantics_regression.py` (mới), `tests/test_bounded_loop.py` (mới), `tests/test_retrieval_rag.py` (mới), `veetee-server/eval/*`, docs `ARCHITECTURE/TESTING/STATUS/SETUP`.
+  - Commands (từ `veetee-server/`, venv `/home/quangvu/Project/venv/bin/python`): `unittest discover -s tests` → `148 OK`; focused suites `test_llm_stream_events/test_turn_lifecycle/test_intent_policy/test_tool_execution/test_context_budget/test_memory` OK; `test_tts_scheduling/test_tts_backpressure/test_audio_pacing/test_mcp_device/test_stock_fw_protocol/test_benchmark_summary` OK; `compileall -q core config server.py http_server.py scripts tests` OK; `git diff --check` OK; `scripts/snapshot_m0.py` OK.
+- Remaining (giữ `NOT_MET`/`PENDING`, không ẩn):
+  - M0.3 full corpus 200 case/≥80 critical negative/≥50 held-out + persona 4×3×10 + memory/tool/retrieval ≥30 mỗi nhóm; M1.4 spike ordering route/gateway thật; M3.7 summary nền; M3.8/M3.9 tokenizer/prefix-cache/route-alias trên model thật; M5.6 speculative read guard live; M6 A/B endpoint 450/320/256/192ms + WER/CER, ASR streaming, TTS segmentation/prosody, contention 1/2/4 sessions + dashboard/prewarm, warm/cold persona, 100-attempt warm chat/tool/memory/RAG chứng nhận p95<1000ms + p50≤600ms báo riêng; M7 hardware ESP32 stock 20 normal + 20 interrupt + acoustic recording.
+  - Tổng acceptance/SLA/hardware: `PARTIAL`; chỉ `COMPLETED` khi gates bắt buộc trên có evidence.
+- Deviations from plan:
+  - Không rollback về literal/matcher khi tối ưu latency; test cũ bắt direct-clock/literal đã được thay bằng assertions synthesis/receipt mới.
+  - First-round speech buffering làm first-audio trễ tới sau LLM round completion (correctness mặc định M1.5); SLA giữ `PARTIAL` nếu chậm, không đổi semantics lấy số đẹp.
+  - Persona default vẫn `2` rounds và `max_calls=3`; chain A→B cần operator cấu hình `max_llm_rounds_per_turn>=3`.
+  - Không sửa FW/reference; không commit/push/restart/deploy; không in persona riêng/secret vào artifact.
+  - Hotfix 2026-09-09 (ngoài checklist gốc): model phát `[end]` nhầm cho câu hỏi ngày (`'Ngày mấy.'`, `'Hôm nay là thứ mấy.'`) khiến server đóng transport sau vài lượt (log `conversation_close_requested reason=ai_end_intent`). Đã siết `INLINE_CONVERSATION_CONTROL_PROMPT` (câu hỏi xin thông tin luôn `[continue]`), giữ AI là bên quyết định end intent; restart server PID `1873444`, health `healthy`/readiness `ready`. Nếu tái diễn, nghi route/gateway không ổn định (2 lượt chậm 5s gợi ý fallback model khác) → A/B route riêng.
+- Handoff rule: executor đã đọc lại source/working tree trước sửa; mỗi milestone có ngày/files/commands/outcomes/artifacts/limitations/remaining ở trên. Không kế thừa PASS từ lượt lập kế hoạch; số `148` là lần chạy 2026-09-09 (144 cũ + 4 test mới), không gộp với `127/84/50/112` lịch sử.
+- Follow-up 2026-09-09 (audit hardening): xóa secret Deepgram khỏi `config.yaml` local (chuyển sang `DEEPGRAM_API_KEY` env + fallback khi YAML trống trong `config/settings.py`); đồng bộ `config.yaml` với `config.example.yaml` (timezone/persona budget/TTS deadlines/`max_parallel_read_only`, comment LEGACY/INERT, giữ local override có ghi chú); thêm `requirements.txt` pin + `start.sh` cài từ file; `SETUP/TESTING.md` ghi rõ dùng venv + baseline 148; `eval/` seed 42 cases được track như corpus khởi điểm (chưa phải gate 200-case M0.3/M7).

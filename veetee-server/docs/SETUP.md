@@ -13,11 +13,10 @@ sudo apt-get update
 sudo apt-get install -y ffmpeg libopus-dev libopus0 git python3-venv python3-pip
 ```
 
-Repo hiện không có lockfile tái lập toàn bộ environment. `start.sh` là nguồn cài dependency thực thi hiện hành khi virtualenv chưa tồn tại; nó cài:
+Dependencies được pin trong [requirements.txt](../requirements.txt) (snapshot venv 2026-09-09, Python 3.12). `start.sh` cài từ file này khi virtualenv chưa tồn tại:
 
-```text
-vieneu websockets aiohttp numpy soundfile scipy opuslib-next pyyaml
-+ torch transformers accelerate soxr onnxruntime nemo_toolkit[asr]
+```bash
+../../venv/bin/pip install -r requirements.txt
 ```
 
 GPU/CUDA compatibility phụ thuộc environment thực tế. Không upgrade driver/Python/package chỉ để làm tài liệu khớp nếu server đang chạy ổn.
@@ -40,15 +39,25 @@ Một số default đáng chú ý trong source/example hiện tại:
 | `latency.first_token_timeout_ms` | `6000` |
 | `latency.total_turn_timeout_ms` | `15000` |
 | `tts.sample_rate` | `24000` |
-| `tools.max_calls_per_turn` | `3` |
-| `tools.schema_limit` | `16` |
-| `tools.max_llm_rounds_per_turn` | `2` |
+| `tools.max_calls_per_turn` | `3` (cho phép `1..8`) |
+| `tools.schema_limit` | `16` (max `64`) |
+| `tools.max_llm_rounds_per_turn` | `2` (cho phép `1..4`) |
+| `llm.base_prompt_max_bytes` / `base_prompt_max_tokens` | `32768` / `8000` est. |
+| `tts.first_chunk_timeout_ms` / `stall_timeout_ms` | `4000` / `2500` |
 
 Local `config.yaml` có thể override các giá trị này; local override không phải default của project.
 
 ## 3. Provider và tính local/remote
 
 Default config dùng Parakeet CTC Vietnamese + Silero VAD cho ASR và VieNeu cho TTS. Deepgram là provider ASR thay thế khi operator cấu hình provider/API key phù hợp.
+
+Secret ASR cấp qua env (để `asr.api_key` trống trong `config.yaml` local):
+
+```bash
+export DEEPGRAM_API_KEY='<secret>'
+```
+
+`settings.py` fallback về env khi YAML để trống, nên không ghi key thật vào file.
 
 LLM provider `omniroute` gọi gateway được cấu hình trong `llm.base_url`. Nếu gateway route sang Groq hoặc provider khác thì inference LLM là remote dù process VeeTee/ASR/TTS vẫn chạy local.
 
@@ -60,7 +69,7 @@ Thứ tự hiện hành:
 2. nếu không có saved persona, dùng `llm.base_prompt` từ config;
 3. `agent-base-prompt.txt` là prompt template chứa `{{base_prompt}}`.
 
-Dashboard/API quản trị có thể cập nhật persona và persist cho lượt sau. Hiện API và textarea đều giới hạn `4000` ký tự; đây là `KNOWN_GAP A05`, không phải giới hạn context lý tưởng. Xem [ARCHITECTURE.md](ARCHITECTURE.md).
+Dashboard/API quản trị có thể cập nhật persona và persist cho lượt sau. API/UI/config/runtime dùng chung budget bytes + est. tokens (`llm.base_prompt_max_bytes`/`base_prompt_max_tokens`); over-budget bị reject rõ ràng, không truncate âm thầm. Đổi persona áp dụng từ lượt sau, các round trong cùng lượt giữ persona version nhất quán. Xem [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Không sao chép nội dung saved persona vào tài liệu hoặc benchmark artifact chỉ để debug config.
 
@@ -93,12 +102,20 @@ Khi token trống, management endpoints trả `401`. OTA và standalone WebSocke
 
 ### Chạy Python trực tiếp
 
-Nếu virtualenv đã có dependency:
+Nếu virtualenv đã có dependency (luôn dùng venv của project, không dùng `python3` hệ thống):
 
 ```bash
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ../../venv/bin/python server.py
 ```
+
+Chạy test cũng phải dùng venv này:
+
+```bash
+../../venv/bin/python -m unittest discover -s tests
+```
+
+`python3` hệ thống thiếu deps (đã ghi nhận 12 import errors) nên không dùng để kết luận test hỏng.
 
 Endpoint mặc định:
 

@@ -6,11 +6,13 @@ Tài liệu này sở hữu cách kiểm thử và cách diễn giải evidence.
 
 ## 1. Unit và integration
 
-Chạy từ `veetee-server/`:
+Chạy từ `veetee-server/` bằng venv của project (không dùng `python3` hệ thống):
 
 ```bash
-python -m unittest discover -s tests -v
+../../venv/bin/python -m unittest discover -s tests -v
 ```
+
+Baseline 2026-09-09: `148/148 PASS` (~1.2s). `python3` hệ thống thiếu deps nên fail import — đó là lỗi môi trường, không phải regression.
 
 Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
 
@@ -38,14 +40,12 @@ Metric chính trong script hiện tại:
 speech_end_to_first_voiced_pcm_received_ms
 ```
 
-Script hiện dùng gate kỹ thuật:
+Script hiện dùng hai chế độ gate (`--certification`):
 
-- tối thiểu `20` measured samples;
-- success rate tối thiểu `95%`;
-- report p50/p90/p95/max;
-- cờ SLA `p95 < 1000 ms` chỉ true khi sample gate và success gate cùng đạt.
+- smoke (mặc định): tối thiểu `20` samples, success `>=95%`, trạng thái `SMOKE_ONLY`, không chứng nhận SLA;
+- certification: `100` attempts/nhóm, success `>=99%` trên toàn bộ attempts (gồm timeout/failure), trạng thái `ACHIEVED`/`PARTIAL`/`NOT_MET`.
 
-Đây là gate **hiện có trong code**, phù hợp quick/runtime benchmark. [Runtime plan M0/M7](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md) yêu cầu acceptance mạnh hơn (`100` attempts/nhóm, success `>=99%`) trước khi dùng làm chứng nhận production; mức đó đang `PLANNED`.
+Cả hai report p50/p90/p95/max và không cộng p95 các stage thành p95 end-to-end. Metric version `v2`; certification metric là `speech_end_to_first_useful_voiced_audio_received_ms`, voiced PCM hiện chỉ là proxy cho tới khi case pass quality/grounding.
 
 Không đổi tên metric thành “first binary” hoặc “first audio sent”. First binary server-side là diagnostic khác và không chứng minh loa đã phát âm hữu ích.
 

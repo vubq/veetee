@@ -1,7 +1,7 @@
 # Voice Pipeline Status
 
 Snapshot tài liệu: **2026-09-09**
-Source đối chiếu trước migration docs: **HEAD `51ec30b`**, working tree sạch.
+Source đối chiếu: **HEAD `469f941`** + working tree runtime M1–M6 (A01–A11 code fixed, xem bên dưới).
 
 Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành nằm ở [ARCHITECTURE.md](ARCHITECTURE.md), test/acceptance ở [TESTING.md](TESTING.md), công việc runtime còn mở ở [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md).
 
@@ -16,44 +16,38 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | VAD default | IMPLEMENTED | Source/example default `450 ms`; local config có thể override |
 | Local audit override | SNAPSHOT | Audit ngày 2026-09-09 quan sát ignored `config.yaml` dùng `320 ms`; không phải project default |
 | TTS sample rate | IMPLEMENTED | `24000 Hz` source/example |
-| Prompt management | IMPLEMENTED + GAP | Saved persona precedence hoạt động; API/UI hiện cap `4000` ký tự (A05) |
-| Tool limits | IMPLEMENTED + GAP | `max_calls=3`, `schema_limit=16`, rounds chỉ `1/2`; catalog/loop còn A06/A10 |
-| Benchmark client | IMPLEMENTED | Metric `speech_end_to_first_voiced_pcm_received_ms`, current gate 20 samples/95% |
-| Runtime latency SLA | PENDING | Chưa có corpus đủ để chứng nhận production p50/p95 |
+| Prompt management | IMPLEMENTED | Saved persona precedence + shared byte/token budget (`32 KiB`/est. `8000`); reject over-budget, version snapshot/turn |
+| Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 2), catalog notice explicit |
+| Benchmark client | IMPLEMENTED | Metric `v2` voiced proxy + useful certification metric; smoke 20/95% vs cert 100/99% (`--certification`) |
+| Runtime latency SLA | PARTIAL | Code/gates xong; chưa chạy warm/lạnh/load 100-attempt trên route/model thật |
 | ESP32 physical playback/AEC | PENDING | Chưa có hardware/acoustic evidence mới cho snapshot này |
 
-## KNOWN_GAP A01–A12
+## A01–A12 sau runtime M1–M6 (code)
 
 | ID | Trạng thái source hiện tại |
 | --- | --- |
-| A01 | Clock receipt còn direct render trong `core/session.py` |
-| A02 | Literal `render_action_receipt_fallback(...)` vẫn tồn tại |
-| A03 | Content có thể được phát trước terminal tool validation cho một số read-only mixed stream |
-| A04 | Context budget chưa tính đầy đủ semantic system prompt; estimate chars/token |
-| A05 | Persona API/UI cap cứng `4000` ký tự |
-| A06 | LLM round validation chỉ cho `1` hoặc `2` |
-| A07 | Memory retrieval còn lexical/recent, chưa hybrid semantic production |
-| A08 | Dialogue chưa giữ đầy đủ structured receipts qua lượt |
-| A09 | Tool schema validation còn nông, chưa recursive JSON Schema đầy đủ |
-| A10 | Tool catalog cắt ở `schema_limit=16`, chưa discovery flow lớn |
-| A11 | Một số ASR/TTS/tool resources còn serialized/shared |
-| A12 | Corpus/model/load/SLA/hardware evidence chưa đủ; test/docs cũ còn assertion lịch sử cần thay ở runtime plan |
+| A01 | RESOLVED (code): clock qua AI synthesis, bỏ direct render; cần corpus model thật |
+| A02 | RESOLVED (code): bỏ literal fallback; nested failure không false success; cần corpus |
+| A03 | RESOLVED (code): buffer speech tới terminal, discard khi có action; cần spike route thật |
+| A04 | RESOLVED (code): unified assembly tính semantic prompt + budget/persona_version/catalog_hash; cần tokenizer/route check |
+| A05 | RESOLVED (code): shared byte/token budget thay cap 4000; UI maxlength 32768 + server validate; cần persona lớn thật |
+| A06 | RESOLVED (code): rounds 1..4 + bounded chain A→B; chat 1 round; cần corpus dependent |
+| A07 | PARTIAL: lexical baseline + retriever contract/RAG fixture/metrics xong; production embedding/RAG chưa |
+| A08 | RESOLVED (code): structured transcript + receipt history + playback states; cần follow-up corpus |
+| A09 | RESOLVED (code): recursive validator + semantic guards + ownership/cancel barriers; cần race/hardware |
+| A10 | RESOLVED (code): explicit catalog notice + search; MCP capability gate; chưa mở tool mới |
+| A11 | PARTIAL: parallel independent reads + lease hold metrics + split deadlines xong; cần A/B tải thật |
+| A12 | PARTIAL: unit 144 PASS (2026-09-09, HEAD `469f941` + working tree); corpus/SLA/hardware còn thiếu |
 
-Các mục trên là `KNOWN_GAP`, chưa được đánh `resolved` bởi migration tài liệu.
-
-## Test evidence lịch sử
-
-Tài liệu trước migration từng ghi:
+## Test evidence
 
 ```text
-127/127 tests PASS
+144/144 tests PASS (2026-09-09, HEAD 469f941 + working tree M1-M6)
 compileall PASS
-git diff --check PASS
+git diff --check PASS (cần rerun trước commit)
 ```
 
-Đây là **kết quả đã ghi nhận của một lần chạy trước**, không được rerun trong task documentation-only này và không được gọi là “regression hiện tại” cho HEAD sau mọi thay đổi. Review 2026-09-08 còn lưu snapshot `84 tests PASS` tại commit cũ; các số test ở các plan khác cũng thuộc snapshot riêng.
-
-Task docs hiện tại không chạy full server/unit suite vì plan yêu cầu tránh side effect/runtime initialization chỉ để kiểm Markdown. Validation của migration docs được ghi trong chính [plan tài liệu](../../task-plans/2026-09-09-hop-nhat-tai-lieu-du-an.md).
+Gồm regression mới `test_ai_semantics_regression` (7), `test_bounded_loop` (5), `test_retrieval_rag` (5) và cập nhật `test_turn_lifecycle` bỏ direct-clock/literal assertions. Số `127` trước đây là snapshot lịch sử, không dùng thay cho lần chạy này. Corpus model thật, latency 100-attempt và hardware vẫn PENDING nên tổng là PARTIAL.
 
 ## Runtime/hardware còn PENDING
 
