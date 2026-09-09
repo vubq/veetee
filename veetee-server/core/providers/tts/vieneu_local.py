@@ -194,6 +194,7 @@ class VieneuLocalTTS(BaseTTS):
 
         worker_future.add_done_callback(_worker_done)
 
+        acquired_perf = time.perf_counter()
         try:
             first_pcm = True
             first_opus = True
@@ -254,6 +255,9 @@ class VieneuLocalTTS(BaseTTS):
             stop_event.set()
             if not worker_future.done():
                 await asyncio.shield(worker_future)
+            held_ms = (time.perf_counter() - acquired_perf) * 1000.0
+            mark_current("tts_lease_held", held_ms=round(held_ms, 3),
+                         priority=lease.priority, queue_wait_ms=round(lease.wait_ms, 3))
             await lease.release()
 
     def scheduler_snapshot(self) -> dict:

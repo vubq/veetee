@@ -261,11 +261,28 @@ class HttpServer:
         base_prompt = str(payload.get("base_prompt", "")).strip()
         if not base_prompt:
             return web.json_response({"error": "Base prompt is required"}, status=400)
-        if len(base_prompt) > 4000:
-            return web.json_response({"error": "Base prompt is too long"}, status=400)
+        # Shared budget validation: bytes + estimated tokens, never silent truncate.
+        try:
+            from config.settings import validate_base_prompt_budget
+            validate_base_prompt_budget(base_prompt, self.config)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
         try:
-            self.llm_engine.set_base_prompt(base_prompt, persist=True)
+            setter = getattr(self.llm_engine, "set_base_prompt", None)
+            if setter is None:
+                raise ValueError("LLM provider has no persona setter")
+            try:
+                setter(
+                    base_prompt,
+                    persist=True,
+                    max_bytes=self.config.llm.base_prompt_max_bytes,
+                    max_tokens_estimate=self.config.llm.base_prompt_max_tokens,
+                    chars_per_token=self.config.latency.context_chars_per_token,
+                )
+            except TypeError:
+                # Back-compat for test doubles without budget args.
+                setter(base_prompt, persist=True)
         except (OSError, ValueError) as e:
             logger.error(f"Failed to update base prompt: {e}")
             return web.json_response({"error": "Could not save base prompt"}, status=500)

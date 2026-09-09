@@ -26,13 +26,18 @@ class TTSLease:
         self._scheduler = scheduler
         self.priority = priority
         self.wait_ms = wait_ms
+        self.acquired_perf = time.perf_counter()
         self._released = False
+
+    @property
+    def held_ms(self) -> float:
+        return (time.perf_counter() - self.acquired_perf) * 1000.0
 
     async def release(self) -> None:
         if self._released:
             return
         self._released = True
-        await self._scheduler.release()
+        await self._scheduler.release(held_ms=self.held_ms)
 
 
 class TTSAdmissionScheduler:
@@ -45,6 +50,10 @@ class TTSAdmissionScheduler:
         self._active_priority: Optional[str] = None
         self._sequence = 0
         self._aging_priority_per_second = max(0.1, float(aging_priority_per_second))
+        self._holds = 0
+        self._total_held_ms = 0.0
+        self._max_held_ms = 0.0
+        self._quota_skipped_prewarm = 0
 
     def _priority_value(self, name: str) -> int:
         return PRIORITY_VALUES.get(str(name or "live").strip().lower(), PRIORITY_VALUES["live"])
@@ -122,10 +131,18 @@ class TTSAdmissionScheduler:
                     self._condition.notify_all()
                 raise
 
-    async def release(self) -> None:
+    def skip_prewarm_for_quota(self) -> None:
+        """Record a prewarm skip so load runs keep live admission bounded."""
+        self._quota_skipped_prewarm += 1
+
+    async def release(self, *, held_ms: float = 0.0) -> None:
         async with self._condition:
             self._active = False
             self._active_priority = None
+            self._holds += 1
+            held = max(0.0, float(held_ms or 0.0))
+            self._total_held_ms += held
+            self._max_held_ms = max(self._max_held_ms, held)
             self._condition.notify_all()
 
     def snapshot(self) -> dict:
@@ -140,4 +157,11 @@ class TTSAdmissionScheduler:
             "active_priority": self._active_priority,
             "waiting": waiting,
             "longest_wait_ms": round(longest_wait_ms, 3),
+            # Lease hold covers inference + queue/pacing/backpressure so M6
+            # can separate engine time from delivery hold. The lease must
+            # only release when the engine is truly free.
+            "holds": self._holds,
+            "avg_held_ms": round(self._total_held_ms / self._holds, 3) if self._holds else 0.0,
+            "max_held_ms": round(self._max_held_ms, 3),
+            "quota_skipped_prewarm": self._quota_skipped_prewarm,
         }

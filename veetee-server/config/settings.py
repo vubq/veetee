@@ -9,6 +9,7 @@ DEFAULT_EXIT_COMMANDS = ["tạm biệt", "kết thúc trò chuyện", "thoát tr
 
 @dataclass
 class ServerConfig:
+    timezone: str = "Asia/Bangkok"
     host: str = "0.0.0.0"
     ws_port: int = 8000
     http_port: int = 8003
@@ -56,6 +57,14 @@ class LLMConfig:
     reasoning_format: str = "hidden"
     base_prompt: str = "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
     prompt_template: str = "agent-base-prompt.txt"
+    # Persona budget replaces the old static 4000-char API/UI cap. Both byte
+    # and estimated-token limits apply so a large persona cannot silently
+    # overflow the model context. Runtime and management paths share this.
+    base_prompt_max_bytes: int = 32 * 1024
+    base_prompt_max_tokens: int = 8000
+    # Incremented every time the persona changes so all rounds of one turn
+    # pin the same snapshot. See OmnirouteGroqLLM.persona_version.
+    persona_version: int = 0
 
 @dataclass
 class TTSConfig:
@@ -68,6 +77,11 @@ class TTSConfig:
     stream_queue_max_chunks: int = 4
     denoise: bool = True
     temperature: float = 0.7
+    # Split deadlines so a long playback is never cut by the generation
+    # timeout. Generation/tool, first-chunk, stall and delivery budgets are
+    # measured separately (M6.7).
+    first_chunk_timeout_ms: int = 4000
+    stall_timeout_ms: int = 2500
 
 
 @dataclass
@@ -134,10 +148,12 @@ class ToolsConfig:
     mcp_device_enabled: bool = False
     max_calls_per_turn: int = 3
     schema_limit: int = 16
-    # Normal chat remains one LLM call. A real action receipt may use one
-    # bounded synthesis round so the model can phrase the actual result.
+    # Normal chat remains one LLM inference. A real action receipt may use
+    # bounded follow-up rounds so the model can chain A->B tools and then
+    # phrase the actual receipts. The ceiling is finite and tested.
     max_llm_rounds_per_turn: int = 2
     tool_result_synthesis: bool = True
+    max_parallel_read_only: int = 2
 
 
 @dataclass
@@ -160,6 +176,40 @@ class AppConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     management: ManagementConfig = field(default_factory=ManagementConfig)
+
+
+def estimate_persona_tokens(text: str, chars_per_token: int = 4) -> int:
+    """Conservative persona token estimate with a safety margin for Vietnamese/JSON."""
+    chars_per_token = max(1, int(chars_per_token))
+    chars = len((text or "").encode("utf-8", "ignore"))
+    # Vietnamese diacritics and JSON schema overhead tokenize worse than 4
+    # chars/token on many tokenizers, so keep a 25% safety margin and label
+    # the result estimated wherever it is reported.
+    return int(chars / chars_per_token * 1.25) + 1
+
+
+def validate_base_prompt_budget(text: str, config: "AppConfig") -> None:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        raise ValueError("base_prompt must not be empty")
+    raw_bytes = len(cleaned.encode("utf-8", "ignore"))
+    if raw_bytes > config.llm.base_prompt_max_bytes:
+        raise ValueError(
+            f"base_prompt exceeds byte budget ({raw_bytes} > {config.llm.base_prompt_max_bytes})"
+        )
+    estimated = estimate_persona_tokens(
+        cleaned, getattr(config.latency, "context_chars_per_token", 4)
+    )
+    if estimated > config.llm.base_prompt_max_tokens:
+        raise ValueError(
+            f"base_prompt exceeds token budget (est. {estimated} > {config.llm.base_prompt_max_tokens})"
+        )
+
+
+def _validate_base_prompt_budget(text: str, config: "AppConfig") -> None:
+    # Startup validation shares the exact runtime/management budget check.
+    # Over-budget personas fail loudly instead of being truncated silently.
+    validate_base_prompt_budget(text, config)
 
 
 def _validate_conversation_config(config: ConversationConfig) -> None:
@@ -208,6 +258,8 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
 
 
 def _validate_app_config(config: AppConfig) -> None:
+    from zoneinfo import ZoneInfo
+    ZoneInfo(config.server.timezone)
     for name in ("utterance_queue_max", "max_utterance_ms"):
         value = getattr(config.asr, name)
         if type(value) is not int or value < 1:
@@ -260,19 +312,32 @@ def _validate_app_config(config: AppConfig) -> None:
     if not 1 <= float(config.intent.confirmation_ttl_seconds) <= 300:
         raise ValueError("intent.confirmation_ttl_seconds must be between 1 and 300")
 
-    for name in ("max_calls_per_turn", "schema_limit", "max_llm_rounds_per_turn"):
+    for name in ("max_calls_per_turn", "schema_limit", "max_llm_rounds_per_turn", "max_parallel_read_only"):
         value = getattr(config.tools, name)
         if type(value) is not int or value < 1:
             raise ValueError(f"tools.{name} must be a positive integer")
-    if config.tools.max_calls_per_turn > 3:
-        raise ValueError("tools.max_calls_per_turn must be <= 3")
-    if config.tools.max_llm_rounds_per_turn not in {1, 2}:
-        raise ValueError("tools.max_llm_rounds_per_turn must be 1 or 2")
+    if not 1 <= config.tools.max_calls_per_turn <= 8:
+        raise ValueError("tools.max_calls_per_turn must be between 1 and 8")
+    if config.tools.max_llm_rounds_per_turn not in {1, 2, 3, 4}:
+        raise ValueError("tools.max_llm_rounds_per_turn must be 1, 2, 3 or 4")
     if config.tools.tool_result_synthesis and config.tools.max_llm_rounds_per_turn < 2:
-        raise ValueError("tools.tool_result_synthesis requires max_llm_rounds_per_turn=2")
+        raise ValueError("tools.tool_result_synthesis requires max_llm_rounds_per_turn>=2")
+    if config.tools.schema_limit > 64:
+        raise ValueError("tools.schema_limit must be <= 64")
+    if not 1 <= config.tools.max_parallel_read_only <= 4:
+        raise ValueError("tools.max_parallel_read_only must be between 1 and 4")
+    for name in ("base_prompt_max_bytes", "base_prompt_max_tokens"):
+        value = getattr(config.llm, name)
+        if type(value) is not int or value < 256:
+            raise ValueError(f"llm.{name} must be an integer >= 256")
+    _validate_base_prompt_budget(config.llm.base_prompt, config)
     if config.asr.text_correction_enabled and config.latency.unified_turn_enabled:
         raise ValueError("fast unified-turn profile requires asr.text_correction_enabled=false")
 
+    for name in ("first_chunk_timeout_ms", "stall_timeout_ms"):
+        value = getattr(config.tts, name)
+        if type(value) is not int or value < 100:
+            raise ValueError(f"tts.{name} must be an integer >= 100")
     if not isinstance(config.management.token, str):
         raise ValueError("management.token must be a string")
     for name in ("test_voice_max_concurrency", "test_voice_requests_per_minute"):
@@ -327,6 +392,13 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         elif section_name == "memory": memory_data = section_data
         elif section_name == "tools": tools_data = section_data
         elif section_name == "management": management_data = section_data
+
+    # Empty string in YAML must not shadow env secrets. Fall back to env so
+    # operators can leave api_key/token empty in local config.yaml.
+    if not str(asr_data.get("api_key", "") or "").strip():
+        asr_data = {k: v for k, v in asr_data.items() if k != "api_key"}
+    if not str(management_data.get("token", "") or "").strip():
+        management_data = {k: v for k, v in management_data.items() if k != "token"}
 
     config = AppConfig(
         server=ServerConfig(**{k: v for k, v in server_data.items() if k in ServerConfig.__annotations__}),

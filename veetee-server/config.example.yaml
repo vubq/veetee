@@ -2,6 +2,7 @@
 # config.yaml được .gitignore bỏ qua; không commit API key thật.
 
 server:
+  timezone: "Asia/Bangkok"
   host: "0.0.0.0"
   ws_port: 8000
   http_port: 8003
@@ -55,6 +56,10 @@ llm:
   reasoning_format: "hidden"
   base_prompt: "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
   prompt_template: "agent-base-prompt.txt"
+  # Persona budget dùng chung cho API/UI/config/runtime. Over-budget bị reject,
+  # không truncate âm thầm. Estimate có safety margin cho tiếng Việt/JSON.
+  base_prompt_max_bytes: 32768
+  base_prompt_max_tokens: 8000
 
 tts:
   provider: "vieneu"
@@ -68,6 +73,9 @@ tts:
   stream_queue_max_chunks: 4
   denoise: true
   temperature: 0.7
+  # Deadline tách riêng: generation không cắt playback dài đang phát bình thường.
+  first_chunk_timeout_ms: 4000
+  stall_timeout_ms: 2500
 
 # Hành vi hội thoại tự nhiên phía server. Không yêu cầu sửa/build firmware Xiaozhi nguyên bản.
 # Semantic intent luôn do AI quyết định; các field legacy bên dưới vẫn được parser
@@ -145,6 +153,8 @@ tools:
   mcp_device_enabled: false
   max_calls_per_turn: 3
   schema_limit: 16
-  # Chat vẫn 1 call; turn có action/receipt được phép thêm đúng 1 vòng synthesis.
+  # Chat vẫn 1 inference. Turn có action được phép bounded follow-up rounds
+  # để chain A->B rồi synthesis; trần 1..4 đã test, không chạy vô hạn.
   max_llm_rounds_per_turn: 2
   tool_result_synthesis: true
+  max_parallel_read_only: 2

@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from core.memory.retrieval import MemoryRetriever
+from core.clock_context import CLOCK_CONTEXT_PREFIX
 
 
 class ContextBudgetError(ValueError):
@@ -94,13 +95,19 @@ class ContextBuilder:
             raise ContextBudgetError("fixed system/tool/output budget exhausts the LLM context")
 
         group_costs = [self._serialized_chars(group) for group in groups]
-        latest_cost = group_costs[-1]
+        mandatory_indexes = {len(groups) - 1}
+        for index, group in enumerate(groups):
+            if any(message.get("role") == "system" and str(message.get("content", "")).startswith(CLOCK_CONTEXT_PREFIX) for message in group):
+                mandatory_indexes.add(index)
+        latest_cost = sum(group_costs[index] for index in mandatory_indexes)
         if latest_cost > available_message_chars:
             raise ContextBudgetError("current user/tool turn exceeds the configured LLM context budget")
 
-        selected_indexes = [len(groups) - 1]
+        selected_indexes = list(mandatory_indexes)
         used = latest_cost
         for index in range(len(groups) - 2, -1, -1):
+            if index in mandatory_indexes:
+                continue
             cost = group_costs[index]
             if used + cost <= available_message_chars:
                 selected_indexes.append(index)
@@ -130,44 +137,102 @@ class ContextBuilder:
         owner_id: Optional[str],
         session_memory: List[Any],
     ) -> List[Dict[str, Any]]:
-        facts: List[Dict[str, Any]] = []
+        self.last_lookup: Dict[str, Any] = {"hit": 0, "miss": 0, "timeout": 0, "truncated": 0}
+        session_facts: List[Dict[str, Any]] = []
         session_slice = list(session_memory[-self.top_k :])
         for index, fact in enumerate(session_slice):
             if hasattr(fact, "id") and hasattr(fact, "value"):
-                facts.append({
+                session_facts.append({
                     "id": str(getattr(fact, "id")),
                     "revision": int(getattr(fact, "revision", 1)),
                     "scope": "session",
                     "value": " ".join(str(getattr(fact, "value", "")).split()),
+                    "provenance": f"memory:session:{getattr(fact, 'id')}",
                 })
             else:
                 cleaned = " ".join(str(fact).split())
                 if cleaned:
-                    facts.append({
+                    session_facts.append({
                         "id": f"session:legacy:{index}",
                         "revision": 1,
                         "scope": "session",
                         "value": cleaned,
+                        "provenance": "memory:session:legacy",
                     })
+        durable_facts: List[Dict[str, Any]] = []
+        lookup_status = "disabled"
         if owner_id and self.retriever is not None:
             try:
-                durable = await asyncio.wait_for(
-                    self.retriever.retrieve(owner_id=owner_id, scope="personal", query=query),
-                    timeout=self.lookup_timeout_ms / 1000.0,
-                )
-                facts.extend({
-                    "id": f"durable:{fact.id}",
-                    "revision": fact.revision,
-                    "scope": "personal",
-                    "value": " ".join(str(fact.value).split()),
-                } for fact in durable)
+                retrieve = getattr(self.retriever, "retrieve", None)
+                if callable(retrieve):
+                    durable = await asyncio.wait_for(
+                        retrieve(owner_id=owner_id, scope="personal", query=query),
+                        timeout=self.lookup_timeout_ms / 1000.0,
+                    )
+                else:
+                    from core.memory.retrieval import RetrievalQuery as _RQ
+
+                    candidates = await asyncio.wait_for(
+                        self.retriever.retrieve_candidates(_RQ(
+                            query=query, owner_id=str(owner_id), scope="personal",
+                            max_results=self.top_k,
+                        )),
+                        timeout=self.lookup_timeout_ms / 1000.0,
+                    )
+                    durable = []  # candidates already shaped below
+                    for item in candidates:
+                        durable_facts.append({
+                            "id": f"durable:{item.id}",
+                            "revision": int(item.version or 1),
+                            "scope": "personal",
+                            "value": " ".join(str(item.value or "").split()),
+                            "provenance": str(item.provenance or ""),
+                        })
+                    durable = []
+                for fact in durable or []:
+                    durable_facts.append({
+                        "id": f"durable:{fact.id}",
+                        "revision": fact.revision,
+                        "scope": "personal",
+                        "value": " ".join(str(fact.value).split()),
+                        "provenance": f"memory:personal:{fact.id}",
+                    })
+                lookup_status = "hit" if durable_facts else "miss"
+            except asyncio.TimeoutError:
+                lookup_status = "timeout"
+                self.last_lookup["timeout"] += 1
             except asyncio.CancelledError:
                 raise
             except Exception:
                 # Memory is a best-effort local enrichment path. A locked or
                 # unavailable DB must degrade the turn to normal chat instead
-                # of breaking the realtime response pipeline.
-                pass
+                # of breaking the realtime response pipeline. The miss is
+                # recorded explicitly instead of being swallowed silently.
+                lookup_status = "miss"
+                self.last_lookup["miss"] += 1
+        # Split budget so recent session facts cannot starve durable facts.
+        half = max(1, self.top_k // 2)
+        facts: List[Dict[str, Any]] = []
+        facts.extend(session_facts[-half:])
+        facts.extend(durable_facts[:half])
+        # Fill leftovers while preserving relevance order within each scope.
+        if len(facts) < self.top_k:
+            for fact in session_facts[: max(0, len(session_facts) - half)]:
+                if len(facts) >= self.top_k:
+                    break
+                if fact not in facts:
+                    facts.append(fact)
+        if len(facts) < self.top_k:
+            for fact in durable_facts[half:]:
+                if len(facts) >= self.top_k:
+                    break
+                facts.append(fact)
+        self.last_lookup.update({
+            "status": lookup_status,
+            "session_count": len(session_facts),
+            "durable_count": len(durable_facts),
+            "returned": len(facts),
+        })
         unique: List[Dict[str, Any]] = []
         seen_ids = set()
         for fact in facts:

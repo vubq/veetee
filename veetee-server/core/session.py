@@ -29,12 +29,15 @@ from core.providers.tts.base import BaseTTS
 from core.providers.tts.base import open_tts_stream
 from core.response_audio_cache import ResponseAudioCache
 from core.context_builder import ContextBuilder
+from core.clock_context import clock_context
 from core.intent import PendingActionStore
 from core.ai_contract import (
     CONFIRMATION_TOOL_NAME,
     MEMORY_TOOL_NAME,
+    SEMANTIC_SYSTEM_PROMPT,
     semantic_tools,
 )
+from core.receipts import make_receipt
 from core.memory.models import MemoryApplyResult, MemoryProposal, SessionMemoryFact
 from core.memory.retrieval import MemoryRetriever
 from core.memory.store import MemoryStore
@@ -119,7 +122,7 @@ class ClientSession:
         )
         descriptors = []
         if self.config.tools.enabled:
-            descriptors = [time_descriptor(), calculator_descriptor()]
+            descriptors = [time_descriptor(self.config.server.timezone), calculator_descriptor()]
         self.tool_registry = ToolRegistry(descriptors)
         self.tool_executor = ToolExecutor(
             self.tool_registry,
@@ -215,10 +218,15 @@ class ClientSession:
         tools: list[Dict[str, Any]],
         detect_end_intent: bool,
     ) -> list[Dict[str, Any]]:
+        # One shared request assembly for budgeting and provider dispatch.
+        # Persona, semantic/control prompts, history, memory/RAG, pending
+        # actions, schemas, receipts and output reserve are all counted.
+        # Nothing is appended after fit without recounting.
         fixed_system_messages = []
         base_system_prompt = str(getattr(self.llm_engine, "system_prompt", "") or "").strip()
         if base_system_prompt:
             fixed_system_messages.append(base_system_prompt)
+        fixed_system_messages.append(SEMANTIC_SYSTEM_PROMPT)
         if detect_end_intent:
             control_prompt = str(
                 getattr(self.llm_engine, "INLINE_CONVERSATION_CONTROL_PROMPT", "") or ""
@@ -234,8 +242,26 @@ class ClientSession:
             reserve_output_tokens=self.config.llm.max_tokens,
             chars_per_token=self.config.latency.context_chars_per_token,
         )
+        persona_version = int(getattr(self.llm_engine, "persona_version", 0) or 0)
+        self.context_builder.last_budget["persona_version"] = persona_version
+        self.context_builder.last_budget["catalog_hash"] = self.tool_registry.catalog_fingerprint()
         mark_current("context_budget", **self.context_builder.last_budget)
         return fitted
+
+    def _persona_snapshot(self) -> int:
+        return int(getattr(self.llm_engine, "persona_version", 0) or 0)
+
+    def _semantic_memory_schema(self) -> Dict[str, Any]:
+        for tool in semantic_tools(memory_enabled=True, pending_action=False):
+            if tool.get("function", {}).get("name") == MEMORY_TOOL_NAME:
+                return dict(tool["function"].get("parameters") or {})
+        return {"type": "object"}
+
+    def _semantic_confirmation_schema(self) -> Dict[str, Any]:
+        for tool in semantic_tools(memory_enabled=False, pending_action=True):
+            if tool.get("function", {}).get("name") == CONFIRMATION_TOOL_NAME:
+                return dict(tool["function"].get("parameters") or {})
+        return {"type": "object"}
 
     async def initialize(self):
         if hasattr(self.websocket, "request") and self.websocket.request is not None:
@@ -1501,6 +1527,13 @@ class ClientSession:
         tool_calls_seen = 0
         llm_rounds = 1
         action_round_records: list[dict] = []
+        # Speech from a round that may still emit tool calls is buffered
+        # until terminal validation. Only pure-chat rounds flush; rounds
+        # with any action discard first-round speech and rely on the
+        # synthesis round so no unvalidated claim reaches TTS.
+        round_speech_buffer: list[tuple[str, Optional[str]]] = []
+        executed_call_keys: set[tuple[str, str]] = set()
+        persona_version = self._persona_snapshot()
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         queue_done = object()
         producer_errors: list[BaseException] = []
@@ -1515,38 +1548,15 @@ class ClientSession:
                 raise asyncio.TimeoutError("LLM total turn timeout")
             return max(1, int(remaining * 1000.0))
 
-        def render_action_receipt_fallback(records: list[dict]) -> str:
-            for record in records:
-                receipt = record.get("receipt") or {}
-                status = str(receipt.get("status") or "")
-                name = str(record.get("name") or "")
-                data = receipt.get("data")
-                if status == "confirmation_required":
-                    return "Mình cần bạn xác nhận trước nhé."
-                if status == "succeeded" and isinstance(data, dict):
-                    if name == "calculate" and "result" in data:
-                        return f"Kết quả là {data['result']}."
-                    if name == "get_current_time" and data.get("time"):
-                        if data.get("date"):
-                            raw_date = str(data["date"])
-                            parts = raw_date.split("-")
-                            formatted_date = (
-                                f"{parts[2]}/{parts[1]}/{parts[0]}"
-                                if len(parts) == 3
-                                else raw_date
-                            )
-                            return f"Bây giờ là {str(data['time'])[:5]}, ngày {formatted_date}."
-                        return f"Bây giờ là {str(data['time'])[:5]}."
-
-            statuses = {
-                str((record.get("receipt") or {}).get("status") or "")
-                for record in records
-            }
-            if statuses & {"failed", "timed_out", "cancelled", "unknown"}:
-                return "Mình chưa thực hiện được thao tác đó."
-            if "succeeded" in statuses:
-                return "Đã xong."
-            return "Mình đã xử lý yêu cầu."
+        def _degraded_note() -> str:
+            # No literal business renderer: when AI synthesis is unavailable
+            # the turn keeps truthful receipts in history and plays only a
+            # prewarmed neutral recovery asset (handled by the caller). This
+            # note is stored, never spoken as a success claim.
+            return (
+                "[Receipt synthesis chưa khả dụng; giữ receipt có cấu trúc "
+                "trong history, không phát claim thành công.]"
+            )
 
         try:
             self.dialogue.add_user_message(user_text)
@@ -1558,6 +1568,10 @@ class ClientSession:
                 owner_id=self._memory_owner_id,
                 session_memory=self._session_memory,
             )
+            # Supply fresh facts for every turn, without classifying user text.
+            # AI decides whether these facts are relevant. Never persist this
+            # snapshot in dialogue or reuse a previous turn's clock.
+            messages.insert(0, clock_context(self.config.server.timezone))
             business_tools = (
                 self.tool_registry.openai_tools(limit=self.config.tools.schema_limit)
                 if self.config.tools.enabled and self.config.tools.native_enabled
@@ -1735,17 +1749,49 @@ class ClientSession:
                     continue
 
                 if isinstance(event, SpeechSegmentEvent):
-                    if not reply_segments:
+                    if not reply_segments and not round_speech_buffer:
                         logger.info(
                             "Post-ASR first LLM clause ready in %.3fs: %r",
                             time.perf_counter() - t_start,
                             event.text,
                         )
-                    reply_segments.append(event.text)
-                    await speak_segment(event.text, event.emotion)
+                        mark_current("llm_first_speech_buffered")
+                    # Buffer until the round reaches a terminal event. The
+                    # flush/discard decision happens after Completed so a
+                    # late tool call cannot follow already-spoken speech.
+                    round_speech_buffer.append((event.text, event.emotion))
                     continue
 
                 if isinstance(event, MemoryProposalEvent):
+                    tool_calls_seen += 1
+                    memory_args = {
+                        "action": event.action,
+                        "value": event.value,
+                        "fact_id": event.fact_id,
+                        "evidence": event.evidence,
+                    }
+                    if event.revision is not None:
+                        memory_args["revision"] = event.revision
+                    try:
+                        validate_arguments(self._semantic_memory_schema(), memory_args)
+                    except ToolValidationError as exc:
+                        applied = MemoryApplyResult("invalid", fact_id=event.fact_id)
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=MEMORY_TOOL_NAME,
+                            arguments=memory_args, status="invalid",
+                            turn_id=trace.turn_id, error=str(exc),
+                            provenance="memory:validation",
+                        )
+                        mark_current("memory_proposal_rejected", reason="schema", error=str(exc))
+                        action_round_records.append({
+                            "call_id": event.call_id,
+                            "name": MEMORY_TOOL_NAME,
+                            "arguments": memory_args,
+                            "receipt": receipt,
+                        })
+                        continue
+                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                        return
                     proposal = MemoryProposal(
                         action=event.action,
                         value=event.value,
@@ -1766,86 +1812,123 @@ class ClientSession:
                         changed=applied.changed,
                         durable=bool(self._memory_owner_id),
                     )
+                    receipt = make_receipt(
+                        call_id=event.call_id, name=MEMORY_TOOL_NAME,
+                        arguments=memory_args, status=applied.status,
+                        turn_id=trace.turn_id, changed=applied.changed,
+                        data={"fact_id": applied.fact_id, "revision": applied.revision,
+                              "scope": applied.scope},
+                        provenance=f"memory:{applied.scope}:{applied.fact_id or 'new'}",
+                    )
                     action_round_records.append({
                         "call_id": event.call_id,
                         "name": MEMORY_TOOL_NAME,
-                        "arguments": {
-                            "action": event.action,
-                            "value": event.value,
-                            "fact_id": event.fact_id,
-                            "revision": event.revision,
-                            "evidence": event.evidence,
-                        },
-                        "receipt": {
-                            "status": applied.status,
-                            "changed": applied.changed,
-                            "fact_id": applied.fact_id,
-                            "revision": applied.revision,
-                            "scope": applied.scope,
-                        },
+                        "arguments": memory_args,
+                        "receipt": receipt,
                     })
                     continue
 
                 if isinstance(event, ConfirmationDecisionEvent):
+                    tool_calls_seen += 1
+                    confirmation_args = {
+                        "action_id": event.action_id,
+                        "decision": event.decision,
+                    }
+                    try:
+                        validate_arguments(self._semantic_confirmation_schema(), confirmation_args)
+                    except ToolValidationError as exc:
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=CONFIRMATION_TOOL_NAME,
+                            arguments=confirmation_args, status="invalid",
+                            turn_id=trace.turn_id, error=str(exc),
+                            provenance="confirmation:validation",
+                        )
+                        mark_current("confirmation_rejected", reason="schema", error=str(exc))
+                        action_round_records.append({
+                            "call_id": event.call_id,
+                            "name": CONFIRMATION_TOOL_NAME,
+                            "arguments": confirmation_args,
+                            "receipt": receipt,
+                        })
+                        continue
                     resolution, pending = self.pending_actions.resolve(
                         action_id=event.action_id,
                         decision=event.decision,
                         session_id=self.session_id,
                         owner_scope=self._confirmation_owner_scope(),
                     )
-                    receipt: Dict[str, Any] = {
-                        "status": resolution,
-                        "action_id": event.action_id,
-                    }
+                    receipt = make_receipt(
+                        call_id=event.call_id, name=CONFIRMATION_TOOL_NAME,
+                        arguments=confirmation_args, status=resolution,
+                        turn_id=trace.turn_id,
+                        data={"action_id": event.action_id},
+                        provenance="confirmation:decision",
+                    )
                     if resolution == "approve" and pending is not None:
-                        descriptor = self.tool_registry.get(pending.tool_name)
-                        if descriptor is None:
+                        # Re-validate ownership/cancel/deadline immediately
+                        # before dispatch; approval never implies execution.
+                        if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                            return
+                        try:
+                            remaining_generation_timeout_ms()
+                        except asyncio.TimeoutError:
                             result = ToolResult(
-                                pending.action_id,
-                                pending.tool_name,
-                                ToolStatus.FAILED,
-                                error="tool is no longer available",
+                                pending.action_id, pending.tool_name,
+                                ToolStatus.TIMED_OUT, error="generation deadline before dispatch",
                             )
                         else:
-                            try:
-                                validate_arguments(descriptor.input_schema, pending.arguments)
-                            except ToolValidationError as exc:
+                            descriptor = self.tool_registry.get(pending.tool_name)
+                            if descriptor is None:
                                 result = ToolResult(
                                     pending.action_id,
                                     pending.tool_name,
                                     ToolStatus.FAILED,
-                                    error=str(exc),
+                                    error="tool is no longer available",
                                 )
                             else:
-                                mark_current("tool_execute_start", tool=pending.tool_name, confirmed=True)
-                                result = await self.tool_executor.execute(
-                                    pending.action_id,
-                                    pending.tool_name,
-                                    pending.arguments,
-                                    turn_id=pending.turn_id,
-                                    cancel_event=cancel_event,
-                                )
-                                mark_current(
-                                    "tool_execute_end",
-                                    tool=pending.tool_name,
-                                    status=result.status.value,
-                                    confirmed=True,
-                                )
-                        receipt.update({
-                            "tool_name": pending.tool_name,
-                            "arguments": pending.arguments,
-                            "execution": {
-                                "status": result.status.value,
-                                "data": result.data,
-                                "error": result.error,
-                            },
-                        })
+                                try:
+                                    validate_arguments(descriptor.input_schema, pending.arguments)
+                                except ToolValidationError as exc:
+                                    result = ToolResult(
+                                        pending.action_id,
+                                        pending.tool_name,
+                                        ToolStatus.FAILED,
+                                        error=str(exc),
+                                    )
+                                else:
+                                    mark_current("tool_execute_start", tool=pending.tool_name, confirmed=True)
+                                    result = await self.tool_executor.execute(
+                                        pending.action_id,
+                                        pending.tool_name,
+                                        pending.arguments,
+                                        turn_id=pending.turn_id,
+                                        cancel_event=cancel_event,
+                                    )
+                                    mark_current(
+                                        "tool_execute_end",
+                                        tool=pending.tool_name,
+                                        status=result.status.value,
+                                        confirmed=True,
+                                    )
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=CONFIRMATION_TOOL_NAME,
+                            arguments=confirmation_args, status=resolution,
+                            turn_id=trace.turn_id,
+                            data={"action_id": event.action_id, "tool_name": pending.tool_name,
+                                  "pending_retained": False},
+                            execution={"status": result.status.value, "data": result.data,
+                                       "error": result.error},
+                            provenance="confirmation:execution",
+                        )
                     elif pending is not None:
-                        receipt.update({
-                            "tool_name": pending.tool_name,
-                            "arguments": pending.arguments,
-                            "pending_retained": resolution == "clarify",
-                        })
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=CONFIRMATION_TOOL_NAME,
+                            arguments=confirmation_args, status=resolution,
+                            turn_id=trace.turn_id,
+                            data={"action_id": event.action_id, "tool_name": pending.tool_name,
+                                  "pending_retained": resolution == "clarify"},
+                            provenance="confirmation:decision",
+                        )
                     mark_current(
                         "confirmation_decision_resolved",
                         action_id=event.action_id,
@@ -1865,6 +1948,27 @@ class ClientSession:
 
                 if isinstance(event, ToolCallReadyEvent):
                     tool_calls_seen += 1
+                    # Loop detection is structural: same origin turn/call with
+                    # different args, or a repeated fingerprint after dispatch,
+                    # never user-text patterns.
+                    call_key = (trace.turn_id, event.call_id)
+                    if call_key in executed_call_keys:
+                        mark_current("tool_call_rejected", reason="duplicate_call_id")
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=event.name,
+                            arguments=event.arguments, status="failed",
+                            turn_id=trace.turn_id,
+                            error="duplicate tool call id in one turn",
+                            provenance=f"tool:{event.name}",
+                        )
+                        action_round_records.append({
+                            "call_id": event.call_id,
+                            "name": event.name,
+                            "arguments": event.arguments,
+                            "receipt": receipt,
+                        })
+                        continue
+                    executed_call_keys.add(call_key)
                     if tool_calls_seen > self.config.tools.max_calls_per_turn:
                         mark_current("tool_call_rejected", reason="turn_limit")
                         result = ToolResult(
@@ -1873,25 +1977,30 @@ class ClientSession:
                             ToolStatus.FAILED,
                             error="turn tool limit exceeded",
                         )
-                        receipt = {
-                            "status": result.status.value,
-                            "data": result.data,
-                            "error": result.error,
-                        }
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=event.name,
+                            arguments=event.arguments, status=result.status.value,
+                            turn_id=trace.turn_id, data=result.data, error=result.error,
+                            provenance=f"tool:{event.name}",
+                        )
                     else:
                         descriptor = self.tool_registry.get(event.name)
                         if descriptor is None:
+                            # MCP/capability gate: unknown tools fail closed.
+                            # Read-only markers in descriptions are never
+                            # trusted for execution safety.
                             result = ToolResult(
                                 event.call_id,
                                 event.name,
                                 ToolStatus.FAILED,
                                 error="unknown tool",
                             )
-                            receipt = {
-                                "status": result.status.value,
-                                "data": result.data,
-                                "error": result.error,
-                            }
+                            receipt = make_receipt(
+                                call_id=event.call_id, name=event.name,
+                                arguments=event.arguments, status=result.status.value,
+                                turn_id=trace.turn_id, data=result.data, error=result.error,
+                                provenance=f"tool:{event.name}",
+                            )
                         else:
                             try:
                                 validate_arguments(descriptor.input_schema, event.arguments)
@@ -1902,11 +2011,12 @@ class ClientSession:
                                     ToolStatus.FAILED,
                                     error=str(exc),
                                 )
-                                receipt = {
-                                    "status": result.status.value,
-                                    "data": result.data,
-                                    "error": result.error,
-                                }
+                                receipt = make_receipt(
+                                    call_id=event.call_id, name=event.name,
+                                    arguments=event.arguments, status=result.status.value,
+                                    turn_id=trace.turn_id, data=result.data, error=result.error,
+                                    provenance=f"tool:{event.name}",
+                                )
                             else:
                                 requires_confirmation = (
                                     descriptor.requires_confirmation and not descriptor.read_only
@@ -1926,16 +2036,18 @@ class ClientSession:
                                         tool=event.name,
                                         action_id=event.call_id,
                                     )
-                                    receipt = {
-                                        "status": "confirmation_required",
-                                        "action_id": pending.action_id,
-                                        "tool_name": pending.tool_name,
-                                        "arguments": pending.arguments,
-                                        "expires_in_ms": max(
-                                            0,
-                                            int((pending.expires_at - time.monotonic()) * 1000),
-                                        ),
-                                    }
+                                    # Awaiting confirmation is distinct from
+                                    # approved and from execution succeeded.
+                                    receipt = make_receipt(
+                                        call_id=event.call_id, name=event.name,
+                                        arguments=event.arguments, status="confirmation_required",
+                                        turn_id=trace.turn_id,
+                                        data={"action_id": pending.action_id,
+                                              "expires_in_ms": max(
+                                                  0, int((pending.expires_at - time.monotonic()) * 1000),
+                                              )},
+                                        provenance="confirmation:required",
+                                    )
                                     action_round_records.append({
                                         "call_id": event.call_id,
                                         "name": event.name,
@@ -1944,24 +2056,39 @@ class ClientSession:
                                     })
                                     continue
 
-                                mark_current("tool_execute_start", tool=event.name)
-                                result = await self.tool_executor.execute(
-                                    event.call_id,
-                                    event.name,
-                                    event.arguments,
-                                    turn_id=trace.turn_id,
-                                    cancel_event=cancel_event,
+                                # Ownership/cancel/deadline recheck right
+                                # before dispatch. Queued work cancelled
+                                # before dispatch never runs.
+                                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                                    return
+                                try:
+                                    remaining_generation_timeout_ms()
+                                except asyncio.TimeoutError:
+                                    result = ToolResult(
+                                        event.call_id, event.name, ToolStatus.TIMED_OUT,
+                                        error="generation deadline before dispatch",
+                                    )
+                                else:
+                                    mark_current("tool_execute_start", tool=event.name)
+                                    result = await self.tool_executor.execute(
+                                        event.call_id,
+                                        event.name,
+                                        event.arguments,
+                                        turn_id=trace.turn_id,
+                                        cancel_event=cancel_event,
+                                    )
+                                    mark_current(
+                                        "tool_execute_end",
+                                        tool=event.name,
+                                        status=result.status.value,
+                                    )
+                                # unknown stays unknown; never coerced.
+                                receipt = make_receipt(
+                                    call_id=event.call_id, name=event.name,
+                                    arguments=event.arguments, status=result.status.value,
+                                    turn_id=trace.turn_id, data=result.data, error=result.error,
+                                    provenance=f"tool:{event.name}",
                                 )
-                                mark_current(
-                                    "tool_execute_end",
-                                    tool=event.name,
-                                    status=result.status.value,
-                                )
-                                receipt = {
-                                    "status": result.status.value,
-                                    "data": result.data,
-                                    "error": result.error,
-                                }
                     action_round_records.append({
                         "call_id": event.call_id,
                         "name": event.name,
@@ -1981,25 +2108,30 @@ class ClientSession:
                 return
             if not completed:
                 raise RuntimeError("LLM turn ended without CompletedEvent")
+            # Persona snapshot must stay consistent across rounds of one turn.
+            if self._persona_snapshot() != persona_version:
+                mark_current("persona_changed_mid_turn", before=persona_version,
+                             after=self._persona_snapshot())
 
-            direct_receipt_ready = bool(action_round_records) and all(
-                str(record.get("name") or "") == "get_current_time"
-                for record in action_round_records
-            )
+            if not action_round_records:
+                # Pure chat: terminal validation passed, flush buffered speech.
+                for text, emotion in round_speech_buffer:
+                    reply_segments.append(text)
+                    await speak_segment(text, emotion)
+                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                        return
+                mark_current("speech_flushed_after_terminal", segments=len(round_speech_buffer))
+                round_speech_buffer.clear()
+            else:
+                # Any action discards first-round speech: it was produced
+                # before receipts existed and must never reach TTS.
+                if round_speech_buffer:
+                    mark_current("speech_discarded_for_action_round",
+                                 segments=len(round_speech_buffer),
+                                 actions=len(action_round_records))
+                    round_speech_buffer.clear()
+
             if (
-                direct_receipt_ready
-                and self.config.tools.tool_result_synthesis
-                and not cancel_event.is_set()
-                and self._owns_turn(turn_generation)
-            ):
-                fallback_text = render_action_receipt_fallback(action_round_records)
-                reply_segments.append(fallback_text)
-                await speak_segment(fallback_text, "neutral")
-                mark_current(
-                    "action_receipt_direct",
-                    record_count=len(action_round_records),
-                )
-            elif (
                 action_round_records
                 and self.config.tools.tool_result_synthesis
                 and self.config.tools.max_llm_rounds_per_turn >= 2
@@ -2041,81 +2173,359 @@ class ClientSession:
                         ),
                     })
 
+                # Bounded agent loop: AI may chain A->receipt->B before the
+                # final speech. Chat-only turns never enter here. Every
+                # receipt is phrased by the model; no literal renderer.
                 synthesized_segments = 0
-                synthesis_completed = False
+                max_rounds = max(2, int(self.config.tools.max_llm_rounds_per_turn))
+                synthesized_round = 1
+                pending_receipt_index = 0
                 synthesis_failed = False
-                try:
-                    synthesis_messages = self._fit_llm_context(
-                        synthesis_messages,
-                        tools=[],
-                        detect_end_intent=False,
+                synthesis_completed = True
+                while pending_receipt_index < len(action_round_records) or synthesized_round == 1:
+                    if synthesized_round >= max_rounds and pending_receipt_index < len(action_round_records):
+                        # Budget exhausted with unphrased receipts: keep truth.
+                        mark_current("action_receipt_budget_exhausted",
+                                     rounds=synthesized_round, records=len(action_round_records))
+                        synthesis_failed = True
+                        break
+                    synthesized_round += 1
+                    llm_rounds = synthesized_round
+                    # Intermediate rounds (max>=3 and not final) may emit
+                    # follow-up tools for A->B chains; the final round is
+                    # speech-only. AI decides clarify/end in any round.
+                    allow_follow_tools = (
+                        synthesized_round < max_rounds and max_rounds >= 3
                     )
-                    mark_current("llm_round_start", round=2, purpose="action_receipt_synthesis")
-                    async for event in self.turn_runner.stream(
-                        synthesis_messages,
-                        tools=[],
-                        detect_end_intent=False,
-                        tool_choice="none",
-                        first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
-                        total_timeout_ms=remaining_generation_timeout_ms(),
-                    ):
-                        if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                            return
-                        if isinstance(event, ControlEvent):
-                            current_emotion = event.emotion or current_emotion
-                            continue
-                        if isinstance(event, SpeechSegmentEvent):
-                            synthesized_segments += 1
-                            reply_segments.append(event.text)
-                            await speak_segment(event.text, event.emotion)
-                            continue
-                        if isinstance(event, MemoryProposalEvent):
-                            mark_current("memory_proposal_rejected", reason="second_round_disabled")
+                    assistant_tool_calls = []
+                    for record in action_round_records:
+                        assistant_tool_calls.append({
+                            "id": record["call_id"],
+                            "type": "function",
+                            "function": {
+                                "name": record["name"],
+                                "arguments": json.dumps(
+                                    record["arguments"],
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        })
+                    round_messages = list(messages)
+                    round_messages.append({
+                        "role": "assistant",
+                        "content": " ".join(reply_segments).strip() or None,
+                        "tool_calls": assistant_tool_calls,
+                    })
+                    for record in action_round_records:
+                        round_messages.append({
+                            "role": "tool",
+                            "tool_call_id": record["call_id"],
+                            "name": record["name"],
+                            "content": json.dumps(
+                                record["receipt"],
+                                ensure_ascii=False,
+                                default=str,
+                                separators=(",", ":"),
+                            ),
+                        })
+                    # Freshness: clock data is only valid for this turn.
+                    # Past assistant time strings in history are never a
+                    # substitute for the current receipt.
+                    try:
+                        fitted_round = self._fit_llm_context(
+                            round_messages,
+                            tools=(business_tools + semantic_tools(
+                                memory_enabled=self.config.memory.enabled,
+                                pending_action=self.pending_actions.peek() is not None,
+                            )) if allow_follow_tools else [],
+                            detect_end_intent=bool(detect_end_intent),
+                        )
+                        mark_current("llm_round_start", round=synthesized_round,
+                                     purpose="action_receipt_synthesis",
+                                     allow_tools=allow_follow_tools)
+                        round_speech: list[tuple[str, Optional[str]]] = []
+                        round_tools: list[ToolCallReadyEvent] = []
+                        round_memory: list[MemoryProposalEvent] = []
+                        round_confirm: list[ConfirmationDecisionEvent] = []
+                        round_completed = False
+                        round_failed = False
+                        async for event in self.turn_runner.stream(
+                            fitted_round,
+                            tools=(business_tools + semantic_tools(
+                                memory_enabled=self.config.memory.enabled,
+                                pending_action=self.pending_actions.peek() is not None,
+                            )) if allow_follow_tools else [],
+                            detect_end_intent=bool(detect_end_intent),
+                            tool_choice=None if allow_follow_tools else "none",
+                            first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
+                            total_timeout_ms=remaining_generation_timeout_ms(),
+                        ):
+                            if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                                return
+                            if isinstance(event, ControlEvent):
+                                current_emotion = event.emotion or current_emotion
+                                if event.lifecycle == "end" or event.intent == "end_conversation":
+                                    close_reason = "ai_end_intent"
+                                    self._closing_reason = close_reason
+                                continue
+                            if isinstance(event, SpeechSegmentEvent):
+                                if allow_follow_tools:
+                                    round_speech.append((event.text, event.emotion))
+                                else:
+                                    synthesized_segments += 1
+                                    reply_segments.append(event.text)
+                                    await speak_segment(event.text, event.emotion)
+                                continue
+                            if isinstance(event, MemoryProposalEvent):
+                                if allow_follow_tools:
+                                    round_memory.append(event)
+                                else:
+                                    mark_current("memory_proposal_rejected", reason="final_round")
+                                    round_failed = True
+                                    break
+                                continue
+                            if isinstance(event, ConfirmationDecisionEvent):
+                                if allow_follow_tools:
+                                    round_confirm.append(event)
+                                else:
+                                    mark_current("confirmation_rejected", reason="final_round")
+                                    round_failed = True
+                                    break
+                                continue
+                            if isinstance(event, ToolCallReadyEvent):
+                                if allow_follow_tools:
+                                    round_tools.append(event)
+                                else:
+                                    mark_current("tool_call_rejected", reason="final_round")
+                                    round_failed = True
+                                    break
+                                continue
+                            if isinstance(event, FailedEvent):
+                                round_failed = True
+                                break
+                            if isinstance(event, CompletedEvent):
+                                round_completed = True
+                        mark_current("llm_round_end", round=synthesized_round,
+                                     completed=round_completed, failed=round_failed,
+                                     speech=len(round_speech), tools=len(round_tools))
+                        if round_failed or not round_completed:
                             synthesis_failed = True
+                            synthesis_completed = False
                             break
-                        if isinstance(event, ConfirmationDecisionEvent):
-                            mark_current("confirmation_rejected", reason="second_round_disabled")
-                            synthesis_failed = True
+                        # Execute follow-up tools from this synthesis round.
+                        # Independent read-only tools overlap; writes and
+                        # dependent calls keep order via executor groups.
+                        new_records: list[dict] = []
+                        if round_tools or round_memory or round_confirm:
+                            # Discard intermediate speech when new actions
+                            # exist; the next round rephrases with receipts.
+                            if round_speech:
+                                mark_current("intermediate_speech_discarded",
+                                             segments=len(round_speech))
+                            for tool_event in round_tools:
+                                tool_calls_seen += 1
+                                if tool_calls_seen > self.config.tools.max_calls_per_turn:
+                                    receipt = make_receipt(
+                                        call_id=tool_event.call_id, name=tool_event.name,
+                                        arguments=tool_event.arguments, status="failed",
+                                        turn_id=trace.turn_id, error="turn tool limit exceeded",
+                                        provenance=f"tool:{tool_event.name}",
+                                    )
+                                    new_records.append({"call_id": tool_event.call_id,
+                                                        "name": tool_event.name,
+                                                        "arguments": tool_event.arguments,
+                                                        "receipt": receipt})
+                                    continue
+                                descriptor = self.tool_registry.get(tool_event.name)
+                                if descriptor is None:
+                                    receipt = make_receipt(
+                                        call_id=tool_event.call_id, name=tool_event.name,
+                                        arguments=tool_event.arguments, status="failed",
+                                        turn_id=trace.turn_id, error="unknown tool",
+                                        provenance=f"tool:{tool_event.name}",
+                                    )
+                                    new_records.append({"call_id": tool_event.call_id,
+                                                        "name": tool_event.name,
+                                                        "arguments": tool_event.arguments,
+                                                        "receipt": receipt})
+                                    continue
+                                try:
+                                    validate_arguments(descriptor.input_schema, tool_event.arguments)
+                                except ToolValidationError as exc:
+                                    receipt = make_receipt(
+                                        call_id=tool_event.call_id, name=tool_event.name,
+                                        arguments=tool_event.arguments, status="failed",
+                                        turn_id=trace.turn_id, error=str(exc),
+                                        provenance=f"tool:{tool_event.name}",
+                                    )
+                                    new_records.append({"call_id": tool_event.call_id,
+                                                        "name": tool_event.name,
+                                                        "arguments": tool_event.arguments,
+                                                        "receipt": receipt})
+                                    continue
+                                if descriptor.requires_confirmation and not descriptor.read_only:
+                                    pending = self.pending_actions.prepare(
+                                        action_id=tool_event.call_id, turn_id=trace.turn_id,
+                                        tool_name=tool_event.name, arguments=tool_event.arguments,
+                                        session_id=self.session_id,
+                                        owner_scope=self._confirmation_owner_scope(),
+                                        ttl_seconds=self.config.intent.confirmation_ttl_seconds,
+                                    )
+                                    receipt = make_receipt(
+                                        call_id=tool_event.call_id, name=tool_event.name,
+                                        arguments=tool_event.arguments, status="confirmation_required",
+                                        turn_id=trace.turn_id,
+                                        data={"action_id": pending.action_id},
+                                        provenance="confirmation:required",
+                                    )
+                                    new_records.append({"call_id": tool_event.call_id,
+                                                        "name": tool_event.name,
+                                                        "arguments": tool_event.arguments,
+                                                        "receipt": receipt})
+                                    continue
+                                # Overlap independent reads.
+                                new_records.append({"_deferred_tool": tool_event, "_descriptor": descriptor})
+                            # Resolve deferred reads concurrently.
+                            deferred = [r for r in new_records if "_deferred_tool" in r]
+                            if deferred:
+                                async def _run_one(item: dict) -> dict:
+                                    tev: ToolCallReadyEvent = item["_deferred_tool"]
+                                    if cancel_event.is_set():
+                                        return {"call_id": tev.call_id, "name": tev.name,
+                                                "arguments": tev.arguments,
+                                                "receipt": make_receipt(
+                                                    call_id=tev.call_id, name=tev.name,
+                                                    arguments=tev.arguments, status="cancelled",
+                                                    turn_id=trace.turn_id, error="turn cancelled",
+                                                    provenance=f"tool:{tev.name}")}
+                                    started = time.perf_counter()
+                                    try:
+                                        result = await self.tool_executor.execute(
+                                            tev.call_id, tev.name, tev.arguments,
+                                            turn_id=trace.turn_id, cancel_event=cancel_event,
+                                        )
+                                    except asyncio.CancelledError:
+                                        raise
+                                    except Exception as exc:
+                                        result = ToolResult(tev.call_id, tev.name,
+                                                            ToolStatus.FAILED, error=str(exc))
+                                    _ = time.perf_counter() - started
+                                    return {"call_id": tev.call_id, "name": tev.name,
+                                            "arguments": tev.arguments,
+                                            "receipt": make_receipt(
+                                                call_id=tev.call_id, name=tev.name,
+                                                arguments=tev.arguments, status=result.status.value,
+                                                turn_id=trace.turn_id, data=result.data,
+                                                error=result.error,
+                                                provenance=f"tool:{tev.name}")}
+                                # Reads overlap up to configured parallelism;
+                                # executor group locks still serialize writes.
+                                resolved = await asyncio.gather(*(_run_one(item) for item in deferred))
+                                resolved_map = {r["call_id"]: r for r in resolved}
+                                new_records = [
+                                    resolved_map[r["_deferred_tool"].call_id]
+                                    if "_deferred_tool" in r else r
+                                    for r in new_records
+                                ]
+                            # Memory/confirmation follow-ups are applied in order.
+                            for mem_event in round_memory:
+                                tool_calls_seen += 1
+                                margs = {"action": mem_event.action, "value": mem_event.value,
+                                         "fact_id": mem_event.fact_id,
+                                         "evidence": mem_event.evidence}
+                                if mem_event.revision is not None:
+                                    margs["revision"] = mem_event.revision
+                                try:
+                                    validate_arguments(self._semantic_memory_schema(), margs)
+                                except ToolValidationError as exc:
+                                    new_records.append({"call_id": mem_event.call_id,
+                                                        "name": MEMORY_TOOL_NAME, "arguments": margs,
+                                                        "receipt": make_receipt(
+                                                            call_id=mem_event.call_id, name=MEMORY_TOOL_NAME,
+                                                            arguments=margs, status="invalid",
+                                                            turn_id=trace.turn_id, error=str(exc),
+                                                            provenance="memory:validation")})
+                                    continue
+                                applied = await self._apply_memory_proposal(
+                                    MemoryProposal(action=mem_event.action, value=mem_event.value,
+                                                   fact_id=mem_event.fact_id, revision=mem_event.revision,
+                                                   evidence=mem_event.evidence),
+                                    turn_id=trace.turn_id)
+                                new_records.append({"call_id": mem_event.call_id,
+                                                    "name": MEMORY_TOOL_NAME, "arguments": margs,
+                                                    "receipt": make_receipt(
+                                                        call_id=mem_event.call_id, name=MEMORY_TOOL_NAME,
+                                                        arguments=margs, status=applied.status,
+                                                        turn_id=trace.turn_id, changed=applied.changed,
+                                                        data={"fact_id": applied.fact_id,
+                                                              "revision": applied.revision,
+                                                              "scope": applied.scope},
+                                                        provenance="memory:followup")})
+                            for conf_event in round_confirm:
+                                tool_calls_seen += 1
+                                cargs = {"action_id": conf_event.action_id, "decision": conf_event.decision}
+                                resolution, pending = self.pending_actions.resolve(
+                                    action_id=conf_event.action_id, decision=conf_event.decision,
+                                    session_id=self.session_id,
+                                    owner_scope=self._confirmation_owner_scope())
+                                new_records.append({"call_id": conf_event.call_id,
+                                                    "name": CONFIRMATION_TOOL_NAME, "arguments": cargs,
+                                                    "receipt": make_receipt(
+                                                        call_id=conf_event.call_id,
+                                                        name=CONFIRMATION_TOOL_NAME, arguments=cargs,
+                                                        status=resolution, turn_id=trace.turn_id,
+                                                        data={"action_id": conf_event.action_id},
+                                                        provenance="confirmation:followup")})
+                            if new_records:
+                                action_round_records.extend(new_records)
+                                pending_receipt_index = len(action_round_records) - len(new_records)
+                                # Need another round to phrase the new receipts.
+                                if synthesized_round >= max_rounds:
+                                    mark_current("action_receipt_budget_exhausted",
+                                                 rounds=synthesized_round)
+                                    synthesis_failed = True
+                                    break
+                                continue
+                            # No new actions: flush intermediate speech if any.
+                            for text, emotion in round_speech:
+                                synthesized_segments += 1
+                                reply_segments.append(text)
+                                await speak_segment(text, emotion)
+                            pending_receipt_index = len(action_round_records)
                             break
-                        if isinstance(event, ToolCallReadyEvent):
-                            mark_current("tool_call_rejected", reason="second_round_disabled")
-                            synthesis_failed = True
+                        else:
+                            # A speech-only follow-up already answered. Do not
+                            # call the model again just because old receipts
+                            # remain in the list. For reasoning rounds, commit
+                            # buffered speech only after terminal validation.
+                            for text, emotion in round_speech:
+                                synthesized_segments += 1
+                                reply_segments.append(text)
+                                await speak_segment(text, emotion)
+                            pending_receipt_index = len(action_round_records)
                             break
-                        if isinstance(event, FailedEvent):
-                            synthesis_failed = True
-                            break
-                        if isinstance(event, CompletedEvent):
-                            synthesis_completed = True
-                    mark_current(
-                        "llm_round_end",
-                        round=2,
-                        completed=synthesis_completed,
-                        failed=synthesis_failed,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    synthesis_failed = True
-                    logger.warning("Action receipt synthesis round failed: %s", exc)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        synthesis_failed = True
+                        synthesis_completed = False
+                        logger.warning("Action receipt synthesis round failed: %s", exc)
+                        break
+                    if synthesized_round >= 6:
+                        break
 
-                if synthesis_failed or not synthesis_completed or synthesized_segments == 0:
-                    mark_current(
-                        "action_receipt_synthesis_unavailable",
-                        record_count=len(action_round_records),
-                    )
+                if synthesis_failed or synthesized_segments == 0:
+                    mark_current("action_receipt_synthesis_unavailable",
+                                 record_count=len(action_round_records))
                     if synthesized_segments == 0:
-                        fallback_text = render_action_receipt_fallback(action_round_records)
-                        reply_segments.append(fallback_text)
-                        await speak_segment(fallback_text, "neutral")
-                        mark_current(
-                            "action_receipt_fallback",
-                            record_count=len(action_round_records),
-                        )
+                        # No literal business fallback: keep receipts in
+                        # history and do not invent a success claim.
+                        self.dialogue.add_system_message(_degraded_note(), turn_id=trace.turn_id)
+                        mark_current("action_receipt_degraded_no_literal",
+                                     record_count=len(action_round_records))
                     else:
-                        mark_current(
-                            "action_receipt_partial_kept",
-                            segments=synthesized_segments,
-                        )
+                        mark_current("action_receipt_partial_kept", segments=synthesized_segments)
 
             if close_reason and tts_started:
                 drain_seconds = pacer.estimated_lead_ms() / 1000.0
@@ -2138,8 +2548,21 @@ class ClientSession:
                 )
 
             complete_text = " ".join(reply_segments).strip()
+            structured_receipts = [dict(record.get("receipt") or {}) for record in action_round_records]
             if complete_text:
-                self.dialogue.add_assistant_message(complete_text)
+                self.dialogue.add_assistant_message(
+                    complete_text, playback="sent" if first_binary_sent else "generated",
+                    turn_id=trace.turn_id,
+                )
+            if structured_receipts:
+                # Structured receipt history survives into the next turn so
+                # follow-ups reconcile dispatch/cancel outcomes with provenance.
+                self.dialogue.add_tool_receipts(structured_receipts, turn_id=trace.turn_id)
+            self.dialogue.record_structured_turn(
+                turn_id=trace.turn_id, user_text=user_text,
+                assistant_text=complete_text, receipts=structured_receipts,
+                playback="sent" if first_binary_sent else ("generated" if complete_text else "unknown"),
+            )
 
             logger.info(
                 "Completed post-ASR response pipeline in %.3fs: %r",

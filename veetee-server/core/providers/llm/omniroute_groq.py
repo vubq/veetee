@@ -205,8 +205,8 @@ class OmnirouteGroqLLM(BaseLLM):
 Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
 
     INLINE_CONVERSATION_CONTROL_PROMPT = """Trong chính lượt này, tự quyết định người dùng có muốn kết thúc phiên hiện tại không. Nếu cần gọi tool, gọi tool trực tiếp ngay; không phát câu chờ và không cần [end]/[continue] trước tool call. Với lượt trả lời bằng nội dung nói, đầu ra bắt buộc mở đầu bằng [end] hoặc [continue], rồi thẻ cảm xúc và nội dung nói.
-[end] chỉ khi lời mới nhất thể hiện rõ muốn dừng/kết thúc phiên; sau đó nói một câu chào ngắn đúng persona.
-[continue] cho mọi trường hợp khác, kể cả hỏi/nhắc về việc tạm biệt hay đi ngủ.
+[end] chỉ khi lời mới nhất là lời chào tạm biệt hoặc yêu cầu dừng rõ ràng và không hỏi thêm gì; sau đó nói một câu chào ngắn đúng persona.
+[continue] cho mọi trường hợp khác: mọi câu hỏi xin thông tin (ngày, giờ, thứ, thời tiết, tính toán, ghi nhớ, tra cứu...), dù ngắn hay cụt, đều là [continue]; cả khi người dùng chỉ nhắc tới việc tạm biệt hay đi ngủ mà chưa chào tạm biệt thật.
 Định dạng: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung.... Hai nhãn điều khiển là metadata nội bộ, không nhắc lại trong lời nói."""
 
     def __init__(
@@ -232,6 +232,8 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
         self.prompt_template = self._load_prompt_template()
         self.base_prompt = self._load_saved_base_prompt() or base_prompt.strip()
         self.system_prompt = self._render_system_prompt(self.base_prompt)
+        self.persona_version = 0
+        self._persona_token_cache: Dict[str, int] = {}
         self._http_session: Optional[aiohttp.ClientSession] = None
 
     def _load_prompt_template(self) -> str:
@@ -266,12 +268,30 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
     def get_base_prompt(self) -> str:
         return self.base_prompt
 
-    def set_base_prompt(self, base_prompt: str, persist: bool = True) -> None:
+    def set_base_prompt(
+        self,
+        base_prompt: str,
+        persist: bool = True,
+        *,
+        max_bytes: int = 32 * 1024,
+        max_tokens_estimate: int = 8000,
+        chars_per_token: int = 4,
+    ) -> None:
         cleaned = (base_prompt or "").strip()
         if not cleaned:
             raise ValueError("base_prompt must not be empty")
+        raw_bytes = len(cleaned.encode("utf-8", "ignore"))
+        if raw_bytes > max_bytes:
+            raise ValueError(f"base_prompt exceeds byte budget ({raw_bytes} > {max_bytes})")
+        estimated = int(len(cleaned.encode("utf-8", "ignore")) / max(1, chars_per_token) * 1.25) + 1
+        if estimated > max_tokens_estimate:
+            raise ValueError(
+                f"base_prompt exceeds token budget (est. {estimated} > {max_tokens_estimate})"
+            )
         self.base_prompt = cleaned
         self.system_prompt = self._render_system_prompt(cleaned)
+        self.persona_version += 1
+        self._persona_token_cache.clear()
 
         if persist and self.base_prompt_state_path:
             state_dir = os.path.dirname(self.base_prompt_state_path)
