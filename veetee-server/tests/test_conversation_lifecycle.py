@@ -56,12 +56,11 @@ class LifecycleSession(ClientSession):
 
 
 class CountingLLM:
-    def __init__(self, correction="đã sửa", end_intents=None, idle_decisions=None):
+    def __init__(self, correction="đã sửa", end_intents=None):
         self.calls = []
         self.correction_calls = 0
         self.correction = correction
         self.end_intents = set(end_intents or [])
-        self.idle_decisions = list(idle_decisions or [])
         self.reply = "Mình nghe đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
 
@@ -73,15 +72,10 @@ class CountingLLM:
             "tool_choice": tool_choice,
         })
         latest = messages[-1] if messages else {}
-        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(latest.get("content", "")):
-            lifecycle = self.idle_decisions.pop(0) if self.idle_decisions else "continue"
-            yield ControlEvent(
-                intent="end_conversation" if lifecycle == "end" else "chat",
-                lifecycle=lifecycle,
-                emotion="relaxed",
-            )
-            if lifecycle == "end":
-                yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
+        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(latest.get("content", "")):
+            # Deterministic idle deadline: the server always ends the session
+            # after the timeout; this call only generates the goodbye text.
+            yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
             yield CompletedEvent(finish_reason="stop")
             return
 
@@ -287,32 +281,42 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session._closing_reason)
         self.assertEqual(session.state, SessionState.LISTENING)
 
-    async def test_idle_continue_rearms_once_then_end_logically_idles(self):
-        llm = CountingLLM(idle_decisions=["continue", "end"])
+    async def test_idle_timeout_ends_session_and_closes_transport(self):
+        # Deterministic idle deadline: exactly one bounded LLM call, then the
+        # session ends even though the model is never asked to [continue].
+        llm = CountingLLM()
         session, websocket, _, _ = self.make_session(goodbye=False, llm=llm)
         session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "auto"
         }))
-        await self.wait_conversation_disarmed(session)
+        await self.wait_closed(websocket)
 
         idle_calls = [
             call for call in llm.calls
             if call["messages"] and call["messages"][-1].get("role") == "system"
-            and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(call["messages"][-1].get("content", ""))
+            and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(call["messages"][-1].get("content", ""))
         ]
-        self.assertEqual(len(idle_calls), 2)
+        self.assertEqual(len(idle_calls), 1)
         self.assertTrue(all(call["tool_choice"] == "none" for call in idle_calls))
-        self.assertFalse(websocket.closed)
-        self.assertTrue(session.is_active)
-        self.assertEqual(session.state, SessionState.IDLE)
+        self.assertEqual(websocket.close_code, 1000)
+        self.assertFalse(session.is_active)
 
-        await session._handle_text_json(json.dumps({"type": "text", "text": "xin chào"}))
-        await self.wait_current_turn(session)
-        self.assertFalse(websocket.closed)
+    async def test_idle_timeout_plays_ai_goodbye_then_closes(self):
+        llm = CountingLLM()
+        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+        session.config.conversation.idle_timeout_seconds = 0.02
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await self.wait_closed(websocket)
+
+        self.assertEqual(tts.texts, [llm.goodbye])
+        self.assertEqual(websocket.close_code, 1000)
+        self.assertFalse(session.is_active)
 
     async def test_idle_timeout_waits_while_session_is_speaking(self):
-        llm = CountingLLM(idle_decisions=["end"])
+        llm = CountingLLM()
         session, websocket, _, _ = self.make_session(goodbye=False, llm=llm)
         session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
@@ -325,8 +329,7 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 0)
 
         session.state = SessionState.LISTENING
-        await self.wait_conversation_disarmed(session)
-        self.assertFalse(websocket.closed)
+        await self.wait_closed(websocket)
         self.assertEqual(len(llm.calls), 1)
 
 

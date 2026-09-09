@@ -553,24 +553,25 @@ class ClientSession:
             pass
 
     async def _evaluate_idle_semantics(self, revision: int, timeout: float) -> bool:
-        """Ask the same LLM contract whether one inactivity epoch ends the chat.
+        """Deterministic conversational idle deadline.
 
-        This is a system lifecycle event, not a synthetic user command. The
-        model gets one bounded inference. Continue produces no unsolicited
-        speech; end may use the model's own generated sentence as the goodbye.
+        After `idle_timeout_seconds` with no conversational interaction
+        (no user question and no AI answer), the session always ends: one
+        bounded LLM inference generates a short goodbye, it is played, then
+        the transport/session is closed. There is no AI-decided [continue]
+        loop — a quiet session must not linger forever. A new user turn that
+        arrives mid-flow bumps the activity revision and cancels this path.
         """
         messages = list(self.dialogue.get_messages_for_llm())
         messages.append({
             "role": "system",
             "content": (
-                "Sự kiện hệ thống: hội thoại không có hoạt động trong "
-                f"{timeout:.0f} giây. Đây không phải lời người dùng. "
-                "Hãy quyết định trong chính response này liệu nên kết thúc phiên logic hay tiếp tục chờ. "
-                "Dùng [end] nếu ngữ cảnh cho thấy phiên đã tự nhiên kết thúc; dùng [continue] nếu nên tiếp tục chờ. "
-                "Nếu [continue], nội dung nói sẽ không được phát. Nếu [end], hãy tạo một câu chào ngắn tự nhiên."
+                "Sự kiện hệ thống: hội thoại đã không có tương tác "
+                f"{timeout:.0f} giây (không có câu hỏi của người dùng và không có câu trả lời nào). "
+                "Phiên sắp kết thúc. Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, "
+                "phù hợp ngữ cảnh hội thoại. Chỉ trả về đúng một câu chào, không thêm gì khác."
             ),
         })
-        lifecycle = "continue"
         speech: list[str] = []
         try:
             async for event in self.turn_runner.stream(
@@ -586,41 +587,29 @@ class ClientSession:
             ):
                 if revision != self._activity_revision or not self.is_active:
                     return False
-                if isinstance(event, ControlEvent):
-                    lifecycle = event.lifecycle
-                elif isinstance(event, SpeechSegmentEvent):
+                if isinstance(event, SpeechSegmentEvent):
                     speech.append(event.text)
                 elif isinstance(event, FailedEvent):
                     raise RuntimeError(event.error)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("idle semantic evaluation failed session=%s error=%s", self.session_id, exc)
-            lifecycle = "continue"
+            logger.warning("idle goodbye generation failed session=%s error=%s", self.session_id, exc)
 
         if revision != self._activity_revision or not self.is_active:
             return False
-        if lifecycle == "end":
-            self._closing_reason = "idle_timeout"
-            text = " ".join(part.strip() for part in speech if part.strip()).strip()
-            if text and self.config.conversation.goodbye_enabled:
-                self._start_fixed_response(
-                    text,
-                    kind="idle_goodbye",
-                    close_after=True,
-                    closing_reason="idle_timeout",
-                )
-            else:
-                await self._close_transport_and_session("idle_timeout")
-            return True
-
-        # One model decision per inactivity epoch. A continue decision starts a
-        # fresh epoch so the watchdog cannot spin and repeatedly call the LLM.
-        self._activity_revision += 1
-        self._last_activity_monotonic = time.monotonic()
-        self._idle_not_before = self._last_activity_monotonic
-        logger.info("conversation_idle_continue session=%s revision=%d", self.session_id, self._activity_revision)
-        return False
+        self._closing_reason = "idle_timeout"
+        text = " ".join(part.strip() for part in speech if part.strip()).strip()
+        if text and self.config.conversation.goodbye_enabled:
+            self._start_fixed_response(
+                text,
+                kind="idle_goodbye",
+                close_after=True,
+                closing_reason="idle_timeout",
+            )
+        else:
+            await self._close_transport_and_session("idle_timeout")
+        return True
 
     async def _handle_wake_detect(self, user_text: str):
         if self._pending_wake_text is not None or self._fixed_response_kind == "greeting":
@@ -1036,29 +1025,6 @@ class ClientSession:
 
     async def _close_transport_and_session(self, reason: str):
         logger.info("conversation_close_commit session=%s reason=%s", self.session_id, reason)
-        if reason == "idle_timeout":
-            # Idle timeout ends the current logical conversation, but the stock
-            # Xiaozhi client may reuse the existing WebSocket when the user
-            # starts listening again. Keep the transport/session alive and
-            # return to a clean idle capture state so the next listen:start or
-            # wake detect can re-arm the conversation normally.
-            self._conversation_armed = False
-            self._closing_reason = None
-            self._cancel_pending_wake()
-            self._invalidate_capture()
-            self._playback_guard_until = 0.0
-            self._idle_not_before = time.monotonic()
-            self.final_transcript_parts.clear()
-            self._speech_active = False
-            self._discard_asr_until_speech_final = False
-            self.processed_transcript = ""
-            self.state = SessionState.IDLE
-            if self.current_turn_task is asyncio.current_task():
-                self.current_turn_task = None
-                self.current_cancel_event = None
-                self._fixed_response_kind = None
-            logger.info("conversation_idle_reset session=%s transport=open", self.session_id)
-            return
         await self._close_websocket(code=1000, reason=reason)
         await self.close(close_transport=False)
 

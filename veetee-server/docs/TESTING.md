@@ -75,7 +75,7 @@ Checklist acceptance:
 2. Mic -> ASR -> AI -> TTS -> loa chạy nhiều lượt liên tiếp.
 3. Nếu board có `listen:detect`, ghi text thực tế và kiểm detect -> AI response -> lượt tiếp theo.
 4. Test contextual end, câu trích dẫn từ kết thúc và câu có chứa từ tương tự nhưng không mang intent kết thúc.
-5. Test idle timeout với cả AI continue và AI end.
+5. Test idle timeout: im lặng quá `conversation.idle_timeout_seconds` (local 120s) thì server deterministic kết thúc phiên — AI sinh 1 câu chào, phát xong đóng WebSocket code 1000. Kiểm có chào + socket đóng + session được dọn; lượt nói chen vào giữa chừng phải hủy flow idle.
 6. Nghe câu dài để xác nhận không mất tail.
 7. Khi board/FW có cơ chế stock tạo `abort` hoặc `listen:start`, ngắt lúc robot đang nói và xác nhận turn sau không nhận stale transcript/audio.
 8. Đo request/gesture -> last binary server riêng với thao tác -> physical speaker stop; không thay thế hai metric cho nhau.

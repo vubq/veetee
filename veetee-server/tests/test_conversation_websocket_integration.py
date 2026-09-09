@@ -36,7 +36,6 @@ class CountingLLM:
         self.reply = "Chào bạn, mình đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
         self.base_prompt = "Bạn là VeeTee."
-        self.idle_decisions = []
 
     async def stream_turn(self, messages, *, tools=None, detect_end_intent=True, tool_choice=None):
         self.calls.append({
@@ -46,15 +45,10 @@ class CountingLLM:
             "tool_choice": tool_choice,
         })
         latest = messages[-1] if messages else {}
-        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(latest.get("content", "")):
-            lifecycle = self.idle_decisions.pop(0) if self.idle_decisions else "continue"
-            yield ControlEvent(
-                intent="end_conversation" if lifecycle == "end" else "chat",
-                lifecycle=lifecycle,
-                emotion="relaxed",
-            )
-            if lifecycle == "end":
-                yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
+        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(latest.get("content", "")):
+            # Deterministic idle deadline: always end; this call only
+            # generates the goodbye text.
+            yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
             yield CompletedEvent(finish_reason="stop")
             return
 
@@ -216,25 +210,35 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         await ws.close()
                     await self._wait_sessions(0)
 
-    async def test_idle_ai_end_keeps_socket_open_and_allows_second_wake(self):
-        self.config.conversation.goodbye_enabled = False
+    async def test_idle_timeout_closes_session_after_goodbye(self):
+        self.config.conversation.goodbye_enabled = True
         self.config.conversation.idle_timeout_seconds = 0.03
-        self.llm.idle_decisions = ["end"]
 
         ws = await self._connect(ProtocolVersion.V1)
         try:
             await self._wake_and_receive_ai(ws, ProtocolVersion.V1)
-            session = await self._wait_conversation_disarmed()
-
-            self.assertFalse(ws.closed)
-            self.assertTrue(session.is_active)
-            self.assertEqual(len(self.active_sessions), 1)
-
-            await self._wake_and_receive_ai(ws, ProtocolVersion.V1)
-            self.assertFalse(ws.closed)
-            self.assertEqual(len(self.active_sessions), 1)
+            # Idle goodbye uses the fixed-response path: tts
+            # start/sentence_start/stop, no llm status message.
+            got_goodbye = False
+            while True:
+                message = await asyncio.wait_for(ws.receive(), timeout=5)
+                if message.type.name == "TEXT":
+                    item = json.loads(message.data)
+                    if item.get("type") == "tts" and item.get("state") == "sentence_start":
+                        self.assertEqual(item.get("text"), self.llm.goodbye)
+                        got_goodbye = True
+                    if item.get("type") == "tts" and item.get("state") == "stop":
+                        break
+                elif message.type.name != "BINARY":
+                    self.fail(f"unexpected websocket message type: {message.type}")
+            self.assertTrue(got_goodbye)
+            closed = await asyncio.wait_for(ws.receive(), timeout=5)
+            self.assertIn(closed.type.name, {"CLOSE", "CLOSED"})
+            self.assertEqual(ws.close_code, 1000)
+            await self._wait_sessions(0)
         finally:
-            await ws.close()
+            if not ws.closed:
+                await ws.close()
 
     async def test_browser_diagnostics_health_and_ota_endpoints(self):
         diagnostics_response = await self.client.get("/api/diagnostics")
