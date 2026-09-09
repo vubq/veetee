@@ -402,7 +402,13 @@ def _percentile(values: list[float], quantile: float) -> Optional[float]:
     return round(ordered[rank], 3)
 
 
-def summarize(records: list[Dict[str, Any]]) -> Dict[str, Any]:
+METRIC_VERSION = "v2"
+# Certification gates from the plan: quick smoke runs must never certify SLA.
+CERT_MIN_SAMPLES = 100
+CERT_MIN_SUCCESS_RATE = 0.99
+
+
+def summarize(records: list[Dict[str, Any]], *, certification: bool = False) -> Dict[str, Any]:
     measured = [record for record in records if record["measured"]]
     values = [
         float(record["speech_end_to_first_voiced_pcm_received_ms"])
@@ -422,15 +428,38 @@ def summarize(records: list[Dict[str, Any]]) -> Dict[str, Any]:
     timeout_samples = outcomes.get("timeout", 0)
     cancelled_samples = outcomes.get("cancelled", 0)
     failed_samples = len(measured) - successful_samples - timeout_samples - cancelled_samples
-    minimum_samples = 20
-    minimum_success_rate = 0.95
+    # Success is counted over ALL required attempts, including timeouts and
+    # failures. Missing marks never pass. Quick smoke runs use the same math
+    # but cannot certify: they report SMOKE_ONLY.
+    minimum_samples = CERT_MIN_SAMPLES if certification else 20
+    minimum_success_rate = CERT_MIN_SUCCESS_RATE if certification else 0.95
     success_rate = successful_samples / len(measured) if measured else 0.0
     sample_gate = len(measured) >= minimum_samples
     success_gate = success_rate >= minimum_success_rate
     p95 = _percentile(values, 0.95)
     p50 = round(statistics.median(values), 3) if values else None
+    sla_pass = bool(values) and sample_gate and success_gate and (p95 or 0) < 1000.0
+    p50_pass = bool(values) and sample_gate and success_gate and (p50 or 0) <= 600.0
+    if not certification:
+        sla_status = "SMOKE_ONLY"
+    elif not (sample_gate and success_gate):
+        sla_status = "NOT_MET"
+    elif sla_pass and p50_pass:
+        sla_status = "ACHIEVED"
+    elif sla_pass:
+        sla_status = "PARTIAL"
+    else:
+        sla_status = "NOT_MET"
     return {
         "metric": "speech_end_to_first_voiced_pcm_received_ms",
+        "metric_version": METRIC_VERSION,
+        # speech_end_to_first_useful_voiced_audio_received_ms is the
+        # certification metric: first voiced audio of the USEFUL answer from
+        # speech-end. The existing voiced-PCM field is only an acoustic proxy
+        # and counts after a case passes quality/grounding. Benchmark runs
+        # without a quality rubric leave useful=null and report PROXY_ONLY.
+        "certification_metric": "speech_end_to_first_useful_voiced_audio_received_ms",
+        "certification_mode": bool(certification),
         "requested_samples": len(measured),
         "successful_samples": successful_samples,
         "timeout_samples": timeout_samples,
@@ -448,8 +477,13 @@ def summarize(records: list[Dict[str, Any]]) -> Dict[str, Any]:
         "p90_ms": _percentile(values, 0.90),
         "p95_ms": p95,
         "max_ms": round(max(values), 3) if values else None,
-        "sla_p95_lt_1000_ms": bool(values) and sample_gate and success_gate and p95 < 1000.0,
-        "target_p50_lte_600_ms": bool(values) and sample_gate and success_gate and p50 <= 600.0,
+        "sla_p95_lt_1000_ms": sla_pass,
+        "target_p50_lte_600_ms": p50_pass,
+        "sla_status": sla_status,
+        "note": (
+            "p95 values are end-to-end percentiles; stage p95s are never summed. "
+            "Voiced PCM is a proxy until quality/grounding passes."
+        ),
     }
 
 
@@ -530,7 +564,7 @@ async def run(args) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
                     index,
                 )
 
-    summary = summarize(records)
+    summary = summarize(records, certification=bool(getattr(args, "certification", False)))
     summary.update({
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "uri": args.uri,
@@ -566,6 +600,8 @@ def parse_args():
     )
     parser.add_argument("--reconnect-each", action="store_true")
     parser.add_argument("--artifact-dir", default="benchmark-artifacts")
+    parser.add_argument("--certification", action="store_true",
+                        help="use 100-attempt/99%% certification gates instead of smoke gates")
     return parser.parse_args()
 
 

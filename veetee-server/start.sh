@@ -8,7 +8,7 @@ if [ ! -d "$VENV" ]; then
     echo "Virtual environment not found at $VENV, creating..."
     python3 -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip
-    "$VENV/bin/pip" install vieneu websockets aiohttp numpy soundfile scipy opuslib-next pyyaml torch transformers accelerate soxr onnxruntime 'nemo_toolkit[asr]'
+    "$VENV/bin/pip" install -r "$DIR/requirements.txt"
 fi
 
 export PYTHONPATH="$DIR:$PYTHONPATH"
