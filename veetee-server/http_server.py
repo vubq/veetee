@@ -75,7 +75,6 @@ class HttpServer:
         tts_engine=None,
         llm_engine=None,
         response_audio_cache=None,
-        greeting_pool_ref=None,
         recent_turn_store=None,
         runtime_readiness_ref=None,
     ):
@@ -84,7 +83,6 @@ class HttpServer:
         self.tts_engine = tts_engine
         self.llm_engine = llm_engine
         self.response_audio_cache = response_audio_cache
-        self.greeting_pool = greeting_pool_ref if greeting_pool_ref is not None else []
         self.recent_turn_store = recent_turn_store or TurnTraceStore(max_recent=100)
         self.runtime_readiness = runtime_readiness_ref if runtime_readiness_ref is not None else {}
         self._test_voice_active = 0
@@ -137,7 +135,6 @@ class HttpServer:
             tts_engine=self.tts_engine,
             llm_engine=self.llm_engine,
             response_audio_cache=self.response_audio_cache,
-            greeting_pool=self.greeting_pool,
             turn_trace_store=self.recent_turn_store,
         )
         await session.initialize()
@@ -281,41 +278,51 @@ class HttpServer:
             if dialogue is not None:
                 dialogue.clear()
             session.processed_transcript = ""
-            refresh_greetings = getattr(session, "refresh_ai_greetings", None)
-            if refresh_greetings is not None:
-                refresh_greetings()
+
+        if self.response_audio_cache is not None:
+            try:
+                await self.response_audio_cache.clear_recovery()
+                generator = getattr(self.llm_engine, "generate_recovery_message", None)
+                if generator is None:
+                    raise RuntimeError("LLM provider has no recovery-message generator")
+                text = await generator()
+                provenance = f"ai:{self.config.llm.model}"
+                await self.response_audio_cache.prepare_recovery(
+                    text,
+                    self.config.conversation.fixed_response_timeout_seconds,
+                    provenance=provenance,
+                )
+                self.runtime_readiness["error_fallback_ready"] = True
+                self.runtime_readiness["error_fallback_provenance"] = provenance
+            except Exception as exc:
+                self.runtime_readiness["error_fallback_ready"] = False
+                self.runtime_readiness["error_fallback_provenance"] = ""
+                logger.warning("AI recovery asset refresh failed after persona change: %s", exc)
 
         return web.json_response({"ok": True, "base_prompt": self.llm_engine.get_base_prompt()})
 
     async def _readiness_snapshot(self) -> dict:
         conversation = self.config.conversation
         fallback_ready = None
+        fallback_provenance = ""
         if self.response_audio_cache is not None:
             try:
-                from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT
-
-                await self.response_audio_cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+                recovery = await self.response_audio_cache.get_recovery()
                 fallback_ready = True
+                fallback_provenance = recovery.provenance
             except Exception:
                 fallback_ready = False
 
         llm_ready = bool(self.runtime_readiness.get("llm_warm", self.llm_engine is not None))
         asr_ready = bool(self.runtime_readiness.get("asr_ready", True))
         tts_ready = self.tts_engine is not None
-        greeting_required = bool(
-            conversation.enabled
-            and conversation.greeting_enabled
-            and conversation.greeting_ai_enabled
-        )
-        greeting_ready = bool(
-            self.runtime_readiness.get(
-                "greeting_ready",
-                (not greeting_required) or bool(self.greeting_pool),
-            )
-        )
         error_fallback_ready = bool(
-            self.runtime_readiness.get("error_fallback_ready", fallback_ready)
+            fallback_ready
+            or self.runtime_readiness.get("error_fallback_ready", False)
         )
+        if fallback_ready:
+            self.runtime_readiness["error_fallback_ready"] = True
+            self.runtime_readiness["error_fallback_provenance"] = fallback_provenance
 
         reasons = []
         if not llm_ready:
@@ -326,8 +333,6 @@ class HttpServer:
             reasons.append("tts_unavailable")
         if not error_fallback_ready:
             reasons.append("error_fallback_audio_unavailable")
-        if not greeting_ready:
-            reasons.append("greeting_pool_unavailable")
         return {
             "status": "ready" if not reasons else "degraded",
             "degraded_reasons": reasons,
@@ -335,10 +340,13 @@ class HttpServer:
             "asr": asr_ready,
             "tts": tts_ready,
             "error_fallback_audio": error_fallback_ready,
+            "error_fallback_provenance": self.runtime_readiness.get(
+                "error_fallback_provenance",
+                fallback_provenance,
+            ),
             "greeting": {
-                "enabled": conversation.greeting_enabled,
-                "pool_count": len(self.greeting_pool),
-                "ready": greeting_ready,
+                "mode": "semantic_turn",
+                "ready": llm_ready,
             },
         }
 
@@ -414,14 +422,9 @@ class HttpServer:
             },
             "conversation": {
                 "enabled": conversation.enabled,
-                "wake_words": conversation.wake_words,
-                "greeting_enabled": conversation.greeting_enabled,
-                "greeting_text": conversation.greeting_text,
+                "semantic_routing": "ai",
                 "audio_cache_enabled": conversation.audio_cache_enabled,
                 "idle_timeout_seconds": conversation.idle_timeout_seconds,
-                "exit_commands": conversation.exit_commands,
-                "goodbye_enabled": conversation.goodbye_enabled,
-                "goodbye_text": conversation.goodbye_text,
                 "wake_start_wait_ms": conversation.wake_start_wait_ms,
                 "fixed_response_timeout_seconds": conversation.fixed_response_timeout_seconds,
                 "close_grace_ms": conversation.close_grace_ms,
@@ -478,6 +481,7 @@ class HttpServer:
                         "outcome": item.get("outcome"),
                         "llm_rounds": item.get("llm_rounds"),
                         "tool_calls": item.get("tool_calls"),
+                        "latency_ms": item.get("latency_ms", {}),
                         "turn_start_to_first_ws_binary_ms": item.get("turn_start_to_first_ws_binary_ms"),
                     }
                     for item in recent_turns[-20:]

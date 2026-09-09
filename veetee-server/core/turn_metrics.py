@@ -142,6 +142,26 @@ def summarize_trace(trace: TurnTrace) -> Dict[str, Any]:
     finish = trace.first("turn_finish")
     if finish is not None:
         payload.update(finish.fields)
+
+    def delta_ms(start_name: str, end_name: str) -> Optional[float]:
+        start = trace.first(start_name)
+        end = trace.first(end_name)
+        if start is None or end is None:
+            return None
+        return round(max(0.0, end.at_ms - start.at_ms), 3)
+
+    latency_ms = {
+        "context_lookup": delta_ms("context_lookup_start", "context_lookup_end"),
+        "llm_headers": delta_ms("llm_request_start", "llm_headers"),
+        "llm_first_content_token": delta_ms("llm_request_start", "llm_first_content_token"),
+        "llm_tool_ready": delta_ms("llm_request_start", "llm_tool_call_ready"),
+        "llm_first_speech_segment": delta_ms("llm_request_start", "llm_speech_segment"),
+        "tts_first_opus": delta_ms("tts_enqueue", "tts_first_opus"),
+        "tts_opus_to_ws_binary": delta_ms("tts_first_opus", "first_ws_binary_sent"),
+    }
+    payload["latency_ms"] = {
+        name: value for name, value in latency_ms.items() if value is not None
+    }
     first_binary = trace.first("first_ws_binary_sent")
     if first_binary is not None:
         payload["turn_start_to_first_ws_binary_ms"] = round(first_binary.at_ms, 3)

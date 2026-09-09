@@ -9,6 +9,7 @@ class TurnEventType(str, Enum):
     CONTROL = "control"
     SPEECH = "speech"
     MEMORY = "memory"
+    CONFIRMATION = "confirmation"
     TOOL_CALL = "tool_call"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -31,11 +32,21 @@ class SpeechSegmentEvent:
 
 @dataclass(frozen=True)
 class MemoryProposalEvent:
+    call_id: str
     action: str
-    key: str = ""
     value: str = ""
+    fact_id: str = ""
+    revision: Optional[int] = None
     evidence: str = ""
     type: TurnEventType = field(default=TurnEventType.MEMORY, init=False)
+
+
+@dataclass(frozen=True)
+class ConfirmationDecisionEvent:
+    call_id: str
+    action_id: str
+    decision: str
+    type: TurnEventType = field(default=TurnEventType.CONFIRMATION, init=False)
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,7 @@ TurnEvent = Union[
     ControlEvent,
     SpeechSegmentEvent,
     MemoryProposalEvent,
+    ConfirmationDecisionEvent,
     ToolCallReadyEvent,
     CompletedEvent,
     FailedEvent,

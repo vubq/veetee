@@ -39,6 +39,11 @@ asr:
   # Bounded queue để lượt capture cũ không chiếm GPU vô hạn.
   utterance_queue_max: 2
   max_utterance_ms: 30000
+  # Chẩn đoán ASR: lưu vòng một số ít WAV + JSON sau inference để A/B decoder/model.
+  # Ghi file chạy ngoài critical path nên không chặn LLM/TTS.
+  diagnostic_capture_enabled: false
+  diagnostic_capture_dir: "/tmp/veetee-asr-captures"
+  diagnostic_capture_max_files: 20
 
 llm:
   provider: "omniroute"
@@ -64,10 +69,12 @@ tts:
   denoise: true
   temperature: 0.7
 
-# Hành vi hội thoại tự nhiên phía server. Mặc định tắt để giữ luồng cũ.
-# Không yêu cầu sửa/build firmware Xiaozhi nguyên bản.
+# Hành vi hội thoại tự nhiên phía server. Không yêu cầu sửa/build firmware Xiaozhi nguyên bản.
+# Semantic intent luôn do AI quyết định; các field legacy bên dưới vẫn được parser
+# chấp nhận để cấu hình cũ load được nhưng không dùng làm matcher user text/template.
 conversation:
   enabled: false
+  # LEGACY/INERT: không dùng để nhận wake phrase.
   wake_words:
     - "你好小智"
     - "小爱同学"
@@ -75,11 +82,14 @@ conversation:
     - "VeeTee ơi"
   greeting_enabled: true
   greeting_ai_enabled: true
+  # LEGACY/INERT: không còn round-robin greeting pool.
   greeting_pool_size: 3
-  greeting_text: ""  # fallback only if AI generation is unavailable
+  # LEGACY/INERT: không dùng làm literal greeting fallback.
+  greeting_text: ""
   audio_cache_enabled: true
-  # 0 = tắt tự kết thúc do im lặng.
+  # 0 = tắt idle watchdog. Khi >0, mỗi inactivity epoch được AI đánh giá 1 lần.
   idle_timeout_seconds: 120
+  # LEGACY/INERT: không dùng để nhận exit phrase.
   exit_commands:
     - "tạm biệt"
     - "kết thúc trò chuyện"
@@ -88,7 +98,8 @@ conversation:
   goodbye_ai_enabled: true
   end_intent_ai_enabled: true
   ai_control_timeout_ms: 1800
-  goodbye_text: ""  # fallback only if AI generation is unavailable
+  # LEGACY/INERT: không dùng làm literal goodbye fallback.
+  goodbye_text: ""
   # Giá trị khởi điểm cần đo trên thiết bị thật.
   wake_start_wait_ms: 150
   fixed_response_timeout_seconds: 5
@@ -96,13 +107,13 @@ conversation:
 
 latency:
   unified_turn_enabled: true
-  first_token_timeout_ms: 4000
+  first_token_timeout_ms: 6000
   total_turn_timeout_ms: 15000
   context_lookup_timeout_ms: 10
   # Toàn request LLM được giữ trong budget này. Server ước lượng 4 ký tự/token
   # để tránh thêm tokenizer vào đường realtime; llm.max_tokens được giữ lại làm
   # output reserve trước khi history/memory/tool schema được nhét vào request.
-  context_max_tokens: 16384
+  context_max_tokens: 8192
   context_chars_per_token: 4
 
 # API quản trị (/api/prompt, /api/test-voice). Nên cấp token bằng biến môi
@@ -134,6 +145,6 @@ tools:
   mcp_device_enabled: false
   max_calls_per_turn: 3
   schema_limit: 16
-  # Mặc định strict one-round. Chỉ profile tổng hợp tool-result mới dùng 2.
-  max_llm_rounds_per_turn: 1
-  tool_result_synthesis: false
+  # Chat vẫn 1 call; turn có action/receipt được phép thêm đúng 1 vòng synthesis.
+  max_llm_rounds_per_turn: 2
+  tool_result_synthesis: true

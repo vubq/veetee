@@ -5,7 +5,6 @@ import math
 import operator
 
 from core.tools.base import ToolDescriptor
-from core.tools.results import ToolStatus
 
 
 _BINOPS = {
@@ -51,13 +50,6 @@ def _handler(arguments):
     return {"expression": expression, "result": _eval(tree)}
 
 
-def _render(result):
-    if result.status != ToolStatus.SUCCEEDED:
-        return "Mình chưa tính được biểu thức đó."
-    data = result.data or {}
-    return f"Kết quả là {data.get('result')}."
-
-
 def calculator_descriptor() -> ToolDescriptor:
     return ToolDescriptor(
         name="calculate",
@@ -71,7 +63,6 @@ def calculator_descriptor() -> ToolDescriptor:
             "additionalProperties": False,
         },
         handler=_handler,
-        renderer=_render,
         timeout_ms=300,
         read_only=True,
         idempotent=True,

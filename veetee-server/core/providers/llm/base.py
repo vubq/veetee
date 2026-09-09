@@ -10,27 +10,9 @@ class BaseLLM(ABC):
         return transcript
 
 
-    async def generate_greetings(self, count: int = 3) -> List[str]:
-        """Generate short wake greetings that match the active assistant persona."""
-        return []
-
-    async def generate_goodbye(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        reason: str,
-        user_text: str = "",
-    ) -> str:
-        """Generate a contextual goodbye that matches the active assistant persona."""
+    async def generate_recovery_message(self) -> str:
+        """Generate one short startup-time message for cached turn recovery."""
         return ""
-
-    async def classify_end_intent(
-        self,
-        user_text: str,
-        messages: List[Dict[str, str]],
-    ) -> bool:
-        """Return True only when the user clearly intends to end the conversation."""
-        return False
 
     async def stream_turn(
         self,
@@ -38,7 +20,7 @@ class BaseLLM(ABC):
         *,
         tools: Optional[List[Dict]] = None,
         detect_end_intent: bool = True,
-        tool_choice: Optional[str] = None,
+        tool_choice: Optional[Any] = None,
     ) -> AsyncGenerator[TurnEvent, None]:
         """Compatibility typed-turn adapter.
 

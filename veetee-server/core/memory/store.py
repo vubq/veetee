@@ -231,6 +231,144 @@ class MemoryStore:
             ).fetchall()
         return [_row_to_fact(row) for row in rows]
 
+    async def get_active_by_id(
+        self,
+        *,
+        owner_id: str,
+        scope: str,
+        fact_id: int,
+    ) -> MemoryFact | None:
+        await self.initialize()
+        return await asyncio.to_thread(
+            self._get_active_by_id_sync,
+            owner_id,
+            scope,
+            int(fact_id),
+        )
+
+    def _get_active_by_id_sync(self, owner_id: str, scope: str, fact_id: int) -> MemoryFact | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_facts WHERE id=? AND owner_id=? AND scope=? AND deleted=0 "
+                "AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                (fact_id, owner_id, scope),
+            ).fetchone()
+        return _row_to_fact(row) if row is not None else None
+
+    async def get_active_by_key(
+        self,
+        *,
+        owner_id: str,
+        scope: str,
+        key: str,
+    ) -> MemoryFact | None:
+        await self.initialize()
+        return await asyncio.to_thread(self._get_active_by_key_sync, owner_id, scope, key)
+
+    def _get_active_by_key_sync(self, owner_id: str, scope: str, key: str) -> MemoryFact | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_facts WHERE owner_id=? AND scope=? AND key=? AND deleted=0",
+                (owner_id, scope, key),
+            ).fetchone()
+        return _row_to_fact(row) if row is not None else None
+
+    async def update_by_id(
+        self,
+        *,
+        owner_id: str,
+        scope: str,
+        fact_id: int,
+        expected_revision: int,
+        value: str,
+        source_turn_id: str,
+        evidence: str,
+    ) -> MemoryFact | None:
+        await self.initialize()
+        async with self._write_lock:
+            return await asyncio.to_thread(
+                self._update_by_id_sync,
+                owner_id,
+                scope,
+                int(fact_id),
+                int(expected_revision),
+                value,
+                source_turn_id,
+                evidence,
+            )
+
+    def _update_by_id_sync(
+        self,
+        owner_id: str,
+        scope: str,
+        fact_id: int,
+        expected_revision: int,
+        value: str,
+        source_turn_id: str,
+        evidence: str,
+    ) -> MemoryFact | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT key FROM memory_facts WHERE id=? AND owner_id=? AND scope=? AND deleted=0 AND revision=?",
+                (fact_id, owner_id, scope, expected_revision),
+            ).fetchone()
+            if row is None:
+                return None
+            search_text = _normalize_search_text(f"{row['key']} {value} {evidence}")
+            cur = conn.execute(
+                "UPDATE memory_facts SET value=?, source_turn_id=?, evidence=?, search_text=?, "
+                "revision=revision+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE id=? AND owner_id=? AND scope=? AND deleted=0 AND revision=?",
+                (
+                    value,
+                    source_turn_id,
+                    evidence,
+                    search_text,
+                    fact_id,
+                    owner_id,
+                    scope,
+                    expected_revision,
+                ),
+            )
+            if cur.rowcount != 1:
+                return None
+            updated = conn.execute("SELECT * FROM memory_facts WHERE id=?", (fact_id,)).fetchone()
+        return _row_to_fact(updated) if updated is not None else None
+
+    async def tombstone_by_id(
+        self,
+        *,
+        owner_id: str,
+        scope: str,
+        fact_id: int,
+        expected_revision: int,
+    ) -> bool:
+        await self.initialize()
+        async with self._write_lock:
+            return await asyncio.to_thread(
+                self._tombstone_by_id_sync,
+                owner_id,
+                scope,
+                int(fact_id),
+                int(expected_revision),
+            )
+
+    def _tombstone_by_id_sync(
+        self,
+        owner_id: str,
+        scope: str,
+        fact_id: int,
+        expected_revision: int,
+    ) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE memory_facts SET deleted=1, revision=revision+1, "
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE id=? AND owner_id=? AND scope=? AND deleted=0 AND revision=?",
+                (fact_id, owner_id, scope, expected_revision),
+            )
+            return cur.rowcount == 1
+
     async def search_active(
         self,
         *,

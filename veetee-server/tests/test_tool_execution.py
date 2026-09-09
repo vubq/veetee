@@ -3,12 +3,27 @@ import unittest
 
 from core.tools.base import ToolDescriptor
 from core.tools.builtin.calculator import calculator_descriptor
+from core.tools.builtin.time_tool import time_descriptor
 from core.tools.executor import ToolExecutor
 from core.tools.registry import ToolRegistry
 from core.tools.results import ToolStatus
 
 
 class ToolExecutionTests(unittest.IsolatedAsyncioTestCase):
+    def test_read_only_tool_schema_tells_model_to_call_without_confirmation(self):
+        tool = time_descriptor().as_openai_tool()["function"]
+        self.assertIn("Tool chỉ đọc", tool["description"])
+        self.assertIn("không cần xin xác nhận", tool["description"])
+        self.assertNotIn("required", tool["parameters"])
+
+    async def test_current_time_uses_default_timezone_without_argument(self):
+        registry = ToolRegistry([time_descriptor()])
+        executor = ToolExecutor(registry)
+        result = await executor.execute("time-1", "get_current_time", {})
+        self.assertEqual(result.status, ToolStatus.SUCCEEDED)
+        self.assertEqual(result.data["timezone"], "Asia/Bangkok")
+        self.assertTrue(result.data["time"])
+
     async def test_schema_validation_and_safe_calculator(self):
         registry = ToolRegistry([calculator_descriptor()])
         executor = ToolExecutor(registry)

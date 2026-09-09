@@ -53,48 +53,6 @@ def _canonical_args_hash(arguments: Dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _normalize_confirmation_text(text: str) -> str:
-    return " ".join(
-        (text or "").strip().lower().replace(".", " ").replace(",", " ").split()
-    )
-
-
-def confirmation_value(text: str) -> Optional[bool]:
-    """Return an explicit local yes/no confirmation, otherwise ``None``.
-
-    This intentionally accepts only short, unambiguous replies. Longer turns
-    continue through the normal LLM path and invalidate the pending action so a
-    later standalone "ừ" cannot authorize stale arguments.
-    """
-    normalized = _normalize_confirmation_text(text)
-    if normalized in {
-        "ừ",
-        "ừm",
-        "ok",
-        "okay",
-        "đồng ý",
-        "xác nhận",
-        "được",
-        "được nhé",
-        "có",
-        "yes",
-    }:
-        return True
-    if normalized in {
-        "không",
-        "không nhé",
-        "thôi",
-        "hủy",
-        "huỷ",
-        "hủy đi",
-        "huỷ đi",
-        "không đồng ý",
-        "no",
-    }:
-        return False
-    return None
-
-
 class PendingActionStore:
     """One-session confirmation state with TTL and argument binding."""
 
@@ -139,24 +97,28 @@ class PendingActionStore:
             return None
         return pending
 
-    def consume_confirmation(
+    def resolve(
         self,
-        text: str,
         *,
+        action_id: str,
+        decision: str,
         session_id: str,
         owner_scope: str,
         now: Optional[float] = None,
-    ) -> tuple[Optional[bool], Optional[PendingAction]]:
+    ) -> tuple[str, Optional[PendingAction]]:
         pending = self.peek(now=now)
         if pending is None:
-            return None, None
+            return "missing", None
         if pending.session_id != str(session_id) or pending.owner_scope != str(owner_scope):
-            return None, None
-        decision = confirmation_value(text)
-        if decision is None:
-            return None, pending
-        self._pending = None
-        return decision, pending
+            return "mismatch", None
+        if pending.action_id != str(action_id):
+            return "mismatch", pending
+        normalized = str(decision or "").strip().lower()
+        if normalized not in {"approve", "reject", "clarify"}:
+            return "invalid", pending
+        if normalized in {"approve", "reject"}:
+            self._pending = None
+        return normalized, pending
 
     def invalidate_if_changed(
         self,

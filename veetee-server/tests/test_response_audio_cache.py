@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from config.settings import TTSConfig
-from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT, MAX_CACHE_ENTRIES, ResponseAudioCache
+from core.response_audio_cache import MAX_CACHE_ENTRIES, ResponseAudioCache
 from server import VeeTeeServer
 
 
@@ -92,21 +92,132 @@ class ResponseAudioCacheTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await waiter
 
-    async def test_server_error_fallback_prewarm_makes_cached_clip_available(self):
+    async def test_recovery_asset_requires_ai_provenance_and_is_cached_only(self):
+        cache, tts = self.make_cache()
+        prepared = await cache.prepare_recovery(
+            "Mình đang gặp sự cố, bạn thử lại nhé.",
+            1,
+            provenance="ai:test-model",
+        )
+        recovered = await cache.get_recovery()
+
+        self.assertEqual(recovered.text, prepared.text)
+        self.assertEqual(recovered.frames, prepared.frames)
+        self.assertEqual(recovered.provenance, "ai:test-model")
+        self.assertEqual(tts.calls, 1)
+
+    async def test_recovery_timeout_reuses_one_pending_fill(self):
+        cache, tts = self.make_cache()
+        tts.release = asyncio.Event()
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await cache.prepare_recovery(
+                "Bạn thử lại nhé.",
+                0.01,
+                provenance="ai:test-model",
+            )
+
+        waiter = asyncio.create_task(cache.prepare_recovery(
+            "Một câu khác không được tạo job mới.",
+            1.0,
+            provenance="ai:test-model",
+        ))
+        await asyncio.sleep(0)
+        tts.release.set()
+        prepared = await asyncio.wait_for(waiter, timeout=1.0)
+
+        self.assertEqual(prepared.text, "Bạn thử lại nhé.")
+        self.assertEqual(tts.calls, 1)
+        self.assertIsNone(await cache.get_pending_recovery())
+
+    async def test_late_recovery_fill_is_promoted_without_new_tts_call(self):
+        cache, tts = self.make_cache()
+        tts.release = asyncio.Event()
+        text = "Bạn thử lại nhé."
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await cache.prepare_recovery(
+                text,
+                0.01,
+                provenance="ai:test-model",
+            )
+
+        tts.release.set()
+        await cache.get_or_fill(text, 1.0, priority="prewarm")
+        recovered = await cache.get_recovery()
+
+        self.assertEqual(recovered.text, text)
+        self.assertEqual(recovered.provenance, "ai:test-model")
+        self.assertEqual(tts.calls, 1)
+
+    async def test_server_error_fallback_prewarm_uses_ai_generated_text(self):
+        class RecoveryLLM:
+            calls = 0
+
+            async def generate_recovery_message(self):
+                self.calls += 1
+                return "Mình đang gặp sự cố, bạn thử lại nhé."
+
         cache, tts = self.make_cache()
         server = object.__new__(VeeTeeServer)
         server.response_audio_cache = cache
+        server.llm_engine = RecoveryLLM()
         server.config = SimpleNamespace(
-            conversation=SimpleNamespace(fixed_response_timeout_seconds=1.0)
+            conversation=SimpleNamespace(
+                fixed_response_timeout_seconds=1.0,
+                ai_control_timeout_ms=500,
+            ),
+            llm=SimpleNamespace(model="test-model"),
         )
-        server.runtime_readiness = {"error_fallback_ready": False}
+        server.runtime_readiness = {
+            "error_fallback_ready": False,
+            "error_fallback_provenance": "",
+        }
 
         ready = await server._prewarm_error_fallback()
-        cached = await cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+        cached = await cache.get_recovery()
 
         self.assertTrue(ready)
         self.assertTrue(server.runtime_readiness["error_fallback_ready"])
-        self.assertTrue(cached.hit)
+        self.assertEqual(server.runtime_readiness["error_fallback_provenance"], "ai:test-model")
+        self.assertEqual(cached.text, "Mình đang gặp sự cố, bạn thử lại nhé.")
+        self.assertEqual(cached.provenance, "ai:test-model")
+        self.assertEqual(server.llm_engine.calls, 1)
+        self.assertEqual(tts.calls, 1)
+
+    async def test_server_retries_pending_recovery_without_regenerating_text(self):
+        class RecoveryLLM:
+            calls = 0
+
+            async def generate_recovery_message(self):
+                self.calls += 1
+                return "Bạn thử lại nhé."
+
+        cache, tts = self.make_cache()
+        tts.release = asyncio.Event()
+        server = object.__new__(VeeTeeServer)
+        server.response_audio_cache = cache
+        server.llm_engine = RecoveryLLM()
+        server.config = SimpleNamespace(
+            conversation=SimpleNamespace(
+                fixed_response_timeout_seconds=0.01,
+                ai_control_timeout_ms=500,
+            ),
+            llm=SimpleNamespace(model="test-model"),
+        )
+        server.runtime_readiness = {
+            "error_fallback_ready": False,
+            "error_fallback_provenance": "",
+        }
+
+        self.assertFalse(await server._prewarm_error_fallback())
+        self.assertFalse(await server._prewarm_error_fallback())
+        self.assertEqual(server.llm_engine.calls, 1)
+        self.assertEqual(tts.calls, 1)
+
+        tts.release.set()
+        self.assertTrue(await server._prewarm_error_fallback())
+        self.assertEqual(server.llm_engine.calls, 1)
         self.assertEqual(tts.calls, 1)
 
 

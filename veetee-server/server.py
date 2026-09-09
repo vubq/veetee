@@ -9,7 +9,7 @@ from config.settings import load_settings, AppConfig
 from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.tts.vieneu_local import VieneuLocalTTS
 from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
-from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT, ResponseAudioCache
+from core.response_audio_cache import ResponseAudioCache
 from core.session import ClientSession
 from core.turn_metrics import TurnTraceStore
 from http_server import HttpServer, get_local_ip
@@ -52,17 +52,12 @@ class VeeTeeServer:
             base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
         )
         self.response_audio_cache = ResponseAudioCache(self.tts_engine, config.tts)
-        self.greeting_pool: list[str] = []
         self.recent_turn_store = TurnTraceStore(max_recent=100)
         self.runtime_readiness = {
             "llm_warm": False,
             "asr_ready": False,
             "error_fallback_ready": False,
-            "greeting_ready": not (
-                config.conversation.enabled
-                and config.conversation.greeting_enabled
-                and config.conversation.greeting_ai_enabled
-            ),
+            "error_fallback_provenance": "",
         }
         self._readiness_repair_task: asyncio.Task | None = None
         
@@ -73,7 +68,6 @@ class VeeTeeServer:
             tts_engine=self.tts_engine,
             llm_engine=self.llm_engine,
             response_audio_cache=self.response_audio_cache,
-            greeting_pool_ref=self.greeting_pool,
             recent_turn_store=self.recent_turn_store,
             runtime_readiness_ref=self.runtime_readiness,
         )
@@ -85,7 +79,6 @@ class VeeTeeServer:
             tts_engine=self.tts_engine,
             llm_engine=self.llm_engine,
             response_audio_cache=self.response_audio_cache,
-            greeting_pool=self.greeting_pool,
             turn_trace_store=self.recent_turn_store,
         )
         await session.initialize()
@@ -103,71 +96,50 @@ class VeeTeeServer:
             self.active_sessions.pop(session.session_id, None)
 
     async def _prewarm_error_fallback(self) -> bool:
-        """Prepare the fixed Vietnamese error clip used by turn recovery.
+        """Prepare one AI-authored cached recovery clip used by failed turns.
 
         Runtime error handling is cached-only so a failed TTS engine is never
         called recursively while attempting to explain that same failure.
         """
         try:
-            await self.response_audio_cache.prewarm(
-                [DEFAULT_ERROR_FALLBACK_TEXT],
+            try:
+                recovery = await self.response_audio_cache.get_recovery()
+            except Exception:
+                recovery = None
+            if recovery is not None:
+                provenance = recovery.provenance
+                self.runtime_readiness["error_fallback_ready"] = True
+                self.runtime_readiness["error_fallback_provenance"] = provenance
+                return True
+
+            pending = await self.response_audio_cache.get_pending_recovery()
+            if pending is not None:
+                cleaned, provenance = pending
+            else:
+                generator = getattr(self.llm_engine, "generate_recovery_message", None)
+                if generator is None:
+                    raise RuntimeError("LLM provider has no recovery-message generator")
+                text = await asyncio.wait_for(
+                    generator(),
+                    timeout=max(0.1, self.config.conversation.ai_control_timeout_ms / 1000.0),
+                )
+                cleaned = str(text or "").strip()
+                if not cleaned:
+                    raise RuntimeError("LLM returned no recovery message")
+                provenance = f"ai:{self.config.llm.model}"
+            await self.response_audio_cache.prepare_recovery(
+                cleaned,
                 self.config.conversation.fixed_response_timeout_seconds,
+                provenance=provenance,
             )
-            await self.response_audio_cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
         except Exception as exc:
             self.runtime_readiness["error_fallback_ready"] = False
-            logger.warning("Vietnamese error fallback prewarm unavailable: %s", exc)
+            self.runtime_readiness["error_fallback_provenance"] = ""
+            logger.warning("AI recovery audio prewarm unavailable: %s", exc)
             return False
         self.runtime_readiness["error_fallback_ready"] = True
-        logger.info("Vietnamese error fallback audio is ready")
-        return True
-
-    async def _prewarm_ai_greetings(self) -> bool:
-        conversation = self.config.conversation
-        if not (
-            conversation.enabled
-            and conversation.greeting_enabled
-            and conversation.greeting_ai_enabled
-        ):
-            self.runtime_readiness["greeting_ready"] = True
-            return True
-
-        generator = getattr(self.llm_engine, "generate_greetings", None)
-        if generator is None:
-            self.runtime_readiness["greeting_ready"] = False
-            return False
-
-        timeout = max(0.1, conversation.ai_control_timeout_ms / 1000.0)
-        try:
-            generated = await asyncio.wait_for(
-                generator(conversation.greeting_pool_size),
-                timeout=timeout,
-            )
-        except Exception as exc:
-            logger.warning("Shared AI greeting prewarm failed: %s", exc)
-            self.runtime_readiness["greeting_ready"] = False
-            return False
-
-        greetings = []
-        for item in generated or []:
-            cleaned = str(item or "").strip()
-            if cleaned and cleaned not in greetings:
-                greetings.append(cleaned)
-            if len(greetings) >= conversation.greeting_pool_size:
-                break
-        if not greetings:
-            logger.warning("Shared AI greeting prewarm returned no usable phrases")
-            self.runtime_readiness["greeting_ready"] = False
-            return False
-
-        self.greeting_pool[:] = greetings
-        logger.info("Shared AI greeting pool ready count=%d", len(self.greeting_pool))
-        if conversation.audio_cache_enabled:
-            await self.response_audio_cache.prewarm(
-                self.greeting_pool,
-                conversation.fixed_response_timeout_seconds,
-            )
-        self.runtime_readiness["greeting_ready"] = True
+        self.runtime_readiness["error_fallback_provenance"] = provenance
+        logger.info("AI recovery audio is ready provenance=%s", provenance)
         return True
 
     async def _repair_readiness_assets(self):
@@ -189,8 +161,6 @@ class VeeTeeServer:
                             logger.warning("LLM warmup retry failed: %s", exc)
                 if not self.runtime_readiness.get("error_fallback_ready"):
                     healthy = await self._prewarm_error_fallback() and healthy
-                if not self.runtime_readiness.get("greeting_ready"):
-                    healthy = await self._prewarm_ai_greetings() and healthy
                 if healthy:
                     return
                 await asyncio.sleep(delay)
@@ -215,7 +185,6 @@ class VeeTeeServer:
             self.runtime_readiness["llm_warm"] = True
 
         await self._prewarm_error_fallback()
-        await self._prewarm_ai_greetings()
 
         # Parakeet is a large local model. Load it before opening the web/WS
         # listeners so the first microphone connection cannot time out while

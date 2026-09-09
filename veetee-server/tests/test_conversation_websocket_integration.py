@@ -9,6 +9,7 @@ from config.settings import AppConfig
 from core.protocol import ProtocolVersion, unpack_audio_payload
 from core.response_audio_cache import ResponseAudioCache
 from core.session import ClientSession
+from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent
 from http_server import HttpServer
 
 
@@ -31,29 +32,44 @@ class FakeASR:
 
 class CountingLLM:
     def __init__(self):
-        self.chat_calls = 0
-        self.greeting_calls = 0
-        self.goodbye_calls = 0
-        self.end_intent_calls = 0
-        self.greeting = "Chào bạn, mình đây."
+        self.calls = []
+        self.reply = "Chào bạn, mình đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
         self.base_prompt = "Bạn là VeeTee."
+        self.idle_decisions = []
 
-    async def stream_chat(self, messages):
-        self.chat_calls += 1
-        yield "LLM response", "neutral"
+    async def stream_turn(self, messages, *, tools=None, detect_end_intent=True, tool_choice=None):
+        self.calls.append({
+            "messages": [dict(item) for item in messages],
+            "tools": list(tools or []),
+            "detect_end_intent": detect_end_intent,
+            "tool_choice": tool_choice,
+        })
+        latest = messages[-1] if messages else {}
+        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(latest.get("content", "")):
+            lifecycle = self.idle_decisions.pop(0) if self.idle_decisions else "continue"
+            yield ControlEvent(
+                intent="end_conversation" if lifecycle == "end" else "chat",
+                lifecycle=lifecycle,
+                emotion="relaxed",
+            )
+            if lifecycle == "end":
+                yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
+            yield CompletedEvent(finish_reason="stop")
+            return
 
-    async def generate_greetings(self, count=3):
-        self.greeting_calls += 1
-        return [self.greeting]
-
-    async def generate_goodbye(self, messages, *, reason, user_text=""):
-        self.goodbye_calls += 1
-        return self.goodbye
-
-    async def classify_end_intent(self, user_text, messages):
-        self.end_intent_calls += 1
-        return False
+        latest_user = next(
+            (str(item.get("content", "")) for item in reversed(messages) if item.get("role") == "user"),
+            "",
+        )
+        should_end = latest_user == "thôi mình đi ngủ đây"
+        yield ControlEvent(
+            intent="end_conversation" if should_end else "chat",
+            lifecycle="end" if should_end else "continue",
+            emotion="relaxed" if should_end else "neutral",
+        )
+        yield SpeechSegmentEvent(self.goodbye if should_end else self.reply, emotion="neutral")
+        yield CompletedEvent(finish_reason="stop")
 
     def get_base_prompt(self):
         return self.base_prompt
@@ -115,14 +131,14 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.asr_patch.stop()
 
     async def _wait_sessions(self, expected):
-        for _ in range(100):
+        for _ in range(200):
             if len(self.active_sessions) == expected:
                 return
             await asyncio.sleep(0.005)
         self.fail(f"active_sessions did not reach {expected}: {self.active_sessions}")
 
     async def _wait_conversation_disarmed(self):
-        for _ in range(100):
+        for _ in range(200):
             if self.active_sessions:
                 session = next(iter(self.active_sessions.values()))
                 if not session._conversation_armed and session._closing_reason is None:
@@ -148,79 +164,77 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hello["type"], "hello")
         return ws
 
-    async def _receive_fixed_response(self, ws, version, expected_text):
+    async def _receive_ai_response(self, ws, version, expected_text):
         received = []
-        for _ in range(4):
+        while True:
             message = await asyncio.wait_for(ws.receive(), timeout=1)
             if message.type.name == "TEXT":
-                received.append(json.loads(message.data))
+                item = json.loads(message.data)
+                received.append(item)
+                if item.get("type") == "tts" and item.get("state") == "stop":
+                    break
             elif message.type.name == "BINARY":
                 payload, _ = unpack_audio_payload(message.data, version)
                 received.append(payload)
             else:
                 self.fail(f"unexpected websocket message type: {message.type}")
 
-        self.assertEqual(received[0]["type"], "tts")
-        self.assertEqual(received[0]["state"], "start")
-        self.assertEqual(received[1]["type"], "tts")
-        self.assertEqual(received[1]["state"], "sentence_start")
-        self.assertEqual(received[1]["text"], expected_text)
-        self.assertEqual(received[2], b"opus:" + expected_text.encode("utf-8"))
-        self.assertEqual(received[3]["type"], "tts")
-        self.assertEqual(received[3]["state"], "stop")
+        llm_status = next(item for item in received if isinstance(item, dict) and item.get("type") == "llm")
+        self.assertIn("emotion", llm_status)
+        tts_messages = [item for item in received if isinstance(item, dict) and item.get("type") == "tts"]
+        self.assertEqual([item.get("state") for item in tts_messages], ["start", "sentence_start", "stop"])
+        self.assertEqual(tts_messages[1]["text"], expected_text)
+        self.assertIn(b"opus:" + expected_text.encode("utf-8"), received)
 
-    async def _wake_and_receive_greeting(self, ws, version):
+    async def _wake_and_receive_ai(self, ws, version):
         await ws.send_json({"type": "listen", "state": "detect", "text": "VeeTee ơi"})
         await ws.send_json({"type": "listen", "state": "start", "mode": "auto"})
-        await self._receive_fixed_response(ws, version, self.llm.greeting)
+        await self._receive_ai_response(ws, version, self.llm.reply)
 
-    async def test_handshake_shared_cache_v1_v2_v3_close_and_reconnect(self):
+    async def test_handshake_v1_v2_v3_wake_uses_ai_and_v3_contextual_end_closes(self):
         for version in (ProtocolVersion.V1, ProtocolVersion.V2, ProtocolVersion.V3):
             with self.subTest(version=version):
                 ws = await self._connect(version)
-                await self._wake_and_receive_greeting(ws, version)
+                try:
+                    before_calls = len(self.llm.calls)
+                    await self._wake_and_receive_ai(ws, version)
+                    self.assertEqual(len(self.llm.calls), before_calls + 1)
+                    latest_user = next(
+                        item for item in reversed(self.llm.calls[-1]["messages"])
+                        if item.get("role") == "user"
+                    )
+                    self.assertEqual(latest_user["content"], "VeeTee ơi")
 
-                self.assertEqual(self.tts.calls, 1)
-                self.assertEqual(self.llm.chat_calls, 0)
-
-                if version != ProtocolVersion.V3:
-                    await ws.close()
+                    if version == ProtocolVersion.V3:
+                        await ws.send_json({"type": "text", "text": "thôi mình đi ngủ đây"})
+                        await self._receive_ai_response(ws, version, self.llm.goodbye)
+                        closed = await asyncio.wait_for(ws.receive(), timeout=1)
+                        self.assertIn(closed.type.name, {"CLOSE", "CLOSED"})
+                        self.assertEqual(ws.close_code, 1000)
+                finally:
+                    if not ws.closed:
+                        await ws.close()
                     await self._wait_sessions(0)
-                    continue
 
-                await ws.send_json({"type": "text", "text": "tạm biệt"})
-                await self._receive_fixed_response(
-                    ws,
-                    version,
-                    self.llm.goodbye,
-                )
-                closed = await asyncio.wait_for(ws.receive(), timeout=1)
-                self.assertIn(closed.type.name, {"CLOSE", "CLOSED"})
-                self.assertEqual(ws.close_code, 1000)
-                await self._wait_sessions(0)
-
-        self.assertEqual(self.tts.calls, 2)
-        self.assertEqual(self.llm.chat_calls, 0)
-        self.assertEqual(self.llm.greeting_calls, 3)
-        self.assertEqual(self.llm.goodbye_calls, 1)
-
-    async def test_idle_timeout_keeps_socket_open_and_allows_second_wake(self):
+    async def test_idle_ai_end_keeps_socket_open_and_allows_second_wake(self):
         self.config.conversation.goodbye_enabled = False
         self.config.conversation.idle_timeout_seconds = 0.03
+        self.llm.idle_decisions = ["end"]
 
         ws = await self._connect(ProtocolVersion.V1)
-        await self._wake_and_receive_greeting(ws, ProtocolVersion.V1)
-        session = await self._wait_conversation_disarmed()
+        try:
+            await self._wake_and_receive_ai(ws, ProtocolVersion.V1)
+            session = await self._wait_conversation_disarmed()
 
-        self.assertFalse(ws.closed)
-        self.assertTrue(session.is_active)
-        self.assertEqual(len(self.active_sessions), 1)
+            self.assertFalse(ws.closed)
+            self.assertTrue(session.is_active)
+            self.assertEqual(len(self.active_sessions), 1)
 
-        await self._wake_and_receive_greeting(ws, ProtocolVersion.V1)
-        self.assertFalse(ws.closed)
-        self.assertEqual(len(self.active_sessions), 1)
-
-        await ws.close()
+            await self._wake_and_receive_ai(ws, ProtocolVersion.V1)
+            self.assertFalse(ws.closed)
+            self.assertEqual(len(self.active_sessions), 1)
+        finally:
+            await ws.close()
 
     async def test_browser_diagnostics_health_and_ota_endpoints(self):
         diagnostics_response = await self.client.get("/api/diagnostics")
@@ -231,6 +245,7 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["protocol"]["versions"], [1, 2, 3])
         self.assertEqual(diagnostics["protocol"]["listening_modes"], ["auto", "manual", "realtime"])
         self.assertEqual(diagnostics["protocol"]["browser_input_format"], "pcm16")
+        self.assertIn("semantic_routing", diagnostics["conversation"])
 
         health_response = await self.client.get("/health")
         self.assertEqual(health_response.status, 200)
@@ -266,13 +281,12 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ota_response.status, 200)
         ws = await self._connect(ProtocolVersion.V1)
         await ws.close()
+        await self._wait_sessions(0)
 
     async def test_management_endpoints_are_disabled_when_token_is_unset(self):
         self.config.management.token = ""
-
         denied_prompt = await self.client.get("/api/prompt")
         denied_voice = await self.client.post("/api/test-voice", json={"text": "xin chào"})
-
         self.assertEqual(denied_prompt.status, 401)
         self.assertEqual(denied_voice.status, 401)
 
@@ -280,7 +294,6 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.config.management.token = "integration-secret"
         self.config.management.test_voice_requests_per_minute = 1
         headers = {"X-Veetee-Management-Token": "integration-secret"}
-
         first = await self.client.post("/api/test-voice", json={"text": "một"}, headers=headers)
         second = await self.client.post("/api/test-voice", json={"text": "hai"}, headers=headers)
         self.assertEqual(first.status, 200)

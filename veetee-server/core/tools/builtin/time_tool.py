@@ -4,7 +4,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.tools.base import ToolDescriptor
-from core.tools.results import ToolStatus
 
 
 def _handler(arguments):
@@ -22,27 +21,23 @@ def _handler(arguments):
     }
 
 
-def _render(result):
-    if result.status != ToolStatus.SUCCEEDED:
-        return "Mình chưa lấy được giờ hiện tại."
-    data = result.data or {}
-    return f"Bây giờ là {data.get('time', '')}, ngày {data.get('date', '')} ({data.get('timezone', '')})."
-
-
 def time_descriptor() -> ToolDescriptor:
     return ToolDescriptor(
         name="get_current_time",
-        description="Lấy ngày giờ hiện tại theo múi giờ IANA, ví dụ Asia/Bangkok.",
+        description=(
+            "Lấy sự thật về ngày/giờ hiện tại theo múi giờ IANA. Dùng tool khi câu trả lời "
+            "thực sự cần biết đồng hồ hoặc ngày hiện tại; đừng gọi chỉ vì người dùng nhắc tới "
+            "một mốc giờ, lịch trình hay hỏi giờ khuyến nghị. Nếu cần ngày/giờ hiện tại mà không "
+            "có múi giờ cụ thể thì dùng mặc định Asia/Bangkok."
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "timezone": {"type": "string", "minLength": 1, "maxLength": 64},
             },
-            "required": ["timezone"],
             "additionalProperties": False,
         },
         handler=_handler,
-        renderer=_render,
         timeout_ms=300,
         read_only=True,
         idempotent=True,

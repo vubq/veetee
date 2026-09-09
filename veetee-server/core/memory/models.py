@@ -22,10 +22,19 @@ class MemoryFact:
 
 
 @dataclass(frozen=True)
+class SessionMemoryFact:
+    id: str
+    value: str
+    revision: int = 1
+    evidence: str = ""
+
+
+@dataclass(frozen=True)
 class MemoryProposal:
     action: str
     value: str = ""
-    key: str = ""
+    fact_id: str = ""
+    revision: Optional[int] = None
     evidence: str = ""
 
 
@@ -33,6 +42,9 @@ class MemoryProposal:
 class MemoryApplyResult:
     status: str
     changed: bool = False
+    fact_id: str = ""
+    revision: Optional[int] = None
+    scope: str = "session"
 
     @property
     def applied(self) -> bool:

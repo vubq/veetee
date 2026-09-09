@@ -6,12 +6,13 @@ VeeTee Server phục vụ ESP32/Xiaozhi firmware nguyên bản và Web Client qu
 - **ASR mặc định:** NVIDIA Parakeet CTC 0.6B Vietnamese + Silero VAD local; Deepgram là provider dự phòng.
 - **TTS:** VieNeu-TTS v3 Turbo local.
 - **VAD:** end silence 450 ms; với frame Silero 32 ms, ngưỡng thực tế được vượt khoảng 480 ms.
-- **Pipeline hợp nhất:** chat thường dùng một LLM stream để sinh speech/control và quyết định intent; memory lookup chạy local, tool execution chạy ở server. Tool-result synthesis là profile tùy chọn và bị chặn ở tối đa 2 LLM rounds.
+- **Pipeline hợp nhất:** chat thường dùng đúng một LLM call để sinh speech/control và quyết định intent. Lượt có tool/memory/confirmation được phép thêm đúng một vòng AI synthesis sau receipt thật, tổng tối đa 2 rounds và vòng 2 ép `tool_choice=none`.
 - **Barge-in mặc định:** `barge_in_policy=client_only`. ESP32 ngắt lượt bằng các message chuẩn đã có như `abort` hoặc `listen:start`.
 - **Audio pacing:** server giới hạn lượng TTS gửi trước bằng `tts.send_ahead_ms`, mặc định 120 ms, thay cho fixed sleep 5 ms.
 - **TTS backpressure:** queue stream VieNeu có giới hạn, mặc định `tts.stream_queue_max_chunks=4`.
-- **Wake/greeting server-side:** exact `listen:detect` allowlist; có AI greeting pool/prewarm + raw-Opus cache và fallback text cấu hình nếu cần.
-- **Kết thúc tự nhiên:** exact exit alias vẫn được route local; semantic goodbye được quyết định trong chính unified LLM stream. Close dùng WebSocket code `1000` sau playback estimate phía server.
+- **Hội thoại do AI quyết định:** text từ `listen:detect`, `chat`, `text` và ASR final đều đi qua AI theo ngữ cảnh; server không match wake/exit phrase để tự quyết định ý định.
+- **Semantic/tool routing do AI quyết định:** server đưa context và tool schema cho LLM với `tool_choice=auto`; không dùng keyword, exact phrase, regex hay whitelist trên câu người dùng để ép intent hoặc chọn function/tool. Deterministic code chỉ giữ protocol/lifecycle, validation, permission/ownership, deadline/cancel và receipt/state invariants.
+- **Kết thúc tự nhiên:** semantic end do AI quyết định trong unified turn. Idle timeout tạo một semantic evaluation có giới hạn cho mỗi inactivity epoch; logical idle vẫn giữ WebSocket stock để thiết bị có thể bắt đầu lượt mới.
 - **Memory:** session memory chạy local; durable personal memory chỉ được bật khi operator cấu hình `memory.trusted_owner_id`. `Device-Id`/`Client-Id` tự khai báo không được dùng làm owner tin cậy.
 - **Tools:** built-in `calculate`/`get_current_time`, native streamed tool calls và adapter MCP stock tùy chọn. MCP thiếu/không được board quảng bá không làm hỏng chat.
 - **Môi trường:** chạy trực tiếp trên máy, không Docker.
@@ -25,7 +26,7 @@ veetee-server/
 ├── core/
 │   ├── audio_pacing.py
 │   ├── audio_utils.py
-│   ├── conversation.py
+│   ├── ai_contract.py
 │   ├── context_builder.py
 │   ├── intent.py
 │   ├── memory/
@@ -38,10 +39,12 @@ veetee-server/
 │   ├── turn_runner.py
 │   └── providers/
 ├── docs/
+│   ├── ARCHITECTURE.md
 │   ├── API_PROTOCOL.md
 │   ├── ESP32_CONFIG.md
 │   ├── PLAN.md
 │   ├── SETUP.md
+│   ├── TESTING.md
 │   └── VOICE_PIPELINE_STATUS.md
 ├── patches/
 │   └── xiaozhi-esp32-barge-in.patch  # Artifact thử nghiệm cũ, không cần áp
@@ -98,11 +101,13 @@ conversation:
   end_intent_ai_enabled: true
 ```
 
-Wake greeting chỉ được route từ exact `listen:detect` mà firmware stock đang dùng đã gửi. Nếu board không phát event này, server không tự suy wake từ `hello`/`listen:start`; hội thoại chính vẫn hoạt động bình thường và không cần sửa firmware.
+Nếu firmware stock gửi `listen:detect` kèm text, server giữ nguyên text đó và đưa vào AI như một lượt ngữ nghĩa sau cửa sổ phối hợp `listen:start`. Server không dùng `wake_words` để phân loại nội dung. Nếu board không phát `listen:detect`, hội thoại qua mic/ASR vẫn hoạt động bình thường và không cần sửa firmware.
 
-Greeting/goodbye dùng cùng protocol TTS stock. Greeting có thể lấy từ AI pool đã chuẩn bị sẵn và raw-Opus cache; cold miss/readiness được theo dõi riêng với `/health`. Exact exit command vẫn được nhận từ detect/text/chat/ASR final theo whole-command match; semantic end đi qua unified stream để dùng đúng lời kết của lượt đó thay vì gọi thêm một goodbye classifier/generator.
+Greeting/goodbye bình thường do AI tạo theo cùng persona/context của turn; không có template hay round-robin pool quyết định nội dung. Recovery khi turn lỗi là một câu do AI sinh lúc startup/persona refresh rồi cache cả audio với provenance `ai:<model>`; nếu cache chưa sẵn sàng thì server báo degraded thay vì chèn câu literal. Các field `wake_words`, `exit_commands`, `greeting_text`, `goodbye_text`, `greeting_pool_size` chỉ còn là cấu hình legacy/inert để đọc config cũ, không tham gia semantic routing.
 
-`latency.unified_turn_enabled=true` là profile mặc định mới. `tools.max_llm_rounds_per_turn=1` + `tools.tool_result_synthesis=false` giữ chat/tool có renderer ở một round; chỉ cấu hình rõ ràng `2` mới cho phép một round tổng hợp kết quả tool. Durable memory tự hạ về tắt nếu không có `memory.trusted_owner_id` đáng tin cậy.
+`latency.unified_turn_enabled=true` là profile mặc định. Chat thường dùng 1 LLM call; action/tool/memory/confirmation có thể dùng vòng 2 để AI diễn đạt receipt thật, với `tools.max_llm_rounds_per_turn=2`, `tools.tool_result_synthesis=true` và `tool_choice=none` ở vòng synthesis. Durable memory tự hạ về tắt nếu không có `memory.trusted_owner_id` đáng tin cậy.
+
+Built-in `get_current_time` cũng tuân theo rule này: mô tả tool và semantic prompt hướng dẫn model dùng clock khi cần dữ liệu hiện tại, nhưng server không dò các câu như “mấy giờ rồi”/“hôm nay ngày mấy” để force tool. Nếu cần cải thiện độ chính xác, ưu tiên sửa prompt, tool description, context hoặc model/provider thay vì thêm matcher câu chữ.
 
 ## Tương thích firmware nguyên bản
 

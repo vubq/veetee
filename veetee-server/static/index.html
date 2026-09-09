@@ -915,9 +915,7 @@
                 const conversation = runtimeDiagnostics.conversation || {};
                 conversationFeatureTag.innerText = conversation.enabled ? 'Conversation ON' : 'Conversation OFF';
                 diagnosticMeta.innerText = [
-                    `wake: ${(conversation.wake_words || []).join(' | ') || '—'}`,
-                    `exit: ${(conversation.exit_commands || []).join(' | ') || '—'}`,
-                    `greeting: ${conversation.greeting_enabled ? 'on' : 'off'} · cache: ${conversation.audio_cache_enabled ? 'on' : 'off'}`,
+                    `semantic routing: ${conversation.semantic_routing || '—'} · cache: ${conversation.audio_cache_enabled ? 'on' : 'off'}`,
                     `idle: ${conversation.idle_timeout_seconds ?? '—'}s · wake wait: ${conversation.wake_start_wait_ms ?? '—'}ms`,
                     `barge-in: ${runtimeDiagnostics.server?.barge_in_policy || '—'} · active sessions: ${runtimeDiagnostics.server?.active_sessions ?? '—'}`,
                 ].join('\n');
@@ -969,14 +967,6 @@
                 sessionStorage.removeItem('veeteeManagementToken');
             }
             return response;
-        }
-
-        function configuredWakeWord() {
-            return runtimeDiagnostics?.conversation?.wake_words?.[0] || 'VeeTee ơi';
-        }
-
-        function configuredExitCommand() {
-            return runtimeDiagnostics?.conversation?.exit_commands?.[0] || 'tạm biệt';
         }
 
         async function loadBasePrompt() {
@@ -1754,11 +1744,21 @@
         });
 
         btnWakeOnly.addEventListener('click', () => {
-            sendProtocolMessage({ type: 'listen', state: 'detect', text: configuredWakeWord() }, 'WAKE →');
+            const text = inputQuery.value.trim();
+            if (!text) {
+                logProtocol('WAKE ERR', 'Nhập text detect vào ô chat trước khi gửi');
+                return;
+            }
+            sendProtocolMessage({ type: 'listen', state: 'detect', text }, 'WAKE →');
         });
 
         btnWakeStart.addEventListener('click', async () => {
-            if (!sendProtocolMessage({ type: 'listen', state: 'detect', text: configuredWakeWord() }, 'WAKE →')) return;
+            const text = inputQuery.value.trim();
+            if (!text) {
+                logProtocol('WAKE ERR', 'Nhập text detect vào ô chat trước khi gửi');
+                return;
+            }
+            if (!sendProtocolMessage({ type: 'listen', state: 'detect', text }, 'WAKE →')) return;
             await new Promise(resolve => setTimeout(resolve, 50));
             sendProtocolMessage({ type: 'listen', state: 'start', mode: listenMode.value }, 'LISTEN →');
         });
@@ -1776,14 +1776,18 @@
         });
 
         btnExit.addEventListener('click', () => {
-            sendProtocolMessage({ type: 'chat', text: configuredExitCommand() }, 'EXIT →');
+            const text = inputQuery.value.trim();
+            if (!text) {
+                logProtocol('END ERR', 'Nhập yêu cầu kết thúc vào ô chat để AI tự hiểu');
+                return;
+            }
+            sendProtocolMessage({ type: 'chat', text }, 'END →');
         });
 
         btnReconnect.addEventListener('click', reconnectWS);
 
         btnDirectTts.addEventListener('click', async () => {
             const text = inputQuery.value.trim()
-                || runtimeDiagnostics?.conversation?.greeting_text
                 || 'Xin chào, đây là bài kiểm tra TTS trực tiếp.';
             try {
                 await initAudioSystem();

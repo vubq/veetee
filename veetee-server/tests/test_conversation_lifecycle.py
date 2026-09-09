@@ -3,8 +3,8 @@ import json
 import unittest
 
 from config.settings import AppConfig
-from core.response_audio_cache import ResponseAudioCache
 from core.session import ClientSession, SessionState
+from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent
 
 
 class FakeWebSocket:
@@ -56,46 +56,51 @@ class LifecycleSession(ClientSession):
 
 
 class CountingLLM:
-    def __init__(self, correction="đã sửa", end_intents=None):
-        self.chat_calls = 0
+    def __init__(self, correction="đã sửa", end_intents=None, idle_decisions=None):
+        self.calls = []
         self.correction_calls = 0
-        self.greeting_calls = 0
-        self.goodbye_calls = 0
-        self.end_intent_calls = 0
         self.correction = correction
         self.end_intents = set(end_intents or [])
-        self.greetings = ["Chào bạn, mình đây.", "Gọi mình có chuyện gì nè?", "Mình nghe đây."]
+        self.idle_decisions = list(idle_decisions or [])
+        self.reply = "Mình nghe đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
 
-    async def stream_chat(self, messages):
-        self.chat_calls += 1
-        yield "Mình nghe đây.", "happy"
+    async def stream_turn(self, messages, *, tools=None, detect_end_intent=True, tool_choice=None):
+        self.calls.append({
+            "messages": [dict(item) for item in messages],
+            "tools": list(tools or []),
+            "detect_end_intent": detect_end_intent,
+            "tool_choice": tool_choice,
+        })
+        latest = messages[-1] if messages else {}
+        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(latest.get("content", "")):
+            lifecycle = self.idle_decisions.pop(0) if self.idle_decisions else "continue"
+            yield ControlEvent(
+                intent="end_conversation" if lifecycle == "end" else "chat",
+                lifecycle=lifecycle,
+                emotion="relaxed",
+            )
+            if lifecycle == "end":
+                yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
+            yield CompletedEvent(finish_reason="stop")
+            return
 
-    async def stream_chat_with_control(self, messages):
-        self.chat_calls += 1
         latest_user = next(
-            (str(message.get("content", "")) for message in reversed(messages) if message.get("role") == "user"),
+            (str(item.get("content", "")) for item in reversed(messages) if item.get("role") == "user"),
             "",
         )
         should_end = latest_user in self.end_intents
-        text = self.goodbye if should_end else "Mình nghe đây."
-        yield text, "relaxed" if should_end else "happy", should_end
+        yield ControlEvent(
+            intent="end_conversation" if should_end else "chat",
+            lifecycle="end" if should_end else "continue",
+            emotion="relaxed" if should_end else "happy",
+        )
+        yield SpeechSegmentEvent(self.goodbye if should_end else self.reply)
+        yield CompletedEvent(finish_reason="stop")
 
     async def correct_transcript(self, text):
         self.correction_calls += 1
         return self.correction
-
-    async def generate_greetings(self, count=3):
-        self.greeting_calls += 1
-        return self.greetings[:count]
-
-    async def generate_goodbye(self, messages, *, reason, user_text=""):
-        self.goodbye_calls += 1
-        return self.goodbye
-
-    async def classify_end_intent(self, user_text, messages):
-        self.end_intent_calls += 1
-        return user_text in self.end_intents
 
 
 class CountingTTS:
@@ -135,13 +140,10 @@ def text_messages(websocket):
 
 
 class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    def make_session(self, *, greeting=True, goodbye=True, cache=False, llm=None, tts=None):
+    def make_session(self, *, goodbye=True, llm=None, tts=None):
         config = AppConfig()
         config.conversation.enabled = True
-        config.conversation.greeting_enabled = greeting
         config.conversation.goodbye_enabled = goodbye
-        config.conversation.audio_cache_enabled = cache
-        config.conversation.greeting_pool_size = 1
         config.conversation.wake_start_wait_ms = 5
         config.conversation.close_grace_ms = 0
         config.conversation.idle_timeout_seconds = 0
@@ -150,34 +152,41 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         websocket = FakeWebSocket()
         llm = llm or CountingLLM()
         tts = tts or CountingTTS()
-        response_cache = ResponseAudioCache(tts, config.tts) if cache else None
-        session = LifecycleSession(websocket, config, tts, llm, response_cache)
-        return session, websocket, llm, tts, response_cache
+        session = LifecycleSession(websocket, config, tts, llm)
+        return session, websocket, llm, tts
 
     async def wait_current_turn(self, session):
-        for _ in range(100):
+        for _ in range(200):
             task = session.current_turn_task
             if task is not None:
                 await asyncio.wait_for(asyncio.shield(task), timeout=1)
                 return
             await asyncio.sleep(0.001)
+        self.fail("AI turn did not start")
+
+    async def wait_llm_calls(self, llm, expected=1):
+        for _ in range(300):
+            if len(llm.calls) >= expected:
+                return
+            await asyncio.sleep(0.001)
+        self.fail(f"LLM calls did not reach {expected}")
 
     async def wait_closed(self, websocket):
-        for _ in range(100):
+        for _ in range(200):
             if websocket.closed:
                 return
             await asyncio.sleep(0.002)
         self.fail("websocket did not close")
 
     async def wait_conversation_disarmed(self, session):
-        for _ in range(100):
+        for _ in range(300):
             if not session._conversation_armed and session._closing_reason is None:
                 return
             await asyncio.sleep(0.002)
         self.fail("conversation did not return to idle")
 
-    async def test_wake_then_fast_listen_start_uses_ai_greeting_without_chat_turn(self):
-        session, websocket, llm, tts, _ = self.make_session()
+    async def test_wake_detect_text_is_routed_through_ai(self):
+        session, websocket, llm, tts = self.make_session()
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "detect", "text": "VeeTee ơi"
         }))
@@ -186,136 +195,86 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         }))
         await self.wait_current_turn(session)
 
-        states = [m.get("state") for m in text_messages(websocket) if m.get("type") == "tts"]
-        self.assertEqual(states, ["start", "sentence_start", "stop"])
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(llm.greeting_calls, 1)
-        self.assertEqual(tts.texts, [llm.greetings[0]])
-        self.assertEqual(tts.calls, 1)
+        self.assertEqual(len(llm.calls), 1)
+        latest_user = next(item for item in reversed(llm.calls[0]["messages"]) if item.get("role") == "user")
+        self.assertEqual(latest_user["content"], "VeeTee ơi")
+        self.assertEqual(tts.texts, [llm.reply])
+        self.assertFalse(websocket.closed)
         self.assertEqual(session.state, SessionState.LISTENING)
 
-    async def test_wake_without_listen_start_uses_bounded_fallback_and_dedupes(self):
-        session, _, llm, tts, _ = self.make_session()
+    async def test_duplicate_wake_detect_only_starts_one_ai_turn(self):
+        session, _, llm, _ = self.make_session()
         detect = json.dumps({"type": "listen", "state": "detect", "text": "VeeTee ơi"})
         await session._handle_text_json(detect)
         await session._handle_text_json(detect)
-        await asyncio.sleep(0.01)
-        await self.wait_current_turn(session)
+        await self.wait_llm_calls(llm)
+        self.assertEqual(len(llm.calls), 1)
 
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(llm.greeting_calls, 1)
-        self.assertEqual(tts.calls, 1)
-
-    async def test_greeting_disabled_does_not_start_fake_tts(self):
-        session, websocket, llm, tts, _ = self.make_session(greeting=False)
+    async def test_compat_greeting_flag_does_not_swallow_wake_text(self):
+        session, _, llm, _ = self.make_session()
+        session.config.conversation.greeting_enabled = False
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "detect", "text": "VeeTee ơi"
         }))
-        await asyncio.sleep(0.01)
+        await self.wait_llm_calls(llm)
+        self.assertEqual(len(llm.calls), 1)
 
-        self.assertIsNone(session.current_turn_task)
-        self.assertEqual(websocket.sent, [])
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(tts.calls, 0)
-
-    async def test_non_wake_detect_remains_normal_chat(self):
-        session, websocket, llm, _, _ = self.make_session()
-        await session._handle_text_json(json.dumps({
-            "type": "listen", "state": "detect", "text": "VeeTee ơi, mấy giờ rồi?"
-        }))
+    async def test_quoted_goodbye_is_chat_when_ai_does_not_end(self):
+        session, websocket, llm, _ = self.make_session()
+        await session._handle_text_json(json.dumps({"type": "text", "text": "‘tạm biệt’"}))
         await self.wait_current_turn(session)
-
-        self.assertEqual(llm.chat_calls, 1)
+        self.assertEqual(len(llm.calls), 1)
         self.assertFalse(websocket.closed)
 
-    async def test_cache_hit_skips_new_tts_synthesis_and_llm(self):
-        session, _, llm, tts, cache = self.make_session(cache=True)
-        await cache.get_or_fill(llm.greetings[0], 1)
-        self.assertEqual(tts.calls, 1)
-
-        await session._handle_text_json(json.dumps({
-            "type": "listen", "state": "detect", "text": "VeeTee ơi"
-        }))
-        await asyncio.sleep(0.01)
+    async def test_explaining_goodbye_word_is_chat_when_ai_does_not_end(self):
+        session, websocket, llm, _ = self.make_session()
+        await session._handle_text_json(json.dumps({"type": "text", "text": "Giải thích từ tạm biệt"}))
         await self.wait_current_turn(session)
+        self.assertEqual(len(llm.calls), 1)
+        self.assertFalse(websocket.closed)
 
-        self.assertEqual(tts.calls, 1)
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(llm.greeting_calls, 1)
-        await cache.shutdown()
-
-    async def test_explicit_exit_bypasses_end_classifier_and_uses_ai_goodbye(self):
-        session, websocket, llm, tts, _ = self.make_session()
-        await session._handle_text_json(json.dumps({"type": "text", "text": "Tạm biệt!"}))
+    async def test_contextual_goodbye_closes_only_when_ai_emits_end(self):
+        phrase = "thôi mình đi ngủ đây"
+        llm = CountingLLM(end_intents={phrase})
+        session, websocket, _, tts = self.make_session(llm=llm)
+        await session._handle_text_json(json.dumps({"type": "text", "text": phrase}))
         await self.wait_closed(websocket)
-
-        self.assertEqual(websocket.close_code, 1000)
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(llm.end_intent_calls, 0)
-        self.assertEqual(llm.goodbye_calls, 1)
+        self.assertEqual(len(llm.calls), 1)
         self.assertEqual(tts.texts, [llm.goodbye])
-        self.assertFalse(session.is_active)
-        await session.close()
-        self.assertEqual(session.asr.stop_calls, 1)
+        self.assertEqual(websocket.close_code, 1000)
 
-    async def test_asr_raw_exit_is_checked_before_llm_correction(self):
+    async def test_raw_asr_goodbye_has_no_keyword_shortcut(self):
         llm = CountingLLM(correction="không được dùng")
-        session, websocket, _, _, _ = self.make_session(llm=llm)
+        session, websocket, _, _ = self.make_session(llm=llm)
         await session._on_speech_started(session._capture_generation)
         await session._on_asr_transcript("tạm biệt", True, True, session._capture_generation)
-        await self.wait_closed(websocket)
+        await self.wait_current_turn(session)
 
+        self.assertEqual(len(llm.calls), 1)
         self.assertEqual(llm.correction_calls, 0)
-        self.assertEqual(llm.chat_calls, 0)
-        self.assertEqual(llm.end_intent_calls, 0)
+        self.assertFalse(websocket.closed)
         messages = text_messages(websocket)
         self.assertEqual(len([m for m in messages if m.get("type") == "stt" and m.get("is_final")]), 1)
         self.assertEqual(len([m for m in messages if m.get("type") == "vad" and m.get("state") == "speech_ended"]), 1)
 
-    async def test_correction_cannot_turn_ordinary_raw_text_into_exit(self):
+    async def test_asr_correction_result_is_still_decided_by_ai(self):
         llm = CountingLLM(correction="tạm biệt")
-        session, websocket, _, _, _ = self.make_session(llm=llm)
+        session, websocket, _, _ = self.make_session(llm=llm)
         session.config.asr.text_correction_enabled = True
         await session._on_speech_started(session._capture_generation)
-        await session._on_asr_transcript(
-            "mình nói hơi nhỏ", True, True, session._capture_generation
-        )
+        await session._on_asr_transcript("mình nói hơi nhỏ", True, True, session._capture_generation)
         await self.wait_current_turn(session)
 
         self.assertEqual(llm.correction_calls, 1)
-        self.assertEqual(llm.chat_calls, 1)
+        self.assertEqual(len(llm.calls), 1)
         self.assertFalse(websocket.closed)
 
-    async def test_ai_end_intent_closes_contextual_phrase(self):
+    async def test_listen_start_cancels_ai_end_before_close_commit(self):
         phrase = "thôi mình đi ngủ đây"
         llm = CountingLLM(end_intents={phrase})
-        session, websocket, _, tts, _ = self.make_session(llm=llm)
-
-        await session._handle_text_json(json.dumps({"type": "text", "text": phrase}))
-        await self.wait_closed(websocket)
-
-        self.assertEqual(llm.end_intent_calls, 0)
-        self.assertEqual(llm.chat_calls, 1)
-        self.assertEqual(llm.goodbye_calls, 0)
-        self.assertEqual(tts.texts, [llm.goodbye])
-
-    async def test_ai_end_intent_does_not_close_when_goodbye_is_only_mentioned(self):
-        llm = CountingLLM()
-        session, websocket, _, _, _ = self.make_session(llm=llm)
-
-        await session._handle_text_json(json.dumps({
-            "type": "text", "text": "Giải thích từ tạm biệt"
-        }))
-        await self.wait_current_turn(session)
-
-        self.assertEqual(llm.end_intent_calls, 0)
-        self.assertEqual(llm.chat_calls, 1)
-        self.assertFalse(websocket.closed)
-
-    async def test_listen_start_cancels_goodbye_before_close_commit(self):
         tts = BlockingTTS()
-        session, websocket, llm, _, _ = self.make_session(tts=tts)
-        await session._handle_text_json(json.dumps({"type": "text", "text": "tạm biệt"}))
+        session, websocket, _, _ = self.make_session(llm=llm, tts=tts)
+        await session._handle_text_json(json.dumps({"type": "text", "text": phrase}))
         await asyncio.wait_for(tts.started.wait(), timeout=1)
         old_task = session.current_turn_task
 
@@ -327,34 +286,34 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(websocket.closed)
         self.assertIsNone(session._closing_reason)
         self.assertEqual(session.state, SessionState.LISTENING)
-        self.assertEqual(llm.chat_calls, 0)
 
-    async def test_idle_timeout_needs_no_mic_frames_and_ping_does_not_reset_it(self):
-        session, websocket, llm, _, _ = self.make_session(goodbye=False)
-        session.config.conversation.idle_timeout_seconds = 0.03
+    async def test_idle_continue_rearms_once_then_end_logically_idles(self):
+        llm = CountingLLM(idle_decisions=["continue", "end"])
+        session, websocket, _, _ = self.make_session(goodbye=False, llm=llm)
+        session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "auto"
         }))
-        await asyncio.sleep(0.015)
-        await session._handle_text_json(json.dumps({"type": "ping"}))
         await self.wait_conversation_disarmed(session)
 
+        idle_calls = [
+            call for call in llm.calls
+            if call["messages"] and call["messages"][-1].get("role") == "system"
+            and "Sự kiện hệ thống: hội thoại không có hoạt động" in str(call["messages"][-1].get("content", ""))
+        ]
+        self.assertEqual(len(idle_calls), 2)
+        self.assertTrue(all(call["tool_choice"] == "none" for call in idle_calls))
         self.assertFalse(websocket.closed)
         self.assertTrue(session.is_active)
         self.assertEqual(session.state, SessionState.IDLE)
 
-        await session._handle_text_json(json.dumps({
-            "type": "listen", "state": "start", "mode": "auto"
-        }))
         await session._handle_text_json(json.dumps({"type": "text", "text": "xin chào"}))
         await self.wait_current_turn(session)
-
-        self.assertEqual(llm.chat_calls, 1)
         self.assertFalse(websocket.closed)
-        self.assertEqual(session.state, SessionState.LISTENING)
 
     async def test_idle_timeout_waits_while_session_is_speaking(self):
-        session, websocket, _, _, _ = self.make_session(goodbye=False)
+        llm = CountingLLM(idle_decisions=["end"])
+        session, websocket, _, _ = self.make_session(goodbye=False, llm=llm)
         session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "realtime"
@@ -363,11 +322,12 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.04)
         self.assertFalse(websocket.closed)
         self.assertTrue(session._conversation_armed)
+        self.assertEqual(len(llm.calls), 0)
 
         session.state = SessionState.LISTENING
         await self.wait_conversation_disarmed(session)
         self.assertFalse(websocket.closed)
-        self.assertEqual(session.state, SessionState.IDLE)
+        self.assertEqual(len(llm.calls), 1)
 
 
 if __name__ == "__main__":

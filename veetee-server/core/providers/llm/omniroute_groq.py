@@ -7,11 +7,19 @@ import re
 from typing import Any, List, Dict, AsyncGenerator, Tuple, Optional
 from core.providers.llm.base import BaseLLM
 from core.intent import Intent
+from core.tools.base import READ_ONLY_TOOL_DESCRIPTION_MARKER
+from core.ai_contract import (
+    CONFIRMATION_TOOL_NAME,
+    MEMORY_TOOL_NAME,
+    SEMANTIC_SYSTEM_PROMPT,
+)
 from core.providers.llm.stream_parser import SSEDecoder, NativeToolCallAccumulator
 from core.turn_events import (
     CompletedEvent,
+    ConfirmationDecisionEvent,
     ControlEvent,
     FailedEvent,
+    MemoryProposalEvent,
     SpeechSegmentEvent,
     ToolCallReadyEvent,
 )
@@ -39,6 +47,8 @@ class SpeechSegmentSplitter:
         # sentence from the LLM.
         self.clause_target_chars = 150
         self.clause_min_chars = 80
+        self.first_clause_min_chars = 36
+        self.first_clause_min_words = 5
         self.hard_max_segment_chars = 240
         self.hard_cut_search_back = 45
         self.first_segment_min_chars = 8
@@ -98,10 +108,21 @@ class SpeechSegmentSplitter:
     def _find_clause_cut(self) -> int:
         """Use punctuation as a latency-friendly cut in a long sentence.
 
-        We deliberately wait past the target before considering clause
-        punctuation. This look-ahead gives a sentence-ending mark a chance to
-        arrive first, and avoids chopping ordinary 100-140 character replies.
+        The first spoken clause may be emitted much earlier so TTS can start
+        while the LLM is still producing the rest of the sentence. Later
+        clauses keep the larger target to preserve natural prosody.
         """
+        if self._segments_emitted == 0:
+            visible_chars = 0
+            for i, char in enumerate(self.buffer):
+                if not char.isspace():
+                    visible_chars += 1
+                if char not in self.clause_puncts or visible_chars < self.first_clause_min_chars:
+                    continue
+                words = re.findall(r"[^\W_]+", self.buffer[: i + 1], flags=re.UNICODE)
+                if len(words) >= self.first_clause_min_words:
+                    return i
+
         if len(self.buffer) < self.clause_target_chars:
             return -1
 
@@ -183,14 +204,10 @@ class OmnirouteGroqLLM(BaseLLM):
 
 Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
 
-    INLINE_CONVERSATION_CONTROL_PROMPT = """Đây là ràng buộc kỹ thuật riêng cho lượt chat hiện tại. Hãy tự quyết định trong CHÍNH câu trả lời này xem người dùng có đang muốn kết thúc phiên trò chuyện hay không; không cần một lượt phân loại riêng.
-
-Đầu ra bắt buộc bắt đầu bằng đúng một trong hai nhãn sau, rồi mới đến thẻ cảm xúc và nội dung nói:
-- [end] nếu lời mới nhất thể hiện rõ ý muốn dừng/kết thúc phiên hiện tại, ví dụ: "nói chuyện sau nhé", "để mai nói tiếp", "thôi mình đi ngủ đây", "hẹn gặp lại", "không cần gì nữa". Nội dung sau đó phải là một câu chào kết thúc ngắn, tự nhiên, đúng persona và phù hợp ngữ cảnh.
-- [continue] cho mọi trường hợp còn lại, kể cả khi người dùng chỉ nhắc đến chủ đề kết thúc, ví dụ: "giải thích từ tạm biệt", "tôi có nên đi ngủ không?", "sau này nói chuyện về chủ đề này nhé".
-
-Định dạng chính xác: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung...
-Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại trong nội dung nói."""
+    INLINE_CONVERSATION_CONTROL_PROMPT = """Trong chính lượt này, tự quyết định người dùng có muốn kết thúc phiên hiện tại không. Nếu cần gọi tool, gọi tool trực tiếp ngay; không phát câu chờ và không cần [end]/[continue] trước tool call. Với lượt trả lời bằng nội dung nói, đầu ra bắt buộc mở đầu bằng [end] hoặc [continue], rồi thẻ cảm xúc và nội dung nói.
+[end] chỉ khi lời mới nhất thể hiện rõ muốn dừng/kết thúc phiên; sau đó nói một câu chào ngắn đúng persona.
+[continue] cho mọi trường hợp khác, kể cả hỏi/nhắc về việc tạm biệt hay đi ngủ.
+Định dạng: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung.... Hai nhãn điều khiển là metadata nội bộ, không nhắc lại trong lời nói."""
 
     def __init__(
         self,
@@ -345,12 +362,6 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             logger.warning("Rejected oversized ASR correction: %r -> %r", original, corrected)
             return original
 
-        if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", corrected) and not re.search(
-            r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", original
-        ):
-            logger.warning("Rejected ASR correction containing an unexpected CJK/Hangul script")
-            return original
-
         return corrected
 
     async def _control_completion(
@@ -412,114 +423,24 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             return ""
         return cleaned
 
-    async def generate_greetings(self, count: int = 3) -> List[str]:
-        count = max(1, min(int(count), 5))
+    async def generate_recovery_message(self) -> str:
         instruction = (
-            "Bạn đang tạo câu wake greeting cho trợ lý giọng nói dựa trên personality/system prompt hiện tại. "
-            "Câu phải tự nhiên, ngắn, phù hợp tính cách, không nhắc đến quy tắc hệ thống và không hỏi nhiều ý. "
-            "Chỉ trả về JSON array các chuỗi, không markdown, không giải thích."
+            "Tạo đúng một câu cực ngắn để trợ lý giọng nói dùng khi một lượt xử lý bị lỗi. "
+            "Câu phải tự nhiên, theo personality hiện tại, không nêu lỗi kỹ thuật, không thêm nhãn. "
+            "Mặc định dùng tiếng Việt. Chỉ 6-9 từ và tối đa 55 ký tự."
         )
         raw = await self._control_completion(
             instruction,
-            f"Tạo đúng {count} câu chào khác nhau để nói ngay khi người dùng vừa gọi trợ lý.",
-            temperature=max(0.55, self.temperature),
-            max_tokens=220,
+            "Hãy tạo câu recovery dùng chung, không phụ thuộc một câu hỏi cụ thể.",
+            temperature=max(0.35, self.temperature),
+            max_tokens=24,
         )
-        try:
-            start, end = raw.find("["), raw.rfind("]")
-            values = json.loads(raw[start:end + 1]) if start >= 0 and end > start else []
-        except Exception:
-            values = []
-        greetings = []
-        for value in values if isinstance(values, list) else []:
-            sentence = self._clean_control_sentence(value, max_chars=140)
-            if sentence and sentence not in greetings:
-                greetings.append(sentence)
-            if len(greetings) >= count:
-                break
-        return greetings
+        return self._clean_control_sentence(raw, max_chars=64)
 
-    async def generate_goodbye(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        reason: str,
-        user_text: str = "",
-    ) -> str:
-        recent = messages[-6:]
-        context = json.dumps(recent, ensure_ascii=False)
-        instruction = (
-            "Bạn đang tạo đúng một câu kết thúc hội thoại cho trợ lý giọng nói. "
-            "Hãy dựa vào personality/system prompt hiện tại và ngữ cảnh gần nhất. "
-            "Câu phải ngắn, tự nhiên, phù hợp điều người dùng vừa nói; không giải thích và không thêm nhãn."
-        )
-        raw = await self._control_completion(
-            instruction,
-            f"Lý do đóng: {reason}\nLời người dùng kích hoạt đóng: {user_text or '(không có)'}\nNgữ cảnh: {context}",
-            temperature=max(0.45, self.temperature),
-            max_tokens=96,
-        )
-        return self._clean_control_sentence(raw)
-
-    async def classify_end_intent(
-        self,
-        user_text: str,
-        messages: List[Dict[str, str]],
-    ) -> bool:
-        recent = messages[-4:]
-        context = json.dumps(recent, ensure_ascii=False)
-        instruction = (
-            "Bạn là bộ phân loại ý định, không phải nhân vật trợ lý. Phân loại xem lời mới nhất có thể hiện rõ "
-            "ý muốn kết thúc phiên trò chuyện hiện tại hay không. Trả TRUE cho các cách nói tự nhiên như "
-            "'nói chuyện sau nhé', 'để mai nói tiếp', 'thôi mình đi ngủ đây', 'hẹn gặp lại', 'không cần gì nữa'. "
-            "Trả FALSE cho câu hỏi hoặc khi người dùng chỉ nhắc tới chủ đề kết thúc, ví dụ 'giải thích từ tạm biệt', "
-            "'tôi có nên đi ngủ không?', 'sau này nói chuyện về chủ đề này nhé'. Chỉ xuất đúng TRUE hoặc FALSE."
-        )
-        raw = await self._control_completion(
-            instruction,
-            f"Ngữ cảnh gần nhất: {context}\nLời người dùng mới nhất: {user_text}",
-            temperature=0.0,
-            max_tokens=4,
-            timeout_seconds=1.2,
-            include_persona=False,
-        )
-        normalized = re.sub(r"^\[[a-zA-Z]+\]\s*", "", raw.strip())
-        return normalized.upper().rstrip(".") == "TRUE"
-
-    def _should_enforce_vietnamese(self, messages: List[Dict[str, str]]) -> bool:
-        """Keep default Vietnamese replies free of accidental CJK leakage."""
-        latest_user = ""
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                latest_user = str(message.get("content", ""))
-                break
-
-        lowered = latest_user.lower()
-        foreign_language_markers = (
-            "tiếng trung", "tiếng hoa", "tiếng nhật", "tiếng hàn",
-            "chinese", "japanese", "korean", "中文", "日本語", "한국어",
-            "kanji", "hiragana", "katakana",
-        )
-        if any(marker in lowered for marker in foreign_language_markers):
-            return False
-
-        # If the user themselves supplied CJK/Hangul text, preserve those
-        # scripts so translation/explanation requests still work naturally.
-        if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", latest_user):
-            return False
-        return True
-
-    def _clean_text(self, text: str, enforce_vietnamese: bool = False) -> str:
+    def _clean_text(self, text: str) -> str:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         text = text.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
-        if enforce_vietnamese:
-            cleaned = re.sub(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+", " ", text)
-            if cleaned != text:
-                logger.warning("Removed unrequested CJK/Hangul characters from Vietnamese LLM output")
-            text = cleaned
-            text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-            text = re.sub(r"\s{2,}", " ", text)
         return text.strip()
 
     def _extract_emotion(self, text: str) -> Tuple[str, str]:
@@ -557,6 +478,7 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         detect_end_intent: bool,
     ):
         full_messages = [{"role": "system", "content": self.system_prompt}]
+        full_messages.append({"role": "system", "content": SEMANTIC_SYSTEM_PROMPT})
         if detect_end_intent:
             full_messages.append({
                 "role": "system",
@@ -585,7 +507,6 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         control_buffer = ""
         inline_end_intent = False
         control_result_emitted = False
-        enforce_vietnamese = self._should_enforce_vietnamese(messages)
 
         def format_yield(clause: str, emotion: Optional[str]):
             nonlocal control_result_emitted
@@ -604,11 +525,11 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                 if not emotion_emitted:
                     detected_emotion, cleaned = self._extract_emotion(clause)
                     emotion_emitted = True
-                    clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
+                    clean_s = self._clean_text(cleaned)
                     if clean_s:
                         items.append(format_yield(clean_s, detected_emotion))
                 else:
-                    clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+                    clean_s = self._clean_text(clause)
                     if clean_s:
                         items.append(format_yield(clean_s, None))
             return items
@@ -619,7 +540,6 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                     if resp.status != 200:
                         err_body = await resp.text()
                         logger.error(f"Omniroute LLM request failed ({resp.status}): {err_body}")
-                        yield "Xin lỗi, đã xảy ra lỗi kết nối.", "sad", False if detect_end_intent else None
                         return
 
                     async for line in resp.content:
@@ -652,7 +572,6 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
 
         except Exception as e:
             logger.error(f"Error communicating with Omniroute LLM: {e}")
-            yield "Xin lỗi, không thể kết nối tới mô hình AI.", "sad", False if detect_end_intent else None
             return
 
         if not control_decided and control_buffer:
@@ -666,11 +585,11 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             if not emotion_emitted:
                 detected_emotion, cleaned = self._extract_emotion(clause)
                 emotion_emitted = True
-                clean_s = self._clean_text(cleaned, enforce_vietnamese=enforce_vietnamese)
+                clean_s = self._clean_text(cleaned)
                 if clean_s:
                     yield format_yield(clean_s, detected_emotion)
             else:
-                clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+                clean_s = self._clean_text(clause)
                 if clean_s:
                     yield format_yield(clean_s, None)
 
@@ -680,7 +599,7 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         *,
         tools: Optional[List[Dict]] = None,
         detect_end_intent: bool = True,
-        tool_choice: Optional[str] = None,
+        tool_choice: Optional[Any] = None,
     ):
         """Stream one typed LLM turn, including native function calls.
 
@@ -688,7 +607,9 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         consumes arbitrary SSE/TCP chunk boundaries and never launches a
         separate intent-classifier inference.
         """
+        request_tools = list(tools or [])
         full_messages = [{"role": "system", "content": self.system_prompt}]
+        full_messages.append({"role": "system", "content": SEMANTIC_SYSTEM_PROMPT})
         if detect_end_intent:
             full_messages.append({
                 "role": "system",
@@ -705,8 +626,8 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             "reasoning_format": self.reasoning_format,
             "reasoning_effort": "none",
         }
-        if tools:
-            payload["tools"] = tools
+        if request_tools:
+            payload["tools"] = request_tools
             payload["tool_choice"] = tool_choice or "auto"
         elif tool_choice is not None:
             payload["tool_choice"] = tool_choice
@@ -719,7 +640,6 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         splitter = SpeechSegmentSplitter()
         decoder = SSEDecoder()
         tool_calls = NativeToolCallAccumulator()
-        enforce_vietnamese = self._should_enforce_vietnamese(messages)
         control_decided = not detect_end_intent
         control_emitted = False
         control_buffer = ""
@@ -730,6 +650,14 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
         usage = None
         saw_content = False
         first_token_marked = False
+        read_only_tool_names = {
+            str(function.get("name") or "")
+            for tool in request_tools
+            if isinstance(tool, dict)
+            for function in [tool.get("function") or {}]
+            if isinstance(function, dict)
+            and READ_ONLY_TOOL_DESCRIPTION_MARKER in str(function.get("description") or "")
+        }
 
         def ensure_control(emotion: str = "neutral", *, tool: bool = False):
             nonlocal control_emitted
@@ -759,13 +687,17 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                     if control is not None:
                         events.append(control)
                         mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
-                clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+                clean_s = self._clean_text(clause)
                 if clean_s:
                     events.append(SpeechSegmentEvent(clean_s, emotion=emotion))
             return events
 
         session = await self._get_http_session()
-        mark_current("llm_request_start", model=self.model, tool_count=len(tools or []))
+        mark_current(
+            "llm_request_start",
+            model=self.model,
+            tool_count=len(request_tools),
+        )
         try:
             async with session.post(
                 url,
@@ -859,7 +791,7 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
                 if control is not None:
                     mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
                     yield control
-            clean_s = self._clean_text(clause, enforce_vietnamese=enforce_vietnamese)
+            clean_s = self._clean_text(clause)
             if clean_s:
                 mark_current("llm_speech_segment", chars=len(clean_s))
                 yield SpeechSegmentEvent(clean_s, emotion=emotion)
@@ -878,11 +810,48 @@ Nhãn [end]/[continue] là metadata nội bộ, không được nhắc lại tro
             if finish_reason != "tool_calls":
                 yield FailedEvent("tool calls require finish_reason=tool_calls")
                 return
+            if saw_content:
+                non_read_only_calls = [
+                    name for _, name, _ in ready_calls
+                    if name not in read_only_tool_names
+                ]
+                if non_read_only_calls:
+                    # Side-effecting/semantic actions must not be dispatched
+                    # after the model has already spoken an unvalidated claim.
+                    yield FailedEvent("action turn emitted content before structured action")
+                    return
+                logger.warning(
+                    "Allowing mixed content before read-only tool call(s): %s",
+                    ", ".join(name for _, name, _ in ready_calls),
+                )
             control = ensure_control(tool=True)
             if control is not None:
                 mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
                 yield control
             for call_id, name, arguments in ready_calls:
+                if name == MEMORY_TOOL_NAME:
+                    mark_current("llm_memory_action_ready", action=arguments.get("action"))
+                    yield MemoryProposalEvent(
+                        call_id=call_id,
+                        action=str(arguments.get("action") or ""),
+                        value=str(arguments.get("value") or ""),
+                        fact_id=str(arguments.get("fact_id") or ""),
+                        revision=arguments.get("revision"),
+                        evidence=str(arguments.get("evidence") or ""),
+                    )
+                    continue
+                if name == CONFIRMATION_TOOL_NAME:
+                    mark_current(
+                        "llm_confirmation_ready",
+                        action_id=arguments.get("action_id"),
+                        decision=arguments.get("decision"),
+                    )
+                    yield ConfirmationDecisionEvent(
+                        call_id=call_id,
+                        action_id=str(arguments.get("action_id") or ""),
+                        decision=str(arguments.get("decision") or ""),
+                    )
+                    continue
                 mark_current("llm_tool_call_ready", tool=name)
                 yield ToolCallReadyEvent(call_id=call_id, name=name, arguments=arguments)
         elif finish_reason == "tool_calls":

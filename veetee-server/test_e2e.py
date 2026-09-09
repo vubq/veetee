@@ -79,7 +79,7 @@ def print_trace_summary(trace: E2ETrace) -> None:
     print("Server logs separately report VAD endpoint reason, ASR correction/final stage, post-ASR first clause, first binary sent, and tts:stop sent.")
 
 
-def synthesize_question_audio():
+def synthesize_question_audio(question_text: str):
     try:
         import numpy as np
         import opuslib_next
@@ -88,7 +88,6 @@ def synthesize_question_audio():
     except Exception as exc:
         raise E2EBlocked(f"speech synthesis dependencies unavailable: {exc}") from exc
 
-    question_text = "Hà Nội là thủ đô của nước nào?"
     try:
         tts = Vieneu()
         audio_48k = tts.infer(question_text)
@@ -114,14 +113,14 @@ def synthesize_question_audio():
     return question_text, opus_frames, silence_frame
 
 
-async def run_full_speech_test(uri: str, timeout_seconds: float) -> E2ETrace:
+async def run_full_speech_test(uri: str, timeout_seconds: float, question_text: str) -> E2ETrace:
     try:
         import websockets
     except Exception as exc:
         raise E2EBlocked(f"websockets dependency unavailable: {exc}") from exc
 
     print("=== STEP 1: Synthesizing test question audio using VieNeu ===")
-    question_text, opus_frames, silence_frame = synthesize_question_audio()
+    question_text, opus_frames, silence_frame = synthesize_question_audio(question_text)
     print(f"Query: {question_text!r}; {len(opus_frames)} speech frames (~{len(opus_frames) * 0.06:.2f}s)")
 
     trace = E2ETrace()
@@ -238,13 +237,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="VeeTee stock-FW-compatible voice E2E check")
     parser.add_argument("--uri", default="ws://127.0.0.1:8000/")
     parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--question", default="Hà Nội là thủ đô của nước nào?")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        asyncio.run(run_full_speech_test(args.uri, max(args.timeout, 1.0)))
+        asyncio.run(run_full_speech_test(args.uri, max(args.timeout, 1.0), args.question))
     except E2EBlocked as exc:
         print(f"\nBLOCKED: {exc}", file=sys.stderr)
         return 2

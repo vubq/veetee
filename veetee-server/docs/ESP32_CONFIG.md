@@ -51,13 +51,13 @@ server.barge_in_policy = client_only
 
 Robot chỉ bị server ngắt turn khi client chủ động gửi message chuẩn như `abort` hoặc `listen:start`. Automatic speech-start barge-in trong lúc loa đang phát được giữ tắt mặc định.
 
-## 3. Wake greeting và lệnh kết thúc không cần sửa FW
+## 3. Wake, greeting và kết thúc do AI xử lý, không cần sửa FW
 
-Tính năng hội thoại tự nhiên mới chạy hoàn toàn phía server khi bật `conversation.enabled=true`:
+Tính năng hội thoại tự nhiên chạy hoàn toàn phía server khi bật `conversation.enabled=true`:
 
-- `listen:detect` có text khớp wake allowlist -> greeting cố định, bỏ LLM;
-- `text`/`chat`/ASR final hoặc detect khớp exit command -> goodbye tùy chọn rồi close code `1000`;
-- idle timeout có thể tự kết thúc session khi không còn hoạt động hợp lệ.
+- `listen:detect` có text -> giữ nguyên text và đưa vào AI sau cửa sổ phối hợp `listen:start`;
+- `text`/`chat`/ASR final -> cùng đi qua AI theo history/context, không match exit phrase local;
+- idle timeout -> tạo tối đa một AI semantic evaluation mỗi inactivity epoch; AI quyết định tiếp tục chờ hay kết thúc logical conversation.
 
 Điều kiện duy nhất cho wake greeting là firmware **đang dùng vốn đã gửi** event stock dạng:
 
@@ -65,9 +65,9 @@ Tính năng hội thoại tự nhiên mới chạy hoàn toàn phía server khi 
 {"type":"listen","state":"detect","text":"VeeTee ơi"}
 ```
 
-Một số build/config stock có thể chỉ phát âm báo wake và vào listening mà không gửi `listen:detect`. Trong trường hợp đó, VeeTee vẫn hội thoại bình thường nhưng không thể biết chắc wake event để phát greeting server-side. Không cần patch/build FW để dùng server; hãy để greeting tắt hoặc dùng hành vi wake/audio sẵn có của firmware đó.
+Một số build/config stock có thể chỉ phát âm báo wake và vào listening mà không gửi `listen:detect`. Trong trường hợp đó, VeeTee vẫn hội thoại bình thường qua mic/ASR nhưng không có text wake event để AI phản hồi riêng. Không cần patch/build FW để dùng server.
 
-Không khai báo server-side AEC chỉ để bật greeting. Greeting và exit routing độc lập với AEC/barge-in.
+Không khai báo server-side AEC chỉ để bật greeting. Semantic routing độc lập với AEC/barge-in. Các field `wake_words` và `exit_commands` trong config chỉ còn là legacy/inert compatibility data, không quyết định intent.
 
 ## 4. Ngắt robot bằng firmware stock
 
@@ -113,10 +113,10 @@ Không build/flash FW mới. Dùng đúng firmware đang có trên board và ghi
 
 1. Kết nối OTA/WS, xác nhận server nhận hello.
 2. Test mic -> ASR -> LLM -> TTS -> loa ít nhất vài lượt liên tiếp.
-3. Nếu firmware có `listen:detect`, ghi lại **text thực tế** và thêm đúng text đó vào `conversation.wake_words`; test wake -> greeting -> câu hỏi.
+3. Nếu firmware có `listen:detect`, ghi lại **text thực tế**; test detect -> AI greeting/response -> câu hỏi tiếp theo. Không cần thêm text vào matcher server.
 4. Tắt greeting rồi nói ngay sau wake để xác nhận không có VAD block cố định làm mất câu.
-5. Test exit command + goodbye on/off và reconnect sau close code `1000`.
-6. Test idle timeout, gồm trường hợp nói sát deadline.
+5. Test nhiều cách nói kết thúc, câu trích dẫn “tạm biệt” và câu hỏi chứa từ đó để xác nhận AI quyết định theo ngữ cảnh.
+6. Test idle timeout, gồm trường hợp AI chọn continue, AI chọn end và user nói sát deadline.
 7. Test câu dài và nghe hết bình thường để xác nhận đuôi câu không bị cắt.
 8. Trong lúc robot nói, dùng nút hoặc wake word mà firmware hiện tại hỗ trợ để tạo `abort`/`listen:start`.
 9. Xác nhận server ngừng gửi binary cũ và gửi stop chuẩn.

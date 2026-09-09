@@ -2,12 +2,29 @@ import asyncio
 import json
 import unittest
 
-from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
+from core.providers.llm.omniroute_groq import OmnirouteGroqLLM, SpeechSegmentSplitter
 from core.providers.llm.stream_parser import NativeToolCallAccumulator, SSEDecoder
-from core.turn_events import FailedEvent, ToolCallReadyEvent
+from core.tools.builtin.time_tool import time_descriptor
+from core.turn_events import CompletedEvent, FailedEvent, SpeechSegmentEvent, ToolCallReadyEvent
 
 
 class LLMStreamEventTests(unittest.TestCase):
+    def test_first_long_clause_can_stream_before_sentence_end(self):
+        splitter = SpeechSegmentSplitter()
+        text = "Mình kiểm tra nhanh thông tin này cho bạn nhé, phần còn lại mình nói ngay sau đó"
+
+        segments = splitter.add_token(text)
+
+        self.assertEqual(segments, ["Mình kiểm tra nhanh thông tin này cho bạn nhé,"])
+        self.assertEqual(splitter.buffer, " phần còn lại mình nói ngay sau đó")
+
+    def test_short_intro_clause_is_not_split_too_early(self):
+        splitter = SpeechSegmentSplitter()
+
+        segments = splitter.add_token("Ừm, mình đang suy nghĩ thêm để trả lời bạn thật tự nhiên")
+
+        self.assertEqual(segments, [])
+
     def test_sse_decoder_handles_arbitrary_chunk_boundaries_and_unicode(self):
         decoder = SSEDecoder()
         payload = 'data: {"text":"xin chào"}\n\ndata: [DONE]\n\n'.encode("utf-8")
@@ -59,6 +76,124 @@ class LLMStreamEventTests(unittest.TestCase):
 
 
 class LLMStreamCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def _stream_events(self, payload: bytes, *, tools, tool_choice=None, capture=None):
+        class Content:
+            async def iter_any(self):
+                yield payload
+
+        class FakeResponse:
+            status = 200
+            content = Content()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def post(self, *args, **kwargs):
+                if capture is not None:
+                    capture.update(kwargs)
+                return FakeResponse()
+
+        llm = OmnirouteGroqLLM(base_prompt="Bạn là trợ lý tiếng Việt.")
+
+        async def get_fake_session():
+            return FakeSession()
+
+        llm._get_http_session = get_fake_session
+        return [
+            event
+            async for event in llm.stream_turn(
+                [{"role": "user", "content": "Mấy giờ rồi?"}],
+                tools=tools,
+                detect_end_intent=False,
+                tool_choice=tool_choice,
+            )
+        ]
+
+    async def test_auto_tool_selection_keeps_context_and_all_tool_schemas(self):
+        payload = (
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-time",'
+            '"function":{"name":"get_current_time","arguments":"{}"}}]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+            'data: [DONE]\n\n'
+        ).encode("utf-8")
+        capture = {}
+        clock_tool = time_descriptor().as_openai_tool()
+        unrelated_tool = {
+            "type": "function",
+            "function": {
+                "name": "other_tool",
+                "description": "Other tool",
+                "parameters": {"type": "object"},
+            },
+        }
+        events = await self._stream_events(
+            payload,
+            tools=[clock_tool, unrelated_tool],
+            capture=capture,
+        )
+
+        request = capture["json"]
+        self.assertEqual(request["tool_choice"], "auto")
+        self.assertEqual(len(request["tools"]), 2)
+        self.assertEqual(
+            {tool["function"]["name"] for tool in request["tools"]},
+            {"get_current_time", "other_tool"},
+        )
+        self.assertEqual(request["messages"][-1]["content"], "Mấy giờ rồi?")
+        joined = "\n".join(str(message.get("content") or "") for message in request["messages"])
+        self.assertIn("Bạn là trợ lý tiếng Việt.", joined)
+        self.assertIn("Semantic contract", joined)
+        self.assertTrue(any(isinstance(event, ToolCallReadyEvent) for event in events))
+
+    async def test_mixed_content_then_read_only_tool_call_is_allowed(self):
+        payload = (
+            'data: {"choices":[{"delta":{"content":"Để mình kiểm tra."}}]}\n\n'
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-time",'
+            '"function":{"name":"get_current_time","arguments":"{}"}}]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+            'data: [DONE]\n\n'
+        ).encode("utf-8")
+
+        events = await self._stream_events(payload, tools=[time_descriptor().as_openai_tool()])
+
+        self.assertTrue(any(isinstance(event, SpeechSegmentEvent) for event in events))
+        self.assertTrue(any(
+            isinstance(event, ToolCallReadyEvent) and event.name == "get_current_time"
+            for event in events
+        ))
+        self.assertTrue(any(isinstance(event, CompletedEvent) for event in events))
+        self.assertFalse(any(isinstance(event, FailedEvent) for event in events))
+
+    async def test_mixed_content_then_side_effect_tool_call_is_rejected(self):
+        payload = (
+            'data: {"choices":[{"delta":{"content":"Để mình làm ngay."}}]}\n\n'
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-volume",'
+            '"function":{"name":"device_set_volume","arguments":"{\\"volume\\":50}"}}]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+            'data: [DONE]\n\n'
+        ).encode("utf-8")
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "device_set_volume",
+                "description": "Đặt âm lượng thiết bị.",
+                "parameters": {"type": "object"},
+            },
+        }]
+
+        events = await self._stream_events(payload, tools=tools)
+
+        self.assertFalse(any(isinstance(event, ToolCallReadyEvent) for event in events))
+        self.assertTrue(any(
+            isinstance(event, FailedEvent)
+            and event.error == "action turn emitted content before structured action"
+            for event in events
+        ))
+
     async def test_truncated_tool_stream_never_publishes_side_effect_call(self):
         payload = (
             'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1",'

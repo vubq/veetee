@@ -15,12 +15,42 @@ class TurnMetricsTests(unittest.TestCase):
         self.assertNotIn("turn_start_to_first_ws_binary_ms", summary)
 
         trace = recorder.start_turn(2, "chat")
+        trace.mark("context_lookup_start")
+        trace.mark("context_lookup_end")
+        trace.mark("llm_request_start")
+        trace.mark("llm_headers")
+        trace.mark("llm_first_content_token")
+        trace.mark("llm_speech_segment")
+        trace.mark("tts_enqueue")
+        trace.mark("tts_first_opus")
         trace.mark("first_ws_binary_sent")
         trace.finish("completed", llm_rounds=2, tool_calls=1)
         summary = recorder.latest_summary()
         self.assertGreaterEqual(summary["turn_start_to_first_ws_binary_ms"], 0)
         self.assertEqual(summary["llm_rounds"], 2)
         self.assertEqual(summary["tool_calls"], 1)
+        self.assertIn("context_lookup", summary["latency_ms"])
+        self.assertIn("llm_headers", summary["latency_ms"])
+        self.assertIn("llm_first_content_token", summary["latency_ms"])
+        self.assertIn("llm_first_speech_segment", summary["latency_ms"])
+        self.assertIn("tts_first_opus", summary["latency_ms"])
+        self.assertIn("tts_opus_to_ws_binary", summary["latency_ms"])
+
+    def test_latency_summary_reports_tool_ready_without_content_token(self):
+        recorder = TurnMetricsRecorder("session", {})
+        trace = recorder.start_turn(1, "chat")
+        trace.mark("llm_request_start")
+        trace.mark("llm_headers")
+        trace.mark("llm_tool_call_ready")
+        trace.mark("tts_enqueue")
+        trace.mark("tts_first_opus")
+        trace.mark("first_ws_binary_sent")
+        trace.finish("completed", llm_rounds=1, tool_calls=1)
+
+        latency = recorder.latest_summary()["latency_ms"]
+        self.assertIn("llm_tool_ready", latency)
+        self.assertNotIn("llm_first_content_token", latency)
+        self.assertIn("tts_first_opus", latency)
 
     def test_secret_values_do_not_change_config_fingerprint(self):
         left = config_fingerprint({"api_key": "one", "token": "a", "mode": "fast"})

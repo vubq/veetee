@@ -15,7 +15,6 @@ CACHE_SCHEMA_VERSION = 1
 MAX_CACHE_ENTRIES = 16
 MAX_CACHE_BYTES = 4 * 1024 * 1024
 MAX_CLIP_SECONDS = 5.0
-DEFAULT_ERROR_FALLBACK_TEXT = "Mình gặp lỗi, bạn thử nói lại nhé."
 
 
 @dataclass(frozen=True)
@@ -39,6 +38,13 @@ class AudioCacheResult:
     synthesis_ms: float
 
 
+@dataclass(frozen=True)
+class RecoveryAudioAsset:
+    text: str
+    frames: tuple[bytes, ...]
+    provenance: str
+
+
 class ResponseAudioCache:
     """Small bounded RAM cache for configured fixed TTS responses."""
 
@@ -52,6 +58,10 @@ class ResponseAudioCache:
         self._inflight_priority: dict[AudioCacheKey, str] = {}
         self._lock = asyncio.Lock()
         self._closed = False
+        self._recovery_text = ""
+        self._recovery_provenance = ""
+        self._recovery_pending_text = ""
+        self._recovery_pending_provenance = ""
 
     def make_key(self, text: str) -> AudioCacheKey:
         engine_identity = getattr(self.tts_engine, "model", None) or type(self.tts_engine).__name__
@@ -97,6 +107,7 @@ class ResponseAudioCache:
                 task = None
             if task is None:
                 task = asyncio.create_task(self._fill(key, priority=priority))
+                task.add_done_callback(self._consume_task_result)
                 self._inflight[key] = task
                 self._inflight_priority[key] = priority
                 logger.info("fixed_audio_cache miss/fill text=%r", key.text)
@@ -113,6 +124,15 @@ class ResponseAudioCache:
             logger.warning("fixed_audio_cache waiter timeout text=%r", key.text)
             raise
 
+    @staticmethod
+    def _consume_task_result(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            pass
+
     async def get_cached(self, text: str) -> AudioCacheResult:
         """Return an already-generated clip without invoking TTS.
 
@@ -128,6 +148,126 @@ class ResponseAudioCache:
                 raise KeyError("fixed response is not cached")
             self._entries.move_to_end(key)
             return AudioCacheResult(cached, True, 0.0)
+
+    async def prepare_recovery(
+        self,
+        text: str,
+        timeout_seconds: float,
+        *,
+        provenance: str,
+    ) -> RecoveryAudioAsset:
+        """Pre-generate one recovery clip whose wording came from the AI.
+
+        Runtime failure handling only reads this cached asset. It never calls
+        the LLM or TTS recursively while either dependency may already be
+        failing.
+        """
+        cleaned = str(text or "").strip()
+        source = str(provenance or "").strip()
+        if not cleaned:
+            raise ValueError("recovery text must not be empty")
+        if not source:
+            raise ValueError("recovery provenance must not be empty")
+
+        async with self._lock:
+            if self._recovery_text and self._recovery_provenance:
+                cleaned = self._recovery_text
+                source = self._recovery_provenance
+            elif self._recovery_pending_text and self._recovery_pending_provenance:
+                cleaned = self._recovery_pending_text
+                source = self._recovery_pending_provenance
+            else:
+                self._recovery_pending_text = cleaned
+                self._recovery_pending_provenance = source
+
+        try:
+            result = await self.get_or_fill(
+                cleaned,
+                timeout_seconds,
+                priority="prewarm",
+            )
+        except asyncio.TimeoutError:
+            raise
+        except Exception:
+            async with self._lock:
+                if (
+                    self._recovery_pending_text == cleaned
+                    and self._recovery_pending_provenance == source
+                ):
+                    self._recovery_pending_text = ""
+                    self._recovery_pending_provenance = ""
+            raise
+
+        async with self._lock:
+            if self._recovery_text == cleaned and self._recovery_provenance == source:
+                pass
+            elif (
+                self._recovery_pending_text == cleaned
+                and self._recovery_pending_provenance == source
+            ):
+                self._recovery_text = cleaned
+                self._recovery_provenance = source
+                self._recovery_pending_text = ""
+                self._recovery_pending_provenance = ""
+            else:
+                raise RuntimeError("recovery prewarm was superseded")
+        return RecoveryAudioAsset(cleaned, tuple(result.frames), source)
+
+    async def get_pending_recovery(self) -> Optional[tuple[str, str]]:
+        async with self._lock:
+            if not self._recovery_pending_text or not self._recovery_pending_provenance:
+                return None
+            return self._recovery_pending_text, self._recovery_pending_provenance
+
+    async def get_recovery(self) -> RecoveryAudioAsset:
+        if self._closed:
+            raise RuntimeError("response audio cache is closed")
+        async with self._lock:
+            text = self._recovery_text
+            provenance = self._recovery_provenance
+            pending_text = self._recovery_pending_text
+            pending_provenance = self._recovery_pending_provenance
+
+        if text and provenance:
+            cached = await self.get_cached(text)
+            return RecoveryAudioAsset(text, tuple(cached.frames), provenance)
+
+        if not pending_text or not pending_provenance:
+            raise KeyError("AI recovery asset is not ready")
+
+        cached = await self.get_cached(pending_text)
+        async with self._lock:
+            if (
+                self._recovery_pending_text == pending_text
+                and self._recovery_pending_provenance == pending_provenance
+            ):
+                self._recovery_text = pending_text
+                self._recovery_provenance = pending_provenance
+                self._recovery_pending_text = ""
+                self._recovery_pending_provenance = ""
+            elif not (
+                self._recovery_text == pending_text
+                and self._recovery_provenance == pending_provenance
+            ):
+                raise KeyError("AI recovery asset was superseded")
+        return RecoveryAudioAsset(pending_text, tuple(cached.frames), pending_provenance)
+
+    async def clear_recovery(self) -> None:
+        """Invalidate recovery wording after persona/model configuration changes."""
+        pending_task = None
+        async with self._lock:
+            pending_text = self._recovery_pending_text
+            self._recovery_text = ""
+            self._recovery_provenance = ""
+            self._recovery_pending_text = ""
+            self._recovery_pending_provenance = ""
+            if pending_text:
+                key = self.make_key(pending_text)
+                if self._inflight_priority.get(key) == "prewarm":
+                    pending_task = self._inflight.get(key)
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+            await asyncio.gather(pending_task, return_exceptions=True)
 
     async def _fill(self, key: AudioCacheKey, *, priority: str) -> tuple[tuple[bytes, ...], float]:
         started = time.perf_counter()
@@ -236,4 +376,9 @@ class ResponseAudioCache:
                 priority: sum(1 for value in self._inflight_priority.values() if value == priority)
                 for priority in {"live", "dashboard", "prewarm"}
             },
+            "recovery_ready": bool(self._recovery_text and self._recovery_provenance),
+            "recovery_provenance": self._recovery_provenance or None,
+            "recovery_pending": bool(
+                self._recovery_pending_text and self._recovery_pending_provenance
+            ),
         }

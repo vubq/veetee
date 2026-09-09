@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import wave
@@ -23,6 +24,9 @@ class _QueuedUtterance:
     pcm: np.ndarray
     enqueued_perf: float
     audio_ms: float
+    endpoint_reason: str
+    trailing_silence_ms: float
+    voiced_ms: float
 
 
 class _ParakeetRuntime:
@@ -111,9 +115,11 @@ class _ParakeetRuntime:
         model.change_decoding_strategy(decoding_cfg, verbose=False)
 
         if use_cuda:
-            # Half the acoustic model before moving it to CUDA. This keeps the
-            # persistent Parakeet allocation small enough to coexist with TTS.
-            model = model.half().to(torch.device("cuda"))
+            # Keep Parakeet in FP32 on CUDA. On the GTX 1650 Ti the FP16 path
+            # was observed to produce only the unknown-token glyph ("⁇") for
+            # valid short Vietnamese utterances that transcribe correctly in
+            # FP32. Reliability matters more than the ~1.2 GB VRAM saving here.
+            model = model.float().to(torch.device("cuda"))
         else:
             model = model.float().to(torch.device("cpu"))
 
@@ -162,25 +168,13 @@ class _ParakeetRuntime:
             return ""
 
         with torch.inference_mode():
-            if cls._device == "cuda":
-                # NeMo's transcription path creates float32 input features. The
-                # model itself stays FP16; autocast handles mixed input safely.
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    output = model.transcribe(
-                        pcm_float32,
-                        batch_size=1,
-                        return_hypotheses=True,
-                        num_workers=0,
-                        verbose=False,
-                    )
-            else:
-                output = model.transcribe(
-                    pcm_float32,
-                    batch_size=1,
-                    return_hypotheses=True,
-                    num_workers=0,
-                    verbose=False,
-                )
+            output = model.transcribe(
+                pcm_float32,
+                batch_size=1,
+                return_hypotheses=True,
+                num_workers=0,
+                verbose=False,
+            )
 
         if isinstance(output, tuple):
             output = output[0]
@@ -220,6 +214,9 @@ class ParakeetSileroASR(BaseASR):
         pre_speech_pad_ms: int = 512,
         utterance_queue_max: int = 2,
         max_utterance_ms: int = 30000,
+        diagnostic_capture_enabled: bool = False,
+        diagnostic_capture_dir: str = "/tmp/veetee-asr-captures",
+        diagnostic_capture_max_files: int = 20,
         metrics_recorder: Optional[TurnMetricsRecorder] = None,
         on_transcript_callback: Optional[
             Callable[..., Awaitable[None]]
@@ -241,6 +238,9 @@ class ParakeetSileroASR(BaseASR):
         self.pre_speech_pad_ms = max(int(pre_speech_pad_ms), 0)
         self.utterance_queue_max = max(1, int(utterance_queue_max))
         self.max_utterance_ms = max(self.min_speech_duration_ms, int(max_utterance_ms))
+        self.diagnostic_capture_enabled = bool(diagnostic_capture_enabled)
+        self.diagnostic_capture_dir = Path(diagnostic_capture_dir)
+        self.diagnostic_capture_max_files = max(1, int(diagnostic_capture_max_files))
         self.metrics_recorder = metrics_recorder
         self.on_transcript_callback = on_transcript_callback
         self.on_speech_started_callback = on_speech_started_callback
@@ -266,6 +266,7 @@ class ParakeetSileroASR(BaseASR):
         self.last_word_confidence: Optional[float] = None
         self._capture_generation = 0
         self._utterance_generation = 0
+        self._diagnostic_tasks: set[asyncio.Task] = set()
 
     async def start(self):
         if self._running:
@@ -447,9 +448,23 @@ class ParakeetSileroASR(BaseASR):
                 peak,
                 gain,
             )
-        await self._enqueue_utterance(utterance_generation, pcm)
+        await self._enqueue_utterance(
+            utterance_generation,
+            pcm,
+            endpoint_reason=endpoint_reason,
+            trailing_silence_ms=trailing_silence_ms,
+            voiced_ms=voiced_ms,
+        )
 
-    async def _enqueue_utterance(self, generation: int, pcm: np.ndarray) -> None:
+    async def _enqueue_utterance(
+        self,
+        generation: int,
+        pcm: np.ndarray,
+        *,
+        endpoint_reason: str,
+        trailing_silence_ms: float,
+        voiced_ms: float,
+    ) -> None:
         audio_ms = pcm.size * 1000.0 / self.sample_rate
         if self._utterance_queue.full():
             kept = []
@@ -497,6 +512,9 @@ class ParakeetSileroASR(BaseASR):
             pcm=pcm,
             enqueued_perf=time.perf_counter(),
             audio_ms=audio_ms,
+            endpoint_reason=endpoint_reason,
+            trailing_silence_ms=trailing_silence_ms,
+            voiced_ms=voiced_ms,
         )
         self._utterance_queue.put_nowait(item)
         if self.metrics_recorder is not None:
@@ -586,6 +604,7 @@ class ParakeetSileroASR(BaseASR):
                                 round(float(confidence), 4) if confidence is not None else None
                             ),
                         )
+                    self._schedule_diagnostic_capture(queued, text, confidence)
                     if text and not any(char.isalnum() for char in text):
                         # Keep only failing utterances, in /tmp, so a real browser
                         # sample can be replayed through Parakeet during debugging.
@@ -611,6 +630,81 @@ class ParakeetSileroASR(BaseASR):
                     await self.on_transcript_callback(text, True, True, utterance_generation)
             finally:
                 self._utterance_queue.task_done()
+
+    def _schedule_diagnostic_capture(
+        self,
+        queued: _QueuedUtterance,
+        text: str,
+        confidence: Optional[float],
+    ) -> None:
+        if not self.diagnostic_capture_enabled:
+            return
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                self._write_diagnostic_capture_sync,
+                queued,
+                text,
+                confidence,
+            )
+        )
+        self._diagnostic_tasks.add(task)
+        task.add_done_callback(self._on_diagnostic_task_done)
+
+    def _on_diagnostic_task_done(self, task: asyncio.Task) -> None:
+        self._diagnostic_tasks.discard(task)
+        try:
+            task.result()
+        except Exception as exc:
+            logger.warning("ASR diagnostic capture failed: %s", exc)
+
+    def _write_diagnostic_capture_sync(
+        self,
+        queued: _QueuedUtterance,
+        text: str,
+        confidence: Optional[float],
+    ) -> None:
+        capture_dir = self.diagnostic_capture_dir
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        capture_id = f"asr_{time.time_ns()}_g{queued.generation}"
+        wav_path = capture_dir / f"{capture_id}.wav"
+        json_path = capture_dir / f"{capture_id}.json"
+
+        pcm16 = (np.clip(queued.pcm, -1.0, 1.0) * 32767.0).astype(np.int16)
+        with wave.open(str(wav_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(pcm16.tobytes())
+
+        metadata = {
+            "generation": queued.generation,
+            "transcript": text or "",
+            "min_word_confidence": float(confidence) if confidence is not None else None,
+            "sample_rate": self.sample_rate,
+            "audio_ms": round(queued.audio_ms, 3),
+            "voiced_ms": round(queued.voiced_ms, 3),
+            "trailing_silence_ms": round(queued.trailing_silence_ms, 3),
+            "endpoint_reason": queued.endpoint_reason,
+        }
+        json_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        wav_files = sorted(
+            capture_dir.glob("asr_*.wav"),
+            key=lambda path: path.stat().st_mtime_ns,
+        )
+        for old_wav in wav_files[: -self.diagnostic_capture_max_files]:
+            old_json = old_wav.with_suffix(".json")
+            old_wav.unlink(missing_ok=True)
+            old_json.unlink(missing_ok=True)
+
+        logger.info(
+            "Saved ASR diagnostic capture: %s transcript=%r",
+            wav_path,
+            text,
+        )
 
     def invalidate_capture(self, capture_generation: int):
         self._capture_generation = int(capture_generation)
@@ -644,6 +738,9 @@ class ParakeetSileroASR(BaseASR):
             except asyncio.CancelledError:
                 pass
             self._worker_task = None
+
+        if self._diagnostic_tasks:
+            await asyncio.gather(*tuple(self._diagnostic_tasks), return_exceptions=True)
 
         self._vad_session = None
         self._pcm_pending.clear()

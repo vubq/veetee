@@ -41,6 +41,9 @@ class ASRConfig:
     text_correction_timeout_ms: int = 900
     utterance_queue_max: int = 2
     max_utterance_ms: int = 30000
+    diagnostic_capture_enabled: bool = False
+    diagnostic_capture_dir: str = "/tmp/veetee-asr-captures"
+    diagnostic_capture_max_files: int = 20
 
 @dataclass
 class LLMConfig:
@@ -70,6 +73,9 @@ class TTSConfig:
 @dataclass
 class ConversationConfig:
     enabled: bool = False
+    # Legacy/inert compatibility fields. They remain loadable so old configs
+    # do not break, but runtime semantic routing never matches user text
+    # against these lists or uses the literal greeting/goodbye values.
     wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
     greeting_enabled: bool = True
     greeting_text: str = ""
@@ -91,12 +97,12 @@ class ConversationConfig:
 @dataclass
 class LatencyConfig:
     unified_turn_enabled: bool = True
-    first_token_timeout_ms: int = 4000
+    first_token_timeout_ms: int = 6000
     total_turn_timeout_ms: int = 15000
     context_lookup_timeout_ms: int = 10
     # Request budgeting uses a conservative character/token estimate so the
     # realtime path stays bounded without adding a tokenizer dependency.
-    context_max_tokens: int = 16384
+    context_max_tokens: int = 8192
     context_chars_per_token: int = 4
 
 
@@ -128,8 +134,10 @@ class ToolsConfig:
     mcp_device_enabled: bool = False
     max_calls_per_turn: int = 3
     schema_limit: int = 16
-    max_llm_rounds_per_turn: int = 1
-    tool_result_synthesis: bool = False
+    # Normal chat remains one LLM call. A real action receipt may use one
+    # bounded synthesis round so the model can phrase the actual result.
+    max_llm_rounds_per_turn: int = 2
+    tool_result_synthesis: bool = True
 
 
 @dataclass
@@ -155,8 +163,6 @@ class AppConfig:
 
 
 def _validate_conversation_config(config: ConversationConfig) -> None:
-    from core.conversation import normalize_command_text
-
     bool_fields = (
         "enabled",
         "greeting_enabled",
@@ -179,11 +185,8 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
         values = getattr(config, name)
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             raise ValueError(f"conversation.{name} must be a list of strings")
-        normalized = [normalize_command_text(item) for item in values]
-        if any(not item for item in normalized):
+        if any(not item.strip() for item in values):
             raise ValueError(f"conversation.{name} cannot contain empty aliases")
-        if len(set(normalized)) != len(normalized):
-            raise ValueError(f"conversation.{name} contains duplicate aliases after normalization")
 
     for name in ("idle_timeout_seconds", "wake_start_wait_ms", "close_grace_ms", "greeting_pool_size", "ai_control_timeout_ms"):
         value = getattr(config, name)
@@ -199,14 +202,9 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
         raise ValueError("conversation.fixed_response_timeout_seconds must be greater than 0")
     config.fixed_response_timeout_seconds = float(timeout)
 
-    wake = {normalize_command_text(item) for item in config.wake_words}
-    exits = {normalize_command_text(item) for item in config.exit_commands}
-    overlap = sorted(wake & exits)
-    if overlap:
-        raise ValueError(
-            "conversation wake_words and exit_commands overlap after normalization: "
-            + ", ".join(overlap)
-        )
+    # Legacy wake/exit lists are retained as inert compatibility data. They
+    # are not semantic routing tables and therefore do not need matcher-style
+    # normalization/overlap rules.
 
 
 def _validate_app_config(config: AppConfig) -> None:

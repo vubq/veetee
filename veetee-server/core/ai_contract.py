@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+
+CONTRACT_VERSION = "veetee.semantic.v1"
+MEMORY_TOOL_NAME = "veetee_memory"
+CONFIRMATION_TOOL_NAME = "veetee_confirmation_decision"
+
+
+SEMANTIC_SYSTEM_PROMPT = f"""Semantic contract {CONTRACT_VERSION}.
+Hiểu intent từ toàn bộ hội thoại. Mặc định nói tiếng Việt; giữ ngôn ngữ/chữ viết khác khi ngữ cảnh yêu cầu.
+
+Memory: chỉ gọi {MEMORY_TOOL_NAME} khi người dùng thực sự yêu cầu lưu/sửa/quên. Recall, ví dụ, trích dẫn hay phủ định không tạo mutation. Khi quên fact đã có, dùng đúng fact_id/revision; mục tiêu mơ hồ thì hỏi lại.
+
+Confirmation: khi có pending action, chỉ gọi {CONFIRMATION_TOOL_NAME} nếu câu mới thực sự approve/reject/clarify và dùng đúng action_id. Nếu người dùng đổi tham số, gọi lại tool nghiệp vụ với args mới.
+
+Tools: mọi quyết định ngữ nghĩa phải do AI đưa ra từ toàn bộ context, tool schema và trạng thái phiên. Không dùng keyword matcher, exact phrase matcher, regex classifier, danh sách câu mẫu, whitelist hoặc hardcode intent để route yêu cầu. Khi yêu cầu cần tool, gọi ngay trong chính lượt này; không kết thúc bằng câu chờ như "để tôi xem/kiểm tra" mà chưa phát tool call. Nếu câu trả lời cần sự thật về ngày/giờ hiện tại, phải dùng get_current_time trong chính lượt đó và chỉ nêu ngày/giờ hiện tại từ receipt; tuyệt đối không tự đoán, suy ra hay lấy giờ mẫu trong persona/lịch sử. Việc người dùng chỉ nhắc đến một mốc giờ, lịch trình hoặc hỏi giờ khuyến nghị không tự động có nghĩa là cần biết đồng hồ hiện tại: hãy quyết định theo ý nghĩa toàn câu. Khi thiếu dữ kiện để tính một lịch cụ thể, hỏi dữ kiện cần thiết hoặc trả lời theo khoảng thời lượng thay vì bịa mốc giờ hiện tại hay mốc giờ của người dùng. Tool chỉ đọc không cần xác nhận. Với action, không tuyên bố thành công trước receipt thật. Không bịa receipt, quyền, ID, revision hay trạng thái.
+"""
+
+
+def semantic_tools(*, memory_enabled: bool, pending_action: bool) -> List[Dict[str, Any]]:
+    tools: List[Dict[str, Any]] = []
+    if memory_enabled:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": MEMORY_TOOL_NAME,
+                "description": (
+                    "Đề xuất mutation memory khi và chỉ khi người dùng thực sự yêu cầu lưu/sửa/quên. "
+                    "Recall là chat bình thường, không gọi tool này."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["upsert", "forget", "forget_all"]},
+                        "value": {"type": "string", "maxLength": 500},
+                        "fact_id": {"type": "string", "maxLength": 96},
+                        "revision": {"type": "integer", "minimum": 1},
+                        "evidence": {"type": "string", "maxLength": 500},
+                    },
+                    "required": ["action"],
+                    "additionalProperties": False,
+                },
+            },
+        })
+    if pending_action:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": CONFIRMATION_TOOL_NAME,
+                "description": "Quyết định ngữ nghĩa cho pending action hiện tại dựa trên toàn bộ ngữ cảnh.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                        "decision": {"type": "string", "enum": ["approve", "reject", "clarify"]},
+                    },
+                    "required": ["action_id", "decision"],
+                    "additionalProperties": False,
+                },
+            },
+        })
+    return tools

@@ -84,25 +84,6 @@ def _extract_result_data(result: Any) -> Any:
     return result
 
 
-def _render_status(result: ToolResult) -> str:
-    if not result.ok:
-        if result.status == ToolStatus.TIMED_OUT:
-            return "Mình chưa nhận được trạng thái thiết bị kịp thời."
-        return "Mình chưa lấy được trạng thái thiết bị."
-    data = result.data
-    if isinstance(data, dict):
-        return "Trạng thái thiết bị hiện tại: " + json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    return f"Trạng thái thiết bị hiện tại: {data}."
-
-
-def _render_volume(result: ToolResult) -> str:
-    if result.status == ToolStatus.UNKNOWN:
-        return "Mình đã gửi yêu cầu đổi âm lượng nhưng chưa xác minh được trạng thái cuối cùng."
-    if not result.ok:
-        return "Mình chưa đổi được âm lượng của thiết bị."
-    return "Thiết bị đã phản hồi thành công cho yêu cầu đổi âm lượng."
-
-
 class MCPDeviceClient:
     """Stock Xiaozhi MCP client bound to one WebSocket session generation."""
 
@@ -314,8 +295,6 @@ class MCPDeviceClient:
                 logger.warning("Skipping MCP tool with invalid schema: %s", mcp_name)
                 continue
             description = str(item.get("description") or mcp_name)
-            renderer = _render_status if mcp_name == "self.get_device_status" else _render_volume
-
             async def handler(
                 arguments: Dict[str, Any],
                 *,
@@ -332,14 +311,8 @@ class MCPDeviceClient:
                 timeout_ms=safe.timeout_ms + 100,
                 read_only=safe.read_only,
                 idempotent=safe.idempotent,
-                renderer=renderer,
                 concurrency_group="device_mcp",
                 requires_confirmation=(safe.exposed_name == "device_set_volume"),
-                confirmation_prompt=(
-                    "Bạn có muốn đặt âm lượng thiết bị thành {volume}% không?"
-                    if safe.exposed_name == "device_set_volume"
-                    else ""
-                ),
             )
             self.registry.register(descriptor, replace=True)
             self._registered_names.add(safe.exposed_name)

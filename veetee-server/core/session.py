@@ -27,12 +27,15 @@ from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.llm.base import BaseLLM
 from core.providers.tts.base import BaseTTS
 from core.providers.tts.base import open_tts_stream
-from core.conversation import classify_conversation_text
-from core.response_audio_cache import DEFAULT_ERROR_FALLBACK_TEXT, ResponseAudioCache
+from core.response_audio_cache import ResponseAudioCache
 from core.context_builder import ContextBuilder
-from core.intent import PendingAction, PendingActionStore
-from core.memory.models import MemoryApplyResult, MemoryProposal
-from core.memory.policy import MemoryPolicy
+from core.intent import PendingActionStore
+from core.ai_contract import (
+    CONFIRMATION_TOOL_NAME,
+    MEMORY_TOOL_NAME,
+    semantic_tools,
+)
+from core.memory.models import MemoryApplyResult, MemoryProposal, SessionMemoryFact
 from core.memory.retrieval import MemoryRetriever
 from core.memory.store import MemoryStore
 from core.tools.builtin.calculator import calculator_descriptor
@@ -43,6 +46,7 @@ from core.tools.registry import ToolRegistry, ToolValidationError, validate_argu
 from core.tools.results import ToolResult, ToolStatus
 from core.turn_events import (
     CompletedEvent,
+    ConfirmationDecisionEvent,
     ControlEvent,
     FailedEvent,
     MemoryProposalEvent,
@@ -69,7 +73,6 @@ class ClientSession:
         tts_engine: BaseTTS,
         llm_engine: BaseLLM,
         response_audio_cache: Optional[ResponseAudioCache] = None,
-        greeting_pool: Optional[list[str]] = None,
         turn_trace_store: Optional[TurnTraceStore] = None,
     ):
         self.websocket = websocket
@@ -98,7 +101,7 @@ class ClientSession:
         
         self.dialogue = DialogueContext(max_history_turns=10)
         self.turn_runner = TurnRunner(self.llm_engine)
-        self._session_memory: list[str] = []
+        self._session_memory: list[SessionMemoryFact] = []
         self._memory_store: Optional[MemoryStore] = None
         self._memory_owner_id: Optional[str] = None
         retriever = None
@@ -140,14 +143,6 @@ class ClientSession:
         self._pending_wake_text: Optional[str] = None
         self._pending_wake_detected_at: Optional[float] = None
         self._fixed_response_kind: Optional[str] = None
-        self._greeting_pool: list[str] = [
-            str(item).strip()
-            for item in (greeting_pool or [])
-            if str(item or "").strip()
-        ]
-        self._greeting_index = 0
-        self._greeting_prepare_task: Optional[asyncio.Task] = None
-        self._greeting_prewarm_task: Optional[asyncio.Task] = None
         self._closing_reason: Optional[str] = None
         self._conversation_armed = False
         self._activity_revision = 0
@@ -192,6 +187,9 @@ class ClientSession:
                 pre_speech_pad_ms=self.config.asr.pre_speech_pad_ms,
                 utterance_queue_max=self.config.asr.utterance_queue_max,
                 max_utterance_ms=self.config.asr.max_utterance_ms,
+                diagnostic_capture_enabled=self.config.asr.diagnostic_capture_enabled,
+                diagnostic_capture_dir=self.config.asr.diagnostic_capture_dir,
+                diagnostic_capture_max_files=self.config.asr.diagnostic_capture_max_files,
                 metrics_recorder=self.turn_metrics,
                 on_transcript_callback=self._on_asr_transcript,
                 on_speech_started_callback=self._on_speech_started,
@@ -327,6 +325,7 @@ class ClientSession:
             state = data.get("state")
             if state == "start":
                 pending_wake = self._pending_wake_text is not None
+                pending_wake_text = self._pending_wake_text or ""
                 pending_wake_detected_at = self._pending_wake_detected_at
                 self._cancel_pending_wake()
                 self._closing_reason = None
@@ -353,34 +352,17 @@ class ClientSession:
                 # spoken again later.
                 self.processed_transcript = ""
                 self._mark_conversation_activity("listen_start")
-                if pending_wake and self.config.conversation.greeting_enabled:
-                    self._start_greeting_response(metric_started_at=pending_wake_detected_at)
+                if pending_wake and pending_wake_text.strip():
+                    await self._trigger_ai_turn(
+                        pending_wake_text,
+                        check_end_intent=True,
+                        source="wake_detect",
+                    )
             elif state == "detect":
                 user_text = data.get("text", "").strip()
                 logger.info(f"Listen detect received: '{user_text}'")
-                route = classify_conversation_text(
-                    user_text,
-                    self.config.conversation,
-                    source="listen:detect",
-                    allow_wake=True,
-                    allow_exit=True,
-                )
-                if route.kind == "wake":
+                if user_text:
                     await self._handle_wake_detect(user_text)
-                elif route.kind == "exit":
-                    self._mark_conversation_activity("exit_detect")
-                    await self._request_conversation_close("exit_command", user_text=user_text)
-                elif route.kind == "chat":
-                    self._cancel_pending_wake()
-                    self._closing_reason = None
-                    self._abort_turn()
-                    self._invalidate_capture()
-                    self._mark_conversation_activity("detect_chat")
-                    await self._trigger_ai_turn(
-                        user_text,
-                        check_end_intent=True,
-                        source="listen_detect",
-                    )
                 else:
                     self.state = SessionState.LISTENING
             elif state == "stop":
@@ -392,24 +374,14 @@ class ClientSession:
         elif msg_type in ("text", "chat"):
             user_text = data.get("text", "").strip()
             if user_text:
-                route = classify_conversation_text(
-                    user_text,
-                    self.config.conversation,
-                    source=msg_type,
-                    allow_wake=False,
-                    allow_exit=True,
-                )
                 self._cancel_pending_wake()
                 self._closing_reason = None
                 self._mark_conversation_activity(f"{msg_type}_input")
-                if route.kind == "exit":
-                    await self._request_conversation_close("exit_command", user_text=user_text)
-                else:
-                    await self._trigger_ai_turn(
-                        user_text,
-                        check_end_intent=True,
-                        source=msg_type,
-                    )
+                await self._trigger_ai_turn(
+                    user_text,
+                    check_end_intent=True,
+                    source=msg_type,
+                )
 
         elif msg_type == MessageType.ABORT:
             reason = data.get("reason", "")
@@ -548,10 +520,81 @@ class ClientSession:
                     revision,
                     timeout,
                 )
-                await self._request_conversation_close("idle_timeout")
-                return
+                ended = await self._evaluate_idle_semantics(revision, timeout)
+                if ended:
+                    return
         except asyncio.CancelledError:
             pass
+
+    async def _evaluate_idle_semantics(self, revision: int, timeout: float) -> bool:
+        """Ask the same LLM contract whether one inactivity epoch ends the chat.
+
+        This is a system lifecycle event, not a synthetic user command. The
+        model gets one bounded inference. Continue produces no unsolicited
+        speech; end may use the model's own generated sentence as the goodbye.
+        """
+        messages = list(self.dialogue.get_messages_for_llm())
+        messages.append({
+            "role": "system",
+            "content": (
+                "Sự kiện hệ thống: hội thoại không có hoạt động trong "
+                f"{timeout:.0f} giây. Đây không phải lời người dùng. "
+                "Hãy quyết định trong chính response này liệu nên kết thúc phiên logic hay tiếp tục chờ. "
+                "Dùng [end] nếu ngữ cảnh cho thấy phiên đã tự nhiên kết thúc; dùng [continue] nếu nên tiếp tục chờ. "
+                "Nếu [continue], nội dung nói sẽ không được phát. Nếu [end], hãy tạo một câu chào ngắn tự nhiên."
+            ),
+        })
+        lifecycle = "continue"
+        speech: list[str] = []
+        try:
+            async for event in self.turn_runner.stream(
+                messages,
+                tools=[],
+                detect_end_intent=True,
+                tool_choice="none",
+                first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
+                total_timeout_ms=min(
+                    self.config.latency.total_turn_timeout_ms,
+                    max(100, self.config.conversation.ai_control_timeout_ms),
+                ),
+            ):
+                if revision != self._activity_revision or not self.is_active:
+                    return False
+                if isinstance(event, ControlEvent):
+                    lifecycle = event.lifecycle
+                elif isinstance(event, SpeechSegmentEvent):
+                    speech.append(event.text)
+                elif isinstance(event, FailedEvent):
+                    raise RuntimeError(event.error)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("idle semantic evaluation failed session=%s error=%s", self.session_id, exc)
+            lifecycle = "continue"
+
+        if revision != self._activity_revision or not self.is_active:
+            return False
+        if lifecycle == "end":
+            self._closing_reason = "idle_timeout"
+            text = " ".join(part.strip() for part in speech if part.strip()).strip()
+            if text and self.config.conversation.goodbye_enabled:
+                self._start_fixed_response(
+                    text,
+                    kind="idle_goodbye",
+                    close_after=True,
+                    closing_reason="idle_timeout",
+                )
+            else:
+                await self._close_transport_and_session("idle_timeout")
+            return True
+
+        # One model decision per inactivity epoch. A continue decision starts a
+        # fresh epoch so the watchdog cannot spin and repeatedly call the LLM.
+        self._activity_revision += 1
+        self._last_activity_monotonic = time.monotonic()
+        self._idle_not_before = self._last_activity_monotonic
+        logger.info("conversation_idle_continue session=%s revision=%d", self.session_id, self._activity_revision)
+        return False
 
     async def _handle_wake_detect(self, user_text: str):
         if self._pending_wake_text is not None or self._fixed_response_kind == "greeting":
@@ -572,9 +615,6 @@ class ClientSession:
         self.processed_transcript = ""
         self._mark_conversation_activity("wake_detect")
 
-        if not self.config.conversation.greeting_enabled:
-            return
-
         self._wake_generation += 1
         wake_generation = self._wake_generation
         self._pending_wake_text = user_text
@@ -592,200 +632,18 @@ class ClientSession:
                 or self._pending_wake_text is None
             ):
                 return
-            detected_at = self._pending_wake_detected_at
+            user_text = self._pending_wake_text
             self._pending_wake_task = None
             self._pending_wake_text = None
             self._pending_wake_detected_at = None
-            self._start_greeting_response(metric_started_at=detected_at)
+            if user_text and user_text.strip():
+                await self._trigger_ai_turn(
+                    user_text,
+                    check_end_intent=True,
+                    source="listen_detect",
+                )
         except asyncio.CancelledError:
             pass
-
-    def refresh_ai_greetings(self):
-        if not self.config.conversation.enabled or not self.config.conversation.greeting_enabled:
-            return
-        task = self._greeting_prepare_task
-        if task and not task.done():
-            task.cancel()
-        prewarm_task = self._greeting_prewarm_task
-        if prewarm_task and not prewarm_task.done():
-            prewarm_task.cancel()
-        self._greeting_prewarm_task = None
-        self._greeting_pool = []
-        self._greeting_index = 0
-        if self.config.conversation.greeting_ai_enabled:
-            self._greeting_prepare_task = asyncio.create_task(self._prepare_ai_greetings())
-
-    def _ensure_greeting_prepare_task(self) -> Optional[asyncio.Task]:
-        if not self.config.conversation.greeting_ai_enabled:
-            return None
-        task = self._greeting_prepare_task
-        if task is None or (task.done() and not self._greeting_pool):
-            task = asyncio.create_task(self._prepare_ai_greetings())
-            self._greeting_prepare_task = task
-        return task
-
-    async def _prepare_ai_greetings(self):
-        generator = getattr(self.llm_engine, "generate_greetings", None)
-        if generator is None:
-            return
-        timeout = max(0.1, self.config.conversation.ai_control_timeout_ms / 1000.0)
-        try:
-            generated = await asyncio.wait_for(
-                generator(self.config.conversation.greeting_pool_size),
-                timeout=timeout,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("AI greeting generation failed: %s", exc)
-            return
-
-        greetings = []
-        for item in generated or []:
-            cleaned = str(item or "").strip()
-            if cleaned and cleaned not in greetings:
-                greetings.append(cleaned)
-        if not greetings:
-            logger.warning("AI greeting generation returned no usable phrases")
-            return
-
-        self._greeting_pool = greetings[: self.config.conversation.greeting_pool_size]
-        self._greeting_index = 0
-        logger.info("AI greeting pool ready session=%s count=%d", self.session_id, len(self._greeting_pool))
-        if self.config.conversation.audio_cache_enabled and self.response_audio_cache is not None:
-            self._greeting_prewarm_task = asyncio.create_task(
-                self.response_audio_cache.prewarm(
-                    self._greeting_pool,
-                    self.config.conversation.fixed_response_timeout_seconds,
-                )
-            )
-
-    def _next_greeting_text(self) -> str:
-        if self._greeting_pool:
-            text = self._greeting_pool[self._greeting_index % len(self._greeting_pool)]
-            self._greeting_index += 1
-            return text
-        return self.config.conversation.greeting_text.strip()
-
-    def _start_greeting_response(self, *, metric_started_at: Optional[float] = None):
-        self._abort_turn()
-        cancel_event = asyncio.Event()
-        turn_generation = self._turn_generation
-        self.current_cancel_event = cancel_event
-        self._fixed_response_kind = "greeting"
-        self.current_turn_task = asyncio.create_task(
-            self._process_ai_greeting_response(
-                cancel_event,
-                turn_generation,
-                metric_started_at=metric_started_at,
-            )
-        )
-
-    async def _process_ai_greeting_response(
-        self,
-        cancel_event: asyncio.Event,
-        turn_generation: int,
-        *,
-        metric_started_at: Optional[float],
-    ):
-        try:
-            if not self._greeting_pool and self.config.conversation.greeting_ai_enabled:
-                prepare_task = self._ensure_greeting_prepare_task()
-                if prepare_task is not None:
-                    timeout = max(0.1, self.config.conversation.ai_control_timeout_ms / 1000.0)
-                    try:
-                        await asyncio.wait_for(asyncio.shield(prepare_task), timeout=timeout)
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "AI greeting generation timed out after %.0f ms",
-                            timeout * 1000,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.warning("AI greeting preparation failed: %s", exc)
-
-            if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                return
-            text = self._next_greeting_text()
-            if not text:
-                logger.info("Skipping greeting because AI generation failed and no fallback is configured")
-                self.state = (
-                    SessionState.IDLE
-                    if self.listening_mode == "manual"
-                    else SessionState.LISTENING
-                )
-                return
-            await self._process_fixed_response(
-                text,
-                cancel_event,
-                turn_generation,
-                kind="greeting",
-                close_after=False,
-                closing_reason=None,
-                metric_started_at=metric_started_at,
-            )
-        finally:
-            if self.current_turn_task is asyncio.current_task():
-                self.current_turn_task = None
-                self.current_cancel_event = None
-                self._fixed_response_kind = None
-
-    def _start_ai_goodbye_response(self, reason: str, user_text: str = ""):
-        self._abort_turn()
-        cancel_event = asyncio.Event()
-        turn_generation = self._turn_generation
-        self.current_cancel_event = cancel_event
-        self._fixed_response_kind = "goodbye"
-        self.current_turn_task = asyncio.create_task(
-            self._process_ai_goodbye_response(
-                reason,
-                user_text,
-                cancel_event,
-                turn_generation,
-            )
-        )
-
-    async def _process_ai_goodbye_response(
-        self,
-        reason: str,
-        user_text: str,
-        cancel_event: asyncio.Event,
-        turn_generation: int,
-    ):
-        text = ""
-        if self.config.conversation.goodbye_ai_enabled:
-            generator = getattr(self.llm_engine, "generate_goodbye", None)
-            if generator is not None:
-                timeout = max(0.1, self.config.conversation.ai_control_timeout_ms / 1000.0)
-                try:
-                    text = await asyncio.wait_for(
-                        generator(
-                            self.dialogue.get_messages_for_llm(),
-                            reason=reason,
-                            user_text=user_text,
-                        ),
-                        timeout=timeout,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("AI goodbye generation failed: %s", exc)
-        text = str(text or "").strip() or self.config.conversation.goodbye_text.strip()
-        if cancel_event.is_set() or not self._owns_turn(turn_generation):
-            return
-        if not text:
-            await self._close_transport_and_session(reason)
-            return
-        await self._process_live_fixed_response(
-            text,
-            cancel_event,
-            turn_generation,
-            kind="goodbye",
-            close_after=True,
-            closing_reason=reason,
-            metric_started_at=None,
-        )
 
     def _start_fixed_response(
         self,
@@ -948,11 +806,11 @@ class ClientSession:
         cancel_event: asyncio.Event,
         turn_generation: int,
     ) -> bool:
-        """Send a pre-generated Vietnamese error clip without invoking TTS."""
+        """Send the startup AI-generated recovery clip without invoking LLM/TTS."""
         if self.response_audio_cache is None:
             return False
         try:
-            cached = await self.response_audio_cache.get_cached(DEFAULT_ERROR_FALLBACK_TEXT)
+            recovery = await self.response_audio_cache.get_recovery()
         except (KeyError, RuntimeError) as exc:
             logger.info("cached_error_fallback_unavailable session=%s reason=%s", self.session_id, exc)
             return False
@@ -960,7 +818,7 @@ class ClientSession:
             logger.warning("cached_error_fallback_lookup_failed session=%s error=%s", self.session_id, exc)
             return False
 
-        frames = tuple(cached.frames or ())
+        frames = tuple(recovery.frames or ())
         if not frames or cancel_event.is_set() or not self._owns_turn(turn_generation):
             return False
 
@@ -975,7 +833,7 @@ class ClientSession:
                 return False
             sent_start = True
             if not await self.send_text(
-                make_tts_message(self.session_id, "sentence_start", DEFAULT_ERROR_FALLBACK_TEXT)
+                make_tts_message(self.session_id, "sentence_start", recovery.text)
             ):
                 return False
             self.state = SessionState.SPEAKING
@@ -996,7 +854,11 @@ class ClientSession:
             if sent_audio and self._owns_turn(turn_generation) and not cancel_event.is_set():
                 await self.send_text(make_tts_message(self.session_id, "stop"))
                 self._mark_response_complete(self._playback_guard_until)
-                mark_current("error_fallback_sent", cached=True)
+                mark_current(
+                    "error_fallback_sent",
+                    cached=True,
+                    provenance=recovery.provenance,
+                )
                 return True
             return False
         except Exception as exc:
@@ -1146,29 +1008,6 @@ class ClientSession:
                 self.current_cancel_event = None
                 self._fixed_response_kind = None
 
-    async def _request_conversation_close(self, reason: str, *, user_text: str = ""):
-        if not self.config.conversation.enabled or not self.is_active:
-            return
-        if self._closing_reason is not None:
-            return
-        self._cancel_pending_wake()
-        was_speaking = self.state == SessionState.SPEAKING
-        self._abort_turn()
-        self._invalidate_capture()
-        self.final_transcript_parts.clear()
-        self._speech_active = False
-        self._discard_asr_until_speech_final = False
-        self.processed_transcript = ""
-        self._closing_reason = reason
-        logger.info("conversation_close_requested session=%s reason=%s", self.session_id, reason)
-        if was_speaking:
-            await self.send_text(make_tts_message(self.session_id, "stop"))
-
-        if self.config.conversation.goodbye_enabled:
-            self._start_ai_goodbye_response(reason, user_text)
-        else:
-            self.current_turn_task = asyncio.create_task(self._close_transport_and_session(reason))
-
     async def _close_transport_and_session(self, reason: str):
         logger.info("conversation_close_commit session=%s reason=%s", self.session_id, reason)
         if reason == "idle_timeout":
@@ -1312,17 +1151,7 @@ class ClientSession:
                 final_stage_started = time.perf_counter()
                 raw_final_text = " ".join(self.final_transcript_parts).strip() or transcript.strip()
                 self.final_transcript_parts.clear()
-                raw_route = classify_conversation_text(
-                    raw_final_text,
-                    self.config.conversation,
-                    source="asr_final",
-                    allow_wake=False,
-                    allow_exit=True,
-                )
-                if raw_route.kind == "exit":
-                    final_text = raw_final_text
-                else:
-                    final_text = await self._maybe_correct_asr_transcript(raw_final_text)
+                final_text = await self._maybe_correct_asr_transcript(raw_final_text)
                 logger.info(
                     "ASR final stage completed in %.0f ms after speech-final callback (correction included when enabled)",
                     (time.perf_counter() - final_stage_started) * 1000,
@@ -1338,10 +1167,7 @@ class ClientSession:
                 if self._speech_active or final_text:
                     await self.send_text(make_vad_message(self.session_id, "speech_ended"))
                 self._speech_active = False
-                if raw_route.kind == "exit":
-                    self._mark_conversation_activity("asr_exit")
-                    await self._request_conversation_close("exit_command", user_text=raw_final_text)
-                elif final_text:
+                if final_text:
                     self._mark_conversation_activity("asr_final")
                     self.turn_metrics.record_capture_event(
                         self._capture_generation,
@@ -1400,35 +1226,6 @@ class ClientSession:
         if not transcript.strip():
             return
 
-        confirmation, pending = self.pending_actions.consume_confirmation(
-            transcript,
-            session_id=self.session_id,
-            owner_scope=self._confirmation_owner_scope(),
-        )
-        if pending is not None and confirmation is not None:
-            self._cancel_pending_wake()
-            self._closing_reason = None
-            self._mark_conversation_activity("tool_confirmation")
-            self.processed_transcript = transcript
-            self._abort_turn()
-            turn_cancel_event = asyncio.Event()
-            turn_generation = self._turn_generation
-            self.current_cancel_event = turn_cancel_event
-            self.current_turn_task = asyncio.create_task(
-                self._process_pending_confirmation(
-                    transcript,
-                    confirmation,
-                    pending,
-                    turn_cancel_event,
-                    turn_generation,
-                )
-            )
-            return
-        if pending is not None:
-            # Any non-confirmation starts a new intent. Drop the old action so
-            # a later standalone "ừ" cannot authorize stale arguments.
-            self.pending_actions.clear()
-
         if transcript == self.processed_transcript:
             return
 
@@ -1459,62 +1256,6 @@ class ClientSession:
             return f"owner:{self._memory_owner_id}"
         return f"session:{self.session_id}"
 
-    @staticmethod
-    def _render_confirmation_prompt(descriptor, arguments: Dict[str, Any]) -> str:
-        template = str(getattr(descriptor, "confirmation_prompt", "") or "").strip()
-        if template:
-            try:
-                return template.format(**arguments)
-            except (KeyError, IndexError, ValueError):
-                logger.warning("Invalid confirmation prompt template for tool=%s", descriptor.name)
-        return "Bạn có muốn xác nhận thao tác này không?"
-
-    async def _process_pending_confirmation(
-        self,
-        user_text: str,
-        confirmed: bool,
-        pending: PendingAction,
-        cancel_event: asyncio.Event,
-        turn_generation: int,
-    ) -> None:
-        if not self._owns_turn(turn_generation):
-            return
-        self.state = SessionState.THINKING
-        self.dialogue.add_user_message(user_text)
-
-        if confirmed:
-            descriptor = self.tool_registry.get(pending.tool_name)
-            if descriptor is None:
-                result = ToolResult(
-                    pending.action_id,
-                    pending.tool_name,
-                    ToolStatus.FAILED,
-                    error="tool is no longer available",
-                )
-            else:
-                result = await self.tool_executor.execute(
-                    pending.action_id,
-                    pending.tool_name,
-                    pending.arguments,
-                    turn_id=pending.turn_id,
-                    cancel_event=cancel_event,
-                )
-            response = self.tool_executor.render(descriptor, result).strip()
-        else:
-            response = "Đã hủy thao tác đó."
-
-        if cancel_event.is_set() or not self._owns_turn(turn_generation):
-            return
-        await self._process_fixed_response(
-            response or "Mình chưa thực hiện được thao tác đó.",
-            cancel_event,
-            turn_generation,
-            kind="tool_confirmation_result",
-            close_after=False,
-            closing_reason=None,
-            metric_started_at=None,
-        )
-
     async def _apply_memory_proposal(
         self,
         proposal: Optional[MemoryProposal],
@@ -1524,16 +1265,99 @@ class ClientSession:
         if proposal is None or not self.config.memory.enabled:
             return MemoryApplyResult("ignored")
 
-        action = str(proposal.action or "").strip()
+        action = str(proposal.action or "").strip().lower()
         value = " ".join(str(proposal.value or "").split())
-        key = str(proposal.key or "").strip()
+        fact_id = str(proposal.fact_id or "").strip()
+        revision = proposal.revision
         evidence = " ".join(str(proposal.evidence or "").split())[:500]
 
+        if action not in {"upsert", "forget", "forget_all"}:
+            return MemoryApplyResult("invalid", scope="session")
+
+        def find_session_fact(target_id: str) -> tuple[int, Optional[SessionMemoryFact]]:
+            for index, fact in enumerate(self._session_memory):
+                if fact.id == target_id:
+                    return index, fact
+            return -1, None
+
+        def parse_durable_id(target_id: str) -> Optional[int]:
+            if not target_id.startswith("durable:"):
+                return None
+            try:
+                parsed = int(target_id.split(":", 1)[1])
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0 else None
+
         if action == "upsert" and value:
-            # Durable memory is the source of truth when configured. Reflect
-            # the change in session memory only after the DB transaction
-            # commits successfully, so a failed write cannot look saved.
-            if self._memory_store is not None and self._memory_owner_id and key:
+            if fact_id:
+                session_index, session_fact = find_session_fact(fact_id)
+                if session_fact is not None:
+                    if revision is None or int(revision) != session_fact.revision:
+                        return MemoryApplyResult(
+                            "revision_conflict",
+                            fact_id=fact_id,
+                            revision=session_fact.revision,
+                            scope="session",
+                        )
+                    updated = SessionMemoryFact(
+                        id=session_fact.id,
+                        value=value,
+                        revision=session_fact.revision + 1,
+                        evidence=evidence,
+                    )
+                    self._session_memory[session_index] = updated
+                    return MemoryApplyResult(
+                        "applied",
+                        changed=updated.value != session_fact.value,
+                        fact_id=updated.id,
+                        revision=updated.revision,
+                        scope="session",
+                    )
+
+                durable_id = parse_durable_id(fact_id)
+                if durable_id is None or self._memory_store is None or not self._memory_owner_id:
+                    return MemoryApplyResult(
+                        "not_found",
+                        fact_id=fact_id,
+                        revision=revision,
+                        scope="personal" if fact_id.startswith("durable:") else "session",
+                    )
+                if revision is None:
+                    return MemoryApplyResult(
+                        "revision_required",
+                        fact_id=fact_id,
+                        scope="personal",
+                    )
+                updated = await self._memory_store.update_by_id(
+                    owner_id=self._memory_owner_id,
+                    scope="personal",
+                    fact_id=durable_id,
+                    expected_revision=int(revision),
+                    value=value,
+                    source_turn_id=turn_id,
+                    evidence=evidence,
+                )
+                if updated is None:
+                    return MemoryApplyResult(
+                        "revision_conflict",
+                        fact_id=fact_id,
+                        revision=revision,
+                        scope="personal",
+                    )
+                return MemoryApplyResult(
+                    "applied",
+                    changed=True,
+                    fact_id=f"durable:{updated.id}",
+                    revision=updated.revision,
+                    scope="personal",
+                )
+
+            # A new memory has no semantic key supplied by the model. Generate
+            # an opaque technical identity; future edits/deletes must target
+            # the exact ID + revision exposed in context.
+            if self._memory_store is not None and self._memory_owner_id:
+                key = f"fact_{uuid.uuid4().hex}"
                 await self._memory_store.upsert(
                     owner_id=self._memory_owner_id,
                     scope="personal",
@@ -1543,15 +1367,37 @@ class ClientSession:
                     source_turn_id=turn_id,
                     evidence=evidence,
                 )
-            changed = value not in self._session_memory
-            if changed:
-                self._session_memory.append(value)
-                max_items = max(6, self.config.memory.top_k * 2)
-                if len(self._session_memory) > max_items:
-                    del self._session_memory[:-max_items]
+                stored = await self._memory_store.get_active_by_key(
+                    owner_id=self._memory_owner_id,
+                    scope="personal",
+                    key=key,
+                )
+                if stored is None:
+                    return MemoryApplyResult("failed", scope="personal")
+                return MemoryApplyResult(
+                    "applied",
+                    changed=True,
+                    fact_id=f"durable:{stored.id}",
+                    revision=stored.revision,
+                    scope="personal",
+                )
+
+            new_fact = SessionMemoryFact(
+                id=f"session:{uuid.uuid4().hex}",
+                value=value,
+                revision=1,
+                evidence=evidence,
+            )
+            self._session_memory.append(new_fact)
+            max_items = max(6, self.config.memory.top_k * 2)
+            if len(self._session_memory) > max_items:
+                del self._session_memory[:-max_items]
             return MemoryApplyResult(
                 "applied",
-                changed=changed or self._memory_store is not None,
+                changed=True,
+                fact_id=new_fact.id,
+                revision=new_fact.revision,
+                scope="session",
             )
 
         if action == "forget_all":
@@ -1567,39 +1413,55 @@ class ClientSession:
             return MemoryApplyResult(
                 "applied" if changed else "not_found",
                 changed=changed,
+                scope="personal" if durable_changed else "session",
             )
 
-        if action == "forget" and value:
-            needle = value.casefold()
-            durable_changed = 0
-            if self._memory_store is not None and self._memory_owner_id:
-                facts = await self._memory_store.list_active(
-                    owner_id=self._memory_owner_id,
-                    scope="personal",
-                    limit=100,
+        if action == "forget":
+            if not fact_id or revision is None:
+                return MemoryApplyResult(
+                    "target_required",
+                    fact_id=fact_id,
+                    revision=revision,
+                    scope="session",
                 )
-                keys = [
-                    fact.key
-                    for fact in facts
-                    if needle in fact.value.casefold() or fact.value.casefold() in needle
-                ]
-                if keys:
-                    durable_changed = await self._memory_store.tombstone(
-                        owner_id=self._memory_owner_id,
-                        scope="personal",
-                        keys=keys,
+            session_index, session_fact = find_session_fact(fact_id)
+            if session_fact is not None:
+                if int(revision) != session_fact.revision:
+                    return MemoryApplyResult(
+                        "revision_conflict",
+                        fact_id=fact_id,
+                        revision=session_fact.revision,
+                        scope="session",
                     )
-            previous_session_size = len(self._session_memory)
-            self._session_memory[:] = [
-                item
-                for item in self._session_memory
-                if needle not in item.casefold() and item.casefold() not in needle
-            ]
-            session_changed = len(self._session_memory) != previous_session_size
-            changed = session_changed or durable_changed > 0
+                del self._session_memory[session_index]
+                return MemoryApplyResult(
+                    "applied",
+                    changed=True,
+                    fact_id=fact_id,
+                    revision=session_fact.revision + 1,
+                    scope="session",
+                )
+
+            durable_id = parse_durable_id(fact_id)
+            if durable_id is None or self._memory_store is None or not self._memory_owner_id:
+                return MemoryApplyResult(
+                    "not_found",
+                    fact_id=fact_id,
+                    revision=revision,
+                    scope="personal" if fact_id.startswith("durable:") else "session",
+                )
+            changed = await self._memory_store.tombstone_by_id(
+                owner_id=self._memory_owner_id,
+                scope="personal",
+                fact_id=durable_id,
+                expected_revision=int(revision),
+            )
             return MemoryApplyResult(
-                "applied" if changed else "not_found",
+                "applied" if changed else "revision_conflict",
                 changed=changed,
+                fact_id=fact_id,
+                revision=int(revision) + (1 if changed else 0),
+                scope="personal",
             )
 
         return MemoryApplyResult("ignored")
@@ -1638,29 +1500,56 @@ class ClientSession:
         active_segment_had_audio = False
         tool_calls_seen = 0
         llm_rounds = 1
-        tool_round_records: list[dict] = []
+        action_round_records: list[dict] = []
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         queue_done = object()
         producer_errors: list[BaseException] = []
 
+        generation_deadline = (
+            time.monotonic() + self.config.latency.total_turn_timeout_ms / 1000.0
+        )
+
+        def remaining_generation_timeout_ms() -> int:
+            remaining = generation_deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("LLM total turn timeout")
+            return max(1, int(remaining * 1000.0))
+
+        def render_action_receipt_fallback(records: list[dict]) -> str:
+            for record in records:
+                receipt = record.get("receipt") or {}
+                status = str(receipt.get("status") or "")
+                name = str(record.get("name") or "")
+                data = receipt.get("data")
+                if status == "confirmation_required":
+                    return "Mình cần bạn xác nhận trước nhé."
+                if status == "succeeded" and isinstance(data, dict):
+                    if name == "calculate" and "result" in data:
+                        return f"Kết quả là {data['result']}."
+                    if name == "get_current_time" and data.get("time"):
+                        if data.get("date"):
+                            raw_date = str(data["date"])
+                            parts = raw_date.split("-")
+                            formatted_date = (
+                                f"{parts[2]}/{parts[1]}/{parts[0]}"
+                                if len(parts) == 3
+                                else raw_date
+                            )
+                            return f"Bây giờ là {str(data['time'])[:5]}, ngày {formatted_date}."
+                        return f"Bây giờ là {str(data['time'])[:5]}."
+
+            statuses = {
+                str((record.get("receipt") or {}).get("status") or "")
+                for record in records
+            }
+            if statuses & {"failed", "timed_out", "cancelled", "unknown"}:
+                return "Mình chưa thực hiện được thao tác đó."
+            if "succeeded" in statuses:
+                return "Đã xong."
+            return "Mình đã xử lý yêu cầu."
+
         try:
             self.dialogue.add_user_message(user_text)
-
-            explicit_proposal = MemoryPolicy.explicit_proposal(user_text)
-            if explicit_proposal is not None:
-                mark_current("memory_write_start", action=explicit_proposal.action)
-                applied = await self._apply_memory_proposal(
-                    explicit_proposal,
-                    turn_id=trace.turn_id,
-                )
-                mark_current(
-                    "memory_write_end",
-                    action=explicit_proposal.action,
-                    applied=applied.applied,
-                    status=applied.status,
-                    changed=applied.changed,
-                    durable=bool(self._memory_owner_id),
-                )
 
             mark_current("context_lookup_start")
             messages = await self.context_builder.build(
@@ -1669,10 +1558,38 @@ class ClientSession:
                 owner_id=self._memory_owner_id,
                 session_memory=self._session_memory,
             )
-            tools = (
+            business_tools = (
                 self.tool_registry.openai_tools(limit=self.config.tools.schema_limit)
                 if self.config.tools.enabled and self.config.tools.native_enabled
                 else []
+            )
+            pending_action = self.pending_actions.peek()
+            if pending_action is not None:
+                messages.insert(-1 if messages and messages[-1].get("role") == "user" else len(messages), {
+                    "role": "system",
+                    "content": (
+                        "Pending action hiện tại là dữ liệu trạng thái do server quản lý. "
+                        "Hãy hiểu câu người dùng theo ngữ cảnh và dùng veetee_confirmation_decision "
+                        "với đúng action_id nếu họ approve/reject/clarify. Nếu họ đổi tham số, gọi tool nghiệp vụ mới.\n"
+                        + json.dumps(
+                            {
+                                "action_id": pending_action.action_id,
+                                "tool_name": pending_action.tool_name,
+                                "arguments": pending_action.arguments,
+                                "expires_in_ms": max(
+                                    0,
+                                    int((pending_action.expires_at - time.monotonic()) * 1000),
+                                ),
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                            separators=(",", ":"),
+                        )
+                    ),
+                })
+            tools = business_tools + semantic_tools(
+                memory_enabled=self.config.memory.enabled,
+                pending_action=pending_action is not None,
             )
             detect_end_intent = bool(
                 check_end_intent
@@ -1686,20 +1603,13 @@ class ClientSession:
                 detect_end_intent=detect_end_intent,
             )
             mark_current("context_lookup_end", message_count=len(messages))
-            generation_deadline = (
-                time.monotonic() + self.config.latency.total_turn_timeout_ms / 1000.0
-            )
-
-            def remaining_generation_timeout_ms() -> int:
-                remaining = generation_deadline - time.monotonic()
-                if remaining <= 0:
-                    raise asyncio.TimeoutError("LLM total turn timeout")
-                return max(1, int(remaining * 1000.0))
+            remaining_generation_timeout_ms()
 
             stream = self.turn_runner.stream(
                 messages,
                 tools=tools,
                 detect_end_intent=detect_end_intent,
+                tool_choice=None,
                 first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
                 total_timeout_ms=remaining_generation_timeout_ms(),
             )
@@ -1838,8 +1748,9 @@ class ClientSession:
                 if isinstance(event, MemoryProposalEvent):
                     proposal = MemoryProposal(
                         action=event.action,
-                        key=event.key,
                         value=event.value,
+                        fact_id=event.fact_id,
+                        revision=event.revision,
                         evidence=event.evidence,
                     )
                     mark_current("memory_write_start", action=event.action)
@@ -1855,6 +1766,101 @@ class ClientSession:
                         changed=applied.changed,
                         durable=bool(self._memory_owner_id),
                     )
+                    action_round_records.append({
+                        "call_id": event.call_id,
+                        "name": MEMORY_TOOL_NAME,
+                        "arguments": {
+                            "action": event.action,
+                            "value": event.value,
+                            "fact_id": event.fact_id,
+                            "revision": event.revision,
+                            "evidence": event.evidence,
+                        },
+                        "receipt": {
+                            "status": applied.status,
+                            "changed": applied.changed,
+                            "fact_id": applied.fact_id,
+                            "revision": applied.revision,
+                            "scope": applied.scope,
+                        },
+                    })
+                    continue
+
+                if isinstance(event, ConfirmationDecisionEvent):
+                    resolution, pending = self.pending_actions.resolve(
+                        action_id=event.action_id,
+                        decision=event.decision,
+                        session_id=self.session_id,
+                        owner_scope=self._confirmation_owner_scope(),
+                    )
+                    receipt: Dict[str, Any] = {
+                        "status": resolution,
+                        "action_id": event.action_id,
+                    }
+                    if resolution == "approve" and pending is not None:
+                        descriptor = self.tool_registry.get(pending.tool_name)
+                        if descriptor is None:
+                            result = ToolResult(
+                                pending.action_id,
+                                pending.tool_name,
+                                ToolStatus.FAILED,
+                                error="tool is no longer available",
+                            )
+                        else:
+                            try:
+                                validate_arguments(descriptor.input_schema, pending.arguments)
+                            except ToolValidationError as exc:
+                                result = ToolResult(
+                                    pending.action_id,
+                                    pending.tool_name,
+                                    ToolStatus.FAILED,
+                                    error=str(exc),
+                                )
+                            else:
+                                mark_current("tool_execute_start", tool=pending.tool_name, confirmed=True)
+                                result = await self.tool_executor.execute(
+                                    pending.action_id,
+                                    pending.tool_name,
+                                    pending.arguments,
+                                    turn_id=pending.turn_id,
+                                    cancel_event=cancel_event,
+                                )
+                                mark_current(
+                                    "tool_execute_end",
+                                    tool=pending.tool_name,
+                                    status=result.status.value,
+                                    confirmed=True,
+                                )
+                        receipt.update({
+                            "tool_name": pending.tool_name,
+                            "arguments": pending.arguments,
+                            "execution": {
+                                "status": result.status.value,
+                                "data": result.data,
+                                "error": result.error,
+                            },
+                        })
+                    elif pending is not None:
+                        receipt.update({
+                            "tool_name": pending.tool_name,
+                            "arguments": pending.arguments,
+                            "pending_retained": resolution == "clarify",
+                        })
+                    mark_current(
+                        "confirmation_decision_resolved",
+                        action_id=event.action_id,
+                        decision=event.decision,
+                        status=resolution,
+                    )
+                    action_round_records.append({
+                        "call_id": event.call_id,
+                        "name": CONFIRMATION_TOOL_NAME,
+                        "arguments": {
+                            "action_id": event.action_id,
+                            "decision": event.decision,
+                        },
+                        "receipt": receipt,
+                    })
                     continue
 
                 if isinstance(event, ToolCallReadyEvent):
@@ -1867,8 +1873,11 @@ class ClientSession:
                             ToolStatus.FAILED,
                             error="turn tool limit exceeded",
                         )
-                        descriptor = self.tool_registry.get(event.name)
-                        rendered = "Mình chưa thể thực hiện thêm thao tác trong lượt này."
+                        receipt = {
+                            "status": result.status.value,
+                            "data": result.data,
+                            "error": result.error,
+                        }
                     else:
                         descriptor = self.tool_registry.get(event.name)
                         if descriptor is None:
@@ -1878,7 +1887,11 @@ class ClientSession:
                                 ToolStatus.FAILED,
                                 error="unknown tool",
                             )
-                            rendered = self.tool_executor.render(descriptor, result).strip()
+                            receipt = {
+                                "status": result.status.value,
+                                "data": result.data,
+                                "error": result.error,
+                            }
                         else:
                             try:
                                 validate_arguments(descriptor.input_schema, event.arguments)
@@ -1889,13 +1902,17 @@ class ClientSession:
                                     ToolStatus.FAILED,
                                     error=str(exc),
                                 )
-                                rendered = self.tool_executor.render(descriptor, result).strip()
+                                receipt = {
+                                    "status": result.status.value,
+                                    "data": result.data,
+                                    "error": result.error,
+                                }
                             else:
                                 requires_confirmation = (
                                     descriptor.requires_confirmation and not descriptor.read_only
                                 )
                                 if requires_confirmation:
-                                    self.pending_actions.prepare(
+                                    pending = self.pending_actions.prepare(
                                         action_id=event.call_id,
                                         turn_id=trace.turn_id,
                                         tool_name=event.name,
@@ -1909,12 +1926,22 @@ class ClientSession:
                                         tool=event.name,
                                         action_id=event.call_id,
                                     )
-                                    rendered = self._render_confirmation_prompt(
-                                        descriptor,
-                                        event.arguments,
-                                    )
-                                    reply_segments.append(rendered)
-                                    await speak_segment(rendered, current_emotion)
+                                    receipt = {
+                                        "status": "confirmation_required",
+                                        "action_id": pending.action_id,
+                                        "tool_name": pending.tool_name,
+                                        "arguments": pending.arguments,
+                                        "expires_in_ms": max(
+                                            0,
+                                            int((pending.expires_at - time.monotonic()) * 1000),
+                                        ),
+                                    }
+                                    action_round_records.append({
+                                        "call_id": event.call_id,
+                                        "name": event.name,
+                                        "arguments": event.arguments,
+                                        "receipt": receipt,
+                                    })
                                     continue
 
                                 mark_current("tool_execute_start", tool=event.name)
@@ -1930,18 +1957,17 @@ class ClientSession:
                                     tool=event.name,
                                     status=result.status.value,
                                 )
-                                rendered = self.tool_executor.render(descriptor, result).strip()
-                    tool_round_records.append({
-                        "call": event,
-                        "result": result,
-                        "rendered": rendered,
+                                receipt = {
+                                    "status": result.status.value,
+                                    "data": result.data,
+                                    "error": result.error,
+                                }
+                    action_round_records.append({
+                        "call_id": event.call_id,
+                        "name": event.name,
+                        "arguments": event.arguments,
+                        "receipt": receipt,
                     })
-                    if rendered and not (
-                        self.config.tools.tool_result_synthesis
-                        and self.config.tools.max_llm_rounds_per_turn >= 2
-                    ):
-                        reply_segments.append(rendered)
-                        await speak_segment(rendered, current_emotion)
                     continue
 
                 if isinstance(event, FailedEvent):
@@ -1956,8 +1982,25 @@ class ClientSession:
             if not completed:
                 raise RuntimeError("LLM turn ended without CompletedEvent")
 
+            direct_receipt_ready = bool(action_round_records) and all(
+                str(record.get("name") or "") == "get_current_time"
+                for record in action_round_records
+            )
             if (
-                tool_round_records
+                direct_receipt_ready
+                and self.config.tools.tool_result_synthesis
+                and not cancel_event.is_set()
+                and self._owns_turn(turn_generation)
+            ):
+                fallback_text = render_action_receipt_fallback(action_round_records)
+                reply_segments.append(fallback_text)
+                await speak_segment(fallback_text, "neutral")
+                mark_current(
+                    "action_receipt_direct",
+                    record_count=len(action_round_records),
+                )
+            elif (
+                action_round_records
                 and self.config.tools.tool_result_synthesis
                 and self.config.tools.max_llm_rounds_per_turn >= 2
                 and not cancel_event.is_set()
@@ -1965,15 +2008,14 @@ class ClientSession:
             ):
                 llm_rounds = 2
                 assistant_tool_calls = []
-                for record in tool_round_records:
-                    call = record["call"]
+                for record in action_round_records:
                     assistant_tool_calls.append({
-                        "id": call.call_id,
+                        "id": record["call_id"],
                         "type": "function",
                         "function": {
-                            "name": call.name,
+                            "name": record["name"],
                             "arguments": json.dumps(
-                                call.arguments,
+                                record["arguments"],
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             ),
@@ -1986,18 +2028,13 @@ class ClientSession:
                     "content": " ".join(reply_segments).strip() or None,
                     "tool_calls": assistant_tool_calls,
                 })
-                for record in tool_round_records:
-                    result = record["result"]
+                for record in action_round_records:
                     synthesis_messages.append({
                         "role": "tool",
-                        "tool_call_id": result.call_id,
-                        "name": result.name,
+                        "tool_call_id": record["call_id"],
+                        "name": record["name"],
                         "content": json.dumps(
-                            {
-                                "status": result.status.value,
-                                "data": result.data,
-                                "error": result.error,
-                            },
+                            record["receipt"],
                             ensure_ascii=False,
                             default=str,
                             separators=(",", ":"),
@@ -2010,13 +2047,13 @@ class ClientSession:
                 try:
                     synthesis_messages = self._fit_llm_context(
                         synthesis_messages,
-                        tools=tools,
+                        tools=[],
                         detect_end_intent=False,
                     )
-                    mark_current("llm_round_start", round=2, purpose="tool_result_synthesis")
+                    mark_current("llm_round_start", round=2, purpose="action_receipt_synthesis")
                     async for event in self.turn_runner.stream(
                         synthesis_messages,
-                        tools=tools,
+                        tools=[],
                         detect_end_intent=False,
                         tool_choice="none",
                         first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
@@ -2033,8 +2070,13 @@ class ClientSession:
                             await speak_segment(event.text, event.emotion)
                             continue
                         if isinstance(event, MemoryProposalEvent):
-                            mark_current("memory_proposal_ignored", reason="tool_synthesis_round")
-                            continue
+                            mark_current("memory_proposal_rejected", reason="second_round_disabled")
+                            synthesis_failed = True
+                            break
+                        if isinstance(event, ConfirmationDecisionEvent):
+                            mark_current("confirmation_rejected", reason="second_round_disabled")
+                            synthesis_failed = True
+                            break
                         if isinstance(event, ToolCallReadyEvent):
                             mark_current("tool_call_rejected", reason="second_round_disabled")
                             synthesis_failed = True
@@ -2054,14 +2096,26 @@ class ClientSession:
                     raise
                 except Exception as exc:
                     synthesis_failed = True
-                    logger.warning("Tool result synthesis round failed: %s", exc)
+                    logger.warning("Action receipt synthesis round failed: %s", exc)
 
                 if synthesis_failed or not synthesis_completed or synthesized_segments == 0:
-                    for record in tool_round_records:
-                        rendered = str(record.get("rendered") or "").strip()
-                        if rendered:
-                            reply_segments.append(rendered)
-                            await speak_segment(rendered, current_emotion)
+                    mark_current(
+                        "action_receipt_synthesis_unavailable",
+                        record_count=len(action_round_records),
+                    )
+                    if synthesized_segments == 0:
+                        fallback_text = render_action_receipt_fallback(action_round_records)
+                        reply_segments.append(fallback_text)
+                        await speak_segment(fallback_text, "neutral")
+                        mark_current(
+                            "action_receipt_fallback",
+                            record_count=len(action_round_records),
+                        )
+                    else:
+                        mark_current(
+                            "action_receipt_partial_kept",
+                            segments=synthesized_segments,
+                        )
 
             if close_reason and tts_started:
                 drain_seconds = pacer.estimated_lead_ms() / 1000.0
@@ -2237,15 +2291,6 @@ class ClientSession:
 
         if self.mcp_device is not None:
             await self.mcp_device.close()
-
-        greeting_task = self._greeting_prepare_task
-        if greeting_task and not greeting_task.done():
-            greeting_task.cancel()
-        self._greeting_prepare_task = None
-        greeting_prewarm_task = self._greeting_prewarm_task
-        if greeting_prewarm_task and not greeting_prewarm_task.done():
-            greeting_prewarm_task.cancel()
-        self._greeting_prewarm_task = None
 
         if self.current_cancel_event is not None:
             self.current_cancel_event.set()

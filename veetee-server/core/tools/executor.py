@@ -309,13 +309,3 @@ class ToolExecutor:
             "receipt_ttl_seconds": self._receipt_ttl_seconds,
             "retention_over_cap": max(0, len(self._receipts) - self._receipt_cap),
         }
-
-    @staticmethod
-    def render(descriptor, result: ToolResult) -> str:
-        if descriptor and descriptor.renderer:
-            return descriptor.renderer(result)
-        if result.ok:
-            return str(result.data)
-        if result.status == ToolStatus.UNKNOWN:
-            return "Mình đã gửi yêu cầu nhưng chưa xác minh được trạng thái cuối cùng."
-        return f"Mình chưa thực hiện được {result.name}: {result.error or result.status.value}."

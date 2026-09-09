@@ -8,8 +8,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from core.intent import Intent
 from core.turn_events import (
     CompletedEvent,
+    ConfirmationDecisionEvent,
     ControlEvent,
     FailedEvent,
+    MemoryProposalEvent,
     SpeechSegmentEvent,
     ToolCallReadyEvent,
     TurnEvent,
@@ -32,7 +34,7 @@ class TurnRunner:
         *,
         tools: Optional[List[Dict]] = None,
         detect_end_intent: bool = True,
-        tool_choice: Optional[str] = None,
+        tool_choice: Optional[Any] = None,
         first_event_timeout_ms: Optional[int] = None,
         total_timeout_ms: Optional[int] = None,
     ) -> AsyncGenerator[TurnEvent, None]:
@@ -61,7 +63,14 @@ class TurnRunner:
                 total_timeout_ms=total_timeout_ms,
                 first_event_predicate=lambda event: isinstance(
                     event,
-                    (SpeechSegmentEvent, ToolCallReadyEvent, CompletedEvent, FailedEvent),
+                    (
+                        SpeechSegmentEvent,
+                        MemoryProposalEvent,
+                        ConfirmationDecisionEvent,
+                        ToolCallReadyEvent,
+                        CompletedEvent,
+                        FailedEvent,
+                    ),
                 ),
             ):
                 yield event

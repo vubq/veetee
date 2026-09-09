@@ -1,5 +1,7 @@
 # Kiến Trúc Hệ Thống & Kế Hoạch Voice Pipeline
 
+> Tài liệu này giữ đường dẫn lịch sử. Nội dung kiến trúc hiện hành xem tại [ARCHITECTURE.md](ARCHITECTURE.md), quy trình kiểm thử xem tại [TESTING.md](TESTING.md), và công việc đang thực hiện xem tại [task-plans](../../task-plans/README.md).
+
 VeeTee phát triển theo hướng **server-only**: ESP32/Xiaozhi dùng firmware nguyên bản, server chịu trách nhiệm tối ưu latency, cancellation, pacing, backpressure và chống stale turn. Không yêu cầu patch firmware để dùng đường mặc định.
 
 Plan triển khai chi tiết: [2026-09-08-server-khong-sua-fw.md](../../task-plans/2026-09-08-server-khong-sua-fw.md).
