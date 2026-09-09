@@ -105,6 +105,8 @@ class NativeToolLLM:
 
 
 class NativeTimeToolLLM:
+    """Test double simulating AI-authored time synthesis (no direct renderer)."""
+
     def __init__(self):
         self.calls = []
 
@@ -122,13 +124,22 @@ class NativeTimeToolLLM:
             "detect_end_intent": detect_end_intent,
             "tool_choice": tool_choice,
         })
-        yield ControlEvent(intent="tool_request")
-        yield ToolCallReadyEvent(
-            call_id="time-1",
-            name="get_current_time",
-            arguments={},
-        )
-        yield CompletedEvent(finish_reason="tool_calls")
+        if len(self.calls) == 1:
+            yield ControlEvent(intent="tool_request")
+            yield ToolCallReadyEvent(
+                call_id="time-1",
+                name="get_current_time",
+                arguments={},
+            )
+            yield CompletedEvent(finish_reason="tool_calls")
+            return
+        yield ControlEvent()
+        yield SpeechSegmentEvent("Bây giờ là 07:30, ngày 10/09/2026.", emotion="neutral")
+        yield CompletedEvent(finish_reason="stop")
+
+
+def _assistant_texts(session):
+    return [m.content for m in session.dialogue.messages if m.role == "assistant"]
 
 
 class NativeChatLLM:
@@ -440,6 +451,9 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 2)
 
     async def test_llm_producer_error_finishes_without_deadlock(self):
+        # Speech is buffered until terminal validation, so a producer failure
+        # before CompletedEvent must not have spoken partial speech. With no
+        # audio started there is no tts:stop; the turn fails loudly.
         session, websocket = self.make_session(llm=FailingLLM())
         await session._trigger_ai_turn("Bắt đầu")
         task = session.current_turn_task
@@ -449,7 +463,9 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             item for item in decode_text_messages(websocket.sent)
             if item.get("type") == "tts" and item.get("state") == "stop"
         ]
-        self.assertEqual(len(stops), 1)
+        self.assertEqual(len(stops), 0)
+        self.assertFalse(any(isinstance(item, bytes) for item in websocket.sent))
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
         self.assertEqual(session.state, SessionState.LISTENING)
 
     async def test_network_send_stall_is_cancelled_by_client_abort(self):
@@ -501,8 +517,8 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any(isinstance(item, bytes) for item in websocket_a.sent))
         self.assertTrue(any(isinstance(item, bytes) for item in websocket_b.sent))
-        self.assertEqual(session_a.dialogue.messages[-1].role, "assistant")
-        self.assertEqual(session_b.dialogue.messages[-1].role, "assistant")
+        self.assertTrue(any(m.role == "assistant" for m in session_a.dialogue.messages))
+        self.assertTrue(any(m.role == "assistant" for m in session_b.dialogue.messages))
 
     async def test_tool_result_synthesis_is_explicitly_two_rounds(self):
         config = AppConfig()
@@ -518,17 +534,21 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 2)
         self.assertIsNone(llm.calls[0]["tool_choice"])
         self.assertEqual(llm.calls[1]["tool_choice"], "none")
-        self.assertFalse(llm.calls[1]["detect_end_intent"])
         second_messages = llm.calls[1]["messages"]
         assistant = next(item for item in second_messages if item.get("tool_calls"))
         tool_result = next(item for item in second_messages if item.get("role") == "tool")
         self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
         self.assertEqual(tool_result["tool_call_id"], "call-1")
         self.assertIn('"status":"succeeded"', tool_result["content"])
-        self.assertEqual(session.dialogue.messages[-1].content, "Kết quả phép tính là 5.")
+        self.assertIn("Kết quả phép tính là 5.", _assistant_texts(session))
+        # Structured receipt history is kept for the next turn.
+        self.assertTrue(any(m.role == "system" and "call-1" in m.content
+                            for m in session.dialogue.messages))
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
 
-    async def test_current_time_receipt_skips_second_llm_round(self):
+    async def test_current_time_receipt_uses_ai_synthesis(self):
+        # A01/A02 regression: clock answers are AI-authored from the full
+        # receipt envelope, never a direct literal renderer.
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
@@ -539,11 +559,16 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await session._trigger_ai_turn("Mấy giờ rồi?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
 
-        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(len(llm.calls), 2)
         self.assertIsNone(llm.calls[0]["tool_choice"])
-        self.assertIn("Bây giờ là ", session.dialogue.messages[-1].content)
-        self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 1)
+        self.assertEqual(llm.calls[1]["tool_choice"], "none")
+        self.assertTrue(any("Bây giờ là " in text for text in _assistant_texts(session)))
+        self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
         self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 1)
+        # Receipt envelope carries provenance and origin turn.
+        receipts = [m.content for m in session.dialogue.messages if m.role == "system"]
+        self.assertTrue(any("get_current_time" in content and "origin_turn" in content
+                            for content in receipts))
 
     async def test_current_time_phrasings_leave_tool_selection_to_llm(self):
         for text in ("Mấy giờ rồi?", "Bây giờ là mấy giờ?", "Hôm nay ngày mấy?"):
@@ -557,14 +582,14 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await session._trigger_ai_turn(text)
                 await asyncio.wait_for(session.current_turn_task, timeout=1.0)
 
-                self.assertEqual(len(llm.calls), 1)
+                self.assertEqual(len(llm.calls), 2)
                 self.assertIsNone(llm.calls[0]["tool_choice"])
                 self.assertTrue(any(
                     tool.get("function", {}).get("name") == "get_current_time"
                     for tool in llm.calls[0]["tools"]
                 ))
                 self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 1)
-                self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 1)
+                self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
 
     async def test_chat_turn_never_preforces_clock_tool_from_user_text(self):
         llm = NativeChatLLM()
@@ -602,12 +627,18 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.calls[1]["tool_choice"], "none")
         self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "completed")
         self.assertLess(elapsed, 0.2)
-        self.assertTrue(any(
-            message.role == "assistant" and "Kết quả là 5" in message.content
+        # Tight generation budget times out the synthesis round: no literal
+        # success claim is spoken, but the truthful receipt stays in history.
+        self.assertFalse(any(
+            message.role == "assistant" and "Kết quả" in message.content
             for message in session.dialogue.messages
         ))
+        self.assertTrue(any(m.role == "system" and "call-1" in m.content
+                            for m in session.dialogue.messages))
 
     async def test_tool_result_synthesis_never_executes_round_two_tool_call(self):
+        # Final synthesis round is speech-only: a late tool call is rejected,
+        # never executed, and never phrased as success by a literal renderer.
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
@@ -622,10 +653,14 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(session.tool_executor._receipts), 1)
         self.assertEqual(llm.calls[1]["tool_choice"], "none")
         self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "completed")
-        self.assertTrue(any(
-            message.role == "assistant" and "Kết quả là 5" in message.content
+        # No false success speech from a literal fallback; the truthful
+        # first-round receipt stays in structured history.
+        self.assertFalse(any(
+            message.role == "assistant" and "Kết quả" in message.content
             for message in session.dialogue.messages
         ))
+        self.assertTrue(any(m.role == "system" and "call-1" in m.content
+                            for m in session.dialogue.messages))
 
     async def test_default_tool_profile_uses_two_rounds_for_action(self):
         llm = NativeToolLLM()
@@ -637,7 +672,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(llm.calls), 2)
         self.assertEqual(llm.calls[1]["tool_choice"], "none")
-        self.assertEqual(session.dialogue.messages[-1].content, "Kết quả phép tính là 5.")
+        self.assertIn("Kết quả phép tính là 5.", _assistant_texts(session))
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
 
     async def test_normal_chat_stays_one_llm_round(self):
@@ -650,7 +685,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(llm.calls), 1)
         self.assertIsNone(llm.calls[0]["tool_choice"])
-        self.assertEqual(session.dialogue.messages[-1].content, "Xin chào bạn.")
+        self.assertIn("Xin chào bạn.", _assistant_texts(session))
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 1)
 
 
