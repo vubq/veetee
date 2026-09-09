@@ -1,6 +1,6 @@
 # Rà soát, hợp nhất tài liệu và bảo toàn task-plans
 
-Status: `PLANNED`
+Status: `COMPLETED`
 
 Created: `2026-09-09`
 
@@ -9,6 +9,8 @@ Created: `2026-09-09`
 Người mới và model thực thi tìm được hướng dẫn hiện hành, hiểu đúng AI semantics/server-only và biết bằng chứng nào đã có/chưa có. Giảm các bản sao kiến trúc/config/checklist làm tài liệu lệch source; giữ toàn bộ task-plans và bằng chứng review lịch sử.
 
 Yêu cầu hiện tại là lên plan và xem tài liệu nào có thể xóa/hợp nhất. Lượt này chỉ tạo hai plan mới và cập nhật index `task-plans/README.md`; các thao tác sửa/hợp nhất/xóa docs phía dưới là công việc cho executor khi user yêu cầu thực hiện, không phải đã làm.
+
+**Execution update 2026-09-09:** user đã yêu cầu thực hiện plan; migration docs bên dưới đã hoàn tất và được validation theo mục D4.
 
 ## Current state
 
@@ -55,10 +57,10 @@ Yêu cầu mới nhất của user và root AGENTS có ưu tiên; implementation
 
 ### D0 — Inventory, ownership và bảo toàn lịch sử
 
-- [ ] D0.1 Chụp danh sách/hash docs/task-plans trước sửa và dirty diff hiện có; không ghi đè thay đổi ngoài scope. Phân loại tracked/untracked/ignored bằng metadata, không xem untracked là rác.
-- [ ] D0.2 Rà inbound links và plain-text references bằng `rg`; gồm README, docs và tất cả task-plans. Khi ref từ plan cũ còn tồn tại, giữ đường dẫn đích hoặc trang redirect Markdown, không làm hỏng handoff cũ.
-- [ ] D0.3 Xác minh source/symbol cho D01–D14, ghi date/HEAD/dirty fingerprint khi dùng số liệu. Không sao chép local hostname/user/credential/fixture riêng vào hướng dẫn portable.
-- [ ] D0.4 Giữ task-plans metadata/checklist của lần thực thi cũ; nếu cần addendum sau này chỉ append rõ ngày/evidence/superseded scope. Không xóa hoặc reset checkbox hàng loạt.
+- [x] D0.1 Chụp danh sách/hash docs/task-plans trước sửa và dirty diff hiện có; không ghi đè thay đổi ngoài scope. Phân loại tracked/untracked/ignored bằng metadata, không xem untracked là rác.
+- [x] D0.2 Rà inbound links và plain-text references bằng `rg`; gồm README, docs và tất cả task-plans. Khi ref từ plan cũ còn tồn tại, giữ đường dẫn đích hoặc trang redirect Markdown, không làm hỏng handoff cũ.
+- [x] D0.3 Xác minh source/symbol cho D01–D14, ghi date/HEAD/dirty fingerprint khi dùng số liệu. Không sao chép local hostname/user/credential/fixture riêng vào hướng dẫn portable.
+- [x] D0.4 Giữ task-plans metadata/checklist của lần thực thi cũ; nếu cần addendum sau này chỉ append rõ ngày/evidence/superseded scope. Không xóa hoặc reset checkbox hàng loạt.
 
 Gate: inventory đủ, mỗi file có vai trò và phương án dưới đây, biết nơi nhận mọi nội dung độc nhất trước khi bỏ đoạn.
 
@@ -85,41 +87,41 @@ Gate: inventory đủ, mỗi file có vai trò và phương án dưới đây, b
 
 **Kết luận về xóa:** chưa có tài liệu hoàn chỉnh nào nên xóa ngay mà không mất vai trò hoặc làm hỏng references. Ứng viên retire rõ nhất là nội dung cũ của `docs/PLAN.md`, chuyển xong giữ link stub; phần có thể bỏ trực tiếp sau migration là duplicate YAML/architecture/checklists và các mô tả hiện hành sai. Giữ nguyên tất cả task-plans theo yêu cầu user.
 
-- [ ] D1.1 Tạo `docs/ARCHITECTURE.md`: pipeline/current behavior; AI/server boundary; persona/context budget; tool/confirmation/receipt/history; memory/RAG seam; latency critical path; cancellation/ownership/audio; known gaps và links plan. Không chép toàn bộ backlog/checklist vào đây.
-- [ ] D1.2 Tạo `docs/TESTING.md`: unit/integration/runtime/hardware khác nhau; lệnh chạy thực; fixtures/labels; metrics/quality/sample gates; persona/semantic/load matrix; cách đọc artifact và khi nào PARTIAL. Chi tiết kế hoạch tương lai vẫn link task plan.
-- [ ] D1.3 Rút README thành entrypoint và quickstart; không tạo thêm docs/README hoặc AI_RULES riêng nếu không cần navigation mới. Rule ở root AGENTS, giải thích kỹ thuật ở ARCHITECTURE.
+- [x] D1.1 Tạo `docs/ARCHITECTURE.md`: pipeline/current behavior; AI/server boundary; persona/context budget; tool/confirmation/receipt/history; memory/RAG seam; latency critical path; cancellation/ownership/audio; known gaps và links plan. Không chép toàn bộ backlog/checklist vào đây.
+- [x] D1.2 Tạo `docs/TESTING.md`: unit/integration/runtime/hardware khác nhau; lệnh chạy thực; fixtures/labels; metrics/quality/sample gates; persona/semantic/load matrix; cách đọc artifact và khi nào PARTIAL. Chi tiết kế hoạch tương lai vẫn link task plan.
+- [x] D1.3 Rút README thành entrypoint và quickstart; không tạo thêm docs/README hoặc AI_RULES riêng nếu không cần navigation mới. Rule ở root AGENTS, giải thích kỹ thuật ở ARCHITECTURE.
 
 ### D2 — Hợp nhất nội dung theo nguồn sự thật
 
 Dependency: D0/D1. Có thể làm trước runtime fixes nếu ghi đúng current gaps, không viết như A01–A12 đã fixed.
 
-- [ ] D2.1 Architecture mới phân biệt `IMPLEMENTED`, `KNOWN_GAP`, `PLANNED`. Ghi rõ clock direct/literal fallback, speech-before-terminal và 2-round limit hiện còn; đổi mô tả khi milestone runtime có evidence.
-- [ ] D2.2 Bỏ exact wake/exit/greeting template khỏi current architecture; bảo toàn lịch sử ở review/plans. Chọn thông số queue/default từ source và link, local observed VAD 320 chỉ là snapshot ngày audit.
-- [ ] D2.3 SETUP bỏ lời hứa “100% local/offline”: ASR/TTS process local, LLM qua gateway và route có thể remote. Dependencies/Python/driver ghi tested version hoặc chưa xác minh, không tự dự đoán compatibility.
-- [ ] D2.4 So lệnh cài với imports/start.sh và environment phục vụ test. Nếu thiếu manifest/lock tái lập, ghi limitation và issue handoff runtime, không tự cài/upgrade môi trường đang dùng để làm docs pass.
-- [ ] D2.5 Config example là full reference; SETUP chỉ ví dụ delta tối thiểu có giá trị. Phân biệt config defaults, local overrides, saved persona và env; thay đổi persona theo behavior thật API/UI (hiện cap 4000, tương lai configurable theo M3).
-- [ ] D2.6 Service instructions dùng placeholder/path portable; user unit và system unit là lựa chọn rõ, không hướng dẫn bật cả hai. Existing dev unit là snapshot, không yêu cầu tạo system unit trùng. README không mặc định start thêm khi service đang chạy.
-- [ ] D2.7 API_PROTOCOL xác minh WS auth/OTA token/management bearer riêng từ code; mô tả chính xác header nào parsed/enforced. Internal control metadata không được viết như JSON command ESP32 phải hiểu; browser-only events có nhãn rõ.
-- [ ] D2.8 ESP32_CONFIG giữ thao tác stock và giới hạn AEC/listen modes/wake/MCP; wire schemas dẫn API; hardware acceptance dẫn TESTING. Không yêu cầu patch/build/flash để hoàn tất tài liệu.
-- [ ] D2.9 STATUS chỉ giữ bằng chứng có ngày/commit+dirty context và phân loại mock/model/hardware. Thay “regression hiện tại xanh 127” bằng “lần chạy đã ghi nhận …; chưa rerun ở snapshot này” nếu không có lần chạy mới.
-- [ ] D2.10 Di chuyển nội dung độc nhất từ docs/PLAN trước, kiểm tra link đích, rồi thay bằng stub. Giữ `PIPELINE_REVIEW_2026-09-08.md` nguyên nội dung sau banner; đề xuất explicit-only cũ không là ngoại lệ deterministic được phép hiện nay.
+- [x] D2.1 Architecture mới phân biệt `IMPLEMENTED`, `KNOWN_GAP`, `PLANNED`. Ghi rõ clock direct/literal fallback, speech-before-terminal và 2-round limit hiện còn; đổi mô tả khi milestone runtime có evidence.
+- [x] D2.2 Bỏ exact wake/exit/greeting template khỏi current architecture; bảo toàn lịch sử ở review/plans. Chọn thông số queue/default từ source và link, local observed VAD 320 chỉ là snapshot ngày audit.
+- [x] D2.3 SETUP bỏ lời hứa “100% local/offline”: ASR/TTS process local, LLM qua gateway và route có thể remote. Dependencies/Python/driver ghi tested version hoặc chưa xác minh, không tự dự đoán compatibility.
+- [x] D2.4 So lệnh cài với imports/start.sh và environment phục vụ test. Nếu thiếu manifest/lock tái lập, ghi limitation và issue handoff runtime, không tự cài/upgrade môi trường đang dùng để làm docs pass.
+- [x] D2.5 Config example là full reference; SETUP chỉ ví dụ delta tối thiểu có giá trị. Phân biệt config defaults, local overrides, saved persona và env; thay đổi persona theo behavior thật API/UI (hiện cap 4000, tương lai configurable theo M3).
+- [x] D2.6 Service instructions dùng placeholder/path portable; user unit và system unit là lựa chọn rõ, không hướng dẫn bật cả hai. Existing dev unit là snapshot, không yêu cầu tạo system unit trùng. README không mặc định start thêm khi service đang chạy.
+- [x] D2.7 API_PROTOCOL xác minh WS auth/OTA token/management bearer riêng từ code; mô tả chính xác header nào parsed/enforced. Internal control metadata không được viết như JSON command ESP32 phải hiểu; browser-only events có nhãn rõ.
+- [x] D2.8 ESP32_CONFIG giữ thao tác stock và giới hạn AEC/listen modes/wake/MCP; wire schemas dẫn API; hardware acceptance dẫn TESTING. Không yêu cầu patch/build/flash để hoàn tất tài liệu.
+- [x] D2.9 STATUS chỉ giữ bằng chứng có ngày/commit+dirty context và phân loại mock/model/hardware. Thay “regression hiện tại xanh 127” bằng “lần chạy đã ghi nhận …; chưa rerun ở snapshot này” nếu không có lần chạy mới.
+- [x] D2.10 Di chuyển nội dung độc nhất từ docs/PLAN trước, kiểm tra link đích, rồi thay bằng stub. Giữ `PIPELINE_REVIEW_2026-09-08.md` nguyên nội dung sau banner; đề xuất explicit-only cũ không là ngoại lệ deterministic được phép hiện nay.
 
 ### D3 — Index và quan hệ với task-plans
 
-- [ ] D3.1 `task-plans/README.md` liệt kê cả hai plan 2026-09-09 và note rules hiện thiếu index; tag PLANNED chỉ trạng thái thực thi, không phải đã triển khai.
-- [ ] D3.2 Nêu runtime plan mới tiếp nối các plan PARTIAL theo scope A01–A12; docs plan là migration riêng. Giữ danh sách và mô tả evidence lịch sử cũ, thêm caveat để không suy “đã hết hardcode”.
-- [ ] D3.3 Links từ README/server STATUS/architecture dẫn plan mới; links trong plan cũ giữ được bằng file/stub. Không làm “consolidation” bằng xóa các file 2026-09-08 hoặc note 2026-09-09.
-- [ ] D3.4 Khi executors hoàn tất milestone, cập nhật Execution status trong đúng plan và status index. Không đánh dấu plan cũ/new COMPLETED chỉ vì docs đã hợp nhất.
+- [x] D3.1 `task-plans/README.md` liệt kê cả hai plan 2026-09-09 và note rules hiện thiếu index; tag PLANNED chỉ trạng thái thực thi, không phải đã triển khai.
+- [x] D3.2 Nêu runtime plan mới tiếp nối các plan PARTIAL theo scope A01–A12; docs plan là migration riêng. Giữ danh sách và mô tả evidence lịch sử cũ, thêm caveat để không suy “đã hết hardcode”.
+- [x] D3.3 Links từ README/server STATUS/architecture dẫn plan mới; links trong plan cũ giữ được bằng file/stub. Không làm “consolidation” bằng xóa các file 2026-09-08 hoặc note 2026-09-09.
+- [x] D3.4 Khi executors hoàn tất milestone, cập nhật Execution status trong đúng plan và status index. Không đánh dấu plan cũ/new COMPLETED chỉ vì docs đã hợp nhất.
 
 Trong lượt lập plan, index đã được bổ sung để người dùng tìm hai plan mới. D3 vẫn cần kiểm tra navigation toàn bộ sau migration docs; không vì index đã có mà tick các mục thực thi khác.
 
 ### D4 — Kiểm chứng và handoff
 
-- [ ] D4.1 Kiểm local Markdown links, relative paths, anchors sau merge; loại code-fence/example URLs khỏi checker để không false positive. Plain-text paths của code mới dự kiến phải có nhãn planned.
-- [ ] D4.2 Rà lại D01–D14: câu sai trong historical review/plan được phép giữ khi có nhãn snapshot; câu sai trong docs hiện hành phải hết. Không dùng grep cấm từ “keyword/regex” vì đó có thể là rule cấm matcher hoặc protocol parser hợp lệ.
-- [ ] D4.3 Kiểm snippets với CLI `--help`/config schema thật, tránh khởi động engine hoặc gọi external API chỉ để check Markdown. Các lệnh runtime/hardware chưa chạy ghi NOT_RUN/PENDING, không tick theo suy luận.
-- [ ] D4.4 Diff chỉ chứa docs/index được phép; mọi task-plan cũ giữ đường dẫn và content lịch sử. Không có `.py`, `.yaml`, prompt runtime, service, reference hoặc artifacts bị sửa ngoài scope.
-- [ ] D4.5 Báo file giữ/hợp nhất/stub, nội dung chuyển đích, links checked, technical claims còn chờ evidence và các decision thay đổi so với plan.
+- [x] D4.1 Kiểm local Markdown links, relative paths, anchors sau merge; loại code-fence/example URLs khỏi checker để không false positive. Plain-text paths của code mới dự kiến phải có nhãn planned.
+- [x] D4.2 Rà lại D01–D14: câu sai trong historical review/plan được phép giữ khi có nhãn snapshot; câu sai trong docs hiện hành phải hết. Không dùng grep cấm từ “keyword/regex” vì đó có thể là rule cấm matcher hoặc protocol parser hợp lệ.
+- [x] D4.3 Kiểm snippets với CLI `--help`/config schema thật, tránh khởi động engine hoặc gọi external API chỉ để check Markdown. Các lệnh runtime/hardware chưa chạy ghi NOT_RUN/PENDING, không tick theo suy luận.
+- [x] D4.4 Diff chỉ chứa docs/index được phép; mọi task-plan cũ giữ đường dẫn và content lịch sử. Không có `.py`, `.yaml`, prompt runtime, service, reference hoặc artifacts bị sửa ngoài scope.
+- [x] D4.5 Báo file giữ/hợp nhất/stub, nội dung chuyển đích, links checked, technical claims còn chờ evidence và các decision thay đổi so với plan.
 
 ## Compatibility constraints
 
@@ -131,23 +133,23 @@ Trong lượt lập plan, index đã được bổ sung để người dùng tì
 
 ## Validation
 
-- [ ] `git diff --check` trên docs mới/sửa; Markdown headings/tables/code fences đúng, không thiếu relative-link targets hiện hành.
-- [ ] Inventory before/after: không mất task-plans, review evidence, prompt/config/data/artifacts. Nếu file đích mới chưa triển khai, references chỉ dùng trong ngữ cảnh planned.
-- [ ] Đối chiếu các thông số có nguy cơ lệch: queue 8, default/local VAD, correction validator, persona API/UI 4000 hiện tại, max rounds/calls, schema coverage, service modes, benchmark metric và sample/success gates.
-- [ ] Mỗi PASS/COMPLETED/test count/số latency có evidence loại gì, ngày/source snapshot và limitations. Không nối số 50/84/112/127 từ các lần chạy khác nhau thành trạng thái mới.
-- [ ] Không có yêu cầu default patch FW, exact phrase routing, literal tool result hoặc first binary = speaker ACK trong docs hiện hành. Review lịch sử giữ nguyên nhưng có banner rõ.
-- [ ] Không chạy full server/unit suite chỉ vì sửa văn bản; nếu validate config/code example bắt buộc side effect thì chuyển sang runtime milestone có environment phù hợp và ghi chưa chạy ở docs pass.
-- [ ] Smoke đọc theo 3 hành trình: người mới setup server; người có ESP32 kết nối stock; executor đọc kiến trúc → active plan → testing → evidence. Không phải tìm một quyết định qua nhiều file mâu thuẫn.
+- [x] `git diff --check` trên docs mới/sửa; Markdown headings/tables/code fences đúng, không thiếu relative-link targets hiện hành.
+- [x] Inventory before/after: không mất task-plans, review evidence, prompt/config/data/artifacts. Nếu file đích mới chưa triển khai, references chỉ dùng trong ngữ cảnh planned.
+- [x] Đối chiếu các thông số có nguy cơ lệch: queue 8, default/local VAD, correction validator, persona API/UI 4000 hiện tại, max rounds/calls, schema coverage, service modes, benchmark metric và sample/success gates.
+- [x] Mỗi PASS/COMPLETED/test count/số latency có evidence loại gì, ngày/source snapshot và limitations. Không nối số 50/84/112/127 từ các lần chạy khác nhau thành trạng thái mới.
+- [x] Không có yêu cầu default patch FW, exact phrase routing, literal tool result hoặc first binary = speaker ACK trong docs hiện hành. Review lịch sử giữ nguyên nhưng có banner rõ.
+- [x] Không chạy full server/unit suite chỉ vì sửa văn bản; nếu validate config/code example bắt buộc side effect thì chuyển sang runtime milestone có environment phù hợp và ghi chưa chạy ở docs pass.
+- [x] Smoke đọc theo 3 hành trình: người mới setup server; người có ESP32 kết nối stock; executor đọc kiến trúc → active plan → testing → evidence. Không phải tìm một quyết định qua nhiều file mâu thuẫn.
 
 ## Acceptance criteria
 
-- [ ] Hai nguồn mới ARCHITECTURE/TESTING chứa đủ nội dung độc nhất chuyển từ docs cũ; README ngắn hơn và điều hướng đầy đủ.
-- [ ] docs/PLAN không còn chỉ dẫn thực thi lỗi thời; stub dẫn đúng docs/task-plans, không broken historical path.
-- [ ] SETUP tái sử dụng config reference, phân biệt local/remote và service modes, API/ESP32 không bị lẫn internal semantics.
-- [ ] STATUS mô tả đúng known gaps và evidence, không nói SLA/hardware/full AI semantics đã đạt khi runtime plan chưa có bằng chứng.
-- [ ] Review lịch sử được giữ tại đường dẫn cũ, note rules và toàn bộ task-plans được giữ và tìm được qua index. Không có yêu cầu xóa task-plans như điều kiện dọn docs.
-- [ ] D01–D14 đã xử lý hoặc ghi PARTIAL kèm dependency runtime cụ thể; link/diff/inventory checks pass.
-- [ ] Không đổi runtime/config/prompt/reference/deployment vì dọn docs; không sao chép credential/saved persona vào tài liệu.
+- [x] Hai nguồn mới ARCHITECTURE/TESTING chứa đủ nội dung độc nhất chuyển từ docs cũ; README ngắn hơn và điều hướng đầy đủ.
+- [x] docs/PLAN không còn chỉ dẫn thực thi lỗi thời; stub dẫn đúng docs/task-plans, không broken historical path.
+- [x] SETUP tái sử dụng config reference, phân biệt local/remote và service modes, API/ESP32 không bị lẫn internal semantics.
+- [x] STATUS mô tả đúng known gaps và evidence, không nói SLA/hardware/full AI semantics đã đạt khi runtime plan chưa có bằng chứng.
+- [x] Review lịch sử được giữ tại đường dẫn cũ, note rules và toàn bộ task-plans được giữ và tìm được qua index. Không có yêu cầu xóa task-plans như điều kiện dọn docs.
+- [x] D01–D14 đã xử lý hoặc ghi PARTIAL kèm dependency runtime cụ thể; link/diff/inventory checks pass.
+- [x] Không đổi runtime/config/prompt/reference/deployment vì dọn docs; không sao chép credential/saved persona vào tài liệu.
 
 ## Risks / open questions
 
@@ -160,8 +162,9 @@ Trong lượt lập plan, index đã được bổ sung để người dùng tì
 
 ## Execution status
 
-- Status: `NOT_STARTED`
-- Completed: Chưa thực thi migration docs. Lượt lập kế hoạch đã đọc/đối chiếu docs, lập inventory D01–D14, tạo hai plan và bổ sung index handoff.
-- Remaining: D0–D4, tạo owner docs, hợp nhất sections, stub docs/PLAN, historical banner, validation/navigation và evidence status.
-- Deviations from plan: Không có.
-- Executor notes: ghi path trước/sau, nội dung chuyển đi, validation, unresolved runtime dependencies; không gọi migration complete chỉ vì có danh sách đề xuất.
+- Status: `COMPLETED`
+- Completed: D0–D4 đã thực thi ngày 2026-09-09 trên source snapshot HEAD `51ec30b`. `README.md` được rút gọn; `ARCHITECTURE.md` và `TESTING.md` được mở rộng thành owner docs; `SETUP.md`, `API_PROTOCOL.md`, `ESP32_CONFIG.md`, `VOICE_PIPELINE_STATUS.md` được hợp nhất theo vai trò; `docs/PLAN.md` thành historical stub; review 2026-09-08 giữ nguyên body và có banner non-normative.
+- Remaining: Không còn việc thuộc migration tài liệu này. Các gap runtime A01–A12, corpus/SLA và hardware ESP32 vẫn thuộc `2026-09-09-ai-persona-tools-memory-latency.md` và không bị đánh dấu resolved.
+- Deviations from plan: `ARCHITECTURE.md` và `TESTING.md` đã tồn tại dạng scaffold trước khi execution, nên executor mở rộng chúng thay vì tạo file mới. Không chạy full unit/server suite vì plan documentation-only chỉ yêu cầu kiểm Markdown/source/CLI không side effect.
+- Validation: `git diff --check` PASS; relative Markdown links broken = 0; code fence check PASS; `scripts/benchmark_pipeline.py --help` PASS; inventory sau sửa vẫn có 8 docs Markdown và 11 task-plan Markdown; body historical review khôi phục về hash trước sửa `6f6596fb90079040`; diff không chạm `.py`, `.yaml`, prompt runtime, service, `references/` hoặc benchmark artifacts.
+- Executor notes: current benchmark code gate vẫn là 20 samples / 95% success; production gate 100 attempts / >=99% chỉ là PLANNED trong runtime plan. Không commit/push/restart/deploy trong execution docs này.

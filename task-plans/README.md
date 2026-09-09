@@ -24,9 +24,9 @@ Mẫu chuẩn: [`_TEMPLATE.md`](_TEMPLATE.md).
 ## Kế hoạch tiếp nối audit 2026-09-09
 
 - [AI semantics, persona lớn, tool/memory và pipeline dưới 1 giây](2026-09-09-ai-persona-tools-memory-latency.md) — `PLANNED`, execution `NOT_STARTED`: M0–M7 xử lý direct clock/literal receipts, speech ordering, schema, persona API/UI và context budget, multi-round tool/history, retrieval/RAG seam, latency A/B và nghiệm thu model/ESP32 thật.
-- [Rà soát và hợp nhất tài liệu dự án](2026-09-09-hop-nhat-tai-lieu-du-an.md) — `PLANNED`, execution `NOT_STARTED`: inventory D01–D14, nguồn tài liệu chính, mapping giữ/hợp nhất/stub và validation; bảo toàn toàn bộ task-plans và review lịch sử.
+- [Rà soát và hợp nhất tài liệu dự án](2026-09-09-hop-nhat-tai-lieu-du-an.md) — `COMPLETED`, execution `COMPLETED`: D01–D14 đã được hợp nhất vào owner docs, `docs/PLAN.md` thành historical stub, review/task-plans được bảo toàn và link/diff/inventory validation đã pass.
 
-Hai file trên mới là kế hoạch, chưa phải implementation đã hoàn tất. Plan runtime tiếp nối các plan `PARTIAL` dưới đây; trong phạm vi đã nêu, yêu cầu AI mới thay chỉ dẫn direct clock/template fallback/explicit-only matcher và giới hạn cứng đúng 2 rounds. Không tự thực thi plan chỉ vì nó được liệt kê ở đây.
+Plan runtime ở trên vẫn là `PLANNED` và tiếp nối các plan `PARTIAL` dưới đây; trong phạm vi đã nêu, yêu cầu AI mới thay chỉ dẫn direct clock/template fallback/explicit-only matcher và giới hạn cứng đúng 2 rounds. Plan tài liệu đã `COMPLETED` ngày 2026-09-09 và chỉ thay đổi docs/index/status, không triển khai các gap runtime A01–A12.
 
 ## Tài liệu sau migration
 

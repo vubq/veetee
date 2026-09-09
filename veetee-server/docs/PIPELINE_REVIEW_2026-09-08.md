@@ -1,5 +1,7 @@
 # Đánh giá server và voice pipeline — 2026-09-08
 
+> **Historical snapshot / non-normative.** Tài liệu này giữ nguyên finding của review ngày 2026-09-08 tại commit cũ để truy vết evidence. Behavior hiện hành xem [ARCHITECTURE.md](ARCHITECTURE.md), trạng thái xem [VOICE_PIPELINE_STATUS.md](VOICE_PIPELINE_STATUS.md), và công việc tiếp nối xem [runtime plan](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md). Các đề xuất cũ không ghi đè rule hiện hành trong root `AGENTS.md`.
+
 Commit được rà: `4819c6a` (`feat: optimize realtime voice pipeline`).
 
 ## Kết luận

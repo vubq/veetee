@@ -1,19 +1,28 @@
-# Đặc Tả Giao Thức VeeTee Protocol
+# VeeTee Protocol Contract
 
-Tài liệu này mô tả đường tương thích mặc định giữa VeeTee Server và ESP32/Xiaozhi firmware nguyên bản. Server không yêu cầu extension riêng trong hello hoặc TTS stop.
+Cập nhật: **2026-09-09**
 
-## 1. WebSocket handshake
+Tài liệu này mô tả contract wire giữa VeeTee và ESP32/Xiaozhi firmware nguyên bản, cộng các HTTP management/browser endpoint riêng. AI intent/memory/tool reasoning nội bộ được mô tả tại [ARCHITECTURE.md](ARCHITECTURE.md), không phải capability mới mà ESP32 phải hiểu.
 
-Client kết nối tới `ws://<server>:8000/` và có thể gửi các header chuẩn đang hỗ trợ:
+## 1. WebSocket connection
 
-| Header | Mô tả | Ví dụ |
-| :--- | :--- | :--- |
-| `Authorization` | Token nếu server cấu hình auth | `Bearer my-token` |
-| `Protocol-Version` | Binary protocol | `1`, `2`, `3` |
-| `Device-Id` | ID/MAC thiết bị | `84:F7:03:12:34:56` |
-| `Client-Id` | UUID client | `550e8400-e29b-41d4-a716-446655440000` |
+Endpoint mặc định:
 
-Hello firmware stock có thể không có `features`:
+```text
+ws://<server>:8000/
+```
+
+Standalone WebSocket path hiện đọc các header:
+
+| Header | Dùng cho |
+| --- | --- |
+| `Protocol-Version` | chọn binary V1/V2/V3; mặc định V1 |
+| `Device-Id` | định danh client do client khai báo |
+| `Client-Id` | định danh client do client khai báo |
+
+`ClientSession` hiện **không enforce `Authorization` cho WebSocket**. Management bearer/token ở HTTP `:8003` là cơ chế khác và không nên mô tả như WS auth đã được enforce.
+
+Hello stock có thể không có `features`:
 
 ```json
 {
@@ -29,7 +38,7 @@ Hello firmware stock có thể không có `features`:
 }
 ```
 
-Hoặc có các cờ firmware nguyên bản hỗ trợ, ví dụ:
+Firmware có thể quảng bá capability stock, ví dụ:
 
 ```json
 {
@@ -41,15 +50,13 @@ Hoặc có các cờ firmware nguyên bản hỗ trợ, ví dụ:
 }
 ```
 
-`features.aec=true` biểu thị firmware chọn hướng server-side AEC. VeeTee hiện chưa có server-side AEC hoàn chỉnh, nên cờ này không tự bật automatic speech barge-in. `mode=realtime` cũng không được dùng như bằng chứng AEC hiệu quả.
-
-Server phản hồi hello với session và audio output:
+Server trả session/audio output:
 
 ```json
 {
   "type": "hello",
   "transport": "websocket",
-  "session_id": "9c180bb6204e47f0b498bb5bb68773b5",
+  "session_id": "<session-id>",
   "audio_params": {
     "format": "opus",
     "sample_rate": 24000,
@@ -59,15 +66,17 @@ Server phản hồi hello với session và audio output:
 }
 ```
 
-## 2. Audio binary
+`features.aec=true` không phải bằng chứng automatic barge-in có thể bật an toàn. Server hiện chưa có server-side AEC hoàn chỉnh.
 
-### Version 1
+## 2. Binary audio
 
-- Client -> Server: raw Opus 16 kHz mono, baseline 60 ms/frame.
-- Server -> Client: raw Opus 24 kHz mono, baseline 60 ms/frame.
-- Web diagnostic client có thể khai báo `audio_params.format=pcm16` để gửi PCM16 16 kHz.
+### V1
 
-### Version 2
+- Client -> server: raw Opus, baseline 16 kHz mono, 60 ms/frame.
+- Server -> client: raw Opus, baseline 24 kHz mono, 60 ms/frame.
+- Web diagnostic client có thể dùng `pcm16`; đây là browser/diagnostic extension, không phải yêu cầu cho firmware stock.
+
+### V2
 
 ```c
 struct BinaryProtocol2 {
@@ -80,7 +89,7 @@ struct BinaryProtocol2 {
 } __attribute__((packed));
 ```
 
-### Version 3
+### V3
 
 ```c
 struct BinaryProtocol3 {
@@ -91,81 +100,50 @@ struct BinaryProtocol3 {
 } __attribute__((packed));
 ```
 
-Server validate packet size/header và bỏ packet truncated thay vì đọc payload không đầy đủ.
+Server validate header/payload size và bỏ packet truncated.
 
-## 3. Client -> Server JSON
+## 3. Client -> server JSON
 
-### Listen start
-
-```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "start",
-  "mode": "realtime"
-}
-```
-
-`mode` có thể là `realtime`, `auto` hoặc `manual`. Server ghi nhận mode client báo, không tự ép firmware đổi mode.
-
-Nếu `listen:start` đến khi server đang speaking, VeeTee coi đây là yêu cầu ngắt turn hiện tại: cancel LLM/TTS, invalidate capture cũ và gửi `tts:stop` chuẩn.
-
-### Listen detect
+### `listen:start`
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "detect",
-  "text": "VeeTee ơi"
-}
+{"type":"listen","state":"start","mode":"realtime"}
 ```
 
-Khi `conversation.enabled=true`, `listen:detect` vẫn là event stock điều khiển lifecycle, nhưng phần `text` được đưa vào AI theo ngữ cảnh:
+`mode` có thể là `realtime`, `auto` hoặc `manual`. Server ghi nhận mode client báo; không ép firmware đổi mode/AEC. Nếu event đến lúc server đang nói, VeeTee cancel turn hiện tại và gửi `tts:stop` chuẩn.
 
-| Input | Hành vi |
-| :--- | :--- |
-| `listen:detect` có text | Giữ text, phối hợp `listen:start` trong cửa sổ ngắn rồi mở AI turn với source `listen_detect` |
-| `chat` / `text` / ASR final | Mở AI turn bình thường với history/context hiện tại |
-| `abort` / `listen:start` / disconnect | Xử lý lifecycle/cancel theo protocol; không suy semantic intent từ câu chữ |
-
-Server không có keyword/regex/whitelist matcher để quyết định semantic intent hoặc chọn tool/function từ user text. Vì vậy wake/exit, memory, confirmation và các tool như `get_current_time` đều do AI quyết định từ context + tool schema; server không ép route chỉ vì câu chứa một từ/mẫu cụ thể. Deterministic logic phía server chỉ bảo vệ protocol/lifecycle, schema, permission/ownership, deadline/cancel, execution và receipt/state invariants.
-
-`hello`, reconnect và một `listen:start` đứng riêng không tạo synthetic user text. Khi có `listen:detect`, server chờ tối đa `conversation.wake_start_wait_ms` (mặc định 150 ms) để phối hợp `listen:start`, sau đó chuyển text detect thật vào AI nếu event vẫn còn hợp lệ.
-
-Nếu firmware đang dùng không gửi `listen:detect`, server không tự suy wake từ `hello`/`listen:start`; mic/ASR/chat vẫn hoạt động bình thường. Không có capability hoặc field VeeTee riêng được thêm để bù cho event này.
-
-### Listen stop
+### `listen:detect`
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "listen",
-  "state": "stop"
-}
+{"type":"listen","state":"detect","text":"VeeTee ơi"}
 ```
 
-Server finalize utterance hiện tại để không phải chờ thêm VAD silence khi client đã chủ động kết thúc capture.
+Nếu có text, server có thể chuyển chính text đó vào AI turn sau cửa sổ phối hợp `listen:start`. Không dùng exact wake/exit matcher để route semantic intent.
 
-### Abort
+Firmware không gửi `listen:detect` vẫn có thể hội thoại qua mic/ASR; server không tạo synthetic wake text từ `hello` hay `listen:start`.
+
+### `listen:stop`
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "abort",
-  "reason": "wake_word_detected"
-}
+{"type":"listen","state":"stop"}
 ```
 
-Khi nhận `abort`, server cancel turn, invalidate capture generation, reset bookkeeping liên quan và gửi `tts:stop` chuẩn nếu đang phát. State được đưa về listening/idle theo listening mode hiện tại.
+Server finalize utterance hiện tại thay vì bắt buộc chờ thêm VAD silence.
 
-## 4. Server -> Client JSON
+### `abort`
+
+```json
+{"type":"abort","reason":"wake_word_detected"}
+```
+
+Server cancel turn, invalidate capture generation cũ, ngừng gửi audio mới và gửi `tts:stop` nếu cần.
+
+## 4. Server -> client JSON
 
 ### STT
 
 ```json
 {
-  "session_id": "xxx",
   "type": "stt",
   "text": "Hà Nội là thủ đô của nước nào?",
   "is_final": true,
@@ -176,85 +154,76 @@ Khi nhận `abort`, server cancel turn, invalidate capture generation, reset boo
 ### VAD
 
 ```json
-{"session_id":"xxx","type":"vad","state":"speech_started"}
-```
-
-```json
-{"session_id":"xxx","type":"vad","state":"speech_ended"}
+{"type":"vad","state":"speech_started"}
+{"type":"vad","state":"speech_ended"}
 ```
 
 ### TTS
 
 ```json
-{"session_id":"xxx","type":"tts","state":"start"}
+{"type":"tts","state":"start"}
+{"type":"tts","state":"sentence_start","text":"Hà Nội là thủ đô của Việt Nam."}
 ```
+
+Sau binary audio cuối hoặc khi cancel:
 
 ```json
-{
-  "session_id": "xxx",
-  "type": "tts",
-  "state": "sentence_start",
-  "text": "Hà Nội là thủ đô của Việt Nam."
-}
+{"type":"tts","state":"stop"}
 ```
 
-Sau binary audio cuối của turn bình thường:
+Đường stock không cần field `interrupt=true` hay decoder-flush extension riêng.
 
-```json
-{"session_id":"xxx","type":"tts","state":"stop"}
-```
+Server có thể cache raw Opus cho nội dung đã được AI sinh/chọn và đóng gói lại theo protocol version của session. Cache là tối ưu delivery, không biến literal tool result thành semantic reply đúng persona.
 
-Đường hỗ trợ stock FW dùng cùng message `tts:stop` chuẩn khi client yêu cầu ngắt. Server dừng gửi audio mới càng sớm càng tốt; không phụ thuộc trường extension riêng để flush decoder.
+## 5. MCP stock
 
-Greeting/goodbye server-side cũng dùng đúng thứ tự stock:
+Device MCP dùng wrapper `type=mcp` với JSON-RPC 2.0. Baseline flow hiện tại:
 
 ```text
-tts:start
--> tts:sentence_start
--> binary Opus V1/V2/V3
--> tts:stop
+initialize
+-> tools/list (withUserTools=false, có pagination)
+-> tools/call
 ```
 
-Khi `conversation.audio_cache_enabled=true`, server có thể cache **raw Opus frame** của nội dung AI đã chọn/sinh rồi đóng gói theo protocol version của từng session lúc phát. Error recovery dùng một asset được AI sinh trước lúc startup/persona refresh và có provenance `ai:<model>`; nếu asset chưa ready thì diagnostics báo degraded, không dùng `greeting_text`/`goodbye_text` làm semantic fallback.
+Request ID là numeric và baseline protocol version là `2024-11-05`. Nếu board không quảng bá `features.mcp` hoặc discovery lỗi, chat thường vẫn hoạt động.
 
-### Conversation close
+MCP capability quyết định tool nào có thể expose; semantic decision có gọi tool hay không vẫn do AI phía server quyết định.
 
-Kết thúc hội thoại từ lời người dùng được quyết định trong chính unified AI turn, bất kể nguồn là `listen:detect`, `text`, `chat` hay ASR final. Server không kiểm tra exit alias trước AI và không gọi classifier ngữ nghĩa thứ hai cho chat thường.
+## 6. Barge-in và pacing
 
-Khi AI trả semantic end, server dùng chính speech của turn đó rồi hoàn tất lifecycle. Idle timeout tạo một AI evaluation riêng cho inactivity event; `continue` re-arm epoch, còn `end` có thể dùng câu goodbye do AI vừa sinh rồi đưa session về logical idle. WebSocket stock được giữ mở cho idle path để firmware có thể `listen:start`/wake lại. Playback tail vẫn chỉ là **ước tính** từ `AudioPacer`; không phải ACK loa đã phát xong.
-
-## 5.1. Intent, Memory và Tools là nội bộ server
-
-ESP32 không cần field/capability riêng cho Intent hoặc Memory. Session memory chạy local; durable personal memory chỉ được bật khi operator gắn `memory.trusted_owner_id`, không dùng `Device-Id`/`Client-Id` tự khai báo làm namespace tin cậy.
-
-Tool calling cũng không thay đổi protocol speech stock. Chat thường dùng 1 LLM call; turn có tool/memory/confirmation action được phép thêm đúng 1 vòng AI synthesis sau receipt thật, tổng tối đa 2. Vòng 2 bị ép `tool_choice=none`, nên không được dispatch action mới. Native `delta.tool_calls` được validate đầy đủ trước execution. Built-in tool chạy phía server; device tools chỉ được expose khi MCP stock được board quảng bá và `tools/list` thực sự công bố tool tương ứng.
-
-MCP device dùng wrapper `type=mcp` với JSON-RPC 2.0, numeric request ID và baseline protocol `2024-11-05`: `initialize -> tools/list(withUserTools=false, pagination) -> tools/call`. Thiếu `features.mcp` hoặc discovery lỗi không chặn hội thoại thường.
-
-`conversation.idle_timeout_seconds > 0` bật watchdog per-session. Ping/heartbeat, silent/stale/echo không reset đồng hồ; watchdog không timeout khi đang pending wake, speech/final ASR, THINKING/SPEAKING hoặc đang kết thúc. Khi hết hạn, watchdog gọi AI đúng một lần cho inactivity epoch. `continue` tạo epoch mới; `end` kết thúc logical conversation. WebSocket vẫn sống để lần kích hoạt kế tiếp re-arm session. `0` tắt idle timeout.
-
-## 5. Barge-in policy
-
-Mặc định:
+Policy mặc định:
 
 ```text
 server.barge_in_policy = client_only
 ```
 
-Quy tắc:
+- stock `abort` và explicit `listen:start` có thể cancel turn;
+- speech-start trong lúc TTS phát không tự cancel theo policy mặc định;
+- `features.aec=true` hoặc `mode=realtime` không tự bật automatic speech barge-in;
+- TTS pacing giới hạn audio gửi trước để giảm tail.
 
-- `abort` và explicit `listen:start` từ client có thể ngắt turn đang nói.
-- VAD speech-start trong lúc TTS phát không tự động cancel turn dưới policy mặc định.
-- Echo guard kéo dài qua estimated playback tail để transcript do loa lọt vào mic không tạo turn mới.
-- Automatic speech barge-in chỉ có thể được xem xét sau này bằng profile thiết bị đã xác minh AEC độc lập; không suy ra từ hello `aec=true` hoặc `mode=realtime`.
+Stock firmware không cung cấp playback queue depth/flush ACK chung. `tts:stop` hay last binary ở server không tương đương physical speaker stop.
 
-## 6. Pacing và giới hạn protocol
+## 7. HTTP OTA, dashboard và management
 
-TTS output được pace theo duration frame bằng monotonic clock. `tts.send_ahead_ms` mặc định 120 ms giới hạn lượng audio server gửi trước theo mô hình playback estimate.
+HTTP mặc định ở `:8003`.
 
-Firmware stock không cung cấp playback queue depth hoặc flush ACK chung. Vì vậy:
+Public/stock-facing routes gồm:
 
-- `tts:stop`/last binary đo được ở server không tương đương thời điểm loa vật lý dừng;
-- close grace/goodbye drain cũng chỉ là ước tính server-side, không phải playback ACK;
-- send-ahead 120 ms là giá trị khởi đầu để test board, không phải cam kết latency;
-- cần đo trên ESP32 thật trước khi tune xuống thấp hơn hoặc cao hơn.
+```text
+GET/POST /ota/
+GET/POST /api/ota/
+GET /   (dashboard/static UI)
+```
+
+Management routes:
+
+```text
+GET  /api/prompt
+POST /api/prompt
+POST /api/test-voice
+```
+
+Management routes yêu cầu token cấu hình qua `management.token` hoặc `VEETEE_MANAGEMENT_TOKEN`. Client gửi `X-Veetee-Management-Token` hoặc `Authorization: Bearer <token>`. Token trống làm management access bị từ chối.
+
+Management token này không phải credential bắt buộc cho firmware OTA/WebSocket stock.
