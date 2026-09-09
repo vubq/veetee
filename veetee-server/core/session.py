@@ -568,8 +568,12 @@ class ClientSession:
             "content": (
                 "Sự kiện hệ thống: hội thoại đã không có tương tác "
                 f"{timeout:.0f} giây (không có câu hỏi của người dùng và không có câu trả lời nào). "
-                "Phiên sắp kết thúc. Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, "
-                "phù hợp ngữ cảnh hội thoại. Chỉ trả về đúng một câu chào, không thêm gì khác."
+                "Phiên sắp kết thúc và sẽ ngắt ngay sau câu này. "
+                "Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, đúng tính cách trong prompt hệ thống và "
+                "phù hợp ngữ cảnh hội thoại — đại ý nếu không cần gì nữa thì xin phép đi trước, "
+                "có gì cứ gọi lại sau. Đây là câu chào kết thúc, không phải câu hỏi: "
+                "không hỏi người dùng có cần giúp gì không, không hỏi sao im lặng. "
+                "Chỉ trả về đúng một câu chào, không thêm gì khác."
             ),
         })
         speech: list[str] = []
