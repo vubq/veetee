@@ -563,6 +563,14 @@ class ClientSession:
         arrives mid-flow bumps the activity revision and cancels this path.
         """
         messages = list(self.dialogue.get_messages_for_llm())
+        if not any(item.get("role") == "user" for item in messages):
+            # Gateway chat template rejects user-less requests (HTTP 400).
+            # This placeholder only feeds this one-off farewell generation and
+            # is never stored in the dialogue history.
+            messages.append({
+                "role": "user",
+                "content": "(Người dùng kết nối nhưng chưa nói gì.)",
+            })
         messages.append({
             "role": "system",
             "content": (

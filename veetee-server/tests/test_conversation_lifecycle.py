@@ -299,6 +299,11 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(idle_calls), 1)
         self.assertTrue(all(call["tool_choice"] == "none" for call in idle_calls))
+        # Gateway template requires a user turn; silent sessions get a marked
+        # placeholder so the farewell call never 400s.
+        self.assertTrue(
+            any(item.get("role") == "user" for item in idle_calls[0]["messages"])
+        )
         self.assertEqual(websocket.close_code, 1000)
         self.assertFalse(session.is_active)
 
