@@ -56,7 +56,7 @@ Các ca H1–H6 đã kiểm tra bằng hàm thật trong process thử độc l�
 
 ### M0 — Baseline, kiểm kê và corpus chống học thuộc
 
-- [ ] 1. Ghi HEAD/dirty/process/config fingerprint không secret; đối chiếu source runtime. Lập bảng mọi nhánh đọc user text hoặc tạo speech trong `core/`, server, dashboard: nguồn quyết định là AI, protocol hay resource policy; có chạy trước AI không; có gây mutation/close không. Bao gồm đường legacy provider, không chỉ unified path.
+- [x] 1. Ghi HEAD/dirty/process/config fingerprint không secret; đối chiếu source runtime. Lập bảng mọi nhánh đọc user text hoặc tạo speech trong `core/`, server, dashboard: nguồn quyết định là AI, protocol hay resource policy; có chạy trước AI không; có gây mutation/close không. Bao gồm đường legacy provider, không chỉ unified path. → Xong 2026-09-10: `veetee-server/eval/USER_TEXT_AUDIT.md` (15 nhánh, HEAD `69c0a14`); legacy lists grep 0 hit runtime.
 - [ ] 2. Lưu H1–H6 thành regression fail trước/pass sau; fake LLM tests kiểm tra wiring/ordering, không dùng chúng chứng minh model hiểu tiếng Việt. Tạo corpus gán nhãn độc lập ít nhất 200 tình huống, gồm ít nhất 80 ca trọng yếu không được mutation/close/confirm nhầm; tối thiểu 50 tình huống held-out không đưa vào prompt examples.
 - [ ] 3. Tách dataset theo hội thoại, bao gồm cùng câu trong ngữ cảnh khác nhau, câu không dấu, ASR sai, phủ định kép, trích dẫn, roleplay, nhiều ý định, sửa ý và interrupt. Chốt nhãn mong đợi trước tuning; báo recall của yêu cầu thật để tránh đạt 0 false-positive bằng cách luôn bỏ qua hành động.
 
