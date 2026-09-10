@@ -25,9 +25,9 @@ Tạo bằng Vieneu local (giọng `Xuân Vĩnh`, 48 kHz; xem script đã dùng 
 thực thi 2026-09-10). Dùng cho test acoustic qua loa và benchmark:
 
 - `wake_hi_esp_v1.wav` (`"Hi, ESP!"`), `wake_hi_esp_v2.wav` (`"Hi Esp!"`):
-  thử đánh thức wakenet tiếng Anh. Vieneu là TTS tiếng Việt nên phát âm
-  có thể lệch — nếu board không bắt thì cần giọng Anh bản xứ, không kết luận
-  model wake word hỏng chỉ từ 2 file này.
+  thử đánh thức wakenet tiếng Anh bằng Vieneu (TTS tiếng Việt, phát âm lệch).
+- `wake_hi_esp_en_us.wav`: `"Hi ESP"` giọng `en-US` thật — file đã chứng minh
+  đánh thức được board (2026-09-10). `scripts/hw_acoustic_test.py` dùng mặc định.
 - `vn_may_gio_roi.wav`, `vn_hom_nay_thu_may.wav`, `vn_ban_ten_la_gi.wav`:
   câu hỏi tiếng Việt để phát kiểm tra vòng mic → ASR → LLM → TTS → loa.
 - `bench_question_16k.wav`: mono PCM16 16 kHz cho

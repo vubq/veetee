@@ -83,6 +83,26 @@ Checklist acceptance:
 
 Nếu board không có cơ chế stock để tạo interrupt, baseline chat vẫn có thể đánh giá; automatic speech barge-in vẫn `PENDING` cho tới khi AEC/device behavior được đo độc lập.
 
+### 5b. Hardware acoustic tự động (`scripts/hw_acoustic_test.py`)
+
+Vòng loa laptop → mic board → server → loa board, verify tự động qua
+`/health` + journal + serial, exit `0` PASS / `1` FAIL / `2` BLOCKED:
+
+```bash
+../../venv/bin/python scripts/hw_acoustic_test.py --expect "mấy giờ"
+../../venv/bin/python scripts/hw_acoustic_test.py --expect "mấy giờ" --idle  # kèm idle-close + re-wake (chậm)
+```
+
+Yêu cầu: server ready, quyền `sudo -n` cổng serial, `pw-play`, board đã
+provision Wi-Fi/OTA, loa PC đặt gần mic. Mỗi lần chỉ một tiến trình đọc
+serial. Fixture trong `eval/audio/` (`wake_hi_esp_en_us.wav` đã chứng minh
+đánh thức được board).
+
+Giới hạn đã biết (board mic đơn, không AEC reference): board nghe được cả
+loa của chính nó nên có echo turns xen giữa; harness chờ kênh lặng rồi hỏi
+lại nhiều lần (`--qa-tries`) và chỉ PASS khi transcript khớp `--expect`.
+PASS tự động không thay kiểm tra nghe tail/dừng-loa vật lý (mục 6, 8).
+
 ## 6. Khi dùng PASS / PARTIAL / PENDING
 
 - `PASS`: gate cụ thể có đủ evidence theo đúng loại test và snapshot.
