@@ -36,8 +36,8 @@ def time_descriptor(default_timezone: str = "Asia/Bangkok") -> ToolDescriptor:
             "thực sự cần biết đồng hồ hoặc ngày hiện tại; đừng gọi chỉ vì người dùng nhắc tới "
             "một mốc giờ, lịch trình hay hỏi giờ khuyến nghị. Nếu cần ngày/giờ hiện tại mà không "
             f"có múi giờ cụ thể thì dùng mặc định {default_timezone}. "
-            "Nếu context lượt hiện tại đã có server_clock đúng múi giờ và đủ dữ liệu, "
-            "dùng trực tiếp snapshot đó; không cần gọi lại tool."
+            "Mỗi lượt luôn có sẵn server_clock đúng múi giờ mặc định: đọc trực tiếp snapshot đó, "
+            "không cần gọi lại tool. Cấm bịa giờ khi chưa có dữ liệu."
         ),
         input_schema={
             "type": "object",
