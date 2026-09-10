@@ -43,9 +43,11 @@ Endpoint mặc định:
 ## Kiểm thử nhanh
 
 ```bash
-python -m unittest discover -s tests -v
-PYTHONPATH=. python test_e2e.py
-python scripts/benchmark_pipeline.py --help
+../../venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=. ../../venv/bin/python test_e2e.py
+../../venv/bin/python scripts/benchmark_pipeline.py --help
 ```
+
+Luôn dùng venv của project (`../../venv`); `python3` hệ thống thiếu deps.
 
 Chi tiết cách diễn giải kết quả và khi nào được ghi `PASS`, `PARTIAL` hoặc `PENDING` nằm trong [docs/TESTING.md](docs/TESTING.md).

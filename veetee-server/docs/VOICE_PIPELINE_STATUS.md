@@ -1,7 +1,7 @@
 # Voice Pipeline Status
 
-Snapshot tài liệu: **2026-09-09**
-Source đối chiếu: **HEAD `469f941`** + working tree runtime M1–M6 (A01–A11 code fixed, xem bên dưới).
+Snapshot tài liệu: **2026-09-10**
+Source đối chiếu: **HEAD `c92192a`**, working tree sạch.
 
 Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành nằm ở [ARCHITECTURE.md](ARCHITECTURE.md), test/acceptance ở [TESTING.md](TESTING.md), công việc runtime còn mở ở [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md).
 
@@ -37,17 +37,18 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | A09 | RESOLVED (code): recursive validator + semantic guards + ownership/cancel barriers; cần race/hardware |
 | A10 | RESOLVED (code): explicit catalog notice + search; MCP capability gate; chưa mở tool mới |
 | A11 | PARTIAL: parallel independent reads + lease hold metrics + split deadlines xong; cần A/B tải thật |
-| A12 | PARTIAL: unit 144 PASS (2026-09-09, HEAD `469f941` + working tree); corpus/SLA/hardware còn thiếu |
+| A12 | PARTIAL: unit 154 PASS (2026-09-10, HEAD `c92192a`); corpus/SLA/hardware còn thiếu |
+| A13 | IMPLEMENTED (code) + spot-check tay: deterministic idle end — chào theo persona rồi đóng phiên code 1000; farewell retry/fallback có regression; đã kiểm 3 lượt model thật qua WebSocket |
 
 ## Test evidence
 
 ```text
-144/144 tests PASS (2026-09-09, HEAD 469f941 + working tree M1-M6)
+154/154 tests PASS (2026-09-10, HEAD c92192a)
 compileall PASS
 git diff --check PASS (cần rerun trước commit)
 ```
 
-Gồm regression mới `test_ai_semantics_regression` (7), `test_bounded_loop` (5), `test_retrieval_rag` (5) và cập nhật `test_turn_lifecycle` bỏ direct-clock/literal assertions. Số `127` trước đây là snapshot lịch sử, không dùng thay cho lần chạy này. Corpus model thật, latency 100-attempt và hardware vẫn PENDING nên tổng là PARTIAL.
+Gồm regression mới `test_ai_semantics_regression`, `test_bounded_loop`, `test_retrieval_rag`, `test_clock_context` và idle farewell (retry/fallback/waiting/invite, đóng transport sau chào). Số `127/144/148` trước đây là snapshot lịch sử, không dùng thay cho lần chạy này. Corpus model thật, latency 100-attempt và hardware vẫn PENDING nên tổng là PARTIAL.
 
 ## Runtime/hardware còn PENDING
 

@@ -44,6 +44,7 @@ Một số default đáng chú ý trong source/example hiện tại:
 | `tools.max_llm_rounds_per_turn` | `2` (cho phép `1..4`) |
 | `llm.base_prompt_max_bytes` / `base_prompt_max_tokens` | `32768` / `8000` est. |
 | `tts.first_chunk_timeout_ms` / `stall_timeout_ms` | `4000` / `2500` |
+| `conversation.enabled` / `idle_timeout_seconds` | `false` / `120` (local test hay bật `true`; hết timeout không tương tác thì chào rồi đóng phiên) |
 
 Local `config.yaml` có thể override các giá trị này; local override không phải default của project.
 

@@ -36,6 +36,16 @@ Khi user yêu cầu thực hiện một plan trong thư mục này:
 5. Cập nhật checklist và mục `Execution status` trong chính file plan khi hoàn thành từng phần quan trọng.
 6. Nếu hoàn tất, đặt trạng thái plan thành `COMPLETED`; nếu còn việc phụ thuộc thiết bị/người dùng, dùng `PARTIAL` và ghi rõ phần còn lại.
 
+## Quy tắc sau khi sửa code (đồng bộ config + restart)
+
+Sau mọi thay đổi code ảnh hưởng runtime (`core/`, `config/`, `http_server.py`, `scripts/`, `static/`), model thực thi phải hoàn tất đủ các bước sau mới được coi là xong:
+
+1. **Verify:** `unittest discover -s tests` bằng venv project, `compileall`, `git diff --check` — tất cả xanh.
+2. **Đồng bộ config:** key mới phải có mặt trong **cả** `config.example.yaml` (kèm comment) **và** `config.yaml` local; kiểm tra parity keys bằng script (thiếu/thừa key đều phải xử lý). Secret chỉ cấp qua env (`DEEPGRAM_API_KEY`, `VEETEE_MANAGEMENT_TOKEN`), không ghi vào file. Local override giữ nguyên và đánh dấu `LOCAL OVERRIDE`. Hai file **cùng cấu trúc/keys, không bắt buộc giống giá trị** vì local override là chủ ý (xem `SETUP.md`).
+3. **Đồng bộ docs:** nếu behavior/default đổi thì cập nhật `ARCHITECTURE.md` (snapshot HEAD + mục behavior), `VOICE_PIPELINE_STATUS.md` (evidence), `TESTING.md` (baseline số tests), `SETUP.md` (bảng defaults).
+4. **Commit:** chia commit nhỏ đúng scope; không commit `config.yaml`/secret/artifact/log (đã gitignore).
+5. **Restart + kiểm tra:** `systemctl --user restart veetee-server-bg.service`, đợi `/health` trả `readiness: ready`, kiểm tra log không có error/traceback mới, xác nhận process đang chạy đúng HEAD mới nhất.
+
 ## Quy tắc handoff
 
 - Plan là tài liệu truyền việc, không phải source of truth cao hơn yêu cầu mới nhất của user.

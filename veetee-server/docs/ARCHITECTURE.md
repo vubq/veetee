@@ -1,7 +1,7 @@
 # VeeTee Server Architecture
 
-Cập nhật tài liệu: **2026-09-09**
-Source snapshot đối chiếu: **HEAD `469f941`**, working tree có thay đổi runtime M1–M6 (xem Execution status trong plan runtime).
+Cập nhật tài liệu: **2026-09-10**
+Source snapshot đối chiếu: **HEAD `c92192a`**, working tree sạch.
 
 Tài liệu này là nơi mô tả **behavior hiện hành**. Backlog/runtime changes nằm trong [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md); không coi nội dung `PLANNED` trong plan là behavior đã có.
 
@@ -112,6 +112,15 @@ TTS được pace và bounded để giảm lượng audio gửi trước. Stock 
 - AEC hiệu quả và tail thực tế phải đo trên board.
 
 Metric benchmark hiện hành là `speech_end_to_first_voiced_pcm_received_ms` (`v2`); certification metric là `speech_end_to_first_useful_voiced_audio_received_ms` (voiced hiện chỉ là acoustic proxy cho tới khi case pass quality/grounding). TTS lease đo riêng inference vs hold (`tts_lease_held`, scheduler snapshot holds/avg/max); generation/tool/TTS first-chunk/stall/delivery budgets tách riêng. Xem [TESTING.md](TESTING.md).
+
+## Vòng đời hội thoại và idle
+
+### IMPLEMENTED (2026-09-10)
+
+- Hết `conversation.idle_timeout_seconds` không có tương tác hội thoại (câu hỏi user / câu trả lời AI — không phải silence âm thanh thô) thì phiên **luôn kết thúc** (deterministic deadline, không vòng AI `[continue]`).
+- Một bounded LLM inference sinh câu chào tạm biệt theo persona; lượt user chen vào giữa chừng hủy flow qua activity revision.
+- Câu chào phải là câu kết thúc, không phải câu hỏi/lời mời nói tiếp: output-shape validation → retry 1 lần → fallback an toàn (`IDLE_FAREWELL_FALLBACK`). Đây là validate output do AI sinh trong path lifecycle, không phân loại lời user.
+- Phát hết câu chào (drain đuôi + `close_grace_ms`, gửi `tts:stop`) rồi đóng WebSocket code 1000 reason `idle_timeout` và dọn session. Muốn nói tiếp phải hello phiên mới.
 
 ## Trạng thái và nguồn evidence
 
