@@ -581,7 +581,9 @@ class ClientSession:
             async for event in self.turn_runner.stream(
                 messages,
                 tools=[],
-                detect_end_intent=True,
+                # Goodbye prompt carries no [end]/[continue] markers; skip
+                # control parsing so the farewell text passes through untouched.
+                detect_end_intent=False,
                 tool_choice="none",
                 first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
                 total_timeout_ms=min(

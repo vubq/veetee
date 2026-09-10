@@ -51,6 +51,8 @@ Local `config.yaml` có thể override các giá trị này; local override khô
 
 Default config dùng Parakeet CTC Vietnamese + Silero VAD cho ASR và VieNeu cho TTS. Deepgram là provider ASR thay thế khi operator cấu hình provider/API key phù hợp.
 
+`asr.device` mặc định `cuda` nhưng server tự fallback `cpu` khi không có GPU (`core/providers/asr/parakeet_silero.py`) — vẫn chạy nhưng inference chậm hơn, không phù hợp đo latency SLA.
+
 Secret ASR cấp qua env (để `asr.api_key` trống trong `config.yaml` local):
 
 ```bash
