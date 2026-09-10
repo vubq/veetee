@@ -19,7 +19,7 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | Prompt management | IMPLEMENTED | Saved persona precedence + shared byte/token budget (`32 KiB`/est. `8000`); reject over-budget, version snapshot/turn |
 | Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 2), catalog notice explicit |
 | Benchmark client | IMPLEMENTED | Metric `v2` voiced proxy + useful certification metric; smoke 20/95% vs cert 100/99% (`--certification`) |
-| Runtime latency SLA | PARTIAL | Code/gates xong; chưa chạy warm/lạnh/load 100-attempt trên route/model thật |
+| Runtime latency SLA | NOT_MET | Smoke 2026-09-10: success 100% nhưng p50 ~6.0s / p95 ~6.6s (target p50 ≤0.6s, p95 <1.0s). Bimodal: lượt nhanh ~1.5s, lượt chậm ~6s, phần chậm nằm ở chân LLM gateway (STT chỉ ~0.5-0.7s). Cert 100-attempt chưa chạy |
 | ESP32 physical playback/AEC | PENDING | Chưa có hardware/acoustic evidence mới cho snapshot này |
 
 ## A01–A12 sau runtime M1–M6 (code)

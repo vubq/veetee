@@ -18,3 +18,18 @@ Mở rộng lên đủ gate:
 - Memory/Tool-confirmation/Retrieval-RAG: mỗi nhóm ≥30 dialogue/query.
 
 File `semantic_corpus_seed.json` chứa 42 case seed bao phủ các nhóm.
+
+## Audio fixtures (`audio/`)
+
+Tạo bằng Vieneu local (giọng `Xuân Vĩnh`, 48 kHz; xem script đã dùng trong log
+thực thi 2026-09-10). Dùng cho test acoustic qua loa và benchmark:
+
+- `wake_hi_esp_v1.wav` (`"Hi, ESP!"`), `wake_hi_esp_v2.wav` (`"Hi Esp!"`):
+  thử đánh thức wakenet tiếng Anh. Vieneu là TTS tiếng Việt nên phát âm
+  có thể lệch — nếu board không bắt thì cần giọng Anh bản xứ, không kết luận
+  model wake word hỏng chỉ từ 2 file này.
+- `vn_may_gio_roi.wav`, `vn_hom_nay_thu_may.wav`, `vn_ban_ten_la_gi.wav`:
+  câu hỏi tiếng Việt để phát kiểm tra vòng mic → ASR → LLM → TTS → loa.
+- `bench_question_16k.wav`: mono PCM16 16 kHz cho
+  `scripts/benchmark_pipeline.py` (`--speech-end-sample 16933`, trailing
+  silence 0.5 s hai đầu, ngưỡng RMS 0.02/10 ms).
