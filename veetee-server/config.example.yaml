@@ -47,13 +47,40 @@ asr:
   diagnostic_capture_max_files: 20
 
 llm:
-  provider: "omniroute"
-  base_url: "http://127.0.0.1:20128/v1"
+  # provider: "groq" (Groq API trực tiếp, quota-aware multi-key) hoặc
+  # "omniroute" (gateway local cũ). Không còn OmniRoute trong đường mới.
+  provider: "groq"
+  base_url: "https://api.groq.com/openai/v1"
   api_key: "local-omniroute"
-  model: "groq/qwen/qwen3.6-27b"
+  model: "qwen/qwen3.6-27b"
+  # Pool key Groq: secret CHỈ ở env (GROQ_API_KEY_<alias>), file này chỉ giữ
+  # id + quota_group. Số lượng key linh hoạt; pool rỗng = tự quét env.
+  # Mỗi alias mặc định một quota_group riêng (quota độc lập).
+  key_pool:
+    - {id: "A", api_key_env: "GROQ_API_KEY_A", quota_group: "gA", enabled: true}
+    - {id: "B", api_key_env: "GROQ_API_KEY_B", quota_group: "gB", enabled: true}
+    - {id: "C", api_key_env: "GROQ_API_KEY_C", quota_group: "gC", enabled: true}
+    - {id: "D", api_key_env: "GROQ_API_KEY_D", quota_group: "gD", enabled: true}
+  # Caps quota theo group (rpm/rpd/tpm/tpd/itpm/otpm). Bỏ trống group nào thì
+  # group đó chạy discovery mode (giới hạn in-flight, học caps từ headers).
+  # Không bịa quota tài khoản khác.
+  quota_groups: {}
+  routing:
+    headroom_pct: 10.0
+    max_attempts: 2
+    admission_wait_ms: 50.0
+    discovery_max_inflight: 1
+    inflight_penalty_s: 0.4
   temperature: 0.6
   max_tokens: 600
   reasoning_format: "hidden"
+  # Effort suy luận cho model mặc định ("none" tắt <think> kiểu Qwen).
+  reasoning_effort: "none"
+  # Model phụ để A/B test (không thay default). Effort riêng từng model
+  # vì gpt-oss chỉ nhận low/medium/high.
+  extra_models: ["openai/gpt-oss-20b"]
+  model_reasoning_effort:
+    "openai/gpt-oss-20b": "low"
   base_prompt: "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
   prompt_template: "agent-base-prompt.txt"
   # Persona budget dùng chung cho API/UI/config/runtime. Over-budget bị reject,

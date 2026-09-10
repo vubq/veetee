@@ -47,11 +47,49 @@ class ASRConfig:
     diagnostic_capture_max_files: int = 20
 
 @dataclass
+class LLMKeyConfig:
+    # One credential entry. Secrets live ONLY in env (api_key_env names the
+    # variable); this file holds ids and quota-group mapping. Any suffix
+    # works, so key count is flexible (A..D today, more later).
+    id: str = ""
+    api_key_env: str = ""
+    quota_group: str = ""
+    enabled: bool = True
+
+
+@dataclass
+class LLMRoutingConfig:
+    headroom_pct: float = 10.0
+    max_attempts: int = 2
+    admission_wait_ms: float = 50.0
+    discovery_max_inflight: int = 1
+    inflight_penalty_s: float = 0.4
+
+
+QUOTA_DIMENSIONS = frozenset({"rpm", "rpd", "tpm", "tpd", "itpm", "otpm"})
+
+
+@dataclass
 class LLMConfig:
-    provider: str = "omniroute"
-    base_url: str = "http://127.0.0.1:20128/v1"
+    provider: str = "groq"
+    base_url: str = "https://api.groq.com/openai/v1"
     api_key: str = "local-omniroute"
-    model: str = "groq/qwen/qwen3.6-27b"
+    model: str = "qwen/qwen3.6-27b"
+    # Pool of Groq credentials. Empty pool = auto-scan GROQ_API_KEY_* env
+    # (each alias gets its own quota group). Ignored by omniroute provider.
+    key_pool: list = field(default_factory=list)
+    # Quota caps per group, e.g. {"gA": {"rpm": 30, "tpm": 8000}}.
+    # Omitted/empty groups run in discovery mode (bounded in-flight, caps
+    # learned from response headers). Never fabricate another account's caps.
+    quota_groups: dict = field(default_factory=dict)
+    routing: LLMRoutingConfig = field(default_factory=LLMRoutingConfig)
+    # Reasoning effort for Qwen-style models ("none" suppresses <think>).
+    # gpt-oss only accepts low/medium/high -> use model_reasoning_effort.
+    reasoning_effort: str = "none"
+    # Extra models for A/B tests (default model untouched). Per-model effort
+    # override, e.g. {"openai/gpt-oss-20b": "low"}.
+    extra_models: list = field(default_factory=list)
+    model_reasoning_effort: dict = field(default_factory=dict)
     temperature: float = 0.6
     max_tokens: int = 600
     reasoning_format: str = "hidden"
@@ -330,6 +368,60 @@ def _validate_app_config(config: AppConfig) -> None:
         value = getattr(config.llm, name)
         if type(value) is not int or value < 256:
             raise ValueError(f"llm.{name} must be an integer >= 256")
+    if config.llm.provider not in ("groq", "omniroute"):
+        raise ValueError("llm.provider must be 'groq' or 'omniroute'")
+    if not isinstance(config.llm.model, str) or not config.llm.model.strip():
+        raise ValueError("llm.model must be a non-empty string")
+    if not isinstance(config.llm.key_pool, list):
+        raise ValueError("llm.key_pool must be a list")
+    seen_ids: set = set()
+    for entry in config.llm.key_pool:
+        if not isinstance(entry, LLMKeyConfig):
+            raise ValueError("llm.key_pool entries must be mappings")
+        if not entry.id.strip():
+            raise ValueError("llm.key_pool entry is missing id")
+        if entry.id in seen_ids:
+            raise ValueError(f"duplicate llm.key_pool id: {entry.id}")
+        seen_ids.add(entry.id)
+        if not isinstance(entry.api_key_env, str) or not entry.api_key_env.strip():
+            raise ValueError(f"llm.key_pool {entry.id} is missing api_key_env")
+        if not isinstance(entry.quota_group, str):
+            raise ValueError(f"llm.key_pool {entry.id} has invalid quota_group")
+        if type(entry.enabled) is not bool:
+            raise ValueError(f"llm.key_pool {entry.id}.enabled must be a boolean")
+    if not isinstance(config.llm.quota_groups, dict):
+        raise ValueError("llm.quota_groups must be a mapping")
+    for group, caps in config.llm.quota_groups.items():
+        if not isinstance(caps, dict):
+            raise ValueError(f"llm.quota_groups[{group}] must be a mapping")
+        for dim, value in caps.items():
+            if dim not in QUOTA_DIMENSIONS:
+                raise ValueError(f"llm.quota_groups[{group}] has unknown dimension: {dim}")
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"llm.quota_groups[{group}][{dim}] must be positive")
+    routing = config.llm.routing
+    if not isinstance(routing, LLMRoutingConfig):
+        raise ValueError("llm.routing must be a mapping")
+    if not 0.0 <= routing.headroom_pct <= 90.0:
+        raise ValueError("llm.routing.headroom_pct must be between 0 and 90")
+    if routing.max_attempts not in (1, 2, 3):
+        raise ValueError("llm.routing.max_attempts must be 1, 2 or 3")
+    if not 0.0 <= routing.admission_wait_ms <= 5000.0:
+        raise ValueError("llm.routing.admission_wait_ms must be between 0 and 5000")
+    if type(routing.discovery_max_inflight) is not int or routing.discovery_max_inflight < 1:
+        raise ValueError("llm.routing.discovery_max_inflight must be a positive integer")
+    if not 0.0 <= routing.inflight_penalty_s <= 10.0:
+        raise ValueError("llm.routing.inflight_penalty_s must be between 0 and 10")
+    if config.llm.reasoning_effort not in ("none", "low", "medium", "high"):
+        raise ValueError("llm.reasoning_effort must be none/low/medium/high")
+    if not isinstance(config.llm.extra_models, list) or any(
+            not isinstance(m, str) or not m.strip() for m in config.llm.extra_models):
+        raise ValueError("llm.extra_models must be a list of non-empty strings")
+    if not isinstance(config.llm.model_reasoning_effort, dict):
+        raise ValueError("llm.model_reasoning_effort must be a mapping")
+    for model, effort in config.llm.model_reasoning_effort.items():
+        if effort not in ("none", "low", "medium", "high"):
+            raise ValueError(f"llm.model_reasoning_effort[{model}] must be none/low/medium/high")
     _validate_base_prompt_budget(config.llm.base_prompt, config)
     if config.asr.text_correction_enabled and config.latency.unified_turn_enabled:
         raise ValueError("fast unified-turn profile requires asr.text_correction_enabled=false")
@@ -399,6 +491,37 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         asr_data = {k: v for k, v in asr_data.items() if k != "api_key"}
     if not str(management_data.get("token", "") or "").strip():
         management_data = {k: v for k, v in management_data.items() if k != "token"}
+
+    pool_data = llm_data.get("key_pool", [])
+    if pool_data is None:
+        pool_data = []
+    if not isinstance(pool_data, list):
+        raise ValueError("llm.key_pool must be a list")
+    key_pool = []
+    for entry in pool_data:
+        if not isinstance(entry, dict):
+            raise ValueError("llm.key_pool entries must be mappings")
+        known = {k: v for k, v in entry.items() if k in LLMKeyConfig.__annotations__}
+        item = LLMKeyConfig(**known)
+        if not item.quota_group.strip():
+            item.quota_group = f"g{item.id}"
+        key_pool.append(item)
+    llm_data = dict(llm_data)
+    llm_data["key_pool"] = key_pool
+    routing_data = llm_data.get("routing", {})
+    if routing_data is None:
+        routing_data = {}
+    if not isinstance(routing_data, dict):
+        raise ValueError("llm.routing must be a mapping")
+    llm_data["routing"] = LLMRoutingConfig(
+        **{k: v for k, v in routing_data.items() if k in LLMRoutingConfig.__annotations__}
+    )
+    quota_groups = llm_data.get("quota_groups", {})
+    if quota_groups is None:
+        quota_groups = {}
+    if not isinstance(quota_groups, dict):
+        raise ValueError("llm.quota_groups must be a mapping")
+    llm_data["quota_groups"] = quota_groups
 
     config = AppConfig(
         server=ServerConfig(**{k: v for k, v in server_data.items() if k in ServerConfig.__annotations__}),

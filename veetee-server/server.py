@@ -9,6 +9,7 @@ from config.settings import load_settings, AppConfig
 from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.tts.vieneu_local import VieneuLocalTTS
 from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
+from core.providers.llm.groq_direct import build_engine_from_config
 from core.response_audio_cache import ResponseAudioCache
 from core.session import ClientSession
 from core.turn_metrics import TurnTraceStore
@@ -26,7 +27,7 @@ class VeeTeeServer:
         self.config = config
         self.local_ip = get_local_ip()
         server_dir = os.path.dirname(os.path.abspath(__file__))
-        logger.info(f"Loaded config: LLM provider=OmniRoute, model={config.llm.model}, max_tokens={config.llm.max_tokens}")
+        logger.info(f"Loaded config: LLM provider={config.llm.provider}, model={config.llm.model}, max_tokens={config.llm.max_tokens}")
         
         # 1. Initialize Vieneu Neural TTS
         self.tts_engine = VieneuLocalTTS(
@@ -39,18 +40,23 @@ class VeeTeeServer:
             temperature=config.tts.temperature
         )
         
-        # 2. Initialize LLM (Omniroute / Groq Qwen 3.6 27B)
-        self.llm_engine = OmnirouteGroqLLM(
-            base_url=config.llm.base_url,
-            api_key=config.llm.api_key,
-            model=config.llm.model,
-            temperature=config.llm.temperature,
-            max_tokens=config.llm.max_tokens,
-            reasoning_format=config.llm.reasoning_format,
-            base_prompt=config.llm.base_prompt,
-            prompt_template_path=os.path.join(server_dir, config.llm.prompt_template),
-            base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
-        )
+        # 2. Initialize LLM (Groq direct quota-aware pool by default).
+        if config.llm.provider == "groq":
+            self.llm_engine = build_engine_from_config(
+                config.llm, server_dir=server_dir)
+        else:
+            logger.info("Using legacy OmniRoute LLM provider")
+            self.llm_engine = OmnirouteGroqLLM(
+                base_url=config.llm.base_url,
+                api_key=config.llm.api_key,
+                model=config.llm.model,
+                temperature=config.llm.temperature,
+                max_tokens=config.llm.max_tokens,
+                reasoning_format=config.llm.reasoning_format,
+                base_prompt=config.llm.base_prompt,
+                prompt_template_path=os.path.join(server_dir, config.llm.prompt_template),
+                base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
+            )
         self.response_audio_cache = ResponseAudioCache(self.tts_engine, config.tts)
         self.recent_turn_store = TurnTraceStore(max_recent=100)
         self.runtime_readiness = {

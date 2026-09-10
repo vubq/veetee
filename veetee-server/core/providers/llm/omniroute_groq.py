@@ -9,7 +9,9 @@ from core.providers.llm.base import BaseLLM
 from core.intent import Intent
 from core.tools.base import READ_ONLY_TOOL_DESCRIPTION_MARKER
 from core.ai_contract import (
+    ASR_CORRECTION_PROMPT,
     CONFIRMATION_TOOL_NAME,
+    INLINE_CONVERSATION_CONTROL_PROMPT,
     MEMORY_TOOL_NAME,
     SEMANTIC_SYSTEM_PROMPT,
 )
@@ -200,14 +202,11 @@ class SpeechSegmentSplitter:
         return []
 
 class OmnirouteGroqLLM(BaseLLM):
-    ASR_CORRECTION_PROMPT = """Bạn là tầng hiệu chỉnh cuối của ASR cho một trợ lý giọng nói tiếng Việt. Đầu vào là transcript máy nhận dạng âm thanh, có thể sai 1-3 từ vì các âm gần nhau, nhất là từ đầu câu, tên riêng, thương hiệu, từ tiếng Anh và chữ cái đọc rời.
+    # Shared contract text lives in core.ai_contract; kept as class
+    # attributes for getattr/diagnostics compatibility.
+    ASR_CORRECTION_PROMPT = ASR_CORRECTION_PROMPT
 
-Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
-
-    INLINE_CONVERSATION_CONTROL_PROMPT = """Trong chính lượt này, tự quyết định người dùng có muốn kết thúc phiên hiện tại không. Nếu cần gọi tool, gọi tool trực tiếp ngay; không phát câu chờ và không cần [end]/[continue] trước tool call. Với lượt trả lời bằng nội dung nói, đầu ra bắt buộc mở đầu bằng [end] hoặc [continue], rồi thẻ cảm xúc và nội dung nói.
-[end] chỉ khi lời mới nhất là lời chào tạm biệt hoặc yêu cầu dừng rõ ràng và không hỏi thêm gì; sau đó nói một câu chào ngắn đúng persona.
-[continue] cho mọi trường hợp khác: mọi câu hỏi xin thông tin (ngày, giờ, thứ, thời tiết, tính toán, ghi nhớ, tra cứu...), dù ngắn hay cụt, đều là [continue]; cả khi người dùng chỉ nhắc tới việc tạm biệt hay đi ngủ mà chưa chào tạm biệt thật.
-Định dạng: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung.... Hai nhãn điều khiển là metadata nội bộ, không nhắc lại trong lời nói."""
+    INLINE_CONVERSATION_CONTROL_PROMPT = INLINE_CONVERSATION_CONTROL_PROMPT
 
     def __init__(
         self,
