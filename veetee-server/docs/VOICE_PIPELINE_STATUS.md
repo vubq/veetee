@@ -20,7 +20,7 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 2), catalog notice explicit |
 | Benchmark client | IMPLEMENTED | Metric `v2` voiced proxy + useful certification metric; smoke 20/95% vs cert 100/99% (`--certification`) |
 | Runtime latency SLA | NOT_MET | Smoke 2026-09-10: success 100% nhưng p50 ~6.0s / p95 ~6.6s (target p50 ≤0.6s, p95 <1.0s). Bimodal: lượt nhanh ~1.5s, lượt chậm ~6s, phần chậm nằm ở chân LLM gateway (STT chỉ ~0.5-0.7s). Cert 100-attempt chưa chạy |
-| ESP32 physical playback/AEC | PENDING | Chưa có hardware/acoustic evidence mới cho snapshot này |
+| ESP32 physical playback/AEC | PARTIAL | Acoustic E2E 2026-09-10 (board bread-compact-wifi-lcd, FW build từ source baseline `c724127` + Kconfig: VI, 240x280, wn9_hiesp, OTA local): wake EN bắt (33 packets) → hỏi TV "Mấy giờ rồi." → STT đúng → đáp đúng giờ → TTS về loa; idle 120s chào "Tạm biệt…" rồi đóng phiên, board về idle; gọi dậy lại mở phiên mới. AEC/barge-in và tail vật lý vẫn PENDING |
 
 ## A01–A12 sau runtime M1–M6 (code)
 
@@ -59,5 +59,6 @@ Gồm regression mới `test_ai_semantics_regression`, `test_bounded_loop`, `tes
 - load 1/2/4 sessions + dashboard/prewarm contention;
 - ESP32 stock: `listen:detect` thực tế, normal tail, interrupt nếu FW hỗ trợ;
 - thao tác ngắt -> physical speaker stop và AEC/acoustic behavior.
+- Đã làm 2026-09-10: wake + 1 lượt hỏi/đáp + idle-close + re-wake trên board thật (xem dòng ESP32 ở trên). Còn lại: interrupt giữa câu, câu dài mất tail, đo speaker-stop vật lý.
 
 Không có build/flash patched firmware trong baseline acceptance.
