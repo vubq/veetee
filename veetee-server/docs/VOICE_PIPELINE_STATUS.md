@@ -19,7 +19,8 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | Prompt management | IMPLEMENTED | Saved persona precedence + shared byte/token budget (`32 KiB`/est. `8000`); reject over-budget, version snapshot/turn |
 | Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 2), catalog notice explicit |
 | Benchmark client | IMPLEMENTED | Metric `v2` voiced proxy + useful certification metric; smoke 20/95% vs cert 100/99% (`--certification`) |
-| Runtime latency SLA | NOT_MET | Smoke 2026-09-10: success 100% nhưng p50 ~6.0s / p95 ~6.6s (target p50 ≤0.6s, p95 <1.0s). Bimodal: lượt nhanh ~1.5s, lượt chậm ~6s, phần chậm nằm ở chân LLM gateway (STT chỉ ~0.5-0.7s). Cert 100-attempt chưa chạy |
+| Runtime latency SLA | NOT_MET | Cert 100-attempt 2026-09-10 (`pipeline-auto-20260910-121550`): success 100/100 (gate ≥99% đạt) nhưng p50 6142ms / p95 6602ms (gate p95 <1000ms TRƯỢT, target p50 ≤600ms TRƯỢT). Bimodal: lượt nhanh ~1.5s, lượt chậm ~6s, phần chậm nằm ở chân LLM gateway (STT chỉ ~0.5-0.7s). Không retry phía server; chờ hướng xử lý gateway riêng |
+| Load đa session | PARTIAL | `scripts/load_probe.py` text-turn 2026-09-10: 1×5 và 2×10 success 100% (p50 full-turn ~7.7s); 4×5 success 90% (2 LLM first-token timeout, TTS queue-wait tới ~6s). Artifact `benchmark-artifacts/load-probe-20260910.json`. Text-turn only, chưa tải ASR decode |
 | ESP32 physical playback/AEC | PARTIAL | Acoustic E2E 2026-09-10 (board bread-compact-wifi-lcd, FW build từ source baseline `c724127` + Kconfig: VI, 240x280, wn9_hiesp, OTA local): wake EN bắt (33 packets) → hỏi TV "Mấy giờ rồi." → STT đúng → đáp đúng giờ → TTS về loa; idle 120s chào "Tạm biệt…" rồi đóng phiên, board về idle; gọi dậy lại mở phiên mới. AEC/barge-in và tail vật lý vẫn PENDING |
 
 ## A01–A12 sau runtime M1–M6 (code)
