@@ -12,7 +12,7 @@ Chạy từ `veetee-server/` bằng venv của project (không dùng `python3` h
 ../../venv/bin/python -m unittest discover -s tests -v
 ```
 
-Baseline 2026-09-10: `154/154 PASS` (~1.8s). `python3` hệ thống thiếu deps nên fail import — đó là lỗi môi trường, không phải regression.
+Baseline 2026-09-10: `155/155 PASS` (~1.8s). `python3` hệ thống thiếu deps nên fail import — đó là lỗi môi trường, không phải regression.
 
 Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
 

@@ -37,13 +37,13 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | A09 | RESOLVED (code): recursive validator + semantic guards + ownership/cancel barriers; cần race/hardware |
 | A10 | RESOLVED (code): explicit catalog notice + search; MCP capability gate; chưa mở tool mới |
 | A11 | PARTIAL: parallel independent reads + lease hold metrics + split deadlines xong; cần A/B tải thật |
-| A12 | PARTIAL: unit 154 PASS (2026-09-10, HEAD `c92192a`); corpus/SLA/hardware còn thiếu |
+| A12 | PARTIAL: unit 155 PASS (2026-09-10); contract bracket tags strip trước TTS (fix `[surprised]` lọt loa); corpus/SLA/hardware còn thiếu |
 | A13 | IMPLEMENTED (code) + spot-check tay: deterministic idle end — chào theo persona rồi đóng phiên code 1000; farewell retry/fallback có regression; đã kiểm 3 lượt model thật qua WebSocket |
 
 ## Test evidence
 
 ```text
-154/154 tests PASS (2026-09-10, HEAD c92192a)
+155/155 tests PASS (2026-09-10)
 compileall PASS
 git diff --check PASS (cần rerun trước commit)
 ```
