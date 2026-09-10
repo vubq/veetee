@@ -17,7 +17,12 @@ Mở rộng lên đủ gate:
 - Persona/ngôn ngữ: 4 persona tổng hợp × 3 mức dài × ≥10 case.
 - Memory/Tool-confirmation/Retrieval-RAG: mỗi nhóm ≥30 dialogue/query.
 
-File `semantic_corpus_seed.json` chứa 42 case seed bao phủ các nhóm.
+File `semantic_corpus_seed.json` chứa 72 case: 42 seed gốc + 30 case
+mẫu `origin=template-2026-09-10` (end-negatives, confirmation, memory
+negatives, clock/tool, smalltalk, language, intent edge — toàn `split=dev`,
+`held-out` giữ nguyên 10 case review tay). Case mẫu là điểm khởi đầu rõ
+nghĩa, chưa phải nhãn human-reviewed; vẫn cần review + mở rộng lên gate
+200/80/50 của M0.3.
 
 ## Audio fixtures (`audio/`)
 

@@ -2,6 +2,7 @@ import unittest
 import struct
 
 from scripts.benchmark_pipeline import _first_voiced_sample_offset, summarize
+from scripts.load_probe import percentile
 
 
 class BenchmarkSummaryTests(unittest.TestCase):
@@ -40,6 +41,16 @@ class BenchmarkSummaryTests(unittest.TestCase):
 
         self.assertEqual(offset, 320)
         self.assertEqual(rms, 1000.0)
+
+
+class LoadProbePercentileTests(unittest.TestCase):
+    def test_percentile_basic(self):
+        values = [1.0, 2.0, 3.0, 4.0]
+        self.assertEqual(percentile(values, 50), 3.0)
+        self.assertEqual(percentile(values, 95), 4.0)
+
+    def test_percentile_empty(self):
+        self.assertIsNone(percentile([], 95))
 
 
 if __name__ == "__main__":
