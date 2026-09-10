@@ -62,7 +62,16 @@ export DEEPGRAM_API_KEY='<secret>'
 
 `settings.py` fallback về env khi YAML để trống, nên không ghi key thật vào file.
 
-LLM provider `omniroute` gọi gateway được cấu hình trong `llm.base_url`. Nếu gateway route sang Groq hoặc provider khác thì inference LLM là remote dù process VeeTee/ASR/TTS vẫn chạy local.
+LLM provider `groq` gọi Groq API trực tiếp (`https://api.groq.com/openai/v1`) với pool nhiều key quota độc lập. Inference LLM là remote dù process VeeTee/ASR/TTS vẫn chạy local. Provider `omniroute` (gateway local cũ) chỉ còn là đường legacy khi cấu hình yêu cầu.
+
+Groq keys cấp qua env, đặt tên `GROQ_API_KEY_<alias>` (số lượng linh hoạt; pool rỗng sẽ tự quét env). File YAML chỉ giữ id + quota_group, không chứa secret:
+
+```bash
+export GROQ_API_KEY_A='<secret>'
+export GROQ_API_KEY_B='<secret>'
+```
+
+Mỗi alias mặc định một `quota_group` riêng. `llm.quota_groups` khai báo caps đã biết (rpm/rpd/tpm/tpd/itpm/otpm); group bỏ trống chạy discovery mode (giới hạn in-flight, học caps từ response headers). Xem `config.example.yaml`.
 
 ## 4. Persona
 

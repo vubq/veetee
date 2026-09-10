@@ -40,6 +40,7 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | A11 | PARTIAL: parallel independent reads + lease hold metrics + split deadlines xong; cần A/B tải thật |
 | A12 | PARTIAL: unit 155 PASS (2026-09-10); contract bracket tags strip trước TTS (fix `[surprised]` lọt loa); corpus/SLA/hardware còn thiếu |
 | A13 | IMPLEMENTED (code) + spot-check tay: deterministic idle end — chào theo persona rồi đóng phiên code 1000; farewell retry/fallback có regression; đã kiểm 3 lượt model thật qua WebSocket |
+| A14 | IN_PROGRESS: Groq API trực tiếp thay OmniRoute (quota ledger + router + `groq_direct.py`, pool key env, discovery từ headers); live chat/tool/recall đúng, unit 207 xanh. gpt-oss-20b thử thêm (không thay default): nhanh tương đương, 1 mẫu đọc giờ sai. Failover thật/metrics/SLA đường mới còn thiếu |
 
 ## Test evidence
 

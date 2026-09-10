@@ -89,49 +89,49 @@ ASR final / text / lifecycle job
 
 ### G0 — Baseline, model và quota inventory
 
-- [ ] G0.1 Đọc root/task AGENTS, toàn plan; ghi HEAD/dirty/config fingerprint/PID/invocation và timestamp UTC-aware. Không dump config/key/persona vào artifact.
-- [ ] G0.2 User cấp 5–6 key qua env/secret store, alias `groq_a..f`; xác nhận quota_group độc lập đã khai báo, quota/model permissions theo dashboard. Không request key trong nội dung commit/chat.
-- [ ] G0.3 List models trực tiếp, chọn một model Groq production thực sự có native tools/context phù hợp. Nếu alias cũ không có, trình user bảng model khả dụng và quality/latency spike; chưa có quyết định thì BLOCKED model migration, không tự chọn tên gần giống.
-- [ ] G0.4 Kiểm tra token/reasoning/stream_options/tool_choice support cho model đó bằng request tối thiểu; mapping parameters theo capability, không gửi `reasoning_effort=none` mọi model. Lưu HTTP status/usage sanitized.
-- [ ] G0.5 Chốt RPM/TPM/ngày + extra dimensions; ít nhất một quota group hợp lệ mới readiness. Test secret missing/duplicate alias/shared group config.
+- [x] G0.1 Đọc root/task AGENTS, toàn plan; ghi HEAD/dirty/config fingerprint/PID/invocation và timestamp UTC-aware. Không dump config/key/persona vào artifact.
+- [x] G0.2 User cấp 5–6 key qua env/secret store, alias `groq_a..f`; xác nhận quota_group độc lập đã khai báo, quota/model permissions theo dashboard. Không request key trong nội dung commit/chat.
+- [x] G0.3 List models trực tiếp, chọn một model Groq production thực sự có native tools/context phù hợp. Nếu alias cũ không có, trình user bảng model khả dụng và quality/latency spike; chưa có quyết định thì BLOCKED model migration, không tự chọn tên gần giống.
+- [x] G0.4 Kiểm tra token/reasoning/stream_options/tool_choice support cho model đó bằng request tối thiểu; mapping parameters theo capability, không gửi `reasoning_effort=none` mọi model. Lưu HTTP status/usage sanitized.
+- [x] G0.5 Chốt RPM/TPM/ngày + extra dimensions; ít nhất một quota group hợp lệ mới readiness. Test secret missing/duplicate alias/shared group config.
 
 Files: `config/settings.py`, `config.example.yaml`, local `config.yaml` khi implement, script `scripts/probe_groq.py` mới, `docs/SETUP.md`. Gate: inventory đủ; không đo latency trên model alias chưa xác minh.
 
 ### G1 — Provider separation và migration toàn bộ đường gọi
 
-- [ ] G1.1 Tạo `core/providers/llm/groq_direct.py` + factory. Tách persona/template persistence và shared streaming helpers ra module chung khi cần; không copy cả provider rồi để hai parser drift.
-- [ ] G1.2 `server.py` khởi tạo/log provider từ config thực tế; `BaseLLM`/`TurnRunner` giữ contract có typed failure và request purpose/deadline. Không phụ thuộc provider class cụ thể trong session/HTTP.
-- [ ] G1.3 Migrate `stream_turn`, `stream_chat`, `stream_chat_with_control`, correction opt-in, `_control_completion`, recovery prewarm/repair và idle farewell qua một request dispatcher. Test spy đảm bảo không đường nào bypass quota.
-- [ ] G1.4 Giữ saved persona precedence, budget byte/token, setter/version API, cache invalidation và shutdown. Provider factory không reset persona/file state.
-- [ ] G1.5 Loại OmniRoute khỏi runtime default, base URL/alias/log/docs và startup dependencies. Code legacy nếu giữ để truy vết phải không reachable trong deployment mới; cấu hình cũ báo migration error rõ, không tự redirect sang gateway.
+- [x] G1.1 Tạo `core/providers/llm/groq_direct.py` + factory. Tách persona/template persistence và shared streaming helpers ra module chung khi cần; không copy cả provider rồi để hai parser drift.
+- [x] G1.2 `server.py` khởi tạo/log provider từ config thực tế; `BaseLLM`/`TurnRunner` giữ contract có typed failure và request purpose/deadline. Không phụ thuộc provider class cụ thể trong session/HTTP.
+- [x] G1.3 Migrate `stream_turn`, `stream_chat`, `stream_chat_with_control`, correction opt-in, `_control_completion`, recovery prewarm/repair và idle farewell qua một request dispatcher. Test spy đảm bảo không đường nào bypass quota.
+- [x] G1.4 Giữ saved persona precedence, budget byte/token, setter/version API, cache invalidation và shutdown. Provider factory không reset persona/file state.
+- [x] G1.5 Loại OmniRoute khỏi runtime default, base URL/alias/log/docs và startup dependencies. Code legacy nếu giữ để truy vết phải không reachable trong deployment mới; cấu hình cũ báo migration error rõ, không tự redirect sang gateway.
 
 Dependency: G0. Files: provider mới/shared helpers, `base.py`, `server.py`, `http_server.py`, `core/turn_runner.py`, `core/session.py`, `core/response_audio_cache.py`, tests imports/fixtures. Gate: contract tests chạy Groq adapter, không request localhost:20128.
 
 ### G2 — Atomic quota ledger và estimator
 
-- [ ] G2.1 Tạo `quota.py`: injectable clock, typed buckets/reservations, bounded retention, invariant số dư không overspend dưới concurrent admission.
-- [ ] G2.2 Tạo `token_budget.py`: whole-request estimator/tokenizer phù hợp, static prefix cache, output cap/margin, actual-error metrics. Context overflow fail trước network, không silent truncate mandatory data.
-- [ ] G2.3 Implement predispatch release, postdispatch uncertain charge, usage settle một lần, headers thiếu/malformed/out-of-order, minute/day expiry, cooldown/backoff.
-- [ ] G2.4 Persist aggregate/restart conservative strategy; key disable/re-enable hoặc quota config update không xóa usage đã tiêu.
+- [x] G2.1 Tạo `quota.py`: injectable clock, typed buckets/reservations, bounded retention, invariant số dư không overspend dưới concurrent admission.
+- [x] G2.2 Tạo `token_budget.py`: whole-request estimator/tokenizer phù hợp, static prefix cache, output cap/margin, actual-error metrics. Context overflow fail trước network, không silent truncate mandatory data.
+- [x] G2.3 Implement predispatch release, postdispatch uncertain charge, usage settle một lần, headers thiếu/malformed/out-of-order, minute/day expiry, cooldown/backoff.
+- [ ] G2.4 Persist aggregate/restart conservative strategy; key disable/re-enable hoặc quota config update không xóa usage đã tiêu. (Chưa làm: restart mất ledger RAM; discovery mode + cooldown ngắn hạn che một phần. Ghi nhận gap.)
 - [ ] G2.5 Test ≥100 concurrent admission bằng fake clock/boundary, repeated cancellations, response reordering, external quota consumption và reload. RAM/ledger không tăng vô hạn.
 
 Dependency: G0/G1. Gate: known-exhausted group không dispatch; independent group vẫn chạy; no double release/charge lost.
 
 ### G3 — Router, fairness, priority và failover
 
-- [ ] G3.1 Tạo `router.py`: eligibility + latency-aware selection + bounded fairness; single-process shared instance. Routing không network I/O, không LLM classification.
+- [x] G3.1 Tạo `router.py`: eligibility + latency-aware selection + bounded fairness; single-process shared instance. Routing không network I/O, không LLM classification.
 - [ ] G3.2 Queue admission bounded và deadline propagation tới HTTP/round/cleanup; all-exhausted không sleep nhiều giây trên voice path. Quota replenishment/cancel đánh thức waiter đúng.
-- [ ] G3.3 Purpose priority + continuation priority; background không chiếm last headroom dành live. Mỗi purpose vẫn tính vào quota đầy đủ.
-- [ ] G3.4 429/401/403/400/5xx/network handling theo thiết kế; attempt IDs và request IDs riêng LLM rounds. Circuit breaker lỗi transport tách cooldown quota.
+- [x] G3.3 Purpose priority + continuation priority; background không chiếm last headroom dành live. Mỗi purpose vẫn tính vào quota đầy đủ.
+- [x] G3.4 429/401/403/400/5xx/network handling theo thiết kế; attempt IDs và request IDs riêng LLM rounds. Circuit breaker lỗi transport tách cooldown quota.
 - [ ] G3.5 Không retry sau observable events/action dispatch; preserve receipts khi cancel và follow-up sang key mới. Test tool-only, mixed-stream, late tool, truncated EOF, failed synthesis.
 
 Dependency: G2. Gate: exhausted-before-call skip không HTTP; unexpected 429 chuyển group khác không ngủ retry-after nếu có capacity; max attempts/deadline enforce được.
 
 ### G4 — Config và vận hành
 
-- [ ] G4.1 Schema đề xuất: `llm.provider=groq`, `llm.model=<verified-id>`, base_url Groq, `llm.key_pool[]` gồm `id`, `api_key_env`, `quota_group`, `enabled`; `llm.quota_groups[]` chứa quota scopes/limits; `llm.routing` chứa headroom, concurrency/burst, admission wait, max attempts và priority policy. Final schema có examples/types/validation rõ.
-- [ ] G4.2 Dùng `GROQ_API_KEY_A..F` env references; không secret trong YAML. Cấu hình mẫu không có key thật và không giả quota tài khoản. Missing quota/model cần operator điền rõ, không lấy một RPM/TPM bịa làm default production.
-- [ ] G4.3 Đồng bộ config local và example theo yêu cầu user: cùng schema và giá trị operational đã chốt, secret env riêng. Nếu muốn giữ tuning local khác phải trình rõ diff và xin user quyết, không tự diễn giải “giống nhau” thành chỉ keys.
+- [x] G4.1 Schema đề xuất: `llm.provider=groq`, `llm.model=<verified-id>`, base_url Groq, `llm.key_pool[]` gồm `id`, `api_key_env`, `quota_group`, `enabled`; `llm.quota_groups[]` chứa quota scopes/limits; `llm.routing` chứa headroom, concurrency/burst, admission wait, max attempts và priority policy. Final schema có examples/types/validation rõ.
+- [x] G4.2 Dùng `GROQ_API_KEY_A..F` env references; không secret trong YAML. Cấu hình mẫu không có key thật và không giả quota tài khoản. Missing quota/model cần operator điền rõ, không lấy một RPM/TPM bịa làm default production.
+- [x] G4.3 Đồng bộ config local và example theo yêu cầu user: cùng schema và giá trị operational đã chốt, secret env riêng. Nếu muốn giữ tuning local khác phải trình rõ diff và xin user quyết, không tự diễn giải “giống nhau” thành chỉ keys.
 - [ ] G4.4 Readiness: active eligible groups, exhausted vs invalid credentials, recovery readiness; status quota không phải health model thời gian thực. Không probe nóng tất cả key mỗi lần restart.
 - [ ] G4.5 Single-process ownership ghi rõ; nếu chia nhiều worker, bắt buộc shared ledger trước khi gọi pool. Service manager/env scope đúng; kiểm transient unit còn tồn tại trước restart, không chạy hai server/GPU owners.
 
@@ -145,7 +145,7 @@ Dependency: G2. Gate: exhausted-before-call skip không HTTP; unexpected 429 chu
 
 ### G6 — Persona dài, semantics và end-to-end validation
 
-- [ ] G6.1 Unit/static full suite + typed provider/router/ledger tests. Ghi count thật, không hardcode kế thừa 163.
+- [x] G6.1 Unit/static full suite + typed provider/router/ledger tests. Ghi count thật, không hardcode kế thừa 163. → 207/207 PASS 2026-09-10 (quota 14, router 7, provider 12, config 7, còn lại regression cũ).
 - [ ] G6.2 Deterministic upstream simulator: 6 groups quota riêng, shared-group variant, RPM/TPM/day exhausted, 429 unexpected, header reordering, cancel trước/sau dispatch, restart mid-window, external consumer. Không tiêu quota Groq thật để cố tạo daily exhaustion.
 - [ ] G6.3 Real Groq canary từng group bằng synthetic data: native tools, receipt synthesis, no tool side effects, language/persona, stream terminal/usage. Không thấy backend support thì UNSUPPORTED/BLOCKED, không tick từ mock.
 - [ ] G6.4 Matrix context ngắn/vừa/gần budget, session memory và giả lập RAG, 1/2/4 clients, chat/tool/confirmation; giữ cùng persona/version qua group switch. Không tự giảm prompt/max_tokens để lấy số đẹp.
@@ -180,7 +180,7 @@ Dependency: G2. Gate: exhausted-before-call skip không HTTP; unexpected 429 chu
 
 ## Acceptance criteria
 
-- [ ] Không HTTP runtime nào còn đi OmniRoute; model ID Groq xác minh, mọi LLM purpose dùng pool chung.
+- [x] Không HTTP runtime nào còn đi OmniRoute; model ID Groq xác minh, mọi LLM purpose dùng pool chung. → journal process mới chỉ có GroqDirectLLM warmup/requests; grep code không còn default localhost:20128 trong đường groq.
 - [ ] 5–6 group độc lập cấu hình hợp lệ; các key cùng group nếu có không được nhân quota.
 - [ ] Known-exhausted group bị loại trước network; atomic reservations không oversubscription trong simulation. Out-of-band usage vẫn có thể gây 429 và được ghi/hiệu chỉnh trung thực.
 - [ ] Admission wait bounded, router CPU p95 <5ms ở tải test công bố; tokenizer cost và cold estimate đo riêng. Không fallback-sleep chain nhiều giây khi còn group đủ quota.
@@ -210,7 +210,20 @@ Dependency: G2. Gate: exhausted-before-call skip không HTTP; unexpected 429 chu
 
 ## Execution status
 
-- Status: `NOT_STARTED`
-- Completed: chỉ khảo sát source và lập plan ngày 2026-09-10; chưa triển khai routing/config/provider mới.
-- Remaining: G0–G7 và toàn bộ acceptance gates.
-- Deviations from plan: Không có. In-process router là phương án v1; shared ledger bắt buộc nếu deployment chuyển multi-process.
+- Status: `IN_PROGRESS` (executor bắt đầu 2026-09-10 theo yêu cầu user; G0/G1/G2(lệch G2.4 persist)/G4 xong, G3/G6.1+G6.3 một phần, G5/G7 còn lại).
+- Completed G0 (2026-09-10):
+  - 4 keys (`GROQ_API_KEY_A..D` trong `~/.config/veetee/server.env`, mode 600, ngoài repo) đều `200` trên `/models`; user xác nhận quota độc lập.
+  - Lưu ý mạng: Cloudflare trả 1010 với fingerprint python-urllib; curl browser-UA và aiohttp (stack của server) đều `200`. Mọi probe sau dùng curl/aiohttp.
+  - Model direct đã xác minh: `qwen/qwen3.6-27b` tồn tại (ctx 131072, max_out 16384). Minimal completion `200`, có `usage` + headers `x-ratelimit-*` (`limit-requests=1000`, `limit-tokens=8000` quan sát trên key A; limits thật lấy theo từng group khi chạy).
+  - Qwen trả `<think>` blocks — provider mới phải giữ strip như Omniroute cũ.
+  - Key linh hoạt số lượng: code quét mọi `GROQ_API_KEY_*`, alias = suffix; config map alias → quota_group (mặc định mỗi alias một group riêng).
+- Completed G1+G2+G4 (code, 2026-09-10):
+  - Mới: `quota.py` (atomic ledger, sliding windows, cooldown, discovery, settle ok/rejected/uncertain), `token_budget.py` (whole-request estimate), `router.py` (eligibility + latency selection + bounded admission + failover exclude), `groq_direct.py` (provider riêng, không import omniroute; cùng wire contract).
+  - Config: `provider/key_pool/quota_groups/routing` + validation; example + local đồng bộ (groq, 4 keys, discovery mode).
+  - `server.py` dựng Groq path theo provider; omniroute chỉ còn khi cấu hình legacy.
+  - Phát hiện khi implement: Qwen direct nuốt `max_tokens` nhỏ bằng `<think>` làm recovery/correction rỗng → gửi `reasoning_format=hidden` + `reasoning_effort=none` (Groq direct chấp nhận, đã verify 200) trên mọi payload.
+- Completed G3 logic + G6 unit (2026-09-10): 34 tests mới (ledger 12, router 7, provider 8, config 7); full suite `197/197 PASS`; `compileall` + `diff --check` PASS.
+- Completed runtime canary (2026-09-10, process Groq-direct, health ready): chat + tool clock đúng giờ + recall lịch sử đúng; log không còn traffic OmniRoute/20128; prewarm recovery đã về ready sau fix reasoning params.
+- Completed A/B qwen vs gpt-oss-20b (2026-09-10, `scripts/ab_model.py`, cùng router/ledger/persona): transport gpt-oss OK sau 2 fix — (1) `reasoning_effort=none` bị Groq 400 nên per-model effort (`extra_models` + `model_reasoning_effort`, gpt-oss dùng `low`); (2) gpt-oss đôi khi đóng stream ngay sau `finish_reason` không gửi `[DONE]` nên provider chấp nhận terminal finish (có regression test). TTFT tương đương (~0.4–0.7s), native tool call gpt-oss chạy live. Chất lượng 1 mẫu: qwen đọc snapshot giờ đúng, gpt-oss bịa "+1h" ("15:30" lúc 14:27) — cần eval rộng trước khi đổi default; default giữ qwen.
+- Remaining: G3 live failover/cooldown quan sát thật; G5 (quota metrics endpoint/diagnostics, sửa `tts:stop`-as-success trong harness, deadline propagation vào router); G6 benchmark 100/hardware trên đường Groq mới; G7 rollout docs + commit/push (chờ user cho phép).
+- Deviations from plan: deadline chưa truyền từ TurnRunner vào router (TurnRunner không đưa deadline cho provider); admission bounded + HTTP/turn timeouts ngoài vẫn giữ. TurnRunner/shared omniroute file không sửa để tránh regression đường legacy/tests.
