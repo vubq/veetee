@@ -457,11 +457,19 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
         )
         return self._clean_control_sentence(raw, max_chars=64)
 
-    def _clean_text(self, text: str) -> str:
+    @staticmethod
+    def _clean_text(text: str) -> str:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         text = text.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
-        return text.strip()
+        # Contract markers ([happy], stray [end], ...) must never reach TTS or
+        # sentence_start: only the first clause goes through _extract_emotion,
+        # so later-clause tags would otherwise leak into spoken audio.
+        # Control parsing runs on raw tokens before this cleaner, so stripping
+        # here cannot break end-intent detection.
+        text = re.sub(r"\[[^\[\]\n]{1,32}\]", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip(" ,")
 
     def _extract_emotion(self, text: str) -> Tuple[str, str]:
         match = re.match(r"^\[([a-zA-Z]+)\]\s*(.*)$", text.strip(), re.DOTALL)

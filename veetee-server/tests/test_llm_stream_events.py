@@ -65,6 +65,17 @@ class LLMStreamEventTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             accumulator.add_delta([{"index": 1, "function": {"name": "b", "arguments": "{}"}}])
 
+    def test_clean_text_strips_bracket_markers_before_tts(self):
+        clean = OmnirouteGroqLLM._clean_text
+        self.assertEqual(clean("[surprised] Hả, vừa rồi nghe không rõ lắm á?"),
+                         "Hả, vừa rồi nghe không rõ lắm á?")
+        self.assertEqual(clean("Ừm [happy] mình hiểu rồi nhé."),
+                         "Ừm mình hiểu rồi nhé.")
+        self.assertEqual(clean("[end] Tạm biệt nhé."), "Tạm biệt nhé.")
+        # Legitimate speech without markers passes through untouched.
+        self.assertEqual(clean("Bây giờ là 10 giờ 51 phút rồi nè."),
+                         "Bây giờ là 10 giờ 51 phút rồi nè.")
+
     def test_native_tool_call_requires_model_call_id(self):
         accumulator = NativeToolCallAccumulator()
         accumulator.add_delta([{
