@@ -186,6 +186,10 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         admission_wait_ms=float(getattr(routing, "admission_wait_ms", 50.0)),
         inflight_penalty_s=float(getattr(routing, "inflight_penalty_s", 0.4)),
     )
+    allowed = [llm_config.model] + [
+        m for m in (getattr(llm_config, "extra_models", []) or [])
+        if m and m != llm_config.model
+    ]
     engine = GroqDirectLLM(
         router,
         model=llm_config.model,
@@ -197,6 +201,8 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         base_prompt_state_path=_os.path.join(server_dir, "data", "base-prompt.txt"),
         max_attempts=int(getattr(routing, "max_attempts", 2)),
         reasoning_effort=str(getattr(llm_config, "reasoning_effort", "none")),
+        allowed_models=allowed,
+        model_state_path=_os.path.join(server_dir, "data", "llm-model.txt"),
     )
     engine.set_model_effort_overrides(
         getattr(llm_config, "model_reasoning_effort", {}) or {})
@@ -266,9 +272,16 @@ class GroqDirectLLM(BaseLLM):
         max_attempts: int = 2,
         session_factory: Optional[Callable[[], Any]] = None,
         reasoning_effort: str = "none",
+        allowed_models: Optional[List[str]] = None,
+        model_state_path: Optional[str] = None,
     ):
         self._router = router
         self.model = model
+        self._allowed_models = [m for m in (allowed_models or [model]) if m]
+        self._model_state_path = model_state_path
+        saved_model = self._load_saved_model()
+        if saved_model and saved_model in self._allowed_models:
+            self.model = saved_model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.prompt_template_path = prompt_template_path
@@ -282,6 +295,39 @@ class GroqDirectLLM(BaseLLM):
         self._model_effort_overrides: Dict[str, str] = {}
         self._session_factory = session_factory
         self._http_session: Optional[aiohttp.ClientSession] = None
+
+    def list_models(self) -> List[str]:
+        """Switchable models: default first, then extras."""
+        return list(self._allowed_models)
+
+    def _load_saved_model(self) -> str:
+        if not self._model_state_path:
+            return ""
+        try:
+            with open(self._model_state_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return ""
+        except OSError as e:
+            logger.warning(f"Could not read saved model: {e}")
+            return ""
+
+    def set_model(self, model: str, persist: bool = True) -> str:
+        """Switch model for subsequent turns; persists across restarts."""
+        cleaned = (model or "").strip()
+        if not cleaned:
+            raise ValueError("model must not be empty")
+        if cleaned not in self._allowed_models:
+            raise ValueError(f"model not allowed: {cleaned!r}")
+        self.model = cleaned
+        if persist and self._model_state_path:
+            state_dir = os.path.dirname(self._model_state_path)
+            os.makedirs(state_dir, exist_ok=True)
+            temp_path = f"{self._model_state_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(cleaned)
+            os.replace(temp_path, self._model_state_path)
+        return self.model
 
     # -- persona persistence (same semantics as before) --------------------
 

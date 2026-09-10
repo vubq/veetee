@@ -104,6 +104,10 @@ class HttpServer:
         self.app.router.add_post("/api/test-voice", self.handle_test_voice)
         self.app.router.add_get("/api/prompt", self.handle_get_prompt)
         self.app.router.add_post("/api/prompt", self.handle_set_prompt)
+        self.app.router.add_get("/api/voice", self.handle_get_voice)
+        self.app.router.add_post("/api/voice", self.handle_set_voice)
+        self.app.router.add_get("/api/model", self.handle_get_model)
+        self.app.router.add_post("/api/model", self.handle_set_model)
         
         static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
         if os.path.exists(static_dir):
@@ -318,6 +322,109 @@ class HttpServer:
 
         return web.json_response({"ok": True, "base_prompt": self.llm_engine.get_base_prompt()})
 
+    async def _refresh_recovery_audio(self, reason: str) -> None:
+        """Regenerate the cached error-fallback clip (e.g. voice changed)."""
+        if self.response_audio_cache is None:
+            return
+        try:
+            await self.response_audio_cache.clear_recovery()
+            generator = getattr(self.llm_engine, "generate_recovery_message", None)
+            if generator is None:
+                raise RuntimeError("LLM provider has no recovery-message generator")
+            text = await generator()
+            provenance = f"ai:{self._runtime_llm_model()}"
+            await self.response_audio_cache.prepare_recovery(
+                text,
+                self.config.conversation.fixed_response_timeout_seconds,
+                provenance=provenance,
+            )
+            self.runtime_readiness["error_fallback_ready"] = True
+            self.runtime_readiness["error_fallback_provenance"] = provenance
+        except Exception as exc:
+            self.runtime_readiness["error_fallback_ready"] = False
+            self.runtime_readiness["error_fallback_provenance"] = ""
+            logger.warning("AI recovery asset refresh failed after %s: %s", reason, exc)
+
+    def _runtime_llm_model(self) -> str:
+        model = getattr(self.llm_engine, "model", None)
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        return self.config.llm.model
+
+    def _runtime_tts_voice(self) -> str:
+        voice = getattr(self.tts_engine, "voice", None)
+        if isinstance(voice, str) and voice.strip():
+            return voice.strip()
+        return self.config.tts.voice
+
+    async def handle_get_voice(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if self.tts_engine is None:
+            return web.json_response({"error": "TTS unavailable"}, status=503)
+        lister = getattr(self.tts_engine, "available_voices", None)
+        voices = []
+        if callable(lister):
+            try:
+                voices = [{"name": name, "description": desc}
+                          for desc, name in lister()]
+            except Exception as exc:
+                logger.warning("Could not list TTS voices: %s", exc)
+        return web.json_response({
+            "voice": self._runtime_tts_voice(),
+            "voices": voices,
+        })
+
+    async def handle_set_voice(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if self.tts_engine is None or not hasattr(self.tts_engine, "set_voice"):
+            return web.json_response({"error": "TTS voice switching unavailable"}, status=503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        try:
+            voice = self.tts_engine.set_voice(str(payload.get("voice", "")))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            logger.error(f"Failed to persist voice: {exc}")
+            return web.json_response({"error": "Could not save voice"}, status=500)
+        # The cached fallback clip was synthesized in the old voice.
+        await self._refresh_recovery_audio("voice change")
+        return web.json_response({"ok": True, "voice": voice})
+
+    async def handle_get_model(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if self.llm_engine is None:
+            return web.json_response({"error": "LLM unavailable"}, status=503)
+        lister = getattr(self.llm_engine, "list_models", None)
+        models = list(lister()) if callable(lister) else [self._runtime_llm_model()]
+        return web.json_response({
+            "model": self._runtime_llm_model(),
+            "models": models,
+        })
+
+    async def handle_set_model(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if self.llm_engine is None or not hasattr(self.llm_engine, "set_model"):
+            return web.json_response({"error": "LLM model switching unavailable"}, status=503)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        try:
+            model = self.llm_engine.set_model(str(payload.get("model", "")))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            logger.error(f"Failed to persist model: {exc}")
+            return web.json_response({"error": "Could not save model"}, status=500)
+        return web.json_response({"ok": True, "model": model})
+
     async def _readiness_snapshot(self) -> dict:
         conversation = self.config.conversation
         fallback_ready = None
@@ -377,8 +484,9 @@ class HttpServer:
             "active_sessions": len(self.active_sessions),
             "ip": self.local_ip,
             "asr": self.config.asr.provider,
-            "llm": self.config.llm.model,
-            "tts": self.config.tts.provider
+            "llm": self._runtime_llm_model(),
+            "tts": self.config.tts.provider,
+            "voice": self._runtime_tts_voice()
         })
 
     async def handle_diagnostics(self, request: web.Request) -> web.Response:

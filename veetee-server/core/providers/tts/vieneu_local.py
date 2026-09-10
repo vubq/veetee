@@ -24,10 +24,15 @@ class VieneuLocalTTS(BaseTTS):
         frame_duration_ms: int = 60,
         stream_queue_max_chunks: int = 4,
         denoise: bool = True,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        voice_state_path: Optional[str] = None
     ):
+        self.voice_state_path = voice_state_path
         self.voice = voice
         self.source_voice = source_voice
+        saved = self._load_saved_voice()
+        if saved:
+            self.voice = saved
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
         self.stream_queue_max_chunks = max(1, int(stream_queue_max_chunks))
@@ -44,6 +49,69 @@ class VieneuLocalTTS(BaseTTS):
         self._worker_futures = set()
         self.engine = None
         self._init_engine()
+
+    _preset_voice_cache: Optional[list] = None
+
+    @classmethod
+    def list_preset_voices(cls) -> list:
+        """[(description, name)] from the engine; [] if unavailable.
+
+        Cached process-wide: instantiating Vieneu just to list static
+        presets would reload weights on every validation call (and risk
+        a second GPU copy next to the running engine).
+        """
+        if cls._preset_voice_cache is None:
+            try:
+                from vieneu import Vieneu
+                cls._preset_voice_cache = list(Vieneu().list_preset_voices())
+            except Exception as exc:
+                logger.warning(f"Could not list Vieneu preset voices: {exc}")
+                return []
+        return cls._preset_voice_cache
+
+    def available_voices(self) -> list:
+        """Prefer the already-loaded engine; no extra GPU copy."""
+        engine = getattr(self, "engine", None)
+        if engine is not None and hasattr(engine, "list_preset_voices"):
+            try:
+                return list(engine.list_preset_voices())
+            except Exception as exc:
+                logger.warning(f"Could not list voices from engine: {exc}")
+        return self.list_preset_voices()
+
+    def _load_saved_voice(self) -> str:
+        # Runs before the engine loads, so it must not touch the engine
+        # (that would load model weights twice). Trust our own state file;
+        # set_voice() validates against the engine list at change time.
+        if not self.voice_state_path:
+            return ""
+        try:
+            with open(self.voice_state_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return ""
+        except OSError as e:
+            logger.warning(f"Could not read saved voice: {e}")
+            return ""
+
+    def set_voice(self, voice: str, persist: bool = True) -> str:
+        """Switch reply voice immediately; persists across restarts."""
+        cleaned = (voice or "").strip()
+        if not cleaned:
+            raise ValueError("voice must not be empty")
+        names = {name for _, name in self.available_voices()}
+        if names and cleaned not in names:
+            raise ValueError(f"unknown voice: {cleaned!r}")
+        self.voice = cleaned
+        if persist and self.voice_state_path:
+            import os
+            state_dir = os.path.dirname(self.voice_state_path)
+            os.makedirs(state_dir, exist_ok=True)
+            temp_path = f"{self.voice_state_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(cleaned)
+            os.replace(temp_path, self.voice_state_path)
+        return self.voice
 
     def _get_scheduler(self) -> TTSAdmissionScheduler:
         """Return the shared scheduler, creating it for legacy/test instances."""

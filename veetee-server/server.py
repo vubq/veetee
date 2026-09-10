@@ -29,9 +29,10 @@ class VeeTeeServer:
         server_dir = os.path.dirname(os.path.abspath(__file__))
         logger.info(f"Loaded config: LLM provider={config.llm.provider}, model={config.llm.model}, max_tokens={config.llm.max_tokens}")
         
-        # 1. Initialize Vieneu Neural TTS
+        # 1. Initialize Vieneu Neural TTS (saved dashboard voice wins).
         self.tts_engine = VieneuLocalTTS(
             voice=config.tts.voice,
+            voice_state_path=os.path.join(server_dir, "data", "voice.txt"),
             source_voice=config.tts.source_voice,
             sample_rate=config.tts.sample_rate,
             frame_duration_ms=config.tts.frame_duration_ms,

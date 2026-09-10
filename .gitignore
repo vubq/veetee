@@ -10,6 +10,8 @@ veetee-server/config.yaml
 # Runtime-generated files
 veetee-server/server.log
 veetee-server/data/base-prompt.txt
+veetee-server/data/voice.txt
+veetee-server/data/llm-model.txt
 veetee-server/data/*.sqlite3
 veetee-server/data/*.sqlite3-*
 veetee-server/benchmark-artifacts/
