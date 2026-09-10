@@ -62,6 +62,27 @@ from config.settings import AppConfig
 
 logger = logging.getLogger("ClientSession")
 
+# Last-resort idle farewell, used only when the model fails twice to produce
+# a closing statement. Shape approved by the operator: farewell, not a
+# question. Persona-specific wording still comes from the model whenever it
+# cooperates.
+IDLE_FAREWELL_FALLBACK = "Nếu không cần gì nữa thì mình xin phép đi trước nhé, có gì cứ gọi mình nha!"
+
+# Markers of a question-like farewell ("need any help?", "why so quiet?").
+# Output-shape validation only — never used to classify user speech.
+_FAREWELL_QUESTION_MARKERS = ("giúp gì", "cần giúp", "sao im", "im lặng", "im re")
+
+
+def _looks_like_question(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    if cleaned.endswith(("?", "？", "?!")):
+        return True
+    lowered = cleaned.lower()
+    return any(marker in lowered for marker in _FAREWELL_QUESTION_MARKERS)
+
+
 class SessionState:
     IDLE = "idle"
     LISTENING = "listening"
@@ -552,15 +573,56 @@ class ClientSession:
         except asyncio.CancelledError:
             pass
 
+    async def _stream_idle_farewell(self, messages, revision: int):
+        """One bounded farewell generation.
+
+        Returns the stripped text (possibly ""), or None when the flow was
+        superseded by new user activity / session end.
+        """
+        speech: list[str] = []
+        try:
+            async for event in self.turn_runner.stream(
+                messages,
+                tools=[],
+                # Goodbye prompt carries no [end]/[continue] markers; skip
+                # control parsing so the farewell text passes through untouched.
+                detect_end_intent=False,
+                tool_choice="none",
+                first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
+                total_timeout_ms=min(
+                    self.config.latency.total_turn_timeout_ms,
+                    max(100, self.config.conversation.ai_control_timeout_ms),
+                ),
+            ):
+                if revision != self._activity_revision or not self.is_active:
+                    return None
+                if isinstance(event, SpeechSegmentEvent):
+                    speech.append(event.text)
+                elif isinstance(event, FailedEvent):
+                    raise RuntimeError(event.error)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("idle goodbye generation failed session=%s error=%s", self.session_id, exc)
+            return ""
+        if revision != self._activity_revision or not self.is_active:
+            return None
+        return " ".join(part.strip() for part in speech if part.strip()).strip()
+
     async def _evaluate_idle_semantics(self, revision: int, timeout: float) -> bool:
         """Deterministic conversational idle deadline.
 
         After `idle_timeout_seconds` with no conversational interaction
-        (no user question and no AI answer), the session always ends: one
-        bounded LLM inference generates a short goodbye, it is played, then
-        the transport/session is closed. There is no AI-decided [continue]
+        (no user question and no AI answer), the session always ends: a
+        bounded LLM inference generates a farewell, it is played, then the
+        transport/session is closed. There is no AI-decided [continue]
         loop — a quiet session must not linger forever. A new user turn that
         arrives mid-flow bumps the activity revision and cancels this path.
+
+        The farewell must be a closing statement in the persona voice, never
+        a question. Output shape is validated (question-like text triggers
+        one stern retry, then a safe default) because hanging up right after
+        asking "do you need help?" is incoherent.
         """
         messages = list(self.dialogue.get_messages_for_llm())
         if not any(item.get("role") == "user" for item in messages):
@@ -580,40 +642,32 @@ class ClientSession:
                 "Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, đúng tính cách trong prompt hệ thống và "
                 "phù hợp ngữ cảnh hội thoại — đại ý nếu không cần gì nữa thì xin phép đi trước, "
                 "có gì cứ gọi lại sau. Đây là câu chào kết thúc, không phải câu hỏi: "
-                "không hỏi người dùng có cần giúp gì không, không hỏi sao im lặng. "
+                "cấm kết thúc bằng dấu hỏi, cấm hỏi người dùng có cần giúp gì không, cấm hỏi sao im lặng. "
                 "Chỉ trả về đúng một câu chào, không thêm gì khác."
             ),
         })
-        speech: list[str] = []
-        try:
-            async for event in self.turn_runner.stream(
-                messages,
-                tools=[],
-                # Goodbye prompt carries no [end]/[continue] markers; skip
-                # control parsing so the farewell text passes through untouched.
-                detect_end_intent=False,
-                tool_choice="none",
-                first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
-                total_timeout_ms=min(
-                    self.config.latency.total_turn_timeout_ms,
-                    max(100, self.config.conversation.ai_control_timeout_ms),
-                ),
-            ):
-                if revision != self._activity_revision or not self.is_active:
-                    return False
-                if isinstance(event, SpeechSegmentEvent):
-                    speech.append(event.text)
-                elif isinstance(event, FailedEvent):
-                    raise RuntimeError(event.error)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("idle goodbye generation failed session=%s error=%s", self.session_id, exc)
-
-        if revision != self._activity_revision or not self.is_active:
+        text = await self._stream_idle_farewell(messages, revision)
+        if text is None:
             return False
+        if not text or _looks_like_question(text):
+            logger.info("idle farewell retry session=%s first=%r", self.session_id, text)
+            retry_messages = messages + [{
+                "role": "system",
+                "content": (
+                    "Câu vừa rồi không dùng được (là câu hỏi hoặc trống). Viết lại NGAY "
+                    "một câu chào tạm biệt khẳng định: cấm dấu hỏi, cấm mời giúp đỡ. "
+                    "Chỉ trả về đúng một câu chào."
+                ),
+            }]
+            retry = await self._stream_idle_farewell(retry_messages, revision)
+            if retry is None:
+                return False
+            text = retry
+        if not text or _looks_like_question(text):
+            logger.info("idle farewell fallback session=%s", self.session_id)
+            text = IDLE_FAREWELL_FALLBACK
+
         self._closing_reason = "idle_timeout"
-        text = " ".join(part.strip() for part in speech if part.strip()).strip()
         if text and self.config.conversation.goodbye_enabled:
             self._start_fixed_response(
                 text,

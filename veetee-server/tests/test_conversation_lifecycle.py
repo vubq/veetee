@@ -56,11 +56,12 @@ class LifecycleSession(ClientSession):
 
 
 class CountingLLM:
-    def __init__(self, correction="đã sửa", end_intents=None):
+    def __init__(self, correction="đã sửa", end_intents=None, idle_texts=None):
         self.calls = []
         self.correction_calls = 0
         self.correction = correction
         self.end_intents = set(end_intents or [])
+        self.idle_texts = list(idle_texts) if idle_texts is not None else None
         self.reply = "Mình nghe đây."
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
 
@@ -72,10 +73,20 @@ class CountingLLM:
             "tool_choice": tool_choice,
         })
         latest = messages[-1] if messages else {}
-        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(latest.get("content", "")):
+        is_idle_call = any(
+            item.get("role") == "system"
+            and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(item.get("content", ""))
+            for item in messages
+        )
+        if is_idle_call:
             # Deterministic idle deadline: the server always ends the session
             # after the timeout; this call only generates the goodbye text.
-            yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
+            if self.idle_texts is not None:
+                text = self.idle_texts.pop(0) if self.idle_texts else ""
+            else:
+                text = self.goodbye
+            if text:
+                yield SpeechSegmentEvent(text, emotion="relaxed")
             yield CompletedEvent(finish_reason="stop")
             return
 
@@ -318,6 +329,36 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(tts.texts, [llm.goodbye])
         self.assertEqual(websocket.close_code, 1000)
+        self.assertFalse(session.is_active)
+
+    async def test_idle_question_like_goodbye_retries_once_then_closes(self):
+        llm = CountingLLM(idle_texts=["có gì cần giúp không?", "Ừ, chào bạn nhé. Hẹn gặp lại!"])
+        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+        session.config.conversation.idle_timeout_seconds = 0.02
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await self.wait_closed(websocket)
+
+        idle_calls = [
+            call for call in llm.calls
+            if call["messages"] and call["messages"][-1].get("role") == "system"
+        ]
+        self.assertEqual(len(idle_calls), 2)
+        self.assertEqual(tts.texts, [llm.goodbye])
+        self.assertFalse(session.is_active)
+
+    async def test_idle_empty_goodbye_falls_back_to_safe_farewell(self):
+        from core.session import IDLE_FAREWELL_FALLBACK
+        llm = CountingLLM(idle_texts=["", ""])
+        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+        session.config.conversation.idle_timeout_seconds = 0.02
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await self.wait_closed(websocket)
+
+        self.assertEqual(tts.texts, [IDLE_FAREWELL_FALLBACK])
         self.assertFalse(session.is_active)
 
     async def test_idle_timeout_waits_while_session_is_speaking(self):
