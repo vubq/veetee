@@ -68,13 +68,24 @@ logger = logging.getLogger("ClientSession")
 # cooperates.
 IDLE_FAREWELL_FALLBACK = "Nếu không cần gì nữa thì mình xin phép đi trước nhé, có gì cứ gọi mình nha!"
 
-# Markers of an unusable farewell: questions ("need any help?", "why so
-# quiet?") or "still waiting here" statements that contradict hanging up.
-# Output-shape validation only — never used to classify user speech.
-_FAREWELL_REJECT_MARKERS = (
-    "giúp gì", "cần giúp", "sao im", "im lặng", "im re",
+# Shape validation for the machine-generated idle farewell. A farewell is
+# unusable when it asks a question, offers help, claims to keep waiting, or
+# invites the user to keep talking without any closing signal — the transport
+# closes right after, so the user could never reply. Output-shape validation
+# only — never used to classify user speech.
+_FAREWELL_QUESTION_MARKERS = ("giúp gì", "cần giúp", "sao im", "im lặng", "im re")
+_FAREWELL_WAITING_MARKERS = (
     "chờ bạn", "đợi bạn", "có tôi đây", "có mình đây",
     "vẫn ở đây", "vẫn đây", "đang ở đây",
+)
+_FAREWELL_INVITE_MARKERS = (
+    "cứ nói", "mình nghe", "tôi nghe", "muốn chat", "muốn nói",
+    "nói nhé", "nói đi", "hỏi mình", "kể mình", "chat gì",
+    "chuyện gì muốn nói",
+)
+_FAREWELL_CLOSING_MARKERS = (
+    "tạm biệt", "bye", "hẹn", "gặp lại", "đi trước",
+    "nghỉ", "ngủ ngon",
 )
 
 
@@ -85,7 +96,13 @@ def _looks_like_question(text: str) -> bool:
     if cleaned.endswith(("?", "？", "?!")):
         return True
     lowered = cleaned.lower()
-    return any(marker in lowered for marker in _FAREWELL_REJECT_MARKERS)
+    if any(marker in lowered for marker in _FAREWELL_QUESTION_MARKERS):
+        return True
+    if any(marker in lowered for marker in _FAREWELL_WAITING_MARKERS):
+        return True
+    if any(marker in lowered for marker in _FAREWELL_INVITE_MARKERS):
+        return not any(marker in lowered for marker in _FAREWELL_CLOSING_MARKERS)
+    return False
 
 
 class SessionState:
@@ -643,14 +660,15 @@ class ClientSession:
             "content": (
                 "Sự kiện hệ thống: hội thoại đã không có tương tác "
                 f"{timeout:.0f} giây (không có câu hỏi của người dùng và không có câu trả lời nào). "
-                "Phiên sắp kết thúc và sẽ ngắt ngay sau câu này. "
+                "Phiên sắp kết thúc và kết nối sẽ bị cắt ngay sau câu này, nên mọi lời mời nói tiếp "
+                "đều vô nghĩa — người dùng sẽ không bao giờ nghe được câu trả lời. "
                 "Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, đúng tính cách trong prompt hệ thống và "
                 "phù hợp ngữ cảnh hội thoại — đại ý nếu không cần gì nữa thì xin phép đi trước, "
                 "có gì cứ gọi lại sau. Ví dụ câu đạt: \"Tạm biệt nhé, có gì cứ gọi mình nha!\" "
                 "Hãy viết một câu tương tự theo đúng tính cách của bạn. "
-                "Đây là câu chào kết thúc, không phải câu hỏi, cũng không phải câu bảo đang chờ: "
-                "cấm kết thúc bằng dấu hỏi, cấm hỏi có cần giúp gì không, cấm hỏi sao im lặng, "
-                "cấm nói đang chờ/đang ở đây. Chỉ trả về đúng một câu chào, không thêm gì khác."
+                "Đây là câu chào kết thúc: cấm kết thúc bằng dấu hỏi, cấm hỏi có cần giúp gì không, "
+                "cấm hỏi sao im lặng, cấm nói đang chờ/đang ở đây, cấm mời người dùng nói tiếp. "
+                "Chỉ trả về đúng một câu chào, không thêm gì khác."
             ),
         })
         text = await self._stream_idle_farewell(messages, revision)
