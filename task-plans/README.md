@@ -23,6 +23,8 @@ Mẫu chuẩn: [`_TEMPLATE.md`](_TEMPLATE.md).
 
 ## Kế hoạch tiếp nối audit 2026-09-09
 
+- [Groq API trực tiếp: multi-key quota-aware routing](2026-09-10-groq-direct-quota-aware-routing.md) — `PLANNED`, execution `NOT_STARTED` (2026-09-10): thay OmniRoute bằng Groq direct theo yêu cầu mới; 5–6 nguồn quota độc lập, token reservation nguyên tử trước request, routing theo quota/latency, migration mọi LLM purpose, sửa tính đúng của harness và nghiệm thu persona/tools/latency. Chưa áp dụng runtime; giữ các gate chưa đạt của plans cũ.
+
 - [AI semantics, persona lớn, tool/memory và pipeline dưới 1 giây](2026-09-09-ai-persona-tools-memory-latency.md) — `PARTIAL`, execution có evidence nhiều đợt (2026-09-09/10): code M0–M7 + unit 155 xanh, live API/WS/E2E model thật, smoke 20 mẫu, hardware acoustic wake/QA/idle/re-wake; corpus 200, cert 100-attempt, SLA, interrupt/AEC còn `PENDING`.
 - [Rà soát và hợp nhất tài liệu dự án](2026-09-09-hop-nhat-tai-lieu-du-an.md) — `COMPLETED`, execution `COMPLETED`: D01–D14 đã được hợp nhất vào owner docs, `docs/PLAN.md` thành historical stub, review/task-plans được bảo toàn và link/diff/inventory validation đã pass.
 
