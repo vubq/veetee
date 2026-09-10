@@ -76,6 +76,13 @@ class LLMStreamEventTests(unittest.TestCase):
         self.assertEqual(clean("Bây giờ là 10 giờ 51 phút rồi nè."),
                          "Bây giờ là 10 giờ 51 phút rồi nè.")
 
+    def test_clean_control_sentence_strips_cached_marker(self):
+        clean = OmnirouteGroqLLM._clean_control_sentence
+        self.assertEqual(clean("[happy] Khoan, hơi trục trặc chút."),
+                         "Khoan, hơi trục trặc chút.")
+        self.assertEqual(clean("Ừm, để tôi xử lý lại nha."),
+                         "Ừm, để tôi xử lý lại nha.")
+
     def test_native_tool_call_requires_model_call_id(self):
         accumulator = NativeToolCallAccumulator()
         accumulator.add_delta([{

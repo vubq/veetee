@@ -438,7 +438,10 @@ Hãy khôi phục câu người dùng có khả năng thực sự đã nói dự
     @staticmethod
     def _clean_control_sentence(text: str, max_chars: int = 180) -> str:
         cleaned = str(text or "").strip().strip('"“”').strip()
-        cleaned = re.sub(r"\s+", " ", cleaned)
+        # Same contract-marker hygiene as _clean_text: a cached recovery
+        # sentence with "[happy]" baked in would otherwise speak the tag.
+        cleaned = re.sub(r"\[[^\[\]\n]{1,32}\]", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
             return ""
         return cleaned
