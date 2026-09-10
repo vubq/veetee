@@ -68,9 +68,14 @@ logger = logging.getLogger("ClientSession")
 # cooperates.
 IDLE_FAREWELL_FALLBACK = "Nếu không cần gì nữa thì mình xin phép đi trước nhé, có gì cứ gọi mình nha!"
 
-# Markers of a question-like farewell ("need any help?", "why so quiet?").
+# Markers of an unusable farewell: questions ("need any help?", "why so
+# quiet?") or "still waiting here" statements that contradict hanging up.
 # Output-shape validation only — never used to classify user speech.
-_FAREWELL_QUESTION_MARKERS = ("giúp gì", "cần giúp", "sao im", "im lặng", "im re")
+_FAREWELL_REJECT_MARKERS = (
+    "giúp gì", "cần giúp", "sao im", "im lặng", "im re",
+    "chờ bạn", "đợi bạn", "có tôi đây", "có mình đây",
+    "vẫn ở đây", "vẫn đây", "đang ở đây",
+)
 
 
 def _looks_like_question(text: str) -> bool:
@@ -80,7 +85,7 @@ def _looks_like_question(text: str) -> bool:
     if cleaned.endswith(("?", "？", "?!")):
         return True
     lowered = cleaned.lower()
-    return any(marker in lowered for marker in _FAREWELL_QUESTION_MARKERS)
+    return any(marker in lowered for marker in _FAREWELL_REJECT_MARKERS)
 
 
 class SessionState:
@@ -641,9 +646,11 @@ class ClientSession:
                 "Phiên sắp kết thúc và sẽ ngắt ngay sau câu này. "
                 "Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, đúng tính cách trong prompt hệ thống và "
                 "phù hợp ngữ cảnh hội thoại — đại ý nếu không cần gì nữa thì xin phép đi trước, "
-                "có gì cứ gọi lại sau. Đây là câu chào kết thúc, không phải câu hỏi: "
-                "cấm kết thúc bằng dấu hỏi, cấm hỏi người dùng có cần giúp gì không, cấm hỏi sao im lặng. "
-                "Chỉ trả về đúng một câu chào, không thêm gì khác."
+                "có gì cứ gọi lại sau. Ví dụ câu đạt: \"Tạm biệt nhé, có gì cứ gọi mình nha!\" "
+                "Hãy viết một câu tương tự theo đúng tính cách của bạn. "
+                "Đây là câu chào kết thúc, không phải câu hỏi, cũng không phải câu bảo đang chờ: "
+                "cấm kết thúc bằng dấu hỏi, cấm hỏi có cần giúp gì không, cấm hỏi sao im lặng, "
+                "cấm nói đang chờ/đang ở đây. Chỉ trả về đúng một câu chào, không thêm gì khác."
             ),
         })
         text = await self._stream_idle_farewell(messages, revision)

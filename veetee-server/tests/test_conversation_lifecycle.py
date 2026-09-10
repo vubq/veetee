@@ -348,6 +348,23 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tts.texts, [llm.goodbye])
         self.assertFalse(session.is_active)
 
+    async def test_idle_waiting_statement_retries_once_then_closes(self):
+        llm = CountingLLM(idle_texts=["Ê, có tôi đây, chờ bạn nè.", "Ừ, chào bạn nhé. Hẹn gặp lại!"])
+        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+        session.config.conversation.idle_timeout_seconds = 0.02
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await self.wait_closed(websocket)
+
+        idle_calls = [
+            call for call in llm.calls
+            if call["messages"] and call["messages"][-1].get("role") == "system"
+        ]
+        self.assertEqual(len(idle_calls), 2)
+        self.assertEqual(tts.texts, [llm.goodbye])
+        self.assertFalse(session.is_active)
+
     async def test_idle_empty_goodbye_falls_back_to_safe_farewell(self):
         from core.session import IDLE_FAREWELL_FALLBACK
         llm = CountingLLM(idle_texts=["", ""])
