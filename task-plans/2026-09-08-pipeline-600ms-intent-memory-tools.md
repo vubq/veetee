@@ -337,6 +337,7 @@ Phụ thuộc: tích lũy theo bước 1–9. Gate: chạy được với cấu 
 
 ## Execution status
 
+- Verification 2026-09-10 (giữ `PARTIAL`): static/unit/config-load PASS (154/154); runtime E2E PASSED; smoke 20/100% nhưng p95 ~6.6s → acceptance p95<1.000ms `NOT_MET`, p50≤600ms `NOT_MET`; one-call chat + bounded tool rounds đúng trên trace live; live memory remember/recall đúng 1 case (chưa phải gate 100-intent/30-dialogue); MCP hardware tools, endpoint A/B, load 1/2/4, corpus 100, acoustic <1s đều PENDING. Không tick acceptance nào thêm.
 - Status: `PARTIAL`
 - Completed:
   - Unified turn stream + deadline/metrics, semantic intent/end, context builder và cancellation/turn ownership đã triển khai phía server.
