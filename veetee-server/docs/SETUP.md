@@ -102,6 +102,15 @@ Authorization: Bearer <secret>
 
 Khi token trống, management endpoints trả `401`. OTA và standalone WebSocket stock không dùng management credential này. Chi tiết nằm trong [API_PROTOCOL.md](API_PROTOCOL.md).
 
+Cùng cách auth trên cho đổi giọng và model lúc chạy (dashboard mục Giọng & Model, áp dụng ngay cho lượt sau trên cả web và thiết bị, có lưu qua restart):
+
+```text
+GET/POST /api/voice  {"voice": "<tên trong preset Vieneu>"}
+GET/POST /api/model  {"model": "<mặc định hoặc extra_models>"}
+```
+
+Giá trị sai trả `400`, không đổi gì. Đổi giọng làm mới clip fallback lỗi theo giọng mới. File state `data/voice.txt` và `data/llm-model.txt` được Git bỏ qua như persona đã lưu.
+
 ## 6. Khởi động
 
 ### Foreground bằng script

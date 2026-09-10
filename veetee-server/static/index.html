@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#07111f">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307111f'/%3E%3Cpath d='M16 5c-4 0-7 2.8-7 6.5V16c0 1.5.8 2.7 2 3.4V23a1.5 1.5 0 0 0 3 0v-1h4v1a1.5 1.5 0 0 0 3 0v-3.6c1.2-.7 2-1.9 2-3.4v-4.5C23 7.8 20 5 16 5z' fill='%2314b8a6'/%3E%3C/svg%3E">
     <title>VeeTee Realtime Voice Server Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/opus-decoder@0.7.7/dist/opus-decoder.min.js"></script>
     <style>
@@ -803,6 +804,57 @@
                         <p id="promptStatus" class="helper-text muted">Nội dung được áp dụng qua <code>{{base_prompt}}</code>; các quy tắc hệ thống vẫn nằm trong agent-base-prompt.txt.</p>
                     </div>
                 </section>
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2 class="panel-title">Giọng &amp; Model</h2>
+                            <p class="panel-subtitle">Áp dụng ngay cho lượt sau, trên cả web và thiết bị.</p>
+                        </div>
+                        <span class="panel-tag" style="background:rgba(20,184,166,0.12); color:#5eead4; border-color:rgba(45,212,191,0.3);">TTS &amp; LLM Ready</span>
+                    </div>
+                    <div class="panel-body" style="display:flex; flex-direction:column; gap:14px; padding:16px;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                            <div style="background:rgba(7,17,31,0.85); border:1px solid rgba(51,65,85,0.7); border-radius:12px; padding:10px 11px;">
+                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                    <span style="width:7px; height:7px; border-radius:999px; background:#14b8a6; box-shadow:0 0 6px #14b8a6; display:inline-block;"></span>
+                                    <span style="font-size:10px; font-weight:700; letter-spacing:0.06em; color:#94a3b8; text-transform:uppercase;">Giọng đang dùng</span>
+                                </div>
+                                <div id="voicePillValue" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:11px; color:#5eead4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">…</div>
+                            </div>
+                            <div style="background:rgba(7,17,31,0.85); border:1px solid rgba(51,65,85,0.7); border-radius:12px; padding:10px 11px;">
+                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                    <span style="width:7px; height:7px; border-radius:999px; background:#22d3ee; box-shadow:0 0 6px #22d3ee; display:inline-block;"></span>
+                                    <span style="font-size:10px; font-weight:700; letter-spacing:0.06em; color:#94a3b8; text-transform:uppercase;">Model đang dùng</span>
+                                </div>
+                                <div id="modelPillValue" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:11px; color:#67e8f9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">…</div>
+                            </div>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                            <label for="selectVoice" style="font-size:11px; font-weight:600; letter-spacing:0.05em; color:#94a3b8; text-transform:uppercase; margin:0;">Chọn giọng nói AI</label>
+                            <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
+                                <select id="selectVoice" style="width:100%; height:40px; background:#07111f; border:1px solid rgba(51,65,85,0.8); border-radius:11px; padding:0 11px; font-size:12.5px; color:#e2e8f0; outline:none; font:inherit;">
+                                    <option>Đang tải danh sách giọng…</option>
+                                </select>
+                                <button id="btnSaveVoice" class="action-btn action-primary save-btn" type="button" style="min-width:96px; height:40px; padding:0 14px; font-size:12px; border-radius:11px;">Lưu giọng</button>
+                            </div>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:6px; border-top:1px solid rgba(51,65,85,0.4); padding-top:12px;">
+                            <label for="selectModel" style="font-size:11px; font-weight:600; letter-spacing:0.05em; color:#94a3b8; text-transform:uppercase; margin:0;">Chọn mô hình LLM</label>
+                            <div style="display:grid; grid-template-columns:1fr auto; gap:8px;">
+                                <select id="selectModel" style="width:100%; height:40px; background:#07111f; border:1px solid rgba(51,65,85,0.8); border-radius:11px; padding:0 11px; font-size:12.5px; color:#e2e8f0; outline:none; font:inherit;">
+                                    <option>Đang tải danh sách model…</option>
+                                </select>
+                                <button id="btnSaveModel" class="action-btn action-primary save-btn" type="button" style="min-width:96px; height:40px; padding:0 14px; font-size:12px; border-radius:11px;">Lưu model</button>
+                            </div>
+                        </div>
+                        <div id="voiceModelFeedback" style="background:rgba(6,78,59,0.2); border:1px solid rgba(52,211,153,0.3); border-radius:12px; padding:9px 12px; display:flex; align-items:center; gap:10px; margin-top:2px;">
+                            <div style="display:flex; align-items:center; gap:7px; min-width:0;">
+                                <span id="voiceModelDot" style="width:7px; height:7px; flex:0 0 auto; border-radius:999px; background:#34d399; box-shadow:0 0 6px rgba(52,211,153,0.8);"></span>
+                                <span id="voiceModelStatus" class="helper-text success" style="margin:0; font-size:11.5px; color:#6ee7b7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Đang tải giọng và model hiện tại…</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </aside>
         </div>
     </main>
@@ -858,6 +910,11 @@
         const inputBasePrompt = document.getElementById('inputBasePrompt');
         const btnSavePrompt = document.getElementById('btnSavePrompt');
         const promptStatus = document.getElementById('promptStatus');
+        const selectVoice = document.getElementById('selectVoice');
+        const btnSaveVoice = document.getElementById('btnSaveVoice');
+        const selectModel = document.getElementById('selectModel');
+        const btnSaveModel = document.getElementById('btnSaveModel');
+        const voiceModelStatus = document.getElementById('voiceModelStatus');
         const audioInputStatus = document.getElementById('audioInputStatus');
         const stageVad = document.getElementById('stageVad');
         const stageAsr = document.getElementById('stageAsr');
@@ -1013,7 +1070,116 @@
             }
         }
 
+        function fillSelect(select, items, current, labelOf) {
+            select.innerHTML = '';
+            for (const item of items) {
+                const option = document.createElement('option');
+                option.value = item.value;
+                option.textContent = item.label;
+                if (item.value === current) option.selected = true;
+                select.appendChild(option);
+            }
+            if (!items.length) {
+                const option = document.createElement('option');
+                option.value = current || '';
+                option.textContent = current || '(trống)';
+                select.appendChild(option);
+            }
+        }
+
+        const voicePillValue = document.getElementById('voicePillValue');
+        const modelPillValue = document.getElementById('modelPillValue');
+        const voiceModelFeedback = document.getElementById('voiceModelFeedback');
+        const voiceModelDot = document.getElementById('voiceModelDot');
+
+        function setVoiceModelFeedback(kind, text) {
+            const styles = {
+                success: { box: 'rgba(6,78,59,0.2); border:1px solid rgba(52,211,153,0.3)',
+                           dot: '#34d399', glow: 'rgba(52,211,153,0.8)', fg: '#6ee7b7' },
+                error: { box: 'rgba(76,5,25,0.25); border:1px solid rgba(251,113,133,0.35)',
+                         dot: '#fb7185', glow: 'rgba(251,113,133,0.8)', fg: '#fda4af' },
+                info: { box: 'rgba(12,74,110,0.25); border:1px solid rgba(34,211,238,0.3)',
+                        dot: '#22d3ee', glow: 'rgba(34,211,238,0.8)', fg: '#a5f3fc' },
+                muted: { box: 'rgba(15,30,48,0.6); border:1px solid rgba(51,65,85,0.6)',
+                         dot: '#64748b', glow: 'rgba(100,116,139,0.6)', fg: '#94a3b8' },
+            }[kind] || {};
+            if (voiceModelFeedback && styles.box) {
+                voiceModelFeedback.style.background = styles.box.split(';')[0];
+                voiceModelFeedback.style.border = styles.box.split(';')[1];
+            }
+            if (voiceModelDot && styles.dot) {
+                voiceModelDot.style.background = styles.dot;
+                voiceModelDot.style.boxShadow = `0 0 6px ${styles.glow}`;
+            }
+            voiceModelStatus.innerText = text;
+            voiceModelStatus.style.color = styles.fg || '';
+            voiceModelStatus.className = `helper-text ${kind}`;
+        }
+
+        async function loadVoiceModel() {
+            try {
+                const [voiceResp, modelResp] = await Promise.all([
+                    managementFetch('/api/voice', { cache: 'no-store' }),
+                    managementFetch('/api/model', { cache: 'no-store' }),
+                ]);
+                if (!voiceResp.ok) throw new Error(`voice HTTP ${voiceResp.status}`);
+                if (!modelResp.ok) throw new Error(`model HTTP ${modelResp.status}`);
+                const voiceData = await voiceResp.json();
+                const modelData = await modelResp.json();
+                fillSelect(selectVoice,
+                    (voiceData.voices || []).map(v => ({
+                        value: v.name,
+                        label: (v.description && v.description.startsWith(v.name))
+                            ? v.description
+                            : (v.description ? `${v.name} — ${v.description}` : v.name),
+                    })),
+                    voiceData.voice || '');
+                fillSelect(selectModel,
+                    (modelData.models || []).map(m => ({ value: m, label: m })),
+                    modelData.model || '');
+                if (voicePillValue) voicePillValue.textContent = voiceData.voice || '?';
+                if (modelPillValue) modelPillValue.textContent = modelData.model || '?';
+                setVoiceModelFeedback('success',
+                    `Đang dùng: giọng ${voiceData.voice || '?'} · model ${modelData.model || '?'}. Lưu là áp dụng ngay cho lượt sau.`);
+            } catch (err) {
+                console.error('Load voice/model error:', err);
+                setVoiceModelFeedback('error', 'Không tải được giọng/model hiện tại.');
+            }
+        }
+
+        async function saveVoiceModel(kind) {
+            const isVoice = kind === 'voice';
+            const select = isVoice ? selectVoice : selectModel;
+            const btn = isVoice ? btnSaveVoice : btnSaveModel;
+            const value = select.value.trim();
+            if (!value) {
+                setVoiceModelFeedback('error', 'Chưa chọn giá trị để lưu.');
+                return;
+            }
+            btn.disabled = true;
+            setVoiceModelFeedback('info', 'Đang lưu...');
+            try {
+                const key = isVoice ? 'voice' : 'model';
+                const response = await managementFetch(isVoice ? '/api/voice' : '/api/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                setVoiceModelFeedback('success',
+                    `✅ Đã lưu ${isVoice ? 'giọng' : 'model'} ${data[key]}. Áp dụng ngay cho lượt sau, trên cả web và thiết bị.`);
+                loadVoiceModel();
+            } catch (err) {
+                console.error('Save voice/model error:', err);
+                setVoiceModelFeedback('error', `Không lưu được: ${err.message || err}`);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         loadBasePrompt();
+        loadVoiceModel();
         loadRuntimeDiagnostics();
 
         // Initialize Opus WebAssembly decoder and Web Audio Context
@@ -1684,6 +1850,8 @@
 
         btnConnect.addEventListener('click', connectWS);
         btnSavePrompt.addEventListener('click', saveBasePrompt);
+        btnSaveVoice.addEventListener('click', () => saveVoiceModel('voice'));
+        btnSaveModel.addEventListener('click', () => saveVoiceModel('model'));
 
         btnMic.addEventListener('click', async () => {
             if (isMicRecording) await stopMic(true);
