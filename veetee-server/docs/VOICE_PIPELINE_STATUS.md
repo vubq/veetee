@@ -1,7 +1,7 @@
 # Voice Pipeline Status
 
 Snapshot tài liệu: **2026-09-10**
-Source đối chiếu: **HEAD `c92192a`**, working tree sạch.
+Source đối chiếu: **HEAD `69c0a14`** (code mới nhất; sau đó chỉ docs/plans, tree sạch).
 
 Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành nằm ở [ARCHITECTURE.md](ARCHITECTURE.md), test/acceptance ở [TESTING.md](TESTING.md), công việc runtime còn mở ở [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md).
 

@@ -172,5 +172,6 @@ Giới hạn: FW không gửi detect sẽ không có greeting server; vẫn dùn
   - Runtime WS: V1/V2/V3 đều nhận greeting đủ `start → sentence_start → binary → stop`; V3 goodbye phát binary và đóng code `1000`. HTTP `/ws` synthetic TTS→PCM16 có STT final, LLM event và TTS binary response.
   - `config.example.yaml` vẫn mặc định `conversation.enabled=false`; chỉ `config.yaml` local/ignored được bật để test runtime.
   - Không có bằng chứng hardware ESP32; không ghi hardware PASS và chưa kết luận barge-in/AEC/loa vật lý đã ổn định.
-- Completion rule:
-  - Server/test xong nhưng runtime/hardware còn thiếu: `PARTIAL`. Chỉ `COMPLETED` khi các tiêu chí bắt buộc còn lại có bằng chứng thực tế.
+ - Completion rule:
+   - Server/test xong nhưng runtime/hardware còn thiếu: `PARTIAL`. Chỉ `COMPLETED` khi các tiêu chí bắt buộc còn lại có bằng chứng thực tế.
+ - Note 2026-09-10 (không đổi checkbox kiến trúc cũ): hướng exact-match/allowlist/fixed-greeting của plan này đã bị thay bằng AI-first + deterministic idle end theo yêu cầu user (xem plan AI-không-hardcode và follow-up deterministic idle). Behavior mới đã kiểm: unit idle, live WS, hardware wake/QA/idle-close/re-wake. Runtime profile 20 lượt + full ESP32 checklist vẫn `PENDING`; giữ `PARTIAL`.

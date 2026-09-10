@@ -23,10 +23,10 @@ Mẫu chuẩn: [`_TEMPLATE.md`](_TEMPLATE.md).
 
 ## Kế hoạch tiếp nối audit 2026-09-09
 
-- [AI semantics, persona lớn, tool/memory và pipeline dưới 1 giây](2026-09-09-ai-persona-tools-memory-latency.md) — `PLANNED`, execution `NOT_STARTED`: M0–M7 xử lý direct clock/literal receipts, speech ordering, schema, persona API/UI và context budget, multi-round tool/history, retrieval/RAG seam, latency A/B và nghiệm thu model/ESP32 thật.
+- [AI semantics, persona lớn, tool/memory và pipeline dưới 1 giây](2026-09-09-ai-persona-tools-memory-latency.md) — `PARTIAL`, execution có evidence nhiều đợt (2026-09-09/10): code M0–M7 + unit 155 xanh, live API/WS/E2E model thật, smoke 20 mẫu, hardware acoustic wake/QA/idle/re-wake; corpus 200, cert 100-attempt, SLA, interrupt/AEC còn `PENDING`.
 - [Rà soát và hợp nhất tài liệu dự án](2026-09-09-hop-nhat-tai-lieu-du-an.md) — `COMPLETED`, execution `COMPLETED`: D01–D14 đã được hợp nhất vào owner docs, `docs/PLAN.md` thành historical stub, review/task-plans được bảo toàn và link/diff/inventory validation đã pass.
 
-Plan runtime ở trên vẫn là `PLANNED` và tiếp nối các plan `PARTIAL` dưới đây; trong phạm vi đã nêu, yêu cầu AI mới thay chỉ dẫn direct clock/template fallback/explicit-only matcher và giới hạn cứng đúng 2 rounds. Plan tài liệu đã `COMPLETED` ngày 2026-09-09 và chỉ thay đổi docs/index/status, không triển khai các gap runtime A01–A12.
+Plan runtime ở trên đã thực thi nhiều đợt và đang `PARTIAL` (xem Execution status trong file); trong phạm vi đã nêu, yêu cầu AI mới thay chỉ dẫn direct clock/template fallback/explicit-only matcher và giới hạn cứng đúng 2 rounds. Plan tài liệu đã `COMPLETED` ngày 2026-09-09 và chỉ thay đổi docs/index/status, không triển khai các gap runtime A01–A12.
 
 ## Tài liệu sau migration
 
@@ -38,11 +38,11 @@ Giữ nguyên các file plan cũ, lịch sử checklist và evidence. Các mô t
 
 ## Plan đã lập
 
-- [Hội thoại do AI quyết định, bỏ hardcode ý định và câu trả lời](2026-09-08-hoi-thoai-ai-khong-hardcode.md) — `PARTIAL`: implementation server-side + 127 regression tests đã xanh; không còn semantic keyword/regex matcher runtime cho end/memory/confirmation/language/tool selection. Runtime clock tool đã qua model thật với AI tự chọn tool; corpus ≥200, SLA và ESP32 vẫn `PENDING`.
+- [Hội thoại do AI quyết định, bỏ hardcode ý định và câu trả lời](2026-09-08-hoi-thoai-ai-khong-hardcode.md) — `PARTIAL`: implementation server-side + unit 155 xanh (2026-09-10); audit xác nhận 0 matcher lên lời user; live remember→recall đúng, abort + follow-up sạch; corpus ≥200, SLA và ESP32 đầy đủ vẫn `PENDING`.
 - [Ổn định và tối ưu pipeline sau review server](2026-09-08-on-dinh-va-toi-uu-pipeline.md) — `PARTIAL`: các lỗi semantic/hardcode phát hiện từ review đã được chuyển sang plan AI và sửa ở working tree; runtime/SLA/phần cứng còn thiếu.
 - [Pipeline dưới 1 giây: Intent, Memory và Function Calling](2026-09-08-pipeline-600ms-intent-memory-tools.md) — `PARTIAL`: đã có implementation và regression phía server; corpus/runtime, SLA và phần cứng còn thiếu. Plan review mới tiếp nối việc sửa lỗi và nghiệm thu.
-- [Hội thoại tự nhiên: wake cache, lời chào, idle timeout và thoát](2026-09-08-hoi-thoai-tu-nhien-khong-sua-fw.md) — `PARTIAL`: phần server + unit/regression/WebSocket + browser/runtime smoke đã hoàn tất; runtime profile 20 lượt và kiểm thử ESP32 thật còn `PENDING`.
-- [Server tương thích FW nguyên bản](2026-09-08-server-khong-sua-fw.md) — `PARTIAL`: phần server + regression đã hoàn thành; runtime/hardware trên ESP32 nguyên bản còn `PENDING`.
+- [Hội thoại tự nhiên: wake cache, lời chào, idle timeout và thoát](2026-09-08-hoi-thoai-tu-nhien-khong-sua-fw.md) — `PARTIAL`: hướng exact-match/allowlist trong plan này đã bị thay bằng AI-first + deterministic idle end (xem plan AI-không-hardcode và follow-up 2026-09-10); phần server mới + hardware wake/QA/idle/re-wake đã có evidence, runtime profile 20 lượt và checklist ESP32 đầy đủ còn `PENDING`.
+- [Server tương thích FW nguyên bản](2026-09-08-server-khong-sua-fw.md) — `PARTIAL`: phần server + regression đã hoàn thành; E2E runtime PASSED 2026-09-10; hardware đã có wake/QA/idle/re-wake trên board build Kconfig từ baseline (không sửa logic source), interrupt 20×20 và đo loa vật lý còn `PENDING`.
 
 ## Ghi chú được giữ để truy vết
 

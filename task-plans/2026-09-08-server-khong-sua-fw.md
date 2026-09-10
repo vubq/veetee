@@ -104,6 +104,7 @@ File dự kiến: `core/session.py`, `core/providers/tts/vieneu_local.py`, `core
 - [x] Kiểm thử queue đầy khi normal finish, producer error, cancel và close; TTS nhanh/chậm, network send stall, callback ASR cũ và hai session. Regression hiện `26/26` pass.
 
 Runtime E2E của build hiện tại chưa chạy: process server đang phục vụ được khởi động từ `2026-09-08 01:20:43`, trước các thay đổi Step 5. Không dùng process cũ làm bằng chứng cho code mới và không khởi tạo thêm VieNeu/Parakeet GPU process chỉ để ép bài test. Measurement correction bật/tắt để `PENDING` cho lần chạy runtime/board có kiểm soát.
+Update 2026-09-10: E2E runtime đã chạy PASSED trên code hiện tại ("Mấy giờ rồi." → STT đúng → đáp đúng giờ, first binary ~1.6-1.9s). E2E acoustic board thật cũng PASS 1 lượt (xem STATUS 2026-09-10). Measurement correction on/off vẫn `PENDING`.
 
 File dự kiến: `test_e2e.py`, các tests ở trên, logging trong session/provider. Tests mock không cần GPU/API; runtime model thật là bài test riêng có điều kiện môi trường.
 
