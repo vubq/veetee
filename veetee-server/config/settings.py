@@ -177,6 +177,10 @@ class MemoryConfig:
     lookup_timeout_ms: int = 10
     top_k: int = 6
     max_memory_chars: int = 2400
+    # Durable/session memory mutations sourced from voice require a minimum
+    # acoustic confidence. AI still decides the semantics; this is only a
+    # provenance/integrity gate against persisting uncertain ASR text.
+    min_asr_confidence_for_write: float = 0.82
 
 
 @dataclass
@@ -349,6 +353,10 @@ def _validate_app_config(config: AppConfig) -> None:
         value = getattr(config.memory, name)
         if type(value) is not int or value < 1:
             raise ValueError(f"memory.{name} must be a positive integer")
+    confidence_gate = config.memory.min_asr_confidence_for_write
+    if isinstance(confidence_gate, bool) or not isinstance(confidence_gate, (int, float)) or not 0.0 <= float(confidence_gate) <= 1.0:
+        raise ValueError("memory.min_asr_confidence_for_write must be between 0 and 1")
+    config.memory.min_asr_confidence_for_write = float(confidence_gate)
     if not isinstance(config.memory.database_path, str) or not config.memory.database_path.strip():
         raise ValueError("memory.database_path must be a non-empty string")
     if not isinstance(config.memory.trusted_owner_id, str):

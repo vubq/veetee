@@ -124,6 +124,21 @@ def collect(stream):
 
 
 class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_warmup_probes_configured_model_with_real_completion(self):
+        session = FakeSession([FakeResponse(status=200, json_body={"choices": []})])
+        llm, _, _ = make_provider(session)
+        await llm.warmup()
+        self.assertEqual(len(session.requests), 1)
+        request = session.requests[0]
+        self.assertTrue(request["url"].endswith("/chat/completions"))
+        self.assertEqual(request["json"]["model"], llm.model)
+
+    async def test_warmup_rejects_unusable_configured_model(self):
+        session = FakeSession([FakeResponse(status=404)])
+        llm, _, _ = make_provider(session)
+        with self.assertRaisesRegex(RuntimeError, "configured model probe failed HTTP 404"):
+            await llm.warmup()
     async def test_stream_turn_chat_uses_first_eligible_key(self):
         chunks = [chat_chunk("[continue][happy]Xin chào"),
                   chat_chunk(" bạn nhé.", finish="stop"),

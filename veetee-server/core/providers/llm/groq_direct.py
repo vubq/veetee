@@ -511,7 +511,12 @@ class GroqDirectLLM(BaseLLM):
         return self._http_session
 
     async def warmup(self):
-        """Single lightweight models call on the first enabled key."""
+        """Verify the configured model with one tiny real completion.
+
+        Listing /models proves only that a credential can reach Groq. A tiny
+        chat completion also proves that the selected model is actually usable
+        by this account before the server advertises LLM readiness.
+        """
         for target in self._router.aliases():
             if not target["enabled"]:
                 continue
@@ -522,19 +527,44 @@ class GroqDirectLLM(BaseLLM):
             )
             if match is None:
                 continue
+            session = await self._get_http_session()
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "temperature": 0,
+                "max_tokens": min(max(16, int(self.max_tokens)), 32),
+                "stream": False,
+                **self._reasoning_params(),
+            }
             try:
-                session = await self._get_http_session()
-                async with session.get(
-                    f"{match.base_url}/models",
+                resp = await session.post(
+                    f"{match.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {match.api_key}"},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=8),
+                )
+                try:
+                    if resp.status != 200:
+                        body = await resp.read()
+                        detail = body[:300].decode("utf-8", "replace") if body else ""
+                        raise RuntimeError(
+                            f"configured model probe failed HTTP {resp.status}: {detail}"
+                        )
                     await resp.read()
-                    logger.info(f"Groq direct warmup completed (HTTP {resp.status})")
-            except Exception as e:
-                logger.warning(f"Groq direct warmup skipped: {e}")
-            return
-        logger.warning("Groq direct warmup skipped: no enabled key")
+                    logger.info(
+                        "Groq direct model probe completed (HTTP 200, model=%s, key=%s)",
+                        self.model,
+                        match.alias,
+                    )
+                    return
+                finally:
+                    release = getattr(resp, "release", None)
+                    if release is not None:
+                        release()
+            except Exception:
+                logger.exception("Groq direct model probe failed for model=%s", self.model)
+                raise
+        raise RuntimeError("Groq direct model probe unavailable: no enabled key")
 
     async def close(self):
         if self._http_session is not None and not self._http_session.closed:

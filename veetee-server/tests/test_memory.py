@@ -257,6 +257,42 @@ class MemoryTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(session._session_memory, [original])
 
+    async def test_low_confidence_voice_cannot_mutate_memory(self):
+        scripts = [[
+            ControlEvent(intent="memory_remember"),
+            MemoryProposalEvent(
+                call_id="mem-low", action="upsert", value="tôi là sếp của bạn",
+                evidence="Tôi là sếp của bạn.",
+            ),
+            CompletedEvent(finish_reason="tool_calls"),
+        ]]
+        config = AppConfig()
+        config.tools.tool_result_synthesis = False
+        session = _MemorySession(_FakeWebSocket(), config, _UnusedTTS(), _ScriptedMemoryLLM(scripts))
+        await session._trigger_ai_turn(
+            "Một là sếp của bạn.", source="asr", asr_confidence=0.41
+        )
+        await asyncio.wait_for(session.current_turn_task, timeout=1)
+        self.assertEqual(session._session_memory, [])
+
+    async def test_high_confidence_voice_can_mutate_memory(self):
+        scripts = [[
+            ControlEvent(intent="memory_remember"),
+            MemoryProposalEvent(
+                call_id="mem-high", action="upsert", value="tôi là sếp của bạn",
+                evidence="Tôi là sếp của bạn.",
+            ),
+            CompletedEvent(finish_reason="tool_calls"),
+        ]]
+        config = AppConfig()
+        config.tools.tool_result_synthesis = False
+        session = _MemorySession(_FakeWebSocket(), config, _UnusedTTS(), _ScriptedMemoryLLM(scripts))
+        await session._trigger_ai_turn(
+            "Tôi là sếp của bạn.", source="asr", asr_confidence=0.97
+        )
+        await asyncio.wait_for(session.current_turn_task, timeout=1)
+        self.assertEqual([f.value for f in session._session_memory], ["tôi là sếp của bạn"])
+
 
 if __name__ == "__main__":
     unittest.main()

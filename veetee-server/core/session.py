@@ -1319,6 +1319,7 @@ class ClientSession:
                         final_text,
                         check_end_intent=True,
                         source="asr",
+                        asr_confidence=getattr(self.asr, "last_word_confidence", None),
                     )
             finally:
                 self._final_stage_in_progress = False
@@ -1363,6 +1364,7 @@ class ClientSession:
         *,
         check_end_intent: bool = False,
         source: str = "chat",
+        asr_confidence: Optional[float] = None,
     ):
         if not transcript.strip():
             return
@@ -1389,6 +1391,7 @@ class ClientSession:
                 turn_generation,
                 check_end_intent=check_end_intent,
                 source=source,
+                asr_confidence=asr_confidence,
             )
         )
 
@@ -1615,6 +1618,7 @@ class ClientSession:
         *,
         check_end_intent: bool = False,
         source: str = "chat",
+        asr_confidence: Optional[float] = None,
     ):
         if not self._owns_turn(turn_generation):
             return
@@ -1686,6 +1690,25 @@ class ClientSession:
             # AI decides whether these facts are relevant. Never persist this
             # snapshot in dialogue or reuse a previous turn's clock.
             messages.insert(0, clock_context(self.config.server.timezone))
+            if source == "asr":
+                confidence_value = (
+                    round(float(asr_confidence), 4)
+                    if asr_confidence is not None else None
+                )
+                provenance = json.dumps(
+                    {"source": "voice_asr", "min_word_confidence": confidence_value},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                messages.insert(1, {
+                    "role": "system",
+                    "content": (
+                        f"input_provenance={provenance}. "
+                        "Đây là metadata kỹ thuật, không đọc thành lời. Nếu confidence thấp hơn "
+                        f"{self.config.memory.min_asr_confidence_for_write:.2f} và lượt này sẽ thay đổi memory, "
+                        "không suy diễn fact: hỏi lại ngắn gọn để xác nhận. Các intent không liên quan memory vẫn xử lý bình thường."
+                    ),
+                })
             business_tools = (
                 self.tool_registry.openai_tools(limit=self.config.tools.schema_limit)
                 if self.config.tools.enabled and self.config.tools.native_enabled
@@ -1911,6 +1934,31 @@ class ClientSession:
                         continue
                     if cancel_event.is_set() or not self._owns_turn(turn_generation):
                         return
+                    if source == "asr" and (
+                        asr_confidence is None
+                        or float(asr_confidence) < self.config.memory.min_asr_confidence_for_write
+                    ):
+                        applied = MemoryApplyResult("needs_clarification", scope="personal" if self._memory_owner_id else "session")
+                        mark_current(
+                            "memory_proposal_rejected",
+                            reason="low_asr_confidence",
+                            confidence=asr_confidence,
+                            minimum=self.config.memory.min_asr_confidence_for_write,
+                        )
+                        receipt = make_receipt(
+                            call_id=event.call_id, name=MEMORY_TOOL_NAME,
+                            arguments=memory_args, status=applied.status,
+                            turn_id=trace.turn_id, changed=False,
+                            error="voice transcript confidence is too low for a memory mutation; ask the user to confirm",
+                            provenance="memory:asr_confidence_gate",
+                        )
+                        action_round_records.append({
+                            "call_id": event.call_id,
+                            "name": MEMORY_TOOL_NAME,
+                            "arguments": memory_args,
+                            "receipt": receipt,
+                        })
+                        continue
                     proposal = MemoryProposal(
                         action=event.action,
                         value=event.value,

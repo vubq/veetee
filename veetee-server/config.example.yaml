@@ -173,6 +173,8 @@ memory:
   lookup_timeout_ms: 10
   top_k: 6
   max_memory_chars: 2400
+  # Không persist mutation từ transcript giọng nói có acoustic confidence thấp.
+  min_asr_confidence_for_write: 0.82
 
 tools:
   enabled: true
