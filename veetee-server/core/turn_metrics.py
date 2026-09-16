@@ -158,6 +158,10 @@ def summarize_trace(trace: TurnTrace) -> Dict[str, Any]:
         "llm_first_speech_segment": delta_ms("llm_request_start", "llm_speech_segment"),
         "tts_first_opus": delta_ms("tts_enqueue", "tts_first_opus"),
         "tts_opus_to_ws_binary": delta_ms("tts_first_opus", "first_ws_binary_sent"),
+        "speech_endpoint_to_first_ws_binary": delta_ms("speech_endpoint", "first_ws_binary_sent"),
+        "last_voice_to_first_ws_binary": delta_ms("last_voiced_sample_estimate", "first_ws_binary_sent"),
+        "asr_infer": delta_ms("asr_lock_acquired", "asr_infer_end"),
+        "asr_final_to_first_ws_binary": delta_ms("asr_final", "first_ws_binary_sent"),
     }
     payload["latency_ms"] = {
         name: value for name, value in latency_ms.items() if value is not None

@@ -4,6 +4,7 @@ import unittest
 
 from core.providers.llm.groq_direct import (
     GroqDirectLLM,
+    SpeechSegmentSplitter,
     build_targets_from_env,
 )
 from core.providers.llm.quota import QuotaLedger
@@ -89,6 +90,31 @@ def make_provider(session, groups=None, targets=None, **kwargs):
                   session_factory=lambda: session)
     params.update(kwargs)
     return GroqDirectLLM(router, **params), router, ledger
+
+
+class GroqSpeechSegmentSplitterTests(unittest.TestCase):
+    def test_short_intro_clause_is_not_split_too_early(self):
+        splitter = SpeechSegmentSplitter()
+
+        self.assertEqual(
+            splitter.add_token("Ừm, mình đang suy nghĩ thêm để trả lời bạn thật tự nhiên"),
+            [],
+        )
+
+    def test_long_first_clause_can_stream_naturally(self):
+        splitter = SpeechSegmentSplitter()
+
+        self.assertEqual(
+            splitter.add_token(
+                "Mình kiểm tra nhanh thông tin này cho bạn nhé, phần còn lại mình nói ngay sau đó"
+            ),
+            ["Mình kiểm tra nhanh thông tin này cho bạn nhé,"],
+        )
+
+    def test_decimal_period_is_not_treated_as_sentence_end(self):
+        splitter = SpeechSegmentSplitter()
+
+        self.assertEqual(splitter.add_token("Giá trị là 3.14 và vẫn đang tiếp tục"), [])
 
 
 def collect(stream):
@@ -192,6 +218,14 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
             [{"role": "user", "content": "hi"}], detect_end_intent=True)]
         self.assertTrue(any(isinstance(e, CompletedEvent) for e in events))
 
+    async     def test_clean_text_drops_tool_call_roleplay(self):
+        clean = GroqDirectLLM._clean_text
+        self.assertEqual(
+            clean("<tool_call> <function=music_play> <parameter>video_id> x"),
+            "")
+        self.assertEqual(clean("Để tôi bật nhạc cho bạn nhé."),
+                         "Để tôi bật nhạc cho bạn nhé.")
+
     async def test_native_tool_call_end_to_end(self):
         tool_delta = [{"index": 0, "id": "call-1",
                        "function": {"name": "get_current_time",
@@ -249,6 +283,29 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
             async for _ in llm.stream_turn(
                     [{"role": "user", "content": "hi"}]):
                 pass
+        snap = await ledger.snapshot("gA")
+        self.assertEqual(snap["in_flight"], 0)
+
+    async def test_abandoned_dispatch_settles_slot(self):
+        body = {"choices": [{"message": {"content": "hi"}}], "usage": {}}
+        session = FakeSession([FakeResponse(status=200, json_body=body)])
+        llm, _, ledger = make_provider(session)
+        payload = {"model": "m", "messages": [{"role": "user", "content": "hi"}],
+                   "max_tokens": 8, "stream": False}
+        gen = llm._dispatch(payload, timeout_s=5, purpose="abandoned",
+                            output_budget=8, stream=False)
+        # Drive to first yield manually, then abandon like a superseded
+        # idle farewell or an un-closed consumer would.
+        lease_holder: list = []
+        try:
+            async for lease, resp, _started in gen:
+                lease_holder.append(lease)
+                break
+        finally:
+            await gen.aclose()
+        self.assertEqual(len(lease_holder), 1)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         snap = await ledger.snapshot("gA")
         self.assertEqual(snap["in_flight"], 0)
 

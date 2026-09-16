@@ -29,6 +29,7 @@ from core.ai_contract import (
     CONFIRMATION_TOOL_NAME,
     INLINE_CONVERSATION_CONTROL_PROMPT,
     MEMORY_TOOL_NAME,
+    RECOVERY_MESSAGE_PROMPT,
     SEMANTIC_SYSTEM_PROMPT,
 )
 from core.intent import Intent
@@ -56,99 +57,132 @@ GROQ_ENV_PREFIX = "GROQ_API_KEY_"
 
 
 class SpeechSegmentSplitter:
-    """Split streamed text into speakable clauses (same policy as before)."""
+    """Split streamed text into natural TTS-sized speech segments.
+
+    VieNeu starts a fresh inference for every emitted segment. Prefer complete
+    sentences, allow an early clause only when it is long enough to sound like
+    a real prosodic unit, and use word-boundary cuts only as a last resort.
+    """
 
     def __init__(self):
         self.buffer = ""
-        self._segments_emitted = 0
+        self.end_puncts = {".", "!", "?", "\n", "…", "。", "！", "？"}
+        self.clause_puncts = {";", "；", ":", "：", ",", "，", "—"}
         self.min_segment_chars = 28
         self.clause_target_chars = 150
         self.clause_min_chars = 80
-        self.first_clause_min_chars = 36
-        self.first_clause_min_words = 5
+        self.first_clause_min_chars = 24
+        self.first_clause_min_words = 4
         self.hard_max_segment_chars = 240
+        self.hard_cut_search_back = 45
         self.first_segment_min_chars = 8
         self.first_segment_min_words = 2
+        self._segments_emitted = 0
 
     def _is_sentence_boundary(self, index: int) -> bool:
-        if index < 0 or index >= len(self.buffer):
-            return False
         char = self.buffer[index]
-        if char in ".!?":
+        if char != ".":
             return True
-        return False
+
+        # Wait for one-character look-ahead so decimals and compact
+        # abbreviations are not emitted as separate TTS segments.
+        if index + 1 >= len(self.buffer):
+            return False
+        prev_char = self.buffer[index - 1] if index > 0 else ""
+        next_char = self.buffer[index + 1]
+        if prev_char.isdigit() and next_char.isdigit():
+            return False
+        if next_char.isalpha() and not next_char.isspace():
+            return False
+
+        return True
 
     def _find_sentence_cut(self) -> int:
-        for index in range(len(self.buffer) - 1, -1, -1):
-            if self._is_sentence_boundary(index):
-                return index + 1
+        visible_chars = 0
+        for index, char in enumerate(self.buffer):
+            if not char.isspace():
+                visible_chars += 1
+            if char not in self.end_puncts or not self._is_sentence_boundary(index):
+                continue
+            if self._segments_emitted > 0 and visible_chars >= self.min_segment_chars:
+                return index
+            if self._segments_emitted == 0 and visible_chars >= self.first_segment_min_chars:
+                words = re.findall(r"[^\W_]+", self.buffer[: index + 1], flags=re.UNICODE)
+                if len(words) >= self.first_segment_min_words:
+                    return index
         return -1
 
     def _find_clause_cut(self) -> int:
-        for index in range(len(self.buffer) - 1, -1, -1):
-            if self.buffer[index] in ",;:":
-                return index + 1
+        if self._segments_emitted == 0:
+            visible_chars = 0
+            for index, char in enumerate(self.buffer):
+                if not char.isspace():
+                    visible_chars += 1
+                if char not in self.clause_puncts or visible_chars < self.first_clause_min_chars:
+                    continue
+                words = re.findall(r"[^\W_]+", self.buffer[: index + 1], flags=re.UNICODE)
+                if len(words) >= self.first_clause_min_words:
+                    return index
+
+        if len(self.buffer) < self.clause_target_chars:
+            return -1
+
+        search_start = self.clause_min_chars
+        search_end = min(len(self.buffer), self.clause_target_chars + 1)
+        for index in range(search_end - 1, search_start - 1, -1):
+            if self.buffer[index] in self.clause_puncts:
+                return index
         return -1
 
-    def _is_safe_word_boundary(self, idx: int) -> bool:
-        if idx <= 0 or idx >= len(self.buffer):
-            return False
-        left = self.buffer[idx - 1]
-        right = self.buffer[idx]
-        if left.isspace() or right.isspace():
-            return True
-        if not (left.isalnum() or left == "_") or not (right.isalnum() or right == "_"):
-            return True
-        return False
+    def _is_safe_word_boundary(self, index: int) -> bool:
+        # Hard-cut fallback is purely structural. Natural phrasing decisions
+        # belong to the model; the transport layer only needs a whitespace
+        # boundary once a segment exceeds the bounded TTS size.
+        return 0 <= index < len(self.buffer) and self.buffer[index].isspace()
 
     def _find_hard_cut(self) -> int:
-        limit = min(len(self.buffer), self.hard_max_segment_chars)
-        for index in range(limit - 1, 0, -1):
-            if self._is_safe_word_boundary(index):
+        if len(self.buffer) < self.hard_max_segment_chars:
+            return -1
+
+        search_start = max(0, self.hard_max_segment_chars - self.hard_cut_search_back)
+        search_end = min(len(self.buffer), self.hard_max_segment_chars + 1)
+        for index in range(search_end - 1, search_start - 1, -1):
+            if self.buffer[index] in self.clause_puncts:
                 return index
-        return limit
+
+        for index in range(search_end - 1, search_start - 1, -1):
+            if self.buffer[index].isspace() and self._is_safe_word_boundary(index):
+                return index
+
+        for index in range(search_end, min(len(self.buffer), self.hard_max_segment_chars + 40)):
+            if self.buffer[index].isspace() and self._is_safe_word_boundary(index):
+                return index
+        return -1
 
     def add_token(self, token: str) -> List[str]:
         self.buffer += token
         segments: List[str] = []
         while True:
             cut = self._find_sentence_cut()
-            if cut > 0:
-                segments.append(self.buffer[:cut])
-                self.buffer = self.buffer[cut:]
-                self._segments_emitted += 1
-                continue
-            visible_chars = len(self.buffer.strip())
-            if self._segments_emitted > 0 and visible_chars >= self.min_segment_chars:
+            if cut == -1:
                 cut = self._find_clause_cut()
-                if cut > 0:
-                    segments.append(self.buffer[:cut])
-                    self.buffer = self.buffer[cut:]
-                    self._segments_emitted += 1
-                    continue
-            if self._segments_emitted == 0 and visible_chars >= self.first_segment_min_chars:
-                match = re.search(r"([^\W\d_]+)$", self.buffer, flags=re.UNICODE)
-                words = re.findall(r"[^\W_]+", self.buffer, flags=re.UNICODE)
-                if match is None or len(words) >= self.first_segment_min_words:
-                    cut = self._find_clause_cut()
-                    if cut > 0:
-                        segments.append(self.buffer[:cut])
-                        self.buffer = self.buffer[cut:]
-                        self._segments_emitted += 1
-                        continue
-            if len(self.buffer) >= self.hard_max_segment_chars:
+            if cut == -1:
                 cut = self._find_hard_cut()
-                segments.append(self.buffer[:cut])
-                self.buffer = self.buffer[cut:]
-                self._segments_emitted += 1
-                continue
-            break
-        return [segment for segment in segments if segment.strip()]
+
+            if cut != -1:
+                segment = self.buffer[: cut + 1].strip()
+                self.buffer = self.buffer[cut + 1:]
+                if segment:
+                    segments.append(segment)
+                    self._segments_emitted += 1
+            else:
+                break
+        return segments
 
     def flush(self) -> List[str]:
-        if self.buffer.strip():
-            remainder = self.buffer
-            self.buffer = ""
+        remainder = self.buffer.strip()
+        self.buffer = ""
+        if remainder:
             self._segments_emitted += 1
             return [remainder]
         return []
@@ -291,6 +325,7 @@ class GroqDirectLLM(BaseLLM):
         self.system_prompt = self._render_system_prompt(self.base_prompt)
         self.persona_version = 0
         self._max_attempts = max(1, int(max_attempts))
+        self._last_single_content = ""
         self._reasoning_effort = reasoning_effort
         self._model_effort_overrides: Dict[str, str] = {}
         self._session_factory = session_factory
@@ -403,15 +438,28 @@ class GroqDirectLLM(BaseLLM):
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         text = text.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
         text = re.sub(r"\[[^\[\]\n]{1,32}\]", "", text)
+        # Roleplayed tool invocations must never be spoken: a follow-up round
+        # has no tools, so a model that "calls" here is narrating, not acting.
+        # Drop the whole clause (roleplay blocks rarely close their tags).
+        if re.search(r"<\s*tool_call", text, flags=re.IGNORECASE):
+            return ""
+        text = re.sub(r"</?(?:function|parameter)[^>]*>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text)
         return text.strip(" ,")
 
     @staticmethod
-    def _clean_control_sentence(text: str, max_chars: int = 180) -> str:
+    def _clean_control_sentence(
+        text: str,
+        max_chars: int = 180,
+        *,
+        min_words: int = 0,
+    ) -> str:
         cleaned = str(text or "").strip().strip('"“”').strip()
         cleaned = re.sub(r"\[[^\[\]\n]{1,32}\]", "", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
+            return ""
+        if min_words > 0 and len(re.findall(r"[^\W_]+", cleaned, flags=re.UNICODE)) < min_words:
             return ""
         return cleaned
 
@@ -496,16 +544,48 @@ class GroqDirectLLM(BaseLLM):
     def _parse_retry_after(self, resp) -> float:
         try:
             value = resp.headers.get("retry-after")
-            return max(0.0, float(str(value).strip().rstrip("s")))
+            return self._parse_duration_s(value, default=1.0)
         except (TypeError, ValueError, AttributeError):
             return 1.0
+
+    @staticmethod
+    def _parse_duration_s(val: Any, default: float = 5.0) -> float:
+        if val is None:
+            return default
+        raw = str(val).strip().lower()
+        if not raw:
+            return default
+        if "ms" in raw:
+            try:
+                return max(0.05, float(raw.replace("ms", "")) / 1000.0)
+            except ValueError:
+                pass
+        if "m" in raw and "s" in raw:
+            parts = raw.split("m")
+            try:
+                minutes = float(parts[0])
+                seconds = float(parts[1].rstrip("s"))
+                return max(0.05, minutes * 60.0 + seconds)
+            except (ValueError, IndexError):
+                pass
+        cleaned = raw.rstrip("s")
+        try:
+            return max(0.05, float(cleaned))
+        except ValueError:
+            return default
 
     def _learn_from_headers(self, lease: Lease, resp) -> None:
         async def _apply():
             limits: Dict[str, float] = {}
             remaining: Dict[str, float] = {}
+            valid_for: Dict[str, float] = {}
             headers = getattr(resp, "headers", {}) or {}
             lowered = {str(k).lower(): v for k, v in dict(headers).items()}
+            reset_tok = self._parse_duration_s(lowered.get("x-ratelimit-reset-tokens"), default=15.0)
+            reset_req = self._parse_duration_s(lowered.get("x-ratelimit-reset-requests"), default=60.0)
+            valid_for["tpm"] = reset_tok
+            valid_for["rpm"] = min(60.0, reset_req)
+            valid_for["rpd"] = reset_req
             pairs = (
                 ("x-ratelimit-limit-requests", "rpd", limits),
                 ("x-ratelimit-limit-tokens", "tpm", limits),
@@ -523,7 +603,9 @@ class GroqDirectLLM(BaseLLM):
             if limits:
                 await self._router._ledger.note_limits(lease.quota_group, limits)
             if remaining:
-                await self._router._ledger.note_remaining(lease.quota_group, remaining)
+                await self._router._ledger.note_remaining(
+                    lease.quota_group, remaining, valid_for=valid_for
+                )
         return _apply()  # type: ignore[return-value]
 
     def _usage_tokens(self, usage: Optional[Dict[str, Any]]) -> Tuple[int, int]:
@@ -596,7 +678,9 @@ class GroqDirectLLM(BaseLLM):
                     await resp.read()
                 except Exception:
                     pass
-                await self._router.cooldown(lease.quota_group, retry_after or 1.0, reason="429")
+                # Strictly honor upstream Retry-After to avoid futile hammering on exhausted limits
+                cooldown_s = max(2.0, retry_after)
+                await self._router.cooldown(lease.quota_group, cooldown_s, reason="429")
                 await self._router.settle_rejected(lease)
                 exclude.add(lease.quota_group)
                 try:
@@ -622,9 +706,15 @@ class GroqDirectLLM(BaseLLM):
                 raise _UpstreamError("Groq HTTP 400 (payload/model)")
             # 200 or other 5xx: hand to caller; caller settles exactly once.
             # The finally releases the connection when the caller is done,
-            # including on cancellation inside the consumer.
+            # including on cancellation inside the consumer. Abandonment
+            # (GeneratorExit, e.g. superseded idle farewell or a consumer
+            # that just stops iterating) cannot await here, so settle via
+            # a scheduled task; router idempotency makes it safe.
             try:
                 yield lease, resp, started
+            except GeneratorExit:
+                self._schedule_uncertain_settle(lease)
+                raise
             finally:
                 try:
                     resp.release()
@@ -634,7 +724,26 @@ class GroqDirectLLM(BaseLLM):
         raise _CapacityBusy("quota attempts exhausted")
 
     def _router_max_attempts(self) -> int:
-        return max(1, int(getattr(self, "_max_attempts", 2)))
+        configured = int(getattr(self, "_max_attempts", 2))
+        targets = getattr(getattr(self, "_router", None), "_targets", [])
+        enabled_count = sum(1 for t in targets if t.enabled and t.api_key)
+        return max(configured, enabled_count, 2)
+
+    def _schedule_uncertain_settle(self, lease: Lease) -> None:
+        """Fire-and-forget settle for paths that cannot await (GeneratorExit)."""
+        async def _settle_quietly() -> None:
+            try:
+                await self._router.settle_uncertain(lease)
+            except Exception:
+                pass
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(_settle_quietly())
+        task.add_done_callback(lambda done: done.exception()
+                               if not done.cancelled() else None)
 
     async def _settle_stream_usage(
         self, lease: Lease, usage: Optional[Dict[str, Any]], started: float,
@@ -655,30 +764,51 @@ class GroqDirectLLM(BaseLLM):
         timeout_s: float,
         purpose: str,
     ) -> str:
-        async for lease, resp, started in self._dispatch(
-            payload, timeout_s=timeout_s, purpose=purpose,
-            output_budget=int(payload.get("max_tokens") or 0), stream=False,
-        ):
-            try:
-                if resp.status != 200:
-                    await self._router.settle_uncertain(lease)
-                    return ""
-                data = await resp.json(content_type=None)
-            except asyncio.CancelledError:
+        lease: Optional[Lease] = None
+        try:
+            async for lease, resp, started in self._dispatch(
+                payload, timeout_s=timeout_s, purpose=purpose,
+                output_budget=int(payload.get("max_tokens") or 150), stream=False,
+            ):
+                await self._single_attempt(lease, resp)
+                return self._last_single_content
+        except asyncio.CancelledError:
+            if lease is not None:
                 await self._router.settle_uncertain(lease)
-                raise
-            except Exception:
-                await self._router.settle_uncertain(lease)
-                return ""
-            await self._learn_from_headers(lease, resp)
-            prompt, completion = self._usage_tokens(data.get("usage"))
-            await self._router.settle_ok(lease, actual_tokens=prompt + completion)
-            content = str(
-                data.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-            content = re.sub(r"<think>.*", "", content, flags=re.DOTALL)
-            return content.strip()
+            raise
         return ""
+
+    async def _single_attempt(self, lease: Lease, resp) -> None:
+        try:
+            if resp.status != 200:
+                try:
+                    error_body = (await resp.text()).strip()
+                except Exception:
+                    error_body = ""
+                logger.error(
+                    "Groq non-stream completion failed: HTTP %s body=%s",
+                    resp.status,
+                    error_body[:800] or "<empty>",
+                )
+                await self._router.settle_uncertain(lease)
+                self._last_single_content = ""
+                return
+            data = await resp.json(content_type=None)
+        except asyncio.CancelledError:
+            await self._router.settle_uncertain(lease)
+            raise
+        except Exception:
+            await self._router.settle_uncertain(lease)
+            self._last_single_content = ""
+            return
+        await self._learn_from_headers(lease, resp)
+        prompt, completion = self._usage_tokens(data.get("usage"))
+        await self._router.settle_ok(lease, actual_tokens=prompt + completion)
+        content = str(
+            data.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<think>.*", "", content, flags=re.DOTALL)
+        self._last_single_content = content.strip()
 
     async def correct_transcript(self, transcript: str) -> str:
         original = (transcript or "").strip()
@@ -742,18 +872,18 @@ class GroqDirectLLM(BaseLLM):
             return ""
 
     async def generate_recovery_message(self) -> str:
-        instruction = (
-            "Tạo đúng một câu cực ngắn để trợ lý giọng nói dùng khi một lượt xử lý bị lỗi. "
-            "Câu phải tự nhiên, theo personality hiện tại, không nêu lỗi kỹ thuật, không thêm nhãn. "
-            "Mặc định dùng tiếng Việt. Chỉ 6-9 từ và tối đa 55 ký tự."
-        )
         raw = await self._control_completion(
-            instruction,
-            "Hãy tạo câu recovery dùng chung, không phụ thuộc một câu hỏi cụ thể.",
+            RECOVERY_MESSAGE_PROMPT,
+            "Hãy tạo một câu recovery dùng chung, hoàn chỉnh và không phụ thuộc câu hỏi cụ thể.",
             temperature=max(0.35, self.temperature),
-            max_tokens=24,
+            max_tokens=32,
         )
-        return self._clean_control_sentence(raw, max_chars=64)
+        cleaned = self._clean_control_sentence(raw, max_chars=100, min_words=4)
+        if not cleaned:
+            return ""
+        if cleaned[-1] not in ".!?…":
+            cleaned += "."
+        return cleaned
 
     # -- streaming turns -----------------------------------------------------
 
@@ -764,6 +894,7 @@ class GroqDirectLLM(BaseLLM):
         tools: Optional[List[Dict]] = None,
         detect_end_intent: bool = True,
         tool_choice: Optional[Any] = None,
+        _empty_retry: bool = False,
     ):
         """Stream one typed LLM turn, including native function calls."""
         request_tools = list(tools or [])
@@ -802,6 +933,8 @@ class GroqDirectLLM(BaseLLM):
         saw_done = False
         usage = None
         saw_content = False
+        speech_committed = False
+        tool_mode_started = False
         first_token_marked = False
         first_event_at: Optional[float] = None
         read_only_tool_names = {
@@ -828,7 +961,7 @@ class GroqDirectLLM(BaseLLM):
             )
 
         def speech_events(token: str):
-            nonlocal emotion_emitted
+            nonlocal emotion_emitted, speech_committed
             events = []
             for clause in splitter.add_token(token):
                 emotion = None
@@ -843,6 +976,7 @@ class GroqDirectLLM(BaseLLM):
                         mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
                 clean_s = self._clean_text(clause)
                 if clean_s:
+                    speech_committed = True
                     events.append(SpeechSegmentEvent(clean_s, emotion=emotion))
             return events
 
@@ -855,7 +989,7 @@ class GroqDirectLLM(BaseLLM):
         try:
             async for lease, resp, started in self._dispatch(
                 payload, timeout_s=15, purpose="chat",
-                output_budget=self.max_tokens, stream=True,
+                output_budget=int(payload.get("max_tokens") or self.max_tokens or 200), stream=True,
             ):
                 attempted = True
                 try:
@@ -869,7 +1003,7 @@ class GroqDirectLLM(BaseLLM):
                     async def consume_event(data_text: str):
                         nonlocal control_decided, control_buffer, inline_end_intent
                         nonlocal finish_reason, saw_done, usage, saw_content, first_token_marked
-                        nonlocal first_event_at
+                        nonlocal first_event_at, tool_mode_started
                         if data_text == "[DONE]":
                             saw_done = True
                             return []
@@ -882,10 +1016,19 @@ class GroqDirectLLM(BaseLLM):
                         native_calls = delta.get("tool_calls") or []
                         if native_calls:
                             tool_calls.add_delta(native_calls)
+                            tool_mode_started = True
+                            # Tool-first rounds must not leak pre-receipt text.
+                            # If no speech segment has been emitted yet, discard
+                            # any partial text and wait for the tool receipt.
+                            if not speech_committed:
+                                splitter.buffer = ""
+                                control_buffer = ""
                         token = delta.get("content") or ""
                         if not token or "<think>" in token:
                             return []
                         saw_content = True
+                        if tool_mode_started and not speech_committed:
+                            return []
                         if not first_token_marked:
                             first_token_marked = True
                             first_event_at = time.monotonic()
@@ -970,6 +1113,7 @@ class GroqDirectLLM(BaseLLM):
                     yield control
             clean_s = self._clean_text(clause)
             if clean_s:
+                speech_committed = True
                 mark_current("llm_speech_segment", chars=len(clean_s))
                 yield SpeechSegmentEvent(clean_s, emotion=emotion)
 
@@ -987,18 +1131,11 @@ class GroqDirectLLM(BaseLLM):
             if finish_reason != "tool_calls":
                 yield FailedEvent("tool calls require finish_reason=tool_calls")
                 return
-            if saw_content:
-                non_read_only_calls = [
-                    name for _, name, _ in ready_calls
-                    if name not in read_only_tool_names
-                ]
-                if non_read_only_calls:
-                    yield FailedEvent("action turn emitted content before structured action")
-                    return
-                logger.warning(
-                    "Allowing mixed content before read-only tool call(s): %s",
-                    ", ".join(name for _, name, _ in ready_calls),
-                )
+            if speech_committed:
+                # Speech is an execution commit point. Never run a late tool
+                # after audio may already have reached the client.
+                yield FailedEvent("tool call emitted after speech commit")
+                return
             control = ensure_control(tool=True)
             if control is not None:
                 mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
@@ -1031,6 +1168,24 @@ class GroqDirectLLM(BaseLLM):
                 yield ToolCallReadyEvent(call_id=call_id, name=name, arguments=arguments)
         elif finish_reason == "tool_calls":
             yield FailedEvent("finish_reason=tool_calls without a complete tool call")
+            return
+        elif finish_reason == "stop" and not speech_committed:
+            if not _empty_retry:
+                # GPT-OSS can rarely spend the completion budget on hidden
+                # reasoning and finish with no visible content. No speech or
+                # tool has committed, so one transparent retry is side-effect
+                # safe and preferable to making the user repeat the request.
+                mark_current("llm_empty_response_retry", model=self.model)
+                async for retry_event in self.stream_turn(
+                    messages,
+                    tools=request_tools,
+                    detect_end_intent=detect_end_intent,
+                    tool_choice=tool_choice,
+                    _empty_retry=True,
+                ):
+                    yield retry_event
+                return
+            yield FailedEvent("LLM completed without speech or tool call after retry")
             return
         elif not control_emitted:
             control = ensure_control()
@@ -1071,7 +1226,7 @@ class GroqDirectLLM(BaseLLM):
         try:
             async for lease, resp, started in self._dispatch(
                 payload, timeout_s=15, purpose="chat",
-                output_budget=self.max_tokens, stream=True,
+                output_budget=int(payload.get("max_tokens") or self.max_tokens or 200), stream=True,
             ):
                 first_event_at: Optional[float] = None
                 try:

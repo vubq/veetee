@@ -966,7 +966,7 @@
 
         async function loadRuntimeDiagnostics() {
             try {
-                const response = await fetch('/api/diagnostics', { cache: 'no-store' });
+                const response = await managementFetch('/api/diagnostics', { cache: 'no-store' });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 runtimeDiagnostics = await response.json();
                 const conversation = runtimeDiagnostics.conversation || {};

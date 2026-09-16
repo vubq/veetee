@@ -102,6 +102,28 @@ class QuotaLedgerTests(unittest.IsolatedAsyncioTestCase):
         # Unknown reservation ids are ignored safely.
         await ledger.settle("gA", 999999, outcome="rejected")
 
+    async def test_observed_remaining_expires_after_valid_for(self):
+        clock = FakeClock()
+        ledger = QuotaLedger({"gA": {"tpm": 10000}}, clock=clock)
+        # Provider observes low remaining (1000) with reset time of 10s.
+        await ledger.note_remaining("gA", {"tpm": 1000}, valid_for={"tpm": 10.0})
+        # Right away, remaining is ~1000, so 5000 is rejected.
+        self.assertIsNone(await ledger.try_reserve("gA", tokens=5000))
+        # After 5s (half elapsed), it has replenished linearly: 1000 + 0.5 * 9000 = 5500.
+        clock.now += 5.0
+        self.assertIsNotNone(await ledger.try_reserve("gA", tokens=5000))
+
+    async def test_settle_ok_unreported_usage_preserves_estimate(self):
+        clock = FakeClock()
+        ledger = QuotaLedger({"gA": {"tpm": 100}}, clock=clock)
+        rid = await ledger.try_reserve("gA", tokens=60)
+        self.assertIsNotNone(rid)
+        # Settle with actual_tokens=0 (provider omitted usage field)
+        await ledger.settle("gA", rid, outcome="ok", actual_tokens=0)
+        # Charge of 60 should be preserved, so requesting 50 exceeds remaining (40)
+        self.assertIsNone(await ledger.try_reserve("gA", tokens=50))
+        self.assertIsNotNone(await ledger.try_reserve("gA", tokens=30))
+
     async def test_unknown_dimension_rejected(self):
         ledger = QuotaLedger()
         with self.assertRaises(ValueError):

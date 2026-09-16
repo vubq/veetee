@@ -34,6 +34,28 @@ class RetrievalRAGTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(facts)
         self.assertTrue(any("cà phê" in f.value for f in facts))
 
+    async def test_lexical_results_are_filled_with_recent_owner_facts(self):
+        await self.store.upsert(
+            owner_id="owner",
+            scope="personal",
+            kind="fact",
+            key="relationship",
+            value="người dùng là cấp trên trực tiếp của trợ lý",
+            source_turn_id="t4",
+            evidence="người dùng trực tiếp xác nhận mối quan hệ này",
+        )
+        retriever = MemoryRetriever(self.store, top_k=2)
+        facts = await retriever.retrieve(
+            owner_id="owner",
+            scope="personal",
+            query="Tôi thích uống cà phê gì?",
+        )
+
+        self.assertLessEqual(len(facts), 2)
+        self.assertTrue(any("cà phê" in fact.value for fact in facts))
+        self.assertTrue(any(fact.key == "relationship" for fact in facts))
+        self.assertTrue(all(fact.owner_id == "owner" for fact in facts))
+
     async def test_no_wrong_owner_deleted_or_stale_facts(self):
         retriever = MemoryRetriever(self.store, top_k=6)
         facts = await retriever.retrieve(owner_id="owner", scope="personal", query="trà sữa")

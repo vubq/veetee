@@ -33,6 +33,9 @@ from core.clock_context import clock_context
 from core.intent import PendingActionStore
 from core.ai_contract import (
     CONFIRMATION_TOOL_NAME,
+    IDLE_FAREWELL_RETRY_PROMPT,
+    IDLE_FAREWELL_SYSTEM_PROMPT,
+    IDLE_FAREWELL_USER_PROMPT,
     MEMORY_TOOL_NAME,
     SEMANTIC_SYSTEM_PROMPT,
     semantic_tools,
@@ -43,6 +46,8 @@ from core.memory.retrieval import MemoryRetriever
 from core.memory.store import MemoryStore
 from core.tools.builtin.calculator import calculator_descriptor
 from core.tools.builtin.time_tool import time_descriptor
+from core.tools.builtin.music_tool import MusicToolProvider
+from core.music_player import MusicPlayer
 from core.tools.executor import ToolExecutor
 from core.tools.mcp_device import MCPDeviceClient
 from core.tools.registry import ToolRegistry, ToolValidationError, validate_arguments
@@ -62,47 +67,26 @@ from config.settings import AppConfig
 
 logger = logging.getLogger("ClientSession")
 
-# Last-resort idle farewell, used only when the model fails twice to produce
-# a closing statement. Shape approved by the operator: farewell, not a
-# question. Persona-specific wording still comes from the model whenever it
-# cooperates.
-IDLE_FAREWELL_FALLBACK = "Nếu không cần gì nữa thì mình xin phép đi trước nhé, có gì cứ gọi mình nha!"
-
-# Shape validation for the machine-generated idle farewell. A farewell is
-# unusable when it asks a question, offers help, claims to keep waiting, or
-# invites the user to keep talking without any closing signal — the transport
-# closes right after, so the user could never reply. Output-shape validation
-# only — never used to classify user speech.
-_FAREWELL_QUESTION_MARKERS = ("giúp gì", "cần giúp", "sao im", "im lặng", "im re")
-_FAREWELL_WAITING_MARKERS = (
-    "chờ bạn", "đợi bạn", "có tôi đây", "có mình đây",
-    "vẫn ở đây", "vẫn đây", "đang ở đây",
-)
-_FAREWELL_INVITE_MARKERS = (
-    "cứ nói", "mình nghe", "tôi nghe", "muốn chat", "muốn nói",
-    "nói nhé", "nói đi", "hỏi mình", "kể mình", "chat gì",
-    "chuyện gì muốn nói",
-)
-_FAREWELL_CLOSING_MARKERS = (
-    "tạm biệt", "bye", "hẹn", "gặp lại", "đi trước",
-    "nghỉ", "ngủ ngon",
-)
+def _normalize_farewell_text(text: str) -> str:
+    return " ".join(
+        "".join(ch.lower() if ch.isalnum() else " " for ch in str(text or "")).split()
+    )
 
 
-def _looks_like_question(text: str) -> bool:
+def _is_valid_idle_farewell(text: str, previous_reply: str = "") -> bool:
+    """Validate structural safety/anti-repeat only, never farewell semantics.
+
+    Whether the text actually expresses a goodbye belongs to the LLM prompt.
+    Server code only prevents malformed output and replay of the prior answer.
+    """
     cleaned = (text or "").strip()
-    if not cleaned:
-        return True
-    if cleaned.endswith(("?", "？", "?!")):
-        return True
-    lowered = cleaned.lower()
-    if any(marker in lowered for marker in _FAREWELL_QUESTION_MARKERS):
-        return True
-    if any(marker in lowered for marker in _FAREWELL_WAITING_MARKERS):
-        return True
-    if any(marker in lowered for marker in _FAREWELL_INVITE_MARKERS):
-        return not any(marker in lowered for marker in _FAREWELL_CLOSING_MARKERS)
-    return False
+    if not cleaned or len(cleaned) > 180 or "\n" in cleaned:
+        return False
+    candidate = _normalize_farewell_text(cleaned)
+    previous = _normalize_farewell_text(previous_reply)
+    if previous and candidate and (candidate == previous or previous in candidate):
+        return False
+    return True
 
 
 class SessionState:
@@ -145,7 +129,7 @@ class ClientSession:
             frame_duration_ms=app_config.tts.frame_duration_ms
         )
         
-        self.dialogue = DialogueContext(max_history_turns=10)
+        self.dialogue = DialogueContext(max_history_turns=5)
         self.turn_runner = TurnRunner(self.llm_engine)
         self._session_memory: list[SessionMemoryFact] = []
         self._memory_store: Optional[MemoryStore] = None
@@ -166,6 +150,22 @@ class ClientSession:
         descriptors = []
         if self.config.tools.enabled:
             descriptors = [time_descriptor(self.config.server.timezone), calculator_descriptor()]
+        self.music_player = MusicPlayer(
+            send_text=self.send_text,
+            send_binary=self.send_binary,
+            session_id=self.session_id,
+            version=lambda: self.version,
+            stall_timeout_s=self.config.music.stall_timeout_s,
+        )
+        self._music_ducked = False
+        self.music_tools = None
+        if self.config.tools.enabled and self.config.music.enabled:
+            self.music_tools = MusicToolProvider(
+                self.music_player,
+                search_results=self.config.music.search_results,
+                resolve_timeout_s=self.config.music.resolve_timeout_s,
+            )
+            descriptors = descriptors + self.music_tools.descriptors()
         self.tool_registry = ToolRegistry(descriptors)
         self.tool_executor = ToolExecutor(
             self.tool_registry,
@@ -399,14 +399,19 @@ class ClientSession:
                 self._cancel_pending_wake()
                 self._closing_reason = None
                 was_speaking = self.state == SessionState.SPEAKING
+                was_music_playing = self.music_player.playing
                 requested_mode = str(data.get("mode", "")).strip().lower()
                 if requested_mode in {"realtime", "auto", "manual"}:
                     self.listening_mode = requested_mode
                 if not pending_wake:
                     self._abort_turn()
+                # A new listen also stops music so the user can talk over it.
+                if was_music_playing:
+                    await self.music_player.stop(announce=False)
+                    self._music_ducked = False
                 self._invalidate_capture()
                 self._playback_guard_until = 0.0
-                if was_speaking:
+                if was_speaking or was_music_playing:
                     # Reference FW accepts tts:stop and moves from speaking to
                     # listening (except manual-stop mode, where it owns the
                     # subsequent state transition itself). Explicit listening
@@ -458,6 +463,10 @@ class ClientSession:
             self._cancel_pending_wake()
             self._closing_reason = None
             self._abort_turn()
+            # Explicit user interrupt also stops music; a new turn may follow.
+            if self.music_player.playing:
+                await self.music_player.stop(announce=False)
+                self._music_ducked = False
             self._invalidate_capture()
             self._playback_guard_until = 0.0
             await self.send_text(make_tts_message(self.session_id, "stop"))
@@ -494,6 +503,8 @@ class ClientSession:
 
     def _abort_turn(self):
         self._turn_generation += 1
+        if self.music_player is not None:
+            self.music_player.clear_pending()
         if self.current_cancel_event:
             self.current_cancel_event.set()
             self.current_cancel_event = None
@@ -561,6 +572,7 @@ class ClientSession:
             or self._speech_active
             or self._final_stage_in_progress
             or self.state in (SessionState.THINKING, SessionState.SPEAKING)
+            or (self.music_player is not None and self.music_player.playing)
         )
 
     async def _idle_watchdog(self):
@@ -641,61 +653,61 @@ class ClientSession:
         loop — a quiet session must not linger forever. A new user turn that
         arrives mid-flow bumps the activity revision and cancels this path.
 
-        The farewell must be a closing statement in the persona voice, never
-        a question. Output shape is validated (question-like text triggers
-        one stern retry, then a safe default) because hanging up right after
-        asking "do you need help?" is incoherent.
+        The LLM prompt owns the semantic meaning and persona wording. Server
+        validation is intentionally structural only: malformed/empty output
+        or replay of the previous answer gets one retry. If AI still cannot
+        produce usable output, the lifecycle closes silently rather than
+        inventing a hard-coded spoken sentence.
         """
-        messages = list(self.dialogue.get_messages_for_llm())
-        if not any(item.get("role") == "user" for item in messages):
-            # Gateway chat template rejects user-less requests (HTTP 400).
-            # This placeholder only feeds this one-off farewell generation and
-            # is never stored in the dialogue history.
-            messages.append({
-                "role": "user",
-                "content": "(Người dùng kết nối nhưng chưa nói gì.)",
-            })
-        messages.append({
-            "role": "system",
-            "content": (
-                "Sự kiện hệ thống: hội thoại đã không có tương tác "
-                f"{timeout:.0f} giây (không có câu hỏi của người dùng và không có câu trả lời nào). "
-                "Phiên sắp kết thúc và kết nối sẽ bị cắt ngay sau câu này, nên mọi lời mời nói tiếp "
-                "đều vô nghĩa — người dùng sẽ không bao giờ nghe được câu trả lời. "
-                "Hãy tạo một câu chào tạm biệt ngắn, tự nhiên, đúng tính cách trong prompt hệ thống và "
-                "phù hợp ngữ cảnh hội thoại — đại ý nếu không cần gì nữa thì xin phép đi trước, "
-                "có gì cứ gọi lại sau. Ví dụ câu đạt: \"Tạm biệt nhé, có gì cứ gọi mình nha!\" "
-                "Hãy viết một câu tương tự theo đúng tính cách của bạn. "
-                "Đây là câu chào kết thúc: cấm kết thúc bằng dấu hỏi, cấm hỏi có cần giúp gì không, "
-                "cấm hỏi sao im lặng, cấm nói đang chờ/đang ở đây, cấm mời người dùng nói tiếp. "
-                "Chỉ trả về đúng một câu chào, không thêm gì khác."
+        # Idle close is a fresh lifecycle inference, not another conversation
+        # turn. Never feed the previous user question/assistant answer back into
+        # this call: doing so lets a model repeat the last answer at hang-up.
+        previous_reply = next(
+            (
+                str(item.content or "")
+                for item in reversed(self.dialogue.messages)
+                if item.role == "assistant" and str(item.content or "").strip()
             ),
-        })
+            "",
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    IDLE_FAREWELL_SYSTEM_PROMPT
+                    + f"\nIdle deadline đã đạt sau {timeout:.0f} giây không tương tác."
+                ),
+            },
+            {"role": "user", "content": IDLE_FAREWELL_USER_PROMPT},
+        ]
         text = await self._stream_idle_farewell(messages, revision)
         if text is None:
             return False
-        if not text or _looks_like_question(text):
-            logger.info("idle farewell retry session=%s first=%r", self.session_id, text)
-            retry_messages = messages + [{
-                "role": "system",
-                "content": (
-                    "Câu vừa rồi không dùng được (là câu hỏi hoặc trống). Viết lại NGAY "
-                    "một câu chào tạm biệt khẳng định: cấm dấu hỏi, cấm mời giúp đỡ. "
-                    "Chỉ trả về đúng một câu chào."
-                ),
-            }]
+        cleaned = (text or "").strip()
+        if not _is_valid_idle_farewell(cleaned, previous_reply):
+            logger.info("idle farewell retry session=%s first=%r", self.session_id, cleaned)
+            retry_messages = [
+                {
+                    "role": "system",
+                    "content": IDLE_FAREWELL_SYSTEM_PROMPT + "\n" + IDLE_FAREWELL_RETRY_PROMPT,
+                },
+                {"role": "user", "content": IDLE_FAREWELL_USER_PROMPT},
+            ]
             retry = await self._stream_idle_farewell(retry_messages, revision)
             if retry is None:
                 return False
-            text = retry
-        if not text or _looks_like_question(text):
-            logger.info("idle farewell fallback session=%s", self.session_id)
-            text = IDLE_FAREWELL_FALLBACK
+            cleaned = (retry or "").strip()
+        if not _is_valid_idle_farewell(cleaned, previous_reply):
+            logger.info(
+                "idle farewell unavailable session=%s; closing without spoken fallback",
+                self.session_id,
+            )
+            cleaned = ""
 
         self._closing_reason = "idle_timeout"
-        if text and self.config.conversation.goodbye_enabled:
+        if cleaned and self.config.conversation.goodbye_enabled:
             self._start_fixed_response(
-                text,
+                cleaned,
                 kind="idle_goodbye",
                 close_after=True,
                 closing_reason="idle_timeout",
@@ -711,10 +723,14 @@ class ClientSession:
 
         self._closing_reason = None
         was_speaking = self.state == SessionState.SPEAKING
+        was_music_playing = self.music_player.playing
         self._abort_turn()
+        if was_music_playing:
+            await self.music_player.stop(announce=False)
+            self._music_ducked = False
         self._invalidate_capture()
         self._playback_guard_until = 0.0
-        if was_speaking:
+        if was_speaking or was_music_playing:
             await self.send_text(make_tts_message(self.session_id, "stop"))
         self.state = SessionState.LISTENING
         self.final_transcript_parts.clear()
@@ -819,6 +835,7 @@ class ClientSession:
             if not self._owns_turn(turn_generation):
                 return
             self.state = SessionState.THINKING
+            await self._duck_music_for_speech()
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 raise ConnectionError("failed to send live fixed-response tts:start")
             sent_start = True
@@ -899,6 +916,7 @@ class ClientSession:
                 self.current_turn_task = None
                 self.current_cancel_event = None
                 self._fixed_response_kind = None
+                await self._unduck_music()
 
     async def _wait_cancelable(self, seconds: float, cancel_event: asyncio.Event) -> bool:
         if seconds <= 0:
@@ -937,6 +955,7 @@ class ClientSession:
         sent_start = False
         sent_audio = False
         try:
+            await self._duck_music_for_speech()
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 return False
             sent_start = True
@@ -1026,6 +1045,7 @@ class ClientSession:
 
             if cancel_event.is_set() or not self._owns_turn(turn_generation):
                 return
+            await self._duck_music_for_speech()
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 raise ConnectionError("failed to send fixed-response tts:start")
             sent_start = True
@@ -1115,6 +1135,40 @@ class ClientSession:
                 self.current_turn_task = None
                 self.current_cancel_event = None
                 self._fixed_response_kind = None
+                await self._unduck_music()
+
+    async def _duck_music_for_speech(self) -> None:
+        """Pause music while AI speech plays so streams never overlap.
+
+        Called at every AI-audio start (normal turns, fixed responses,
+        error fallback). Idempotent within a turn via _music_ducked; the
+        flag clears when the turn settles or the session closes. A manual
+        music command in between wins (control paths reset the flag only
+        on explicit user stop).
+        """
+        if self._music_ducked:
+            return
+        try:
+            if self.music_player.state == "playing":
+                await self.music_player.pause()
+                self._music_ducked = True
+                logger.info("Music ducked for AI speech session=%s",
+                            self.session_id)
+        except Exception as exc:
+            logger.debug("Music duck failed: %s", exc)
+
+    async def _unduck_music(self) -> None:
+        """Resume music paused by _duck_music_for_speech, if still paused."""
+        if not self._music_ducked:
+            return
+        self._music_ducked = False
+        try:
+            if self.music_player.state == "paused":
+                await self.music_player.resume()
+                logger.info("Music resumed after AI speech session=%s",
+                            self.session_id)
+        except Exception as exc:
+            logger.debug("Music resume failed: %s", exc)
 
     async def _close_transport_and_session(self, reason: str):
         logger.info("conversation_close_commit session=%s reason=%s", self.session_id, reason)
@@ -1130,15 +1184,17 @@ class ClientSession:
             )
             return
 
-        if self.state == SessionState.SPEAKING:
-            # Stock FW has no runtime proof that device-side AEC is effective.
-            # Under client_only policy, speech detected while TTS is playing is
-            # treated as possible echo. Explicit abort/listen:start from the FW
-            # remains the supported interruption path.
+        if self.state == SessionState.SPEAKING or (self.music_player is not None and self.music_player.playing):
+            # Stock FW and single-mic setups have no proof that device-side AEC
+            # is effective. Under client_only policy, speech detected while TTS
+            # or music is playing is treated as speaker echo. Explicit abort /
+            # listen:start remains the supported interruption path.
             self._discard_asr_until_speech_final = True
             self._speech_active = False
             self.final_transcript_parts.clear()
-            if self.listening_mode == "realtime":
+            if self.music_player is not None and self.music_player.playing:
+                logger.info("Ignoring ASR speech while music is playing (echo guard)")
+            elif self.listening_mode == "realtime":
                 logger.info(
                     "Ignoring realtime ASR during TTS under client_only barge-in policy"
                 )
@@ -1586,11 +1642,10 @@ class ClientSession:
         tool_calls_seen = 0
         llm_rounds = 1
         action_round_records: list[dict] = []
-        # Speech from a round that may still emit tool calls is buffered
-        # until terminal validation. Only pure-chat rounds flush; rounds
-        # with any action discard first-round speech and rely on the
-        # synthesis round so no unvalidated claim reaches TTS.
-        round_speech_buffer: list[tuple[str, Optional[str]]] = []
+        # The first spoken segment is a speech commit point: pure chat starts
+        # TTS immediately. Any later action event in the same round fails
+        # closed and is never executed after audio may have reached the client.
+        speech_committed = False
         executed_call_keys: set[tuple[str, str]] = set()
         persona_version = self._persona_snapshot()
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
@@ -1714,6 +1769,7 @@ class ClientSession:
                     return
                 if cancel_event.is_set() or not self._owns_turn(turn_generation):
                     return
+                await self._duck_music_for_speech()
 
                 if not tts_started:
                     emo = emotion or current_emotion or "neutral"
@@ -1808,20 +1864,24 @@ class ClientSession:
                     continue
 
                 if isinstance(event, SpeechSegmentEvent):
-                    if not reply_segments and not round_speech_buffer:
+                    if not reply_segments:
                         logger.info(
                             "Post-ASR first LLM clause ready in %.3fs: %r",
                             time.perf_counter() - t_start,
                             event.text,
                         )
-                        mark_current("llm_first_speech_buffered")
-                    # Buffer until the round reaches a terminal event. The
-                    # flush/discard decision happens after Completed so a
-                    # late tool call cannot follow already-spoken speech.
-                    round_speech_buffer.append((event.text, event.emotion))
+                        mark_current("llm_first_speech_committed")
+                    speech_committed = True
+                    reply_segments.append(event.text)
+                    await speak_segment(event.text, event.emotion)
+                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                        return
                     continue
 
                 if isinstance(event, MemoryProposalEvent):
+                    if speech_committed:
+                        mark_current("action_rejected_after_speech_commit", action="memory")
+                        raise RuntimeError("memory action emitted after speech commit")
                     tool_calls_seen += 1
                     memory_args = {
                         "action": event.action,
@@ -1888,6 +1948,9 @@ class ClientSession:
                     continue
 
                 if isinstance(event, ConfirmationDecisionEvent):
+                    if speech_committed:
+                        mark_current("action_rejected_after_speech_commit", action="confirmation")
+                        raise RuntimeError("confirmation action emitted after speech commit")
                     tool_calls_seen += 1
                     confirmation_args = {
                         "action_id": event.action_id,
@@ -2006,6 +2069,9 @@ class ClientSession:
                     continue
 
                 if isinstance(event, ToolCallReadyEvent):
+                    if speech_committed:
+                        mark_current("action_rejected_after_speech_commit", action=event.name)
+                        raise RuntimeError("tool action emitted after speech commit")
                     tool_calls_seen += 1
                     # Loop detection is structural: same origin turn/call with
                     # different args, or a repeated fingerprint after dispatch,
@@ -2172,24 +2238,17 @@ class ClientSession:
                 mark_current("persona_changed_mid_turn", before=persona_version,
                              after=self._persona_snapshot())
 
-            if not action_round_records:
-                # Pure chat: terminal validation passed, flush buffered speech.
-                for text, emotion in round_speech_buffer:
-                    reply_segments.append(text)
-                    await speak_segment(text, emotion)
-                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                        return
-                mark_current("speech_flushed_after_terminal", segments=len(round_speech_buffer))
-                round_speech_buffer.clear()
-            else:
-                # Any action discards first-round speech: it was produced
-                # before receipts existed and must never reach TTS.
-                if round_speech_buffer:
-                    mark_current("speech_discarded_for_action_round",
-                                 segments=len(round_speech_buffer),
-                                 actions=len(action_round_records))
-                    round_speech_buffer.clear()
+            if action_round_records and speech_committed:
+                # Defensive invariant; normal providers reject this before an
+                # action event reaches the session.
+                raise RuntimeError("action round reached terminal after speech commit")
+            if speech_committed:
+                mark_current("speech_streamed_before_terminal", segments=len(reply_segments))
 
+            # Receipts are data, never user-facing prose. Every tool/memory
+            # result goes back to the LLM so intent, persona, language and
+            # amount of detail remain AI-authored. Deterministic server code
+            # validates/applies actions but never renders their spoken result.
             if (
                 action_round_records
                 and self.config.tools.tool_result_synthesis
@@ -2292,12 +2351,15 @@ class ClientSession:
                     # Past assistant time strings in history are never a
                     # substitute for the current receipt.
                     try:
+                        # Synthesis rounds contain no new user utterance.
+                        # Semantic side effects (memory/confirmation) are only
+                        # decided from fresh user input in the first round;
+                        # receipt synthesis may chain business tools only.
+                        followup_semantic_tools = []
                         fitted_round = self._fit_llm_context(
                             round_messages,
-                            tools=(business_tools + semantic_tools(
-                                memory_enabled=self.config.memory.enabled,
-                                pending_action=self.pending_actions.peek() is not None,
-                            )) if allow_follow_tools else [],
+                            tools=(business_tools + followup_semantic_tools)
+                            if allow_follow_tools else [],
                             detect_end_intent=bool(detect_end_intent),
                         )
                         mark_current("llm_round_start", round=synthesized_round,
@@ -2306,15 +2368,12 @@ class ClientSession:
                         round_speech: list[tuple[str, Optional[str]]] = []
                         round_tools: list[ToolCallReadyEvent] = []
                         round_memory: list[MemoryProposalEvent] = []
-                        round_confirm: list[ConfirmationDecisionEvent] = []
                         round_completed = False
                         round_failed = False
                         async for event in self.turn_runner.stream(
                             fitted_round,
-                            tools=(business_tools + semantic_tools(
-                                memory_enabled=self.config.memory.enabled,
-                                pending_action=self.pending_actions.peek() is not None,
-                            )) if allow_follow_tools else [],
+                            tools=(business_tools + followup_semantic_tools)
+                            if allow_follow_tools else [],
                             detect_end_intent=bool(detect_end_intent),
                             tool_choice=None if allow_follow_tools else "none",
                             first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
@@ -2345,12 +2404,15 @@ class ClientSession:
                                     break
                                 continue
                             if isinstance(event, ConfirmationDecisionEvent):
-                                if allow_follow_tools:
-                                    round_confirm.append(event)
-                                else:
-                                    mark_current("confirmation_rejected", reason="final_round")
-                                    round_failed = True
-                                    break
+                                # Defensive guard for provider/test doubles
+                                # that emit a semantic event for a tool that
+                                # was not exposed in this synthesis round.
+                                mark_current(
+                                    "confirmation_rejected",
+                                    reason="no_new_user_input",
+                                )
+                                round_failed = True
+                                break
                                 continue
                             if isinstance(event, ToolCallReadyEvent):
                                 if allow_follow_tools:
@@ -2376,7 +2438,7 @@ class ClientSession:
                         # Independent read-only tools overlap; writes and
                         # dependent calls keep order via executor groups.
                         new_records: list[dict] = []
-                        if round_tools or round_memory or round_confirm:
+                        if round_tools or round_memory:
                             # Discard intermediate speech when new actions
                             # exist; the next round rephrases with receipts.
                             if round_speech:
@@ -2487,7 +2549,7 @@ class ClientSession:
                                     if "_deferred_tool" in r else r
                                     for r in new_records
                                 ]
-                            # Memory/confirmation follow-ups are applied in order.
+                            # Memory follow-ups are applied in order.
                             for mem_event in round_memory:
                                 tool_calls_seen += 1
                                 margs = {"action": mem_event.action, "value": mem_event.value,
@@ -2521,21 +2583,6 @@ class ClientSession:
                                                               "revision": applied.revision,
                                                               "scope": applied.scope},
                                                         provenance="memory:followup")})
-                            for conf_event in round_confirm:
-                                tool_calls_seen += 1
-                                cargs = {"action_id": conf_event.action_id, "decision": conf_event.decision}
-                                resolution, pending = self.pending_actions.resolve(
-                                    action_id=conf_event.action_id, decision=conf_event.decision,
-                                    session_id=self.session_id,
-                                    owner_scope=self._confirmation_owner_scope())
-                                new_records.append({"call_id": conf_event.call_id,
-                                                    "name": CONFIRMATION_TOOL_NAME, "arguments": cargs,
-                                                    "receipt": make_receipt(
-                                                        call_id=conf_event.call_id,
-                                                        name=CONFIRMATION_TOOL_NAME, arguments=cargs,
-                                                        status=resolution, turn_id=trace.turn_id,
-                                                        data={"action_id": conf_event.action_id},
-                                                        provenance="confirmation:followup")})
                             if new_records:
                                 action_round_records.extend(new_records)
                                 pending_receipt_index = len(action_round_records) - len(new_records)
@@ -2578,11 +2625,26 @@ class ClientSession:
                     mark_current("action_receipt_synthesis_unavailable",
                                  record_count=len(action_round_records))
                     if synthesized_segments == 0:
-                        # No literal business fallback: keep receipts in
-                        # history and do not invent a success claim.
+                        # Preserve truthful receipts and never invent the tool
+                        # outcome. Recovery wording is generated by the active
+                        # AI persona at startup and cached; server logic only
+                        # decides that a recovery is needed.
                         self.dialogue.add_system_message(_degraded_note(), turn_id=trace.turn_id)
-                        mark_current("action_receipt_degraded_no_literal",
-                                     record_count=len(action_round_records))
+                        recovery_text = ""
+                        if self.response_audio_cache is not None:
+                            try:
+                                recovery = await self.response_audio_cache.get_recovery()
+                                recovery_text = str(recovery.text or "").strip()
+                            except Exception as exc:
+                                logger.info("action receipt recovery unavailable: %s", exc)
+                        if recovery_text:
+                            reply_segments.append(recovery_text)
+                            await speak_segment(recovery_text, "neutral")
+                            mark_current("action_receipt_degraded_recovery_spoken",
+                                         record_count=len(action_round_records))
+                        else:
+                            mark_current("action_receipt_degraded_no_speech",
+                                         record_count=len(action_round_records))
                     else:
                         mark_current("action_receipt_partial_kept", segments=synthesized_segments)
 
@@ -2659,6 +2721,8 @@ class ClientSession:
             self._speech_active = False
             self.final_transcript_parts.clear()
             self._mark_response_complete(self._playback_guard_until)
+            if self.music_player is not None:
+                await self.music_player.start_pending()
 
         except asyncio.CancelledError:
             logger.info("Response task cancelled")
@@ -2717,6 +2781,7 @@ class ClientSession:
             if self.current_turn_task is asyncio.current_task():
                 self.current_turn_task = None
                 self.current_cancel_event = None
+                await self._unduck_music()
 
     async def send_text(self, text: str) -> bool:
         if not self.is_active:
@@ -2773,6 +2838,12 @@ class ClientSession:
 
         if self.mcp_device is not None:
             await self.mcp_device.close()
+
+        self._music_ducked = False
+        try:
+            await self.music_player.close()
+        except Exception as exc:
+            logger.debug("Music player close failed: %s", exc)
 
         if self.current_cancel_event is not None:
             self.current_cancel_event.set()

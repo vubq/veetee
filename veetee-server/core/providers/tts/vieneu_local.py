@@ -47,6 +47,9 @@ class VieneuLocalTTS(BaseTTS):
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vieneu_tts")
         self._scheduler = TTSAdmissionScheduler()
         self._worker_futures = set()
+        self._detached_cleanup_tasks = set()
+        self._quarantined_worker = None
+        self._closed = False
         self.engine = None
         self._init_engine()
 
@@ -121,6 +124,70 @@ class VieneuLocalTTS(BaseTTS):
             self._scheduler = scheduler
         return scheduler
 
+    def _submit_worker(self, loop: asyncio.AbstractEventLoop, func):
+        """Submit one inference worker and keep it visible to shutdown."""
+        if getattr(self, "_closed", False):
+            raise RuntimeError("Vieneu TTS is shut down")
+        future = loop.run_in_executor(self.executor, func)
+        self._worker_futures.add(future)
+
+        def _worker_done(done_future):
+            self._worker_futures.discard(done_future)
+            try:
+                done_future.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.debug("TTS worker finished with error: %s", exc)
+
+        future.add_done_callback(_worker_done)
+        return future
+
+    def _ensure_engine_available(self) -> None:
+        """Reject new inference while a cancelled native call is still running."""
+        if getattr(self, "_closed", False):
+            raise RuntimeError("Vieneu TTS is shut down")
+        quarantined = getattr(self, "_quarantined_worker", None)
+        if quarantined is not None and not quarantined.done():
+            raise RuntimeError(
+                "Vieneu TTS engine is still stopping a cancelled inference"
+            )
+
+    def _detach_worker_cleanup(self, worker_future, lease, acquired_perf: float) -> None:
+        """Keep the engine lease until a cancelled worker really exits.
+
+        Native inference runs in a thread and cannot be force-cancelled safely.
+        The caller must still be able to close promptly, so the wait is detached
+        while the scheduler lease remains held. New work is rejected during this
+        quarantine instead of being admitted concurrently on the same engine.
+        """
+        self._quarantined_worker = worker_future
+
+        async def _finish_and_release():
+            try:
+                await asyncio.shield(worker_future)
+            except Exception as exc:
+                logger.debug("Detached Vieneu worker finished with error: %s", exc)
+            finally:
+                held_ms = (time.perf_counter() - acquired_perf) * 1000.0
+                mark_current(
+                    "tts_lease_held",
+                    held_ms=round(held_ms, 3),
+                    priority=lease.priority,
+                    queue_wait_ms=round(lease.wait_ms, 3),
+                )
+                await lease.release()
+                if getattr(self, "_quarantined_worker", None) is worker_future:
+                    self._quarantined_worker = None
+
+        task = asyncio.create_task(_finish_and_release())
+        cleanup_tasks = getattr(self, "_detached_cleanup_tasks", None)
+        if cleanup_tasks is None:
+            cleanup_tasks = set()
+            self._detached_cleanup_tasks = cleanup_tasks
+        cleanup_tasks.add(task)
+        task.add_done_callback(cleanup_tasks.discard)
+
     def _init_engine(self):
         logger.info(f"Loading local Vieneu Neural TTS engine (preset voice: '{self.voice}')...")
         t0 = time.time()
@@ -159,6 +226,7 @@ class VieneuLocalTTS(BaseTTS):
         text = (text or "").strip()
         if not text:
             return b""
+        self._ensure_engine_available()
 
         loop = asyncio.get_running_loop()
 
@@ -186,7 +254,7 @@ class VieneuLocalTTS(BaseTTS):
             return output.getvalue()
 
         try:
-            return await loop.run_in_executor(self.executor, _generate_wav)
+            return await self._submit_worker(loop, _generate_wav)
         finally:
             await lease.release()
 
@@ -200,6 +268,7 @@ class VieneuLocalTTS(BaseTTS):
     ) -> AsyncGenerator[bytes, None]:
         if not text or not text.strip():
             return
+        self._ensure_engine_available()
         
         remainder_buffer = bytearray()
         loop = asyncio.get_running_loop()
@@ -250,17 +319,7 @@ class VieneuLocalTTS(BaseTTS):
                 if not stop_event.is_set() and not (cancel_event and cancel_event.is_set()):
                     _put_with_backpressure(queue_done)
 
-        worker_future = loop.run_in_executor(self.executor, _generate)
-        self._worker_futures.add(worker_future)
-
-        def _worker_done(future):
-            self._worker_futures.discard(future)
-            try:
-                future.result()
-            except Exception as exc:
-                logger.debug("TTS worker finished with error: %s", exc)
-
-        worker_future.add_done_callback(_worker_done)
+        worker_future = self._submit_worker(loop, _generate)
 
         acquired_perf = time.perf_counter()
         try:
@@ -322,11 +381,43 @@ class VieneuLocalTTS(BaseTTS):
         finally:
             stop_event.set()
             if not worker_future.done():
-                await asyncio.shield(worker_future)
-            held_ms = (time.perf_counter() - acquired_perf) * 1000.0
-            mark_current("tts_lease_held", held_ms=round(held_ms, 3),
-                         priority=lease.priority, queue_wait_ms=round(lease.wait_ms, 3))
-            await lease.release()
+                self._detach_worker_cleanup(worker_future, lease, acquired_perf)
+            else:
+                held_ms = (time.perf_counter() - acquired_perf) * 1000.0
+                mark_current("tts_lease_held", held_ms=round(held_ms, 3),
+                             priority=lease.priority, queue_wait_ms=round(lease.wait_ms, 3))
+                await lease.release()
 
     def scheduler_snapshot(self) -> dict:
         return self._get_scheduler().snapshot()
+
+    async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
+        """Stop accepting inference and release executor resources.
+
+        Python cannot forcibly stop an inference function already executing in
+        a worker thread. Normal server shutdown closes sessions/cache first, so
+        active streaming workers should already be winding down here. We wait
+        for them only for a bounded grace period and cancel work that has not
+        started before shutting the executor down.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
+        pending = [future for future in list(self._worker_futures) if not future.done()]
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(asyncio.shield(future) for future in pending),
+                                   return_exceptions=True),
+                    timeout=max(0.0, float(grace_seconds)),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Vieneu TTS shutdown grace expired with %d worker(s) still running",
+                    sum(not future.done() for future in pending),
+                )
+
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)

@@ -72,6 +72,9 @@ class LLMStreamEventTests(unittest.TestCase):
         self.assertEqual(clean("Ừm [happy] mình hiểu rồi nhé."),
                          "Ừm mình hiểu rồi nhé.")
         self.assertEqual(clean("[end] Tạm biệt nhé."), "Tạm biệt nhé.")
+        self.assertEqual(
+            clean("<tool_call> <function=music_play> <parameter>video_id> x"),
+            "")
         # Legitimate speech without markers passes through untouched.
         self.assertEqual(clean("Bây giờ là 10 giờ 51 phút rồi nè."),
                          "Bây giờ là 10 giờ 51 phút rồi nè.")

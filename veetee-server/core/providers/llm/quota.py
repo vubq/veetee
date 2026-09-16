@@ -49,7 +49,7 @@ class _GroupState:
     entries: Deque[_Entry] = field(default_factory=deque)
     cooldown_until: float = 0.0
     cooldown_reason: str = ""
-    observed_remaining: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    observed_remaining: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
     in_flight: int = 0
     discovery: bool = True
 
@@ -108,13 +108,24 @@ class QuotaLedger:
         limit = state.limits.get(dim)
         if limit is None:
             return None
-        remaining = limit - self._spent(state, dim)
+        local_remaining = max(0.0, limit - self._spent(state, dim))
         observed = state.observed_remaining.get(dim)
         if observed is not None:
-            value, seen_at = observed
-            if now - seen_at < DIMENSION_WINDOWS[dim]:
-                remaining = min(remaining, value)
-        return remaining
+            value, seen_at, valid_for = observed
+            elapsed = now - seen_at
+            if elapsed < valid_for and valid_for > 0:
+                # Continuous token bucket replenishment: tokens refill linearly
+                # over the reset window from the observed value back to full limit.
+                ratio = min(1.0, max(0.0, elapsed / valid_for))
+                replenished = min(limit, value + ratio * max(0.0, limit - value))
+                spent_since_seen = sum(
+                    entry.amount
+                    for entry in state.entries
+                    if entry.dimension == dim and entry.timestamp >= seen_at and now - entry.timestamp < DIMENSION_WINDOWS[dim]
+                )
+                observed_effective = max(0.0, replenished - spent_since_seen)
+                return min(local_remaining, observed_effective)
+        return local_remaining
 
     async def try_reserve(
         self, group: str, *, requests: int = 1, tokens: float = 0
@@ -189,11 +200,15 @@ class QuotaLedger:
                 kept: Deque[_Entry] = deque()
                 for entry in state.entries:
                     if entry.reservation_id == reservation_id and entry.dimension in _TOKEN_DIMS:
-                        if actual_tokens:
+                        if actual_tokens > 0:
                             kept.append(_Entry(
                                 now, entry.dimension, float(actual_tokens),
                                 reservation_id))
-                        # else: drop the estimated charge entirely.
+                        else:
+                            # Preserve estimated reservation charge when actual usage is unreported
+                            kept.append(_Entry(
+                                now, entry.dimension, entry.amount,
+                                reservation_id))
                     else:
                         kept.append(entry)
                 state.entries = kept
@@ -218,14 +233,25 @@ class QuotaLedger:
             if state.limits:
                 state.discovery = False
 
-    async def note_remaining(self, group: str, remaining: Dict[str, float]) -> None:
-        """Tighten effective budget with provider-observed remaining values."""
+    async def note_remaining(
+        self,
+        group: str,
+        remaining: Dict[str, float],
+        valid_for: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """Tighten effective budget with provider-observed remaining values.
+
+        The observation expires after valid_for seconds (defaulting to the
+        dimension window), after which local tracking takes over again.
+        """
         async with self._lock:
             now = self._now()
             state = self._states.setdefault(group, _GroupState())
+            valid_map = dict(valid_for or {})
             for dim, value in (remaining or {}).items():
                 if dim in DIMENSION_WINDOWS and float(value) >= 0:
-                    state.observed_remaining[dim] = (float(value), now)
+                    dur = float(valid_map.get(dim) or DIMENSION_WINDOWS[dim])
+                    state.observed_remaining[dim] = (float(value), now, max(0.05, dur))
 
     async def snapshot(self, group: str) -> Dict[str, object]:
         """Sanitized state for telemetry (no keys, no prompts)."""

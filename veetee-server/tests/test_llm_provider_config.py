@@ -86,7 +86,7 @@ class GroqProviderConfigTests(unittest.TestCase):
             os.unlink(path)
 
     def test_rejects_bad_routing(self):
-        doc = MINIMAL_YAML.replace("max_attempts: 2", "max_attempts: 9")
+        doc = MINIMAL_YAML.replace("max_attempts: 2", "max_attempts: 99")
         path = write_temp(doc)
         try:
             with self.assertRaises(ValueError):

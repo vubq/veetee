@@ -21,3 +21,5 @@ nemo_toolkit[asr]==3.0.0
 # HTTP dashboard / management API (da co trong venv, giu pin de tai hien).
 fastapi==0.141.1
 uvicorn==0.52.4
+# Tim/phat nhac YouTube (yt-dlp + ffmpeg he thong).
+yt-dlp==2026.8.19

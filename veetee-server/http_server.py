@@ -89,6 +89,8 @@ class HttpServer:
         self._test_voice_recent = deque()
         self.local_ip = get_local_ip()
         self.app = web.Application()
+        self._runner = None
+        self._site = None
         self._setup_routes()
 
     def _setup_routes(self):
@@ -160,10 +162,20 @@ class HttpServer:
         Returns WebSocket server endpoint and time synchronization for ESP32 firmware.
         """
         host_header = request.headers.get("Host", "")
-        proto_header = request.headers.get("X-Forwarded-Proto", "http")
+        proto_header = request.headers.get("X-Forwarded-Proto", "")
+        forwarded_proto = proto_header.split(",", 1)[0].strip().lower()
+        host_for_match = host_header.strip().lower()
+        if host_for_match.startswith("["):
+            closing = host_for_match.find("]")
+            host_name = host_for_match[1:closing] if closing > 0 else host_for_match
+        else:
+            host_name = host_for_match.split(":", 1)[0]
+        host_name = host_name.rstrip(".")
         
         # If accessing via Tailscale Funnel / Public domain
-        if "ts.net" in host_header or "https" in proto_header or request.scheme == "https":
+        is_tailscale_funnel = host_name == "ts.net" or host_name.endswith(".ts.net")
+        is_https = forwarded_proto == "https" or request.scheme == "https"
+        if is_tailscale_funnel or is_https:
             ws_url = f"wss://{host_header}/ws"
         else:
             host = self.local_ip
@@ -455,8 +467,9 @@ class HttpServer:
             reasons.append("asr_not_ready")
         if not tts_ready:
             reasons.append("tts_unavailable")
-        if not error_fallback_ready:
-            reasons.append("error_fallback_audio_unavailable")
+        # Recovery audio is an optional AI-authored capability, not a critical
+        # readiness dependency. Report it below for observability without
+        # marking an otherwise usable ASR/LLM/TTS server as degraded.
         return {
             "status": "ready" if not reasons else "degraded",
             "degraded_reasons": reasons,
@@ -490,7 +503,9 @@ class HttpServer:
         })
 
     async def handle_diagnostics(self, request: web.Request) -> web.Response:
-        """Expose non-secret runtime capabilities used by the browser test console."""
+        """Expose runtime diagnostics to authenticated management clients."""
+        if not self._management_access_allowed(request):
+            return self._management_denied()
         conversation = self.config.conversation
         session_rows = []
         retained_traces = list(self.recent_turn_store.recent)
@@ -616,11 +631,25 @@ class HttpServer:
         })
 
     async def start(self):
+        if self._runner is not None:
+            return
         host = self.config.server.host
         port = self.config.server.http_port
         runner = web.AppRunner(self.app)
         await runner.setup()
-        site = web.TCPSite(runner, host, port)
-        await site.start()
+        try:
+            site = web.TCPSite(runner, host, port)
+            await site.start()
+        except BaseException:
+            await runner.cleanup()
+            raise
+        self._runner = runner
+        self._site = site
         logger.info(f"HTTP Server started at http://{self.local_ip}:{port}")
         logger.info(f"OTA Endpoint: http://{self.local_ip}:{port}/ota/")
+
+    async def stop(self):
+        runner, self._runner = self._runner, None
+        self._site = None
+        if runner is not None:
+            await runner.cleanup()

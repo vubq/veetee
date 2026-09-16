@@ -45,9 +45,13 @@ class CountingLLM:
             "tool_choice": tool_choice,
         })
         latest = messages[-1] if messages else {}
-        if latest.get("role") == "system" and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(latest.get("content", "")):
-            # Deterministic idle deadline: always end; this call only
-            # generates the goodbye text.
+        idle_request = any(
+            item.get("role") == "system"
+            and "hội thoại đã hết thời gian chờ" in str(item.get("content", ""))
+            for item in messages
+        )
+        if idle_request:
+            # Idle farewell is intentionally isolated from old dialogue.
             yield SpeechSegmentEvent(self.goodbye, emotion="relaxed")
             yield CompletedEvent(finish_reason="stop")
             return
@@ -241,7 +245,11 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await ws.close()
 
     async def test_browser_diagnostics_health_and_ota_endpoints(self):
-        diagnostics_response = await self.client.get("/api/diagnostics")
+        self.config.management.token = "integration-secret"
+        headers = {"X-Veetee-Management-Token": "integration-secret"}
+        denied_diagnostics = await self.client.get("/api/diagnostics")
+        self.assertEqual(denied_diagnostics.status, 401)
+        diagnostics_response = await self.client.get("/api/diagnostics", headers=headers)
         self.assertEqual(diagnostics_response.status, 200)
         diagnostics = await diagnostics_response.json()
         self.assertTrue(diagnostics["conversation"]["enabled"])
@@ -263,9 +271,49 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ota["websocket"]["version"], 1)
         self.assertIn("url", ota["websocket"])
 
+    async def test_ota_only_treats_real_tailscale_or_https_headers_as_public_tls(self):
+        fake_ts = await self.client.get(
+            "/ota/",
+            headers={"Host": "not-ts.net.evil.example"},
+        )
+        fake_ts_payload = await fake_ts.json()
+        self.assertTrue(fake_ts_payload["websocket"]["url"].startswith("ws://"))
+
+        fake_https = await self.client.get(
+            "/ota/",
+            headers={"Host": "example.test", "X-Forwarded-Proto": "nothttps"},
+        )
+        fake_https_payload = await fake_https.json()
+        self.assertTrue(fake_https_payload["websocket"]["url"].startswith("ws://"))
+
+        funnel = await self.client.get(
+            "/ota/",
+            headers={"Host": "veetee.tail52a635.ts.net:443"},
+        )
+        funnel_payload = await funnel.json()
+        self.assertEqual(
+            funnel_payload["websocket"]["url"],
+            "wss://veetee.tail52a635.ts.net:443/ws",
+        )
+
+        proxied_https = await self.client.get(
+            "/ota/",
+            headers={"Host": "voice.example.com", "X-Forwarded-Proto": "https"},
+        )
+        proxied_https_payload = await proxied_https.json()
+        self.assertEqual(
+            proxied_https_payload["websocket"]["url"],
+            "wss://voice.example.com/ws",
+        )
+
     async def test_management_token_protects_prompt_and_test_voice_without_affecting_stock_ota_ws(self):
         self.config.management.token = "integration-secret"
         headers = {"X-Veetee-Management-Token": "integration-secret"}
+
+        denied_diagnostics = await self.client.get("/api/diagnostics")
+        self.assertEqual(denied_diagnostics.status, 401)
+        allowed_diagnostics = await self.client.get("/api/diagnostics", headers=headers)
+        self.assertEqual(allowed_diagnostics.status, 200)
 
         denied_prompt = await self.client.get("/api/prompt")
         self.assertEqual(denied_prompt.status, 401)
@@ -289,8 +337,10 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_management_endpoints_are_disabled_when_token_is_unset(self):
         self.config.management.token = ""
+        denied_diagnostics = await self.client.get("/api/diagnostics")
         denied_prompt = await self.client.get("/api/prompt")
         denied_voice = await self.client.post("/api/test-voice", json={"text": "xin chào"})
+        self.assertEqual(denied_diagnostics.status, 401)
         self.assertEqual(denied_prompt.status, 401)
         self.assertEqual(denied_voice.status, 401)
 
@@ -304,6 +354,8 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.status, 429)
 
     async def test_diagnostics_retains_bounded_turn_trace_after_disconnect(self):
+        self.config.management.token = "integration-secret"
+        headers = {"X-Veetee-Management-Token": "integration-secret"}
         ws = await self._connect(ProtocolVersion.V1)
         await self._wait_sessions(1)
         session = next(iter(self.active_sessions.values()))
@@ -315,7 +367,7 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await ws.close()
         await self._wait_sessions(0)
 
-        response = await self.client.get("/api/diagnostics")
+        response = await self.client.get("/api/diagnostics", headers=headers)
         self.assertEqual(response.status, 200)
         diagnostics = await response.json()
         self.assertEqual(diagnostics["runtime"]["recent_turn_count"], 1)

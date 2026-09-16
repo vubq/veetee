@@ -189,9 +189,23 @@ class ToolsConfig:
     # Normal chat remains one LLM inference. A real action receipt may use
     # bounded follow-up rounds so the model can chain A->B tools and then
     # phrase the actual receipts. The ceiling is finite and tested.
-    max_llm_rounds_per_turn: int = 2
+    max_llm_rounds_per_turn: int = 3
     tool_result_synthesis: bool = True
     max_parallel_read_only: int = 2
+    # Deprecated compatibility flag. Tool receipts are always phrased by the
+    # LLM; deterministic server code never renders user-facing tool speech.
+    direct_read_only_speech_enabled: bool = False
+
+
+@dataclass
+class MusicConfig:
+    # YouTube music search/play/control tools + background Opus streaming.
+    # Needs network access to YouTube and the yt-dlp package. Device needs
+    # no change: tracks stream as stock tts audio messages.
+    enabled: bool = True
+    search_results: int = 5
+    resolve_timeout_s: float = 20.0
+    stall_timeout_s: float = 12.0
 
 
 @dataclass
@@ -213,6 +227,7 @@ class AppConfig:
     intent: IntentConfig = field(default_factory=IntentConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
+    music: MusicConfig = field(default_factory=MusicConfig)
     management: ManagementConfig = field(default_factory=ManagementConfig)
 
 
@@ -364,6 +379,14 @@ def _validate_app_config(config: AppConfig) -> None:
         raise ValueError("tools.schema_limit must be <= 64")
     if not 1 <= config.tools.max_parallel_read_only <= 4:
         raise ValueError("tools.max_parallel_read_only must be between 1 and 4")
+    if type(config.music.enabled) is not bool:
+        raise ValueError("music.enabled must be a boolean")
+    if type(config.music.search_results) is not int or not 1 <= config.music.search_results <= 10:
+        raise ValueError("music.search_results must be an integer between 1 and 10")
+    for name in ("resolve_timeout_s", "stall_timeout_s"):
+        value = getattr(config.music, name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"music.{name} must be a positive number")
     for name in ("base_prompt_max_bytes", "base_prompt_max_tokens"):
         value = getattr(config.llm, name)
         if type(value) is not int or value < 256:
@@ -404,8 +427,8 @@ def _validate_app_config(config: AppConfig) -> None:
         raise ValueError("llm.routing must be a mapping")
     if not 0.0 <= routing.headroom_pct <= 90.0:
         raise ValueError("llm.routing.headroom_pct must be between 0 and 90")
-    if routing.max_attempts not in (1, 2, 3):
-        raise ValueError("llm.routing.max_attempts must be 1, 2 or 3")
+    if not 1 <= routing.max_attempts <= 16:
+        raise ValueError("llm.routing.max_attempts must be between 1 and 16")
     if not 0.0 <= routing.admission_wait_ms <= 5000.0:
         raise ValueError("llm.routing.admission_wait_ms must be between 0 and 5000")
     if type(routing.discovery_max_inflight) is not int or routing.discovery_max_inflight < 1:
@@ -456,6 +479,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
     intent_data = raw.get("intent", {})
     memory_data = raw.get("memory", {})
     tools_data = raw.get("tools", {})
+    music_data = raw.get("music", {})
     management_data = raw.get("management", {})
 
     if conversation_data is None:
@@ -473,6 +497,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         ("intent", intent_data),
         ("memory", memory_data),
         ("tools", tools_data),
+        ("music", music_data),
         ("management", management_data),
     ):
         if section_data is None:
@@ -483,6 +508,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         elif section_name == "intent": intent_data = section_data
         elif section_name == "memory": memory_data = section_data
         elif section_name == "tools": tools_data = section_data
+        elif section_name == "music": music_data = section_data
         elif section_name == "management": management_data = section_data
 
     # Empty string in YAML must not shadow env secrets. Fall back to env so
@@ -533,6 +559,7 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         intent=IntentConfig(**{k: v for k, v in intent_data.items() if k in IntentConfig.__annotations__}),
         memory=MemoryConfig(**{k: v for k, v in memory_data.items() if k in MemoryConfig.__annotations__}),
         tools=ToolsConfig(**{k: v for k, v in tools_data.items() if k in ToolsConfig.__annotations__}),
+        music=MusicConfig(**{k: v for k, v in music_data.items() if k in MusicConfig.__annotations__}),
         management=ManagementConfig(
             **{k: v for k, v in management_data.items() if k in ManagementConfig.__annotations__}
         ),

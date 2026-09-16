@@ -32,12 +32,8 @@ def time_descriptor(default_timezone: str = "Asia/Bangkok") -> ToolDescriptor:
     return ToolDescriptor(
         name="get_current_time",
         description=(
-            "Lấy sự thật về ngày/giờ hiện tại theo múi giờ IANA. Dùng tool khi câu trả lời "
-            "thực sự cần biết đồng hồ hoặc ngày hiện tại; đừng gọi chỉ vì người dùng nhắc tới "
-            "một mốc giờ, lịch trình hay hỏi giờ khuyến nghị. Nếu cần ngày/giờ hiện tại mà không "
-            f"có múi giờ cụ thể thì dùng mặc định {default_timezone}. "
-            "Mỗi lượt luôn có sẵn server_clock đúng múi giờ mặc định: đọc trực tiếp snapshot đó, "
-            "không cần gọi lại tool. Cấm bịa giờ khi chưa có dữ liệu."
+            "Lấy ngày giờ hiện tại theo timezone (mặc định server). "
+            "Context mỗi lượt đã có sẵn server_clock; chỉ gọi khi cần timezone khác."
         ),
         input_schema={
             "type": "object",

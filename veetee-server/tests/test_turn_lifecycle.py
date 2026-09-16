@@ -451,9 +451,10 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 2)
 
     async def test_llm_producer_error_finishes_without_deadlock(self):
-        # Speech is buffered until terminal validation, so a producer failure
-        # before CompletedEvent must not have spoken partial speech. With no
-        # audio started there is no tts:stop; the turn fails loudly.
+        # Low-latency chat streams committed speech before CompletedEvent. If
+        # the producer fails afterwards, already-sent audio stays truthful and
+        # the server must close TTS cleanly, mark the turn failed, and recover
+        # to listening without deadlock.
         session, websocket = self.make_session(llm=FailingLLM())
         await session._trigger_ai_turn("Bắt đầu")
         task = session.current_turn_task
@@ -463,8 +464,8 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             item for item in decode_text_messages(websocket.sent)
             if item.get("type") == "tts" and item.get("state") == "stop"
         ]
-        self.assertEqual(len(stops), 0)
-        self.assertFalse(any(isinstance(item, bytes) for item in websocket.sent))
+        self.assertEqual(len(stops), 1)
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
         self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
         self.assertEqual(session.state, SessionState.LISTENING)
 
@@ -524,6 +525,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
+        config.tools.direct_read_only_speech_enabled = False
         llm = NativeToolLLM()
         websocket = FakeWebSocket()
         session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
@@ -605,6 +607,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
+        config.tools.direct_read_only_speech_enabled = False
         config.latency.first_token_timeout_ms = 100
         config.latency.total_turn_timeout_ms = 50
         llm = NativeToolLLM(second_round_delay=0.03)
@@ -642,6 +645,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         config = AppConfig()
         config.tools.tool_result_synthesis = True
         config.tools.max_llm_rounds_per_turn = 2
+        config.tools.direct_read_only_speech_enabled = False
         llm = NativeToolLLM(second_round_tool_call=True)
         websocket = FakeWebSocket()
         session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
@@ -662,7 +666,7 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(m.role == "system" and "call-1" in m.content
                             for m in session.dialogue.messages))
 
-    async def test_default_tool_profile_uses_two_rounds_for_action(self):
+    async def test_default_calculator_receipt_is_phrased_by_ai(self):
         llm = NativeToolLLM()
         websocket = FakeWebSocket()
         session = SessionForTest(websocket, AppConfig(), TwoFrameTTS(), llm)
@@ -671,9 +675,13 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
 
         self.assertEqual(len(llm.calls), 2)
-        self.assertEqual(llm.calls[1]["tool_choice"], "none")
+        self.assertIsNone(llm.calls[0]["tool_choice"])
+        # With the default 3-round budget the synthesis round may chain a
+        # second AI-chosen tool; no deterministic renderer is involved.
+        self.assertIsNone(llm.calls[1]["tool_choice"])
         self.assertIn("Kết quả phép tính là 5.", _assistant_texts(session))
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
 
     async def test_normal_chat_stays_one_llm_round(self):
         llm = NativeChatLLM()

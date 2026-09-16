@@ -47,5 +47,52 @@ class ASRDiagnosticCaptureTests(unittest.TestCase):
             self.assertEqual(metadata["min_word_confidence"], 0.91)
 
 
+class ASRAudioIdleEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_idle_finalizes_after_observed_trailing_silence(self):
+        asr = ParakeetSileroASR(min_silence_duration_ms=320)
+        asr._running = True
+        asr._speech_active = True
+        asr._capture_generation = 7
+        asr._utterance_generation = 7
+        asr._silence_ms = 96.0
+        asr._speech_buffer.extend(b"\x01\x00" * 512)
+        asr._pcm_pending.extend(b"\x00\x00" * 80)
+
+        calls = []
+
+        async def fake_finish(*, endpoint_reason="unknown"):
+            calls.append(endpoint_reason)
+            asr._reset_utterance_state()
+
+        asr._finish_utterance = fake_finish
+
+        await asr._finalize_after_audio_idle(0.0, 7)
+
+        self.assertEqual(calls, ["audio_idle"])
+        self.assertFalse(asr._speech_active)
+        self.assertEqual(asr._pcm_pending, bytearray())
+
+    async def test_audio_idle_does_not_finalize_without_observed_silence(self):
+        asr = ParakeetSileroASR(min_silence_duration_ms=320)
+        asr._running = True
+        asr._speech_active = True
+        asr._capture_generation = 3
+        asr._utterance_generation = 3
+        asr._silence_ms = 0.0
+
+        called = False
+
+        async def fake_finish(*, endpoint_reason="unknown"):
+            nonlocal called
+            called = True
+
+        asr._finish_utterance = fake_finish
+
+        await asr._finalize_after_audio_idle(0.0, 3)
+
+        self.assertFalse(called)
+        self.assertTrue(asr._speech_active)
+
+
 if __name__ == "__main__":
     unittest.main()

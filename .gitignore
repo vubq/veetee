@@ -38,3 +38,6 @@ venv/
 *.swo
 *~
 .DS_Store
+
+# Local browser automation state
+.playwright-mcp/

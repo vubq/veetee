@@ -13,6 +13,7 @@ from core.ai_contract import (
     CONFIRMATION_TOOL_NAME,
     INLINE_CONVERSATION_CONTROL_PROMPT,
     MEMORY_TOOL_NAME,
+    RECOVERY_MESSAGE_PROMPT,
     SEMANTIC_SYSTEM_PROMPT,
 )
 from core.providers.llm.stream_parser import SSEDecoder, NativeToolCallAccumulator
@@ -56,17 +57,6 @@ class SpeechSegmentSplitter:
         self.first_segment_min_chars = 8
         self.first_segment_min_words = 2
         self._segments_emitted = 0
-        self._common_abbreviations = {
-            "mr", "mrs", "ms", "dr", "ts", "ths", "tp", "q", "p", "st", "vs",
-        }
-
-        # A fallback split immediately around these words sounds especially
-        # unnatural in Vietnamese because they bind the two phrases together.
-        self.boundary_words = {
-            "và", "nhưng", "hoặc", "hay", "nên", "mà", "thì", "vì", "nếu",
-            "khi", "rồi", "cũng", "để", "của", "cho", "với", "là", "đã",
-            "đang", "sẽ", "cuối", "cùng",
-        }
 
     def _is_sentence_boundary(self, index: int) -> bool:
         char = self.buffer[index]
@@ -85,10 +75,6 @@ class SpeechSegmentSplitter:
         if next_char.isalpha() and not next_char.isspace():
             return False
 
-        left = self.buffer[:index].rstrip()
-        match = re.search(r"([^\W\d_]+)$", left, flags=re.UNICODE)
-        if match and match.group(1).lower() in self._common_abbreviations:
-            return False
         return True
 
     def _find_sentence_cut(self) -> int:
@@ -136,14 +122,8 @@ class SpeechSegmentSplitter:
         return -1
 
     def _is_safe_word_boundary(self, idx: int) -> bool:
-        """Reject hard cuts next to Vietnamese connector/function words."""
-        left = self.buffer[:idx].rstrip()
-        right = self.buffer[idx:].lstrip()
-        left_match = re.search(r"([^\W\d_]+)$", left, flags=re.UNICODE)
-        right_match = re.match(r"([^\W\d_]+)", right, flags=re.UNICODE)
-        left_word = left_match.group(1).lower() if left_match else ""
-        right_word = right_match.group(1).lower() if right_match else ""
-        return left_word not in self.boundary_words and right_word not in self.boundary_words
+        """Use only a structural whitespace boundary for last-resort cuts."""
+        return 0 <= idx < len(self.buffer) and self.buffer[idx].isspace()
 
     def _find_hard_cut(self) -> int:
         """Last-resort protection for extremely long unpunctuated text."""
@@ -161,8 +141,8 @@ class SpeechSegmentSplitter:
             if self.buffer[i].isspace() and self._is_safe_word_boundary(i):
                 return i
 
-        # If all nearby spaces are bad semantic boundaries, prefer a slightly
-        # later whitespace over cutting through a connector phrase.
+        # If there is no whitespace in the preferred window, allow a slightly
+        # later whitespace before giving up on this bounded hard-cut pass.
         for i in range(search_end, min(len(self.buffer), self.hard_max_segment_chars + 40)):
             if self.buffer[i].isspace() and self._is_safe_word_boundary(i):
                 return i
@@ -435,7 +415,12 @@ class OmnirouteGroqLLM(BaseLLM):
         return content.strip()
 
     @staticmethod
-    def _clean_control_sentence(text: str, max_chars: int = 180) -> str:
+    def _clean_control_sentence(
+        text: str,
+        max_chars: int = 180,
+        *,
+        min_words: int = 0,
+    ) -> str:
         cleaned = str(text or "").strip().strip('"“”').strip()
         # Same contract-marker hygiene as _clean_text: a cached recovery
         # sentence with "[happy]" baked in would otherwise speak the tag.
@@ -443,21 +428,18 @@ class OmnirouteGroqLLM(BaseLLM):
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
             return ""
+        if min_words > 0 and len(re.findall(r"[^\W_]+", cleaned, flags=re.UNICODE)) < min_words:
+            return ""
         return cleaned
 
     async def generate_recovery_message(self) -> str:
-        instruction = (
-            "Tạo đúng một câu cực ngắn để trợ lý giọng nói dùng khi một lượt xử lý bị lỗi. "
-            "Câu phải tự nhiên, theo personality hiện tại, không nêu lỗi kỹ thuật, không thêm nhãn. "
-            "Mặc định dùng tiếng Việt. Chỉ 6-9 từ và tối đa 55 ký tự."
-        )
         raw = await self._control_completion(
-            instruction,
-            "Hãy tạo câu recovery dùng chung, không phụ thuộc một câu hỏi cụ thể.",
+            RECOVERY_MESSAGE_PROMPT,
+            "Hãy tạo một câu recovery dùng chung, hoàn chỉnh và không phụ thuộc câu hỏi cụ thể.",
             temperature=max(0.35, self.temperature),
-            max_tokens=24,
+            max_tokens=32,
         )
-        return self._clean_control_sentence(raw, max_chars=64)
+        return self._clean_control_sentence(raw, max_chars=100, min_words=4)
 
     @staticmethod
     def _clean_text(text: str) -> str:
@@ -470,6 +452,12 @@ class OmnirouteGroqLLM(BaseLLM):
         # Control parsing runs on raw tokens before this cleaner, so stripping
         # here cannot break end-intent detection.
         text = re.sub(r"\[[^\[\]\n]{1,32}\]", "", text)
+        # Roleplayed tool invocations must never be spoken: a follow-up round
+        # has no tools, so a model that "calls" here is narrating, not acting.
+        # Drop the whole clause (roleplay blocks rarely close their tags).
+        if re.search(r"<\s*tool_call", text, flags=re.IGNORECASE):
+            return ""
+        text = re.sub(r"</?(?:function|parameter)[^>]*>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text)
         return text.strip(" ,")
 

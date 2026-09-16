@@ -3,6 +3,7 @@ import json
 import unittest
 
 from config.settings import AppConfig
+from core.ai_contract import IDLE_FAREWELL_SYSTEM_PROMPT
 from core.session import ClientSession, SessionState
 from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent
 
@@ -75,7 +76,7 @@ class CountingLLM:
         latest = messages[-1] if messages else {}
         is_idle_call = any(
             item.get("role") == "system"
-            and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(item.get("content", ""))
+            and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
             for item in messages
         )
         if is_idle_call:
@@ -305,16 +306,17 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         idle_calls = [
             call for call in llm.calls
-            if call["messages"] and call["messages"][-1].get("role") == "system"
-            and "Sự kiện hệ thống: hội thoại đã không có tương tác" in str(call["messages"][-1].get("content", ""))
+            if any(
+                item.get("role") == "system"
+                and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
+                for item in call["messages"]
+            )
         ]
         self.assertEqual(len(idle_calls), 1)
         self.assertTrue(all(call["tool_choice"] == "none" for call in idle_calls))
-        # Gateway template requires a user turn; silent sessions get a marked
-        # placeholder so the farewell call never 400s.
-        self.assertTrue(
-            any(item.get("role") == "user" for item in idle_calls[0]["messages"])
-        )
+        # Idle farewell is intentionally context-isolated: only lifecycle
+        # instruction + one synthetic user request are sent to the LLM.
+        self.assertEqual([item.get("role") for item in idle_calls[0]["messages"]], ["system", "user"])
         self.assertEqual(websocket.close_code, 1000)
         self.assertFalse(session.is_active)
 
@@ -331,46 +333,65 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.close_code, 1000)
         self.assertFalse(session.is_active)
 
-    async def test_idle_question_like_goodbye_retries_once_then_closes(self):
-        llm = CountingLLM(idle_texts=["có gì cần giúp không?", "Ừ, chào bạn nhé. Hẹn gặp lại!"])
-        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+    async def test_idle_farewell_does_not_receive_previous_conversation(self):
+        llm = CountingLLM()
+        session, websocket, _, _ = self.make_session(goodbye=False, llm=llm)
+        session.dialogue.add_user_message("Nay là thứ mấy?")
+        session.dialogue.add_assistant_message("Bây giờ là Thứ Tư, ngày 16/9/2026.")
         session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "auto"
         }))
         await self.wait_closed(websocket)
 
-        idle_calls = [
+        idle_call = next(
             call for call in llm.calls
-            if call["messages"] and call["messages"][-1].get("role") == "system"
-        ]
-        self.assertEqual(len(idle_calls), 2)
-        self.assertEqual(tts.texts, [llm.goodbye])
-        self.assertFalse(session.is_active)
+            if any(
+                item.get("role") == "system"
+                and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
+                for item in call["messages"]
+            )
+        )
+        serialized = json.dumps(idle_call["messages"], ensure_ascii=False)
+        self.assertNotIn("Nay là thứ mấy", serialized)
+        self.assertNotIn("Bây giờ là Thứ Tư", serialized)
+        self.assertEqual([item.get("role") for item in idle_call["messages"]], ["system", "user"])
 
-    async def test_idle_waiting_statement_retries_once_then_closes(self):
-        llm = CountingLLM(idle_texts=["Ê, có tôi đây, chờ bạn nè.", "Ừ, chào bạn nhé. Hẹn gặp lại!"])
-        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
-        session.config.conversation.idle_timeout_seconds = 0.02
-        await session._handle_text_json(json.dumps({
-            "type": "listen", "state": "start", "mode": "auto"
-        }))
-        await self.wait_closed(websocket)
-
-        idle_calls = [
-            call for call in llm.calls
-            if call["messages"] and call["messages"][-1].get("role") == "system"
-        ]
-        self.assertEqual(len(idle_calls), 2)
-        self.assertEqual(tts.texts, [llm.goodbye])
-        self.assertFalse(session.is_active)
-
-    async def test_idle_invite_to_talk_retries_once_then_closes(self):
+    async def test_idle_rejects_goodbye_that_repeats_previous_answer(self):
+        repeated = "Bây giờ là Thứ Tư, ngày 16/9/2026."
         llm = CountingLLM(idle_texts=[
-            "Chào nè, có chuyện gì muốn nói thì cứ nói nhé, mình nghe đây.",
-            "Ừ, chào bạn nhé. Hẹn gặp lại!",
+            "Tạm biệt nhé. Bây giờ là Thứ Tư, ngày 16/9/2026.",
+            "Hẹn gặp lại bạn sau nhé!",
         ])
         session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
+        session.dialogue.add_user_message("Nay là thứ mấy?")
+        session.dialogue.add_assistant_message(repeated)
+        session.config.conversation.idle_timeout_seconds = 0.02
+        await session._handle_text_json(json.dumps({
+            "type": "listen", "state": "start", "mode": "auto"
+        }))
+        await self.wait_closed(websocket)
+
+        self.assertEqual(tts.texts, ["Hẹn gặp lại bạn sau nhé!"])
+        idle_calls = [
+            call for call in llm.calls
+            if any(
+                item.get("role") == "system"
+                and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
+                for item in call["messages"]
+            )
+        ]
+        self.assertEqual(len(idle_calls), 2)
+        self.assertFalse(session.is_active)
+
+    async def test_idle_generated_text_is_not_keyword_classified_by_server(self):
+        # This fake model deliberately violates the farewell prompt. The server
+        # must not reinterpret its meaning with keyword/regex classifiers; it
+        # only owns lifecycle + structural safety. Production semantics belong
+        # to the AI prompt/model.
+        text = "Mình vẫn ở đây, cứ nói nhé."
+        llm = CountingLLM(idle_texts=[text, "không được gọi lượt hai"])
+        session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
         session.config.conversation.idle_timeout_seconds = 0.02
         await session._handle_text_json(json.dumps({
             "type": "listen", "state": "start", "mode": "auto"
@@ -379,19 +400,18 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         idle_calls = [
             call for call in llm.calls
-            if call["messages"] and call["messages"][-1].get("role") == "system"
+            if any(
+                item.get("role") == "system"
+                and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
+                for item in call["messages"]
+            )
         ]
-        self.assertEqual(len(idle_calls), 2)
-        self.assertEqual(tts.texts, [llm.goodbye])
+        self.assertEqual(len(idle_calls), 1)
+        self.assertEqual(tts.texts, [text])
         self.assertFalse(session.is_active)
 
-    async def test_idle_invite_with_closing_signal_is_accepted(self):
-        from core.session import _looks_like_question
-        self.assertFalse(_looks_like_question("Có gì cứ nói với mình nhé, tạm biệt!"))
-        self.assertTrue(_looks_like_question("Chào nè, cứ nói nhé, mình nghe đây."))
-
-    async def test_idle_empty_goodbye_falls_back_to_safe_farewell(self):
-        from core.session import IDLE_FAREWELL_FALLBACK
+    async def test_idle_empty_goodbye_retries_then_closes_silently(self):
+        # Never invent a hard-coded spoken sentence when AI generation fails.
         llm = CountingLLM(idle_texts=["", ""])
         session, websocket, _, tts = self.make_session(goodbye=True, llm=llm)
         session.config.conversation.idle_timeout_seconds = 0.02
@@ -400,7 +420,16 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         }))
         await self.wait_closed(websocket)
 
-        self.assertEqual(tts.texts, [IDLE_FAREWELL_FALLBACK])
+        idle_calls = [
+            call for call in llm.calls
+            if any(
+                item.get("role") == "system"
+                and IDLE_FAREWELL_SYSTEM_PROMPT in str(item.get("content", ""))
+                for item in call["messages"]
+            )
+        ]
+        self.assertEqual(len(idle_calls), 2)
+        self.assertEqual(tts.texts, [])
         self.assertFalse(session.is_active)
 
     async def test_idle_timeout_waits_while_session_is_speaking(self):

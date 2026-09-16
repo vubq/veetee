@@ -15,11 +15,14 @@ this many tokens right now, and which one is expected to answer fastest.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from core.providers.llm.quota import QuotaLedger
+
+logger = logging.getLogger("GroqRouter")
 
 LOW_PRIORITY_PURPOSES = frozenset({"prewarm", "benchmark", "background"})
 
@@ -75,6 +78,10 @@ class GroqRouter:
         self._alpha = min(1.0, max(0.0, float(ewma_alpha)))
         self._low_priority = frozenset(low_priority_purposes)
         self._stats: Dict[str, _GroupStats] = {}
+        # Settled reservation ids: first settle wins, later ones no-op.
+        # Abandoned generators, task cancels and explicit settles all funnel
+        # here, so no path can double-charge or double-release a slot.
+        self._settled: Dict[int, float] = {}
 
     def disable_alias(self, alias: str, reason: str = "") -> None:
         for target in self._targets:
@@ -156,25 +163,62 @@ class GroqRouter:
             if deadline is not None:
                 budget = min(budget, max(0.0, deadline - self._now()))
             if budget > 0:
-                await asyncio.sleep(min(budget, self._admission_wait_s))
-                lease = await self._try_once(estimated_tokens, purpose, exclude_groups)
-                if lease is not None:
-                    return lease
+                step = min(0.2, budget)
+                steps = max(1, int(budget / step))
+                for _ in range(steps):
+                    await asyncio.sleep(step)
+                    lease = await self._try_once(estimated_tokens, purpose, exclude_groups)
+                    if lease is not None:
+                        return lease
+        states = []
+        for target in self._targets:
+            snap = await self._ledger.snapshot(target.quota_group)
+            states.append(
+                f"{target.alias}/{target.quota_group}:"
+                f"enabled={target.enabled} "
+                f"in_flight={snap.get('in_flight')} "
+                f"remaining={snap.get('remaining')} "
+                f"cooldown_until={snap.get('cooldown_until')} "
+                f"discovery={snap.get('discovery')}"
+            )
+        logger.warning(
+            "Quota exhausted for ~%d tokens (purpose=%s): %s",
+            estimated_tokens, purpose, " | ".join(states),
+        )
         raise QuotaExhausted(
             f"no eligible quota group for ~{estimated_tokens} tokens "
             f"(purpose={purpose})"
         )
 
+    def _claim_settle(self, lease: Lease) -> bool:
+        """First settle wins. Returns True if this call owns the settle."""
+        now = self._now()
+        if lease.reservation_id in self._settled:
+            return False
+        self._settled[lease.reservation_id] = now
+        if len(self._settled) > 50000:
+            cutoff = now - 86400.0
+            self._settled = {
+                rid: ts for rid, ts in self._settled.items() if ts >= cutoff
+            }
+        return True
+
     async def settle_ok(self, lease: Lease, actual_tokens: int = 0) -> None:
+        if not self._claim_settle(lease):
+            return
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id,
             outcome="ok", actual_tokens=max(0, int(actual_tokens)))
 
     async def settle_rejected(self, lease: Lease) -> None:
+        if not self._claim_settle(lease):
+            return
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id, outcome="rejected")
 
     async def settle_uncertain(self, lease: Lease) -> None:
+        if not self._claim_settle(lease):
+            return
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id, outcome="uncertain")
 

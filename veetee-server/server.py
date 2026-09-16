@@ -150,26 +150,27 @@ class VeeTeeServer:
         return True
 
     async def _repair_readiness_assets(self):
-        """Retry non-fatal warm assets in background with bounded backoff."""
+        """Retry only critical warm assets in background with bounded backoff.
+
+        AI-authored recovery audio is an optional capability. Its absence must
+        not create an endless LLM retry loop or downgrade an otherwise usable
+        ASR/LLM/TTS server.
+        """
         delay = 1.0
         while True:
             try:
-                healthy = True
-                if not self.runtime_readiness.get("llm_warm"):
-                    warmup = getattr(self.llm_engine, "warmup", None)
-                    if warmup is None:
-                        self.runtime_readiness["llm_warm"] = True
-                    else:
-                        try:
-                            await warmup()
-                            self.runtime_readiness["llm_warm"] = True
-                        except Exception as exc:
-                            healthy = False
-                            logger.warning("LLM warmup retry failed: %s", exc)
-                if not self.runtime_readiness.get("error_fallback_ready"):
-                    healthy = await self._prewarm_error_fallback() and healthy
-                if healthy:
+                if self.runtime_readiness.get("llm_warm"):
                     return
+                warmup = getattr(self.llm_engine, "warmup", None)
+                if warmup is None:
+                    self.runtime_readiness["llm_warm"] = True
+                    return
+                try:
+                    await warmup()
+                    self.runtime_readiness["llm_warm"] = True
+                    return
+                except Exception as exc:
+                    logger.warning("LLM warmup retry failed: %s", exc)
                 await asyncio.sleep(delay)
                 delay = min(30.0, delay * 2.0)
             except asyncio.CancelledError:
@@ -213,7 +214,7 @@ class VeeTeeServer:
         # 1. Start HTTP & OTA server
         await self.http_server.start()
 
-        if not all(self.runtime_readiness.values()):
+        if not self.runtime_readiness.get("llm_warm"):
             self._readiness_repair_task = asyncio.create_task(
                 self._repair_readiness_assets(),
                 name="veetee-readiness-repair",
@@ -240,24 +241,59 @@ class VeeTeeServer:
                 
                 stop_event = asyncio.Event()
                 loop = asyncio.get_running_loop()
+                registered_signals = []
                 for sig in (signal.SIGINT, signal.SIGTERM):
                     try:
                         loop.add_signal_handler(sig, stop_event.set)
+                        registered_signals.append(sig)
                     except (NotImplementedError, RuntimeError, ValueError):
                         pass
                 try:
                     await stop_event.wait()
                 except (asyncio.CancelledError, KeyboardInterrupt):
                     pass
+                finally:
+                    for sig in registered_signals:
+                        try:
+                            loop.remove_signal_handler(sig)
+                        except (NotImplementedError, RuntimeError, ValueError):
+                            pass
         finally:
             if self._readiness_repair_task is not None:
                 self._readiness_repair_task.cancel()
                 await asyncio.gather(self._readiness_repair_task, return_exceptions=True)
                 self._readiness_repair_task = None
-            await self.response_audio_cache.shutdown()
+
+            # Close both standalone-WS and aiohttp-/ws sessions before
+            # tearing down their listener. Session.close() is idempotent, so
+            # connection-handler finalizers may race this safely.
+            sessions = list(self.active_sessions.values())
+            if sessions:
+                await asyncio.gather(
+                    *(session.close() for session in sessions),
+                    return_exceptions=True,
+                )
+                self.active_sessions.clear()
+            try:
+                await self.http_server.stop()
+            except Exception as exc:
+                logger.warning("HTTP server cleanup failed: %s", exc)
+            try:
+                await self.response_audio_cache.shutdown()
+            except Exception as exc:
+                logger.warning("Response audio cache cleanup failed: %s", exc)
+            shutdown_tts = getattr(self.tts_engine, "shutdown", None)
+            if shutdown_tts is not None:
+                try:
+                    await shutdown_tts()
+                except Exception as exc:
+                    logger.warning("TTS cleanup failed: %s", exc)
             close_llm = getattr(self.llm_engine, "close", None)
             if close_llm is not None:
-                await close_llm()
+                try:
+                    await close_llm()
+                except Exception as exc:
+                    logger.warning("LLM cleanup failed: %s", exc)
 
 async def main():
     config = load_settings()

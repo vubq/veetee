@@ -219,6 +219,7 @@ GET /   (dashboard/static UI)
 Management routes:
 
 ```text
+GET  /api/diagnostics
 GET  /api/prompt
 POST /api/prompt
 POST /api/test-voice

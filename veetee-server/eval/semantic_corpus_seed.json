@@ -855,5 +855,75 @@
       "history recall"
     ],
     "origin": "template-2026-09-10"
+  },
+  {
+    "id": "mus-001",
+    "split": "dev",
+    "group": "tool",
+    "critical": false,
+    "user": "Dừng lại đi.",
+    "expected_semantic_outcome": "stop current music via music_control",
+    "evidence_needed": [
+      "tool music_control",
+      "action stop"
+    ],
+    "context": "nhạc đang phát",
+    "origin": "template-2026-09-10"
+  },
+  {
+    "id": "mus-002",
+    "split": "dev",
+    "group": "tool",
+    "critical": true,
+    "user": "Dừng.",
+    "expected_semantic_outcome": "bare stop while music plays means stop, no clarify",
+    "evidence_needed": [
+      "tool music_control",
+      "action stop"
+    ],
+    "context": "nhạc đang phát",
+    "origin": "template-2026-09-10"
+  },
+  {
+    "id": "mus-003",
+    "split": "dev",
+    "group": "tool",
+    "critical": false,
+    "user": "Chuyển bài khác đi.",
+    "expected_semantic_outcome": "next track via music_control",
+    "evidence_needed": [
+      "tool music_control",
+      "action next"
+    ],
+    "context": "nhạc đang phát",
+    "origin": "template-2026-09-10"
+  },
+  {
+    "id": "mus-004",
+    "split": "dev",
+    "group": "tool",
+    "critical": false,
+    "user": "Tạm dừng một chút.",
+    "expected_semantic_outcome": "pause via music_control, music resumable",
+    "evidence_needed": [
+      "tool music_control",
+      "action pause"
+    ],
+    "context": "nhạc đang phát",
+    "origin": "template-2026-09-10"
+  },
+  {
+    "id": "mus-005",
+    "split": "dev",
+    "group": "tool",
+    "critical": false,
+    "user": "Bật bài See Tình.",
+    "expected_semantic_outcome": "play named song, preferably direct music_play with query",
+    "evidence_needed": [
+      "music starts",
+      "no <tool_call> in speech"
+    ],
+    "context": "không có nhạc đang phát",
+    "origin": "template-2026-09-10"
   }
 ]

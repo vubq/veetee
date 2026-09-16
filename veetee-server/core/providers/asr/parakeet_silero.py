@@ -267,6 +267,7 @@ class ParakeetSileroASR(BaseASR):
         self._capture_generation = 0
         self._utterance_generation = 0
         self._diagnostic_tasks: set[asyncio.Task] = set()
+        self._audio_idle_task: Optional[asyncio.Task] = None
 
     async def start(self):
         if self._running:
@@ -314,11 +315,67 @@ class ParakeetSileroASR(BaseASR):
         if capture_generation is not None:
             self._capture_generation = int(capture_generation)
 
+        self._cancel_audio_idle_finalize()
         self._pcm_pending.extend(pcm_bytes)
         while len(self._pcm_pending) >= self.FRAME_BYTES:
             frame = bytes(self._pcm_pending[: self.FRAME_BYTES])
             del self._pcm_pending[: self.FRAME_BYTES]
             await self._process_frame(frame)
+
+        # Stock Xiaozhi clients can stop sending microphone frames shortly
+        # before their listen:stop message arrives. If Silero has already seen
+        # the beginning of trailing silence, finish the remaining silence
+        # budget on wall clock instead of waiting indefinitely for more PCM.
+        # Requiring observed non-voice audio avoids treating a plain transport
+        # gap in the middle of voiced speech as an utterance boundary.
+        if self._speech_active and self._silence_ms > 0:
+            self._schedule_audio_idle_finalize()
+
+    def _cancel_audio_idle_finalize(self) -> None:
+        task = self._audio_idle_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+        self._audio_idle_task = None
+
+    def _schedule_audio_idle_finalize(self) -> None:
+        self._cancel_audio_idle_finalize()
+        if not self._speech_active or self._silence_ms <= 0:
+            return
+        remaining_ms = max(0.0, self.min_silence_duration_ms - self._silence_ms)
+        generation = self._utterance_generation
+        self._audio_idle_task = asyncio.create_task(
+            self._finalize_after_audio_idle(remaining_ms / 1000.0, generation)
+        )
+
+    async def _finalize_after_audio_idle(self, delay_seconds: float, generation: int) -> None:
+        try:
+            await asyncio.sleep(delay_seconds)
+            if (
+                not self._running
+                or not self._speech_active
+                or self._utterance_generation != generation
+                or self._silence_ms <= 0
+            ):
+                return
+
+            # Preserve the final sub-frame exactly as explicit client finalize
+            # does. It is shorter than one Silero frame and therefore was not
+            # classified, but still belongs to this utterance.
+            if self._pcm_pending:
+                self._speech_buffer.extend(self._pcm_pending)
+                self._pcm_pending.clear()
+            logger.info(
+                "ASR audio stream idle after trailing silence; finalizing generation=%s "
+                "observed_silence=%.0fms",
+                generation,
+                self._silence_ms,
+            )
+            await self._finish_utterance(endpoint_reason="audio_idle")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if self._audio_idle_task is asyncio.current_task():
+                self._audio_idle_task = None
 
     def _speech_probability(self, frame: bytes) -> float:
         if self._vad_session is None:
@@ -526,6 +583,7 @@ class ParakeetSileroASR(BaseASR):
             )
 
     def _reset_utterance_state(self):
+        self._cancel_audio_idle_finalize()
         self._speech_buffer.clear()
         self._pre_roll.clear()
         self._speech_active = False
@@ -716,6 +774,7 @@ class ParakeetSileroASR(BaseASR):
         if not self._running:
             return
 
+        self._cancel_audio_idle_finalize()
         # Preserve a partial final PCM frame when the user explicitly stops the
         # microphone. Silero has already classified the preceding full frames.
         if self._speech_active and self._pcm_pending:

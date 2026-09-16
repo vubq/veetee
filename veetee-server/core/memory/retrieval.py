@@ -103,10 +103,27 @@ class MemoryRetriever:
                 )
                 if self.embed_fn is not None and len(facts) > 1:
                     facts = await self._maybe_rerank(request.query, facts)
-                facts = facts[:limit]
-                if not facts:
-                    facts = await self.store.list_active(owner_id=owner_id, scope=request.scope, limit=limit)
-                    facts = facts[:limit]
+
+                # Lexical retrieval is a ranking signal, not a semantic gate.
+                # Reserve part of the bounded context for recent owner facts;
+                # otherwise weak shared words can fill every slot and hide a
+                # stable relationship/preference expressed with other wording.
+                # The LLM, not this retriever, decides semantic relevance.
+                lexical_budget = max(1, (limit + 1) // 2)
+                facts = facts[:lexical_budget]
+                recent = await self.store.list_active(
+                    owner_id=owner_id,
+                    scope=request.scope,
+                    limit=limit,
+                )
+                seen_ids = {fact.id for fact in facts}
+                for fact in recent:
+                    if fact.id in seen_ids:
+                        continue
+                    facts.append(fact)
+                    seen_ids.add(fact.id)
+                    if len(facts) >= limit:
+                        break
         except TimeoutError:
             self.metrics["timeout"] += 1
             return []

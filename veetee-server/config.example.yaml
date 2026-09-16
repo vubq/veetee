@@ -67,8 +67,8 @@ llm:
   quota_groups: {}
   routing:
     headroom_pct: 10.0
-    max_attempts: 2
-    admission_wait_ms: 50.0
+    max_attempts: 4
+    admission_wait_ms: 2500.0
     discovery_max_inflight: 1
     inflight_penalty_s: 0.4
   temperature: 0.6
@@ -182,6 +182,14 @@ tools:
   schema_limit: 16
   # Chat vẫn 1 inference. Turn có action được phép bounded follow-up rounds
   # để chain A->B rồi synthesis; trần 1..4 đã test, không chạy vô hạn.
-  max_llm_rounds_per_turn: 2
+  max_llm_rounds_per_turn: 3
   tool_result_synthesis: true
   max_parallel_read_only: 2
+
+# Nhạc YouTube: tìm/phát/điều khiển bằng giọng nói, stream Opus về loa.
+# Cần mạng tới YouTube + package yt-dlp. Thiết bị không cần thay đổi.
+music:
+  enabled: true
+  search_results: 5
+  resolve_timeout_s: 20.0
+  stall_timeout_s: 12.0

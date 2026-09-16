@@ -73,6 +73,21 @@ export GROQ_API_KEY_B='<secret>'
 
 Mỗi alias mặc định một `quota_group` riêng. `llm.quota_groups` khai báo caps đã biết (rpm/rpd/tpm/tpd/itpm/otpm); group bỏ trống chạy discovery mode (giới hạn in-flight, học caps từ response headers). Xem `config.example.yaml`.
 
+## 3b. Nhạc YouTube bằng giọng nói
+
+Nói "bật bài X" → AI tìm, hỏi lại nếu nhiều bài/không rõ, rồi phát ra loa
+thiết bị (stream Opus, không cần đổi firmware). Lệnh dừng/tạm dừng/tiếp
+tục/bài trước/sau đều bằng giọng nói; bấm nút ngắt (abort) hoặc nói lượt mới
+cũng dừng nhạc để nghe bạn.
+
+Cần package `yt-dlp` (đã có trong requirements) + mạng tới YouTube, bật ở
+mục `music:` trong config. Khi AI nói trong lúc nhạc đang phát, server tự
+tạm dừng nhạc rồi phát tiếp sau (tránh hai luồng audio chồng nhau gây lag);
+bấm ngắt hoặc nói lượt mới thì dừng hẳn. Giới hạn đã biết: board mic đơn
+không có AEC nên tự nghe loa của chính nó — muốn ra lệnh khi nhạc đang to
+thì bấm ngắt trước rồi nói. Nguồn nhạc tuân thủ điều khoản/dịch vụ của
+YouTube.
+
 ## 4. Persona
 
 Thứ tự hiện hành:
@@ -87,7 +102,7 @@ Không sao chép nội dung saved persona vào tài liệu hoặc benchmark arti
 
 ## 5. Management token
 
-`/api/prompt` và `/api/test-voice` yêu cầu management token. Cách ưu tiên để cấp secret:
+`/api/diagnostics`, `/api/prompt` và `/api/test-voice` yêu cầu management token. Cách ưu tiên để cấp secret:
 
 ```bash
 export VEETEE_MANAGEMENT_TOKEN='<secret>'

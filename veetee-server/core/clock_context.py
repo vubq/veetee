@@ -28,7 +28,9 @@ def clock_context(timezone: str) -> dict:
             f"{int(hour)} giờ {int(minute)} phút, {weekday}, ngày {int(day)}/"
             f"{int(month)}/{year}. Khi được hỏi giờ/ngày/thứ HIỆN TẠI, đọc "
             f"đúng các con số này; cấm đoán, cấm bịa, cấm lấy giờ từ "
-            f"persona/ví dụ/lượt cũ."
+            f"persona/ví dụ/lượt cũ. Chỉ nói đúng thành phần được hỏi: hỏi thứ "
+            f"thì không tự thêm ngày hoặc giờ; hỏi ngày thì không tự thêm giờ; "
+            f"hỏi giờ thì không tự thêm ngày hoặc thứ."
         )
     except (KeyError, ValueError, AttributeError):
         reading = ""

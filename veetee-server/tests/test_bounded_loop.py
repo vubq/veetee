@@ -87,6 +87,7 @@ class BoundedLoopTests(unittest.IsolatedAsyncioTestCase):
         from tests.test_turn_lifecycle import NativeToolLLM
         config = AppConfig()
         config.tools.max_llm_rounds_per_turn = 4
+        config.tools.direct_read_only_speech_enabled = False
         llm = NativeToolLLM()
         session = SessionForTest(FakeWebSocket(), config, TwoFrameTTS(), llm)
         await session._trigger_ai_turn("Hai cộng ba?")

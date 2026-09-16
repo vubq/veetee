@@ -212,19 +212,68 @@ class IntentPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed, [])
         self.assertEqual(session.pending_actions.peek().action_id, "call-confirm-1")
         self.assertEqual(len(llm.calls), 2)
-        self.assertEqual(llm.calls[1]["tool_choice"], "none")
+        self.assertIsNone(llm.calls[1]["tool_choice"])
+        self.assertNotIn(
+            "veetee_confirmation_decision",
+            {tool["function"]["name"] for tool in llm.calls[1]["tools"]},
+        )
 
         await session._trigger_ai_turn("Ừ, đặt như vậy đi")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
         self.assertEqual(executed, [{"level": 7}])
         self.assertIsNone(session.pending_actions.peek())
         self.assertEqual(len(llm.calls), 4)
-        self.assertEqual(llm.calls[3]["tool_choice"], "none")
+        self.assertIsNone(llm.calls[3]["tool_choice"])
 
         await session._trigger_ai_turn("được!")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
         self.assertEqual(executed, [{"level": 7}])
         self.assertEqual(len(llm.calls), 5)
+
+    async def test_synthesis_round_cannot_self_approve_pending_side_effect(self):
+        executed = []
+
+        async def mutate(arguments):
+            executed.append(dict(arguments))
+            return {"ok": True}
+
+        llm = ScriptedLLM([
+            tool_request(),
+            [
+                ControlEvent(),
+                ConfirmationDecisionEvent(
+                    call_id="self-approve",
+                    action_id="call-confirm-1",
+                    decision="approve",
+                ),
+                CompletedEvent(finish_reason="tool_calls"),
+            ],
+        ])
+        session = SessionForTest(FakeWebSocket(), AppConfig(), TwoFrameTTS(), llm)
+        session.tool_registry.register(ToolDescriptor(
+            name="mutate_test",
+            description="test mutation",
+            input_schema={
+                "type": "object",
+                "properties": {"level": {"type": "integer"}},
+                "required": ["level"],
+                "additionalProperties": False,
+            },
+            handler=mutate,
+            read_only=False,
+            idempotent=True,
+            requires_confirmation=True,
+        ))
+
+        await session._trigger_ai_turn("Đặt mức 7")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(executed, [])
+        self.assertIsNotNone(session.pending_actions.peek())
+        self.assertNotIn(
+            "veetee_confirmation_decision",
+            {tool["function"]["name"] for tool in llm.calls[1]["tools"]},
+        )
 
     async def test_unrelated_or_ambiguous_text_does_not_clear_pending_without_ai_decision(self):
         llm = ScriptedLLM([

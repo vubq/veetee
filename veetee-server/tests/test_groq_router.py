@@ -79,6 +79,22 @@ class GroqRouterTests(unittest.IsolatedAsyncioTestCase):
             await router.acquire(100, purpose="prewarm")
         await router.settle_ok(lease, actual_tokens=0)
 
+    async def test_double_settle_releases_once(self):
+        clock = FakeClock()
+        ledger = QuotaLedger({"gA": {"rpm": 1}}, clock=clock)
+        targets = [RouteTarget(alias="A", api_key="kA", quota_group="gA",
+                               base_url="https://x")]
+        router = GroqRouter(targets, ledger, clock=clock)
+        lease = await router.acquire(10, purpose="chat")
+        await router.settle_ok(lease, actual_tokens=5)
+        # Second settle (e.g. generator finally after explicit settle) no-ops:
+        # in_flight stays released exactly once, token charge stays actual.
+        await router.settle_uncertain(lease)
+        snap = await ledger.snapshot("gA")
+        self.assertEqual(snap["in_flight"], 0)
+        clock.now += 61.0  # rpm window passes; budget usable again.
+        self.assertIsNotNone(await ledger.try_reserve("gA", tokens=5))
+
     async def test_disable_alias_on_401(self):
         clock = FakeClock()
         router, _ = make_router(clock)

@@ -87,7 +87,7 @@ class TimeThenSynthesisLLM:
 
 
 class MixedSpeechThenToolLLM:
-    """Emits speech before a read-only tool in the same round (must be discarded)."""
+    """Malformed provider double: emits a tool only after speech committed."""
 
     def __init__(self):
         self.calls = []
@@ -172,7 +172,7 @@ class SemanticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Mình đã xử lý", joined)
         self.assertIn("chưa thành công", joined)
 
-    async def test_a03_mixed_speech_is_discarded_before_terminal(self):
+    async def test_a03_late_tool_after_speech_commit_fails_closed(self):
         config = AppConfig()
         llm = MixedSpeechThenToolLLM()
         websocket = FakeWebSocket()
@@ -180,10 +180,11 @@ class SemanticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         await session._trigger_ai_turn("Mấy giờ rồi?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
         texts = _assistant_texts(session)
-        # First-round speculative speech never reaches TTS/history.
-        self.assertFalse(any("Để mình kiểm tra" in t for t in texts))
-        self.assertTrue(any("07:30" in t for t in texts))
-        self.assertEqual(len(llm.calls), 2)
+        # Low-latency chat commits speech immediately. A provider/test double
+        # that emits a tool afterwards is malformed: the tool must not run and
+        # there must be no receipt-synthesis round that can claim success.
+        self.assertFalse(any("07:30" in t for t in texts))
+        self.assertEqual(len(llm.calls), 1)
 
     async def test_a09_nested_schema_is_rejected(self):
         schema = {
