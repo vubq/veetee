@@ -39,6 +39,7 @@ Endpoint mặc định:
 - [ESP32_CONFIG.md](docs/ESP32_CONFIG.md): kết nối firmware Xiaozhi nguyên bản và smoke test cơ bản.
 - [TESTING.md](docs/TESTING.md): unit/integration/runtime/hardware, metric và quality gate.
 - [VOICE_PIPELINE_STATUS.md](docs/VOICE_PIPELINE_STATUS.md): snapshot evidence/trạng thái hiện tại.
+- [PRODUCTION_READINESS_2026-09-18.md](docs/PRODUCTION_READINESS_2026-09-18.md): kết quả audit/hardening, live evidence và external blockers còn lại.
 - [REMAINING_WORK.md](docs/REMAINING_WORK.md): 6 việc tồn đọng (corpus, endpoint A/B, interrupt, AEC, durable owner, MCP) + hướng dẫn chi tiết.
 - [Task plans](../task-plans/README.md): kế hoạch runtime còn mở và lịch sử handoff.
 
