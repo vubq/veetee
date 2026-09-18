@@ -1,5 +1,11 @@
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { OpusDecoder } from 'opus-decoder'
+import {
+  createMicProcessor,
+  createStreamingPcm16Resampler,
+  extractOpusPacket,
+  resampleFloatToPcm16,
+} from '../lib/voiceAudio'
 
 export function useVoiceConsole({ authRequired, notify }) {
   const chatInput = ref('')
@@ -31,10 +37,7 @@ export function useVoiceConsole({ authRequired, notify }) {
   let micSource = null
   let micProcessor = null
   let micMute = null
-  let micInputSeen = 0
-  let micNextSourcePos = 0
-  let micPreviousSample = 0
-  let micHasPreviousSample = false
+  const micResampler = createStreamingPcm16Resampler(16000)
   let syntheticCancelled = false
   let activeSyntheticSource = null
   const activeSources = new Set()
@@ -64,19 +67,7 @@ export function useVoiceConsole({ authRequired, notify }) {
   }
 
   function extractOpus(buffer) {
-    const bytes = new Uint8Array(buffer)
-    const view = new DataView(buffer)
-    if (Number(protocolVersion.value) === 2) {
-      if (bytes.byteLength < 16) throw new Error('V2 packet invalid')
-      const size = view.getUint32(12, false)
-      return bytes.slice(16, 16 + size)
-    }
-    if (Number(protocolVersion.value) === 3) {
-      if (bytes.byteLength < 4) throw new Error('V3 packet invalid')
-      const size = view.getUint16(2, false)
-      return bytes.slice(4, 4 + size)
-    }
-    return bytes
+    return extractOpusPacket(buffer, protocolVersion.value)
   }
 
   function playAudio(channelData) {
@@ -260,80 +251,6 @@ export function useVoiceConsole({ authRequired, notify }) {
     audioStatus.value = 'Đã ngắt lượt hiện tại'
   }
 
-  function resampleMic(input, sourceRate, targetRate = 16000) {
-    if (!input?.length) return new Int16Array(0)
-    if (sourceRate === targetRate) {
-      return Int16Array.from(input, value => Math.max(-1, Math.min(1, value)) * 32767)
-    }
-    const ratio = sourceRate / targetRate
-    const start = micInputSeen
-    const end = start + input.length
-    const out = []
-    while (micNextSourcePos < end) {
-      const leftIndex = Math.floor(micNextSourcePos)
-      const fraction = micNextSourcePos - leftIndex
-      const rightIndex = fraction > 0 ? leftIndex + 1 : leftIndex
-      if (rightIndex >= end) break
-      const sampleAt = index => index === start - 1 && micHasPreviousSample ? micPreviousSample : input[index - start]
-      const left = sampleAt(leftIndex)
-      const right = sampleAt(rightIndex)
-      if (!Number.isFinite(left) || !Number.isFinite(right)) break
-      const value = Math.max(-1, Math.min(1, left + (right - left) * fraction))
-      out.push(value < 0 ? value * 32768 : value * 32767)
-      micNextSourcePos += ratio
-    }
-    micInputSeen = end
-    micPreviousSample = input[input.length - 1]
-    micHasPreviousSample = true
-    return Int16Array.from(out)
-  }
-
-  function resampleFloatToPcm16(input, sourceRate, targetRate = 16000) {
-    if (!input?.length) return new Int16Array(0)
-    const ratio = sourceRate / targetRate
-    const length = Math.max(1, Math.floor(input.length / ratio))
-    const out = new Int16Array(length)
-    for (let i = 0; i < length; i += 1) {
-      const position = i * ratio
-      const left = Math.floor(position)
-      const right = Math.min(input.length - 1, left + 1)
-      const fraction = position - left
-      const value = Math.max(-1, Math.min(1, input[left] + (input[right] - input[left]) * fraction))
-      out[i] = value < 0 ? value * 32768 : value * 32767
-    }
-    return out
-  }
-
-  async function createMicProcessor(ctx) {
-    if (ctx.audioWorklet && typeof window.AudioWorkletNode !== 'undefined') {
-      const source = `
-        class VeeTeeMicWorklet extends AudioWorkletProcessor {
-          process(inputs) {
-            const input = inputs[0] && inputs[0][0]
-            if (input && input.length) this.port.postMessage(input.slice(0))
-            return true
-          }
-        }
-        registerProcessor('veetee-mic-worklet', VeeTeeMicWorklet)
-      `
-      const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
-      try {
-        await ctx.audioWorklet.addModule(url)
-      } finally {
-        URL.revokeObjectURL(url)
-      }
-      return {
-        node: new AudioWorkletNode(ctx, 'veetee-mic-worklet', {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          outputChannelCount: [1],
-        }),
-        legacy: false,
-      }
-    }
-    return { node: ctx.createScriptProcessor(2048, 1, 1), legacy: true }
-  }
-
   async function startMic() {
     if (!wsConnected() || !navigator.mediaDevices?.getUserMedia) return
     await ensureAudio()
@@ -343,10 +260,7 @@ export function useVoiceConsole({ authRequired, notify }) {
       })
       micCtx = new (window.AudioContext || window.webkitAudioContext)()
       if (micCtx.state === 'suspended') await micCtx.resume()
-      micInputSeen = 0
-      micNextSourcePos = 0
-      micPreviousSample = 0
-      micHasPreviousSample = false
+      micResampler.reset()
       micSource = micCtx.createMediaStreamSource(micStream)
       const processor = await createMicProcessor(micCtx)
       micProcessor = processor.node
@@ -357,7 +271,7 @@ export function useVoiceConsole({ authRequired, notify }) {
       micMute.connect(micCtx.destination)
       const forwardSamples = mono => {
         if (!isMicRecording.value || !wsConnected()) return
-        const pcm = resampleMic(mono, micCtx.sampleRate)
+        const pcm = micResampler.process(mono, micCtx.sampleRate)
         if (pcm.length) ws.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength))
       }
       if (processor.legacy) {

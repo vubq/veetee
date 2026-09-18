@@ -14,7 +14,7 @@ Chạy từ `veetee-server/` bằng venv của project (không dùng `python3` h
 
 Baseline 2026-09-18 sau production hardening: `282/282 PASS` (4.684s). Suite gồm auth/OTA one-time credential, pairing bounds, device-owner memory mapping, degraded boot khi thiếu LLM credential, permanent-error retry classification, health/security headers, quota/router/provider/config, lifecycle/tool/memory regressions. `compileall`, `pip check` và `git diff --check` là các gate bắt buộc trước release.
 
-Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Frontend có Vitest/Vue Test Utils (`cd web && npm test`) và production build gate (`npm run build`); baseline hiện tại `8/8` tests PASS trên 4 file, gồm management 401, pairing validation, runtime secret masking/save, degraded badge và UI controls. Các suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
+Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Frontend có Vitest/Vue Test Utils (`cd web && npm test`) và production build gate (`npm run build`); baseline hiện tại `12/12` tests PASS trên 5 file, gồm management 401, pairing validation, runtime secret masking/save, degraded badge, UI controls và voice audio framing/resampling. Các suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
 
 ## 2. Runtime E2E
 

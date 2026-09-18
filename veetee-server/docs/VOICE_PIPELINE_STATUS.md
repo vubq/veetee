@@ -46,7 +46,7 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 
 ```text
 282/282 backend tests PASS (2026-09-18, 4.684s)
-8/8 frontend Vitest PASS (4 files)
+12/12 frontend Vitest PASS (5 files; gồm voice audio framing/resampling)
 production frontend build PASS
 compileall / pip check / git diff --check là release gates bắt buộc
 ```
