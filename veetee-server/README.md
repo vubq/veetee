@@ -2,17 +2,20 @@
 
 VeeTee là backend voice realtime chạy trực tiếp trên Linux/WSL, phục vụ Web Client và ESP32/Xiaozhi **firmware nguyên bản**. Các tính năng chuẩn của server không yêu cầu patch/build/flash firmware tùy biến.
 
-Pipeline mặc định dùng ASR local (Parakeet CTC Vietnamese + Silero VAD), LLM qua OmniRoute và TTS VieNeu local. Process server chạy local; route LLM phía sau OmniRoute có thể là provider từ xa tùy cấu hình.
+Pipeline mặc định dùng ASR local (Parakeet CTC Vietnamese + Silero VAD), Groq API trực tiếp với quota-aware key pool cho LLM và VieNeu local cho TTS. HTTP/OTA/management vẫn khởi động ở trạng thái `degraded` khi LLM credential chưa sẵn sàng để operator có thể sửa cấu hình từ dashboard.
 
 ## Khởi động nhanh
 
 ```bash
 cd veetee-server
 cp config.example.yaml config.yaml
+cp .env.example .env
+chmod 600 config.yaml .env
+# Điền VEETEE_MANAGEMENT_TOKEN và ít nhất một GROQ_API_KEY_* hợp lệ vào .env.
 ./start.sh
 ```
 
-`config.yaml` là cấu hình local và được Git bỏ qua. Dùng [config.example.yaml](config.example.yaml) làm reference đầy đủ; không sao chép credential vào repo.
+`config.yaml` là cấu hình local và được Git bỏ qua. Credential đặt trong `.env`/environment (`VEETEE_MANAGEMENT_TOKEN`, `GROQ_API_KEY_*`), không ghi secret vào YAML. `start.sh` tự load `.env` nếu có; production host có mẫu `deploy/veetee.service`. Dùng [config.example.yaml](config.example.yaml) làm reference đầy đủ.
 
 Endpoint mặc định:
 
@@ -47,6 +50,7 @@ Endpoint mặc định:
 ../../venv/bin/python -m unittest discover -s tests -v
 PYTHONPATH=. ../../venv/bin/python test_e2e.py
 ../../venv/bin/python scripts/benchmark_pipeline.py --help
+cd web && npm test && npm run build
 ```
 
 Luôn dùng venv của project (`../../venv`); `python3` hệ thống thiếu deps.

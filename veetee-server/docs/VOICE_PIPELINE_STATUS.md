@@ -1,7 +1,7 @@
 # Voice Pipeline Status
 
-Snapshot tài liệu: **2026-09-10**
-Source đối chiếu: **HEAD `69c0a14`** (code mới nhất; sau đó chỉ docs/plans, tree sạch).
+Snapshot tài liệu: **2026-09-18**
+Source đối chiếu: **working tree production-hardening hiện tại** (baseline trước hardening: HEAD `3767532`). Các benchmark/hardware số liệu mang ngày 2026-09-10 bên dưới được giữ như evidence lịch sử, không được hiểu là đo lại trên runtime hôm nay.
 
 Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành nằm ở [ARCHITECTURE.md](ARCHITECTURE.md), test/acceptance ở [TESTING.md](TESTING.md), công việc runtime còn mở ở [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md).
 
@@ -17,7 +17,7 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | Local audit override | SNAPSHOT | Audit ngày 2026-09-09 quan sát ignored `config.yaml` dùng `320 ms`; không phải project default |
 | TTS sample rate | IMPLEMENTED | `24000 Hz` source/example |
 | Prompt management | IMPLEMENTED | Saved persona precedence + shared byte/token budget (`32 KiB`/est. `8000`); reject over-budget, version snapshot/turn |
-| Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 2), catalog notice explicit |
+| Tool limits | IMPLEMENTED | `max_calls 1..8` (default 3), `schema_limit` max 64, rounds `1..4` (default 3), catalog notice explicit |
 | Benchmark client | IMPLEMENTED | Metric `v2` voiced proxy + useful certification metric; smoke 20/95% vs cert 100/99% (`--certification`) |
 | Runtime latency SLA | NOT_MET | Cert 100-attempt 2026-09-10 (`pipeline-auto-20260910-121550`): success 100/100 (gate ≥99% đạt) nhưng p50 6142ms / p95 6602ms (gate p95 <1000ms TRƯỢT, target p50 ≤600ms TRƯỢT). Bimodal: lượt nhanh ~1.5s, lượt chậm ~6s, phần chậm nằm ở chân LLM gateway (STT chỉ ~0.5-0.7s). Không retry phía server; chờ hướng xử lý gateway riêng |
 | Load đa session | PARTIAL | `scripts/load_probe.py` text-turn 2026-09-10: 1×5 và 2×10 success 100% (p50 full-turn ~7.7s); 4×5 success 90% (2 LLM first-token timeout, TTS queue-wait tới ~6s). Artifact `benchmark-artifacts/load-probe-20260910.json`. Text-turn only, chưa tải ASR decode |
@@ -40,14 +40,15 @@ Tài liệu này chỉ giữ trạng thái/evidence. Kiến trúc hiện hành n
 | A11 | PARTIAL: parallel independent reads + lease hold metrics + split deadlines xong; cần A/B tải thật |
 | A12 | PARTIAL: unit 155 PASS (2026-09-10); contract bracket tags strip trước TTS (fix `[surprised]` lọt loa); corpus/SLA/hardware còn thiếu |
 | A13 | IMPLEMENTED (code) + spot-check tay: deterministic idle end — chào theo persona rồi đóng phiên code 1000; farewell retry/fallback có regression; đã kiểm 3 lượt model thật qua WebSocket |
-| A14 | IN_PROGRESS: Groq API trực tiếp thay OmniRoute (quota ledger + router + `groq_direct.py`, pool key env, discovery từ headers); live chat/tool/recall đúng, unit 207 xanh. gpt-oss-20b thử thêm (không thay default): nhanh tương đương, 1 mẫu đọc giờ sai. Failover thật/metrics/SLA đường mới còn thiếu |
+| A14 | IMPLEMENTED (source): Groq API trực tiếp + quota ledger/router/key pool env. Server hiện boot `degraded` thay vì chết khi thiếu/sai credential và dừng retry với lỗi permanent. Runtime production LLM hôm 2026-09-18 vẫn cần một `GROQ_API_KEY_*` hợp lệ trước khi có thể chứng nhận live chat/latency mới. |
 
 ## Test evidence
 
 ```text
-155/155 tests PASS (2026-09-10)
-compileall PASS
-git diff --check PASS (cần rerun trước commit)
+282/282 backend tests PASS (2026-09-18, 4.684s)
+8/8 frontend Vitest PASS (4 files)
+production frontend build PASS
+compileall / pip check / git diff --check là release gates bắt buộc
 ```
 
 Gồm regression mới `test_ai_semantics_regression`, `test_bounded_loop`, `test_retrieval_rag`, `test_clock_context` và idle farewell (retry/fallback/waiting/invite, đóng transport sau chào). Số `127/144/148` trước đây là snapshot lịch sử, không dùng thay cho lần chạy này. Corpus model thật, latency 100-attempt và hardware vẫn PENDING nên tổng là PARTIAL.

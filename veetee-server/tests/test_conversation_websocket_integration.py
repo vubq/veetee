@@ -1,11 +1,13 @@
 import asyncio
 import json
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
 
 from config.settings import AppConfig
+from core.management_store import ManagementStore
 from core.protocol import ProtocolVersion, unpack_audio_payload
 from core.response_audio_cache import ResponseAudioCache
 from core.session import ClientSession
@@ -98,6 +100,7 @@ class CountingTTS:
 class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         config = AppConfig()
+        config.management.token = "integration-secret"
         config.conversation.enabled = True
         config.conversation.audio_cache_enabled = True
         config.conversation.wake_start_wait_ms = 50
@@ -107,6 +110,8 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         config.tts.send_ahead_ms = 5
 
         self.config = config
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.store = ManagementStore(self.tempdir.name + "/manager-state.json")
         self.tts = CountingTTS()
         self.llm = CountingLLM()
         self.cache = ResponseAudioCache(self.tts, config.tts)
@@ -117,6 +122,7 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             tts_engine=self.tts,
             llm_engine=self.llm,
             response_audio_cache=self.cache,
+            management_store=self.store,
         )
         self.asr_patch = patch.object(ClientSession, "_create_asr", lambda _self: FakeASR())
         self.asr_patch.start()
@@ -127,6 +133,7 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         await self.cache.shutdown()
         self.asr_patch.stop()
+        self.tempdir.cleanup()
 
     async def _wait_sessions(self, expected):
         for _ in range(200):
@@ -145,8 +152,10 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.fail("active session did not return to idle")
 
     async def _connect(self, version):
-        ws = await self.client.ws_connect("/ws")
-        await self._wait_sessions(1)
+        manager_cookie = self.http_server.websocket_access.manager_cookie()
+        ws = await self.client.ws_connect(
+            "/ws", headers={"Cookie": f"veetee_session={manager_cookie}"}
+        )
         await ws.send_json({
             "type": "hello",
             "version": version,
@@ -161,6 +170,44 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         hello = await asyncio.wait_for(ws.receive_json(), timeout=1)
         self.assertEqual(hello["type"], "hello")
         return ws
+
+    async def _pair_stock_device(self, *, device_id="aa:bb:cc:dd:ee:01", client_id="client-1", extra_headers=None):
+        headers = {
+            "Device-Id": device_id,
+            "Client-Id": client_id,
+            "Activation-Version": "1",
+            **(extra_headers or {}),
+        }
+        first = await self.client.post(
+            "/ota/",
+            headers=headers,
+            json={"application": {"version": "2.0.0"}, "board": {"type": "test-board"}},
+        )
+        self.assertEqual(first.status, 200)
+        first_payload = await first.json()
+        self.assertIn("activation", first_payload)
+        self.assertNotIn("challenge", first_payload["activation"])
+        code = first_payload["activation"]["code"]
+
+        pending = await self.client.post("/ota/activate", headers=headers, json={})
+        self.assertEqual(pending.status, 202)
+
+        paired = await self.client.post(
+            "/api/devices/pair",
+            headers={"X-Veetee-Management-Token": "integration-secret"},
+            json={"code": code, "assistant_id": "default", "name": "Integration ESP32"},
+        )
+        self.assertEqual(paired.status, 200)
+
+        activated = await self.client.post("/ota/activate", headers=headers, json={})
+        self.assertEqual(activated.status, 200)
+
+        final = await self.client.post("/ota/", headers=headers, json={})
+        self.assertEqual(final.status, 200)
+        final_payload = await final.json()
+        self.assertIn("websocket", final_payload)
+        self.assertTrue(final_payload["websocket"]["token"])
+        return headers, final_payload
 
     async def _receive_ai_response(self, ws, version, expected_text):
         received = []
@@ -265,42 +312,36 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health["status"], "healthy")
         self.assertEqual(health["active_sessions"], 0)
 
-        ota_response = await self.client.get("/ota/")
-        self.assertEqual(ota_response.status, 200)
-        ota = await ota_response.json()
+        _, ota = await self._pair_stock_device()
         self.assertEqual(ota["websocket"]["version"], 1)
         self.assertIn("url", ota["websocket"])
 
     async def test_ota_only_treats_real_tailscale_or_https_headers_as_public_tls(self):
-        fake_ts = await self.client.get(
-            "/ota/",
-            headers={"Host": "not-ts.net.evil.example"},
+        _, fake_ts_payload = await self._pair_stock_device(
+            device_id="aa:bb:cc:dd:ee:11", client_id="client-11",
+            extra_headers={"Host": "not-ts.net.evil.example"},
         )
-        fake_ts_payload = await fake_ts.json()
         self.assertTrue(fake_ts_payload["websocket"]["url"].startswith("ws://"))
 
-        fake_https = await self.client.get(
-            "/ota/",
-            headers={"Host": "example.test", "X-Forwarded-Proto": "nothttps"},
+        _, fake_https_payload = await self._pair_stock_device(
+            device_id="aa:bb:cc:dd:ee:12", client_id="client-12",
+            extra_headers={"Host": "example.test", "X-Forwarded-Proto": "nothttps"},
         )
-        fake_https_payload = await fake_https.json()
         self.assertTrue(fake_https_payload["websocket"]["url"].startswith("ws://"))
 
-        funnel = await self.client.get(
-            "/ota/",
-            headers={"Host": "veetee.tail52a635.ts.net:443"},
+        _, funnel_payload = await self._pair_stock_device(
+            device_id="aa:bb:cc:dd:ee:13", client_id="client-13",
+            extra_headers={"Host": "veetee.tail52a635.ts.net:443"},
         )
-        funnel_payload = await funnel.json()
         self.assertEqual(
             funnel_payload["websocket"]["url"],
             "wss://veetee.tail52a635.ts.net:443/ws",
         )
 
-        proxied_https = await self.client.get(
-            "/ota/",
-            headers={"Host": "voice.example.com", "X-Forwarded-Proto": "https"},
+        _, proxied_https_payload = await self._pair_stock_device(
+            device_id="aa:bb:cc:dd:ee:14", client_id="client-14",
+            extra_headers={"Host": "voice.example.com", "X-Forwarded-Proto": "https"},
         )
-        proxied_https_payload = await proxied_https.json()
         self.assertEqual(
             proxied_https_payload["websocket"]["url"],
             "wss://voice.example.com/ws",
@@ -329,9 +370,17 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(allowed_voice.status, 200)
 
-        ota_response = await self.client.get("/ota/")
-        self.assertEqual(ota_response.status, 200)
-        ws = await self._connect(ProtocolVersion.V1)
+        device_headers, ota = await self._pair_stock_device(
+            device_id="aa:bb:cc:dd:ee:21", client_id="client-21"
+        )
+        ws_headers = {
+            "Authorization": f"Bearer {ota['websocket']['token']}",
+            "Device-Id": device_headers["Device-Id"],
+            "Client-Id": device_headers["Client-Id"],
+        }
+        ws = await self.client.ws_connect("/ws", headers=ws_headers)
+        await ws.send_json({"type": "hello", "version": 1})
+        self.assertEqual((await ws.receive_json())["type"], "hello")
         await ws.close()
         await self._wait_sessions(0)
 

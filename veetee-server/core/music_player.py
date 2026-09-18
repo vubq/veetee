@@ -209,7 +209,7 @@ class MusicPlayer:
         self._frames_sent = 0
         self._state = "playing"
         self._task = asyncio.create_task(self._run(track))
-        logger.info("Music play session=%s title=%r", self._session_id, track.title)
+        logger.info("Music play session=%s title_chars=%d", self._session_id, len(track.title or ""))
 
     async def _frame_stream(self, track: MusicTrack) -> AsyncIterator[bytes]:
         try:
@@ -291,8 +291,8 @@ class MusicPlayer:
             if self._envelope_active:
                 await self._send_text(make_tts_message(self._session_id, "stop"))
                 self._envelope_active = False
-            logger.info("Music track ended session=%s title=%r frames=%d",
-                        self._session_id, track.title, self._frames_sent)
+            logger.info("Music track ended session=%s title_chars=%d frames=%d",
+                        self._session_id, len(track.title or ""), self._frames_sent)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

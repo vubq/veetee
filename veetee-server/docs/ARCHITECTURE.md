@@ -1,7 +1,7 @@
 # VeeTee Server Architecture
 
-Cập nhật tài liệu: **2026-09-10**
-Source snapshot đối chiếu: **HEAD `69c0a14`** (code mới nhất; sau đó chỉ docs/plans, tree sạch).
+Cập nhật tài liệu: **2026-09-18**
+Source snapshot đối chiếu: **working tree production-hardening hiện tại** (baseline trước hardening: HEAD `3767532`). Core security/runtime changes được kiểm bằng full regression suite; xem [TESTING.md](TESTING.md).
 
 Tài liệu này là nơi mô tả **behavior hiện hành**. Backlog/runtime changes nằm trong [plan AI/persona/tools/memory/latency](../../task-plans/2026-09-09-ai-persona-tools-memory-latency.md); không coi nội dung `PLANNED` trong plan là behavior đã có.
 

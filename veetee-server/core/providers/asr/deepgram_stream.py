@@ -135,7 +135,7 @@ class DeepgramStreamASR(BaseASR):
                         self._cancel_idle_finalize()
                         if self._utterance_has_text and self._last_nonempty_transcript:
                             transcript = self._last_nonempty_transcript
-                            logger.info("Deepgram UtteranceEnd finalizing: %r", transcript)
+                            logger.info("Deepgram UtteranceEnd finalizing chars=%d", len(transcript))
                             if self.on_transcript_callback:
                                 await self.on_transcript_callback(
                                     transcript,

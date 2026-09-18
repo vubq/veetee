@@ -1,6 +1,6 @@
 # VeeTee Protocol Contract
 
-Cập nhật: **2026-09-09**
+Cập nhật: **2026-09-18**
 
 Tài liệu này mô tả contract wire giữa VeeTee và ESP32/Xiaozhi firmware nguyên bản, cộng các HTTP management/browser endpoint riêng. AI intent/memory/tool reasoning nội bộ được mô tả tại [ARCHITECTURE.md](ARCHITECTURE.md), không phải capability mới mà ESP32 phải hiểu.
 
@@ -20,7 +20,15 @@ Standalone WebSocket path hiện đọc các header:
 | `Device-Id` | định danh client do client khai báo |
 | `Client-Id` | định danh client do client khai báo |
 
-`ClientSession` hiện **không enforce `Authorization` cho WebSocket**. Management bearer/token ở HTTP `:8003` là cơ chế khác và không nên mô tả như WS auth đã được enforce.
+Hai listener WS đều yêu cầu xác thực trước khi tạo session/ASR. Firmware stock dùng credential **riêng theo thiết bị** do server cấp sau quy trình OTA pairing; credential đó được trả trong `websocket.token`, rồi firmware tự gửi `Authorization: Bearer <device-credential>` cùng `Device-Id` và `Client-Id` khi mở WebSocket. Không còn shared `VEETEE_WS_TOKEN`/`server.ws_token`.
+
+Pairing stock: thiết bị gọi `GET/POST /ota/` với `Device-Id`, `Client-Id`, `Activation-Version`; khi chưa bind, server trả `activation.code` 6 số. Người quản trị nhập mã vào dashboard, chọn assistant và có thể gán memory owner. Firmware poll `POST /ota/activate`; với Activation-Version 1 body có thể là `{}` và server trả `202` cho đến khi được duyệt, sau đó `200`. Lần OTA kế tiếp phát `websocket.url`, `version` và token riêng **một lần**; firmware persist token. Các OTA check thường lệ sau đó không re-disclose credential. Re-pair rotate credential mới; revoke làm credential mất hiệu lực.
+
+Browser quản trị đăng nhập bằng `POST /api/session` với `Authorization: Bearer <VEETEE_MANAGEMENT_TOKEN>`, nhận cookie HttpOnly/SameSite=Strict có hạn một giờ, rồi gọi management API và mở `/ws` cùng origin bằng cookie. Dashboard không lưu management token trong URL/localStorage/sessionStorage. Dùng HTTPS khi kết nối từ xa. Nếu terminate TLS ở proxy, bảo đảm cookie Secure được xử lý đúng; server không tin tùy tiện header forwarded ngoài logic URL OTA đã giới hạn.
+
+Origin khác host bị từ chối trừ khi nằm trong `server.ws_allowed_origins`. Client stock không có Origin vẫn phải xác thực. Hai listener chia sẻ `ws_max_sessions` (mặc định 8), kể cả phiên đang chờ hello. Client phải gửi hello hợp lệ trong `ws_hello_timeout_seconds` (5 giây), trước mọi chat/audio; frame tối đa 64 KiB.
+
+WebSocket auth cách ly theo device credential và assistant binding. Durable memory cũng hỗ trợ `owner_id` riêng trên paired device; session đã xác thực ưu tiên owner này và fallback `memory.trusted_owner_id` cho thiết bị legacy/chưa gán. Không tự suy owner từ Device-Id/Client-Id.
 
 Hello stock có thể không có `features`:
 
@@ -216,15 +224,27 @@ GET/POST /api/ota/
 GET /   (dashboard/static UI)
 ```
 
-Management routes:
+Management routes chính:
 
 ```text
-GET  /api/diagnostics
-GET  /api/prompt
-POST /api/prompt
-POST /api/test-voice
+POST   /api/session
+GET    /api/assistants
+POST   /api/assistants
+PATCH  /api/assistants/{assistant_id}
+DELETE /api/assistants/{assistant_id}
+GET    /api/devices
+GET    /api/devices/pending
+POST   /api/devices/pair
+PATCH  /api/devices/{device_id}/{client_id}
+POST   /api/devices/{device_id}/{client_id}/revoke
+GET    /api/runtime-config
+PATCH  /api/runtime-config
+GET    /api/diagnostics
+GET    /api/prompt
+POST   /api/prompt
+POST   /api/test-voice
 ```
 
-Management routes yêu cầu token cấu hình qua `management.token` hoặc `VEETEE_MANAGEMENT_TOKEN`. Client gửi `X-Veetee-Management-Token` hoặc `Authorization: Bearer <token>`. Token trống làm management access bị từ chối.
+Management routes yêu cầu `management.token` hoặc `VEETEE_MANAGEMENT_TOKEN`. API vẫn chấp nhận header management trực tiếp cho automation, nhưng dashboard mặc định đổi token lấy cookie HttpOnly qua `/api/session` rồi dùng cookie. Token trống làm management access bị từ chối.
 
-Management token này không phải credential bắt buộc cho firmware OTA/WebSocket stock.
+Management credential và per-device WebSocket credential là hai lớp riêng; firmware stock không cần biết management token.

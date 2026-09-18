@@ -265,6 +265,7 @@ class VieneuLocalTTS(BaseTTS):
         *,
         priority: str = "live",
         queue_deadline_seconds: Optional[float] = None,
+        voice_override: Optional[str] = None,
     ) -> AsyncGenerator[bytes, None]:
         if not text or not text.strip():
             return
@@ -303,7 +304,7 @@ class VieneuLocalTTS(BaseTTS):
             try:
                 for chunk in self.engine.infer_stream(
                     text,
-                    voice=self.voice,
+                    voice=(voice_override or self.voice),
                     denoise=self.denoise,
                     temperature=self.temperature,
                     apply_watermark=False,

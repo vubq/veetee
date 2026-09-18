@@ -866,7 +866,7 @@ class GroqDirectLLM(BaseLLM):
         min_len = max(1, int(len(original) * 0.55))
         max_len = max(len(original) + 24, int(len(original) * 1.45))
         if not (min_len <= len(corrected) <= max_len):
-            logger.warning("Rejected oversized ASR correction: %r -> %r", original, corrected)
+            logger.warning("Rejected oversized ASR correction original_chars=%d corrected_chars=%d", len(original), len(corrected))
             return original
         return corrected
 

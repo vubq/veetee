@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import statistics
 import struct
 import sys
@@ -499,10 +500,18 @@ async def run(args) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
         fixture,
         args.auto_silence_ms,
     )
+    device_id = os.getenv("VEETEE_DEVICE_ID", "veetee-benchmark-device").strip()
+    client_id = os.getenv("VEETEE_CLIENT_ID", "veetee-benchmark-client").strip()
+    device_token = os.getenv("VEETEE_DEVICE_TOKEN", "").strip()
+    if not device_token:
+        raise BenchmarkError(
+            "VEETEE_DEVICE_TOKEN is required; pair this Device-Id/Client-Id through OTA first"
+        )
     headers = {
-        "Device-Id": "veetee-benchmark-device",
-        "Client-Id": "veetee-benchmark-client",
+        "Device-Id": device_id,
+        "Client-Id": client_id,
         "Protocol-Version": "1",
+        "Authorization": f"Bearer {device_token}",
     }
     total_runs = args.warmup + args.runs
     records: list[Dict[str, Any]] = []

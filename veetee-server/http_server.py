@@ -3,14 +3,36 @@ import time
 import socket
 import logging
 import hmac
+import json
 from collections import deque
 import aiohttp
 from aiohttp import web
 from config.settings import AppConfig
 from core.session import ClientSession
+from core.access import WebSocketAccess, serve_session
+from core.assistant_runtime import build_assistant_llm_view, build_assistant_tts_view
 from core.turn_metrics import TurnTraceStore, summarize_trace
 
 logger = logging.getLogger("HttpServer")
+
+
+@web.middleware
+async def security_headers_middleware(request: web.Request, handler):
+    response = await handler(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), geolocation=(), microphone=(self)")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self'; font-src 'self' data:; "
+        "img-src 'self' data: blob:; media-src 'self' blob:; "
+        "connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; "
+        "base-uri 'self'; frame-ancestors 'none'",
+    )
+    return response
+
 
 def get_local_ip() -> str:
     try:
@@ -77,8 +99,14 @@ class HttpServer:
         response_audio_cache=None,
         recent_turn_store=None,
         runtime_readiness_ref=None,
+        websocket_access=None,
+        management_store=None,
     ):
         self.config = app_config
+        self.management_store = management_store
+        self.websocket_access = websocket_access or WebSocketAccess(
+            app_config.server, app_config.management, management_store
+        )
         self.active_sessions = active_sessions_ref
         self.tts_engine = tts_engine
         self.llm_engine = llm_engine
@@ -88,7 +116,10 @@ class HttpServer:
         self._test_voice_active = 0
         self._test_voice_recent = deque()
         self.local_ip = get_local_ip()
-        self.app = web.Application()
+        self.app = web.Application(
+            client_max_size=64 * 1024,
+            middlewares=[security_headers_middleware],
+        )
         self._runner = None
         self._site = None
         self._setup_routes()
@@ -97,6 +128,20 @@ class HttpServer:
         self.app.router.add_get("/", self.handle_root)
         self.app.router.add_get("/ws", self.handle_ws)
         self.app.router.add_get("/ws/", self.handle_ws)
+        self.app.router.add_post("/api/session", self.handle_login)
+        self.app.router.add_get("/api/assistants", self.handle_list_assistants)
+        self.app.router.add_post("/api/assistants", self.handle_create_assistant)
+        self.app.router.add_patch("/api/assistants/{assistant_id}", self.handle_update_assistant)
+        self.app.router.add_delete("/api/assistants/{assistant_id}", self.handle_delete_assistant)
+        self.app.router.add_get("/api/devices", self.handle_list_devices)
+        self.app.router.add_get("/api/devices/pending", self.handle_list_pending_devices)
+        self.app.router.add_post("/api/devices/pair", self.handle_pair_device)
+        self.app.router.add_patch("/api/devices/{device_id}/{client_id}", self.handle_update_device)
+        self.app.router.add_post("/api/devices/{device_id}/{client_id}/revoke", self.handle_revoke_device)
+        self.app.router.add_get("/api/runtime-config", self.handle_get_runtime_config)
+        self.app.router.add_patch("/api/runtime-config", self.handle_update_runtime_config)
+        self.app.router.add_post("/ota/activate", self.handle_activate)
+        self.app.router.add_post("/api/ota/activate", self.handle_activate)
         self.app.router.add_post("/ota/", self.handle_ota)
         self.app.router.add_get("/ota/", self.handle_ota)
         self.app.router.add_post("/api/ota/", self.handle_ota)
@@ -130,37 +175,58 @@ class HttpServer:
                 )
         return web.Response(text="VeeTee Voice Assistant Backend is active.", content_type="text/plain")
 
+    async def handle_login(self, request):
+        access = self.websocket_access
+        if not access.origin_allowed(request.headers):
+            return web.Response(status=403)
+        authorization = str(request.headers.get("Authorization", "") or "")
+        supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not access.manager_token_valid(supplied):
+            return web.Response(status=401)
+        response = web.json_response({"ok": True})
+        response.set_cookie("veetee_session", access.manager_cookie(), max_age=3600,
+                            httponly=True, samesite="Strict", secure=request.secure)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(heartbeat=30.0)
+        access = self.websocket_access
+        if not access.origin_allowed(request.headers):
+            return web.Response(status=403)
+        auth = access.authenticate(request.headers)
+        if not auth:
+            return web.Response(status=401)
+        if access.active >= self.config.server.ws_max_sessions:
+            return web.Response(status=503)
+        ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=65536)
         await ws.prepare(request)
         
         adapter = AiohttpWsAdapter(ws, request)
-        session = ClientSession(
-            websocket=adapter,
-            app_config=self.config,
-            tts_engine=self.tts_engine,
-            llm_engine=self.llm_engine,
-            response_audio_cache=self.response_audio_cache,
-            turn_trace_store=self.recent_turn_store,
-        )
-        await session.initialize()
-        self.active_sessions[session.session_id] = session
-        
+        assistant = auth.get("assistant") if isinstance(auth, dict) else None
+        auth_device = auth.get("device") if isinstance(auth, dict) else None
+        owner_id = self.config.memory.trusted_owner_id
+        if isinstance(auth_device, dict) and str(auth_device.get("owner_id") or "").strip():
+            owner_id = str(auth_device["owner_id"]).strip()
+        session_tts = build_assistant_tts_view(self.tts_engine, assistant)
+        session_llm = build_assistant_llm_view(self.llm_engine, assistant, self.config)
+        def factory():
+            return ClientSession(
+                websocket=adapter,
+                app_config=self.config,
+                tts_engine=session_tts,
+                llm_engine=session_llm,
+                response_audio_cache=self.response_audio_cache if assistant is None else None,
+                turn_trace_store=self.recent_turn_store,
+                authenticated_owner_id=owner_id,
+            )
         try:
-            async for message in adapter:
-                await session.handle_message(message)
+            await serve_session(adapter, access, self.config, self.active_sessions, factory)
         except Exception as e:
             logger.error(f"Error in HTTP WebSocket session: {e}")
-        finally:
-            await session.close()
-            self.active_sessions.pop(session.session_id, None)
             
         return ws
 
-    async def handle_ota(self, request: web.Request) -> web.Response:
-        """
-        Returns WebSocket server endpoint and time synchronization for ESP32 firmware.
-        """
+    def _ota_ws_url(self, request: web.Request) -> str:
         host_header = request.headers.get("Host", "")
         proto_header = request.headers.get("X-Forwarded-Proto", "")
         forwarded_proto = proto_header.split(",", 1)[0].strip().lower()
@@ -171,30 +237,115 @@ class HttpServer:
         else:
             host_name = host_for_match.split(":", 1)[0]
         host_name = host_name.rstrip(".")
-        
-        # If accessing via Tailscale Funnel / Public domain
         is_tailscale_funnel = host_name == "ts.net" or host_name.endswith(".ts.net")
         is_https = forwarded_proto == "https" or request.scheme == "https"
         if is_tailscale_funnel or is_https:
-            ws_url = f"wss://{host_header}/ws"
-        else:
-            host = self.local_ip
-            ws_port = self.config.server.ws_port
-            ws_url = f"ws://{host}:{ws_port}/"
-        
+            return f"wss://{host_header}/ws"
+        return f"ws://{self.local_ip}:{self.config.server.ws_port}/"
+
+    def _device_headers(self, request: web.Request) -> tuple[str, str]:
+        device_id = str(request.headers.get("Device-Id", "") or "").strip()
+        client_id = str(request.headers.get("Client-Id", "") or "").strip()
+        # Upstream treats Client-Id as optional and falls back to Device-Id.
+        return device_id, client_id or device_id
+
+    async def handle_ota(self, request: web.Request) -> web.Response:
+        """Stock Xiaozhi OTA discovery + six-digit activation pairing."""
+        device_id, client_id = self._device_headers(request)
         response_data = {
-            "websocket": {
-                "url": ws_url,
-                "version": 1
-            },
             "server_time": {
                 "timestamp": int(time.time() * 1000),
-                "timezone_offset": 420
+                "timezone_offset": 420,
             }
         }
-        return web.json_response(response_data)
+        if not self.management_store or not device_id or not client_id:
+            return web.json_response(response_data, status=400)
+
+        paired = self.management_store.get_device(device_id, client_id)
+        if paired and not paired.get("revoked"):
+            credential = self.management_store.claim_approved_credential(
+                device_id,
+                client_id,
+                source_key=request.remote or "",
+            )
+            if credential:
+                response_data["websocket"] = {
+                    "url": self._ota_ws_url(request),
+                    "version": 1,
+                    "token": credential,
+                }
+            # Established stock firmware persists websocket settings locally.
+            # Routine OTA checks therefore never re-disclose the bearer token.
+            self.management_store.touch_device(device_id, client_id)
+            return web.json_response(response_data, headers={"Cache-Control": "no-store"})
+
+        metadata = {}
+        try:
+            if request.can_read_body:
+                body = await request.json()
+                if isinstance(body, dict):
+                    metadata = {
+                        "board": body.get("board") or body.get("chip_model") or "",
+                        "app_version": body.get("application", {}).get("version", "")
+                            if isinstance(body.get("application"), dict) else body.get("version", ""),
+                    }
+        except Exception:
+            pass
+        try:
+            pending = self.management_store.ensure_pending(
+                device_id,
+                client_id,
+                metadata,
+                source_key=request.remote or "",
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except RuntimeError as exc:
+            status = 429 if "rate limit" in str(exc) else 503
+            return web.json_response(
+                {"error": str(exc)},
+                status=status,
+                headers={"Cache-Control": "no-store"},
+            )
+        activation_version = str(request.headers.get("Activation-Version", "1") or "1").strip()
+        response_data["activation"] = {
+            "code": pending["code"],
+            "message": "Nhập mã 6 số này trong VeeTee Manager để ghép thiết bị.",
+            "timeout_ms": max(1000, int((pending["expires_at"] - time.time()) * 1000)),
+        }
+        # Version 1 firmware cannot prove a challenge (its activation body is
+        # literally {}). Only advertise challenge mode to newer contracts.
+        if activation_version != "1":
+            response_data["activation"]["challenge"] = pending["challenge"]
+        return web.json_response(response_data, headers={"Cache-Control": "no-store"})
+
+    async def handle_activate(self, request: web.Request) -> web.Response:
+        """Firmware polls this endpoint until the manager approves its code."""
+        if not self.management_store:
+            return web.json_response({"error": "pairing unavailable"}, status=503)
+        device_id, client_id = self._device_headers(request)
+        if not device_id or not client_id:
+            return web.json_response({"error": "device identity required"}, status=400)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        challenge = str(payload.get("challenge", "") or "") if isinstance(payload, dict) else ""
+        pending = self.management_store.pending_for_device(device_id, client_id)
+        if not pending:
+            return web.json_response({"status": "pending"}, status=202,
+                                     headers={"Cache-Control": "no-store"})
+        activation_version = str(request.headers.get("Activation-Version", "1") or "1").strip()
+        if activation_version != "1" and challenge != str(pending.get("challenge") or ""):
+            return web.json_response({"error": "activation challenge invalid"}, status=400)
+        if not self.management_store.activation_approved(device_id, client_id, challenge):
+            return web.json_response({"status": "pending"}, status=202,
+                                     headers={"Cache-Control": "no-store"})
+        return web.json_response({"status": "activated"}, headers={"Cache-Control": "no-store"})
 
     def _management_access_allowed(self, request: web.Request) -> bool:
+        if self.websocket_access._manager_cookie_valid(request.headers):
+            return True
         token = self.config.management.token.strip()
         if not token:
             return False
@@ -210,6 +361,206 @@ class HttpServer:
             status=401,
             headers={"Cache-Control": "no-store"},
         )
+
+    async def _json_body(self, request: web.Request) -> dict:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise ValueError("Invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        return payload
+
+    async def handle_list_assistants(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        rows = self.management_store.list_assistants() if self.management_store else []
+        devices = self.management_store.list_devices() if self.management_store else []
+        counts = {}
+        for device in devices:
+            if device.get("revoked"):
+                continue
+            aid = str(device.get("assistant_id") or "")
+            counts[aid] = counts.get(aid, 0) + 1
+        for row in rows:
+            row["device_count"] = counts.get(str(row.get("id")), 0)
+            if not row.get("base_prompt"):
+                row["base_prompt"] = self.config.llm.base_prompt
+            if not row.get("voice"):
+                row["voice"] = self._runtime_tts_voice()
+            if not row.get("model"):
+                row["model"] = self._runtime_llm_model()
+        return web.json_response({"assistants": rows}, headers={"Cache-Control": "no-store"})
+
+    async def handle_create_assistant(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if not self.management_store:
+            return web.json_response({"error": "management store unavailable"}, status=503)
+        try:
+            payload = await self._json_body(request)
+            from config.settings import validate_base_prompt_budget
+            base_prompt = str(payload.get("base_prompt") or "").strip()
+            if base_prompt:
+                validate_base_prompt_budget(base_prompt, self.config)
+            model = str(payload.get("model") or "").strip()
+            if model and hasattr(self.llm_engine, "list_models") and model not in self.llm_engine.list_models():
+                raise ValueError("model is not allowed")
+            voice = str(payload.get("voice") or "").strip()
+            if voice and hasattr(self.tts_engine, "available_voices"):
+                names = {name for _, name in self.tts_engine.available_voices()}
+                if names and voice not in names:
+                    raise ValueError("voice is not available")
+            row = self.management_store.create_assistant(
+                name=str(payload.get("name") or ""),
+                base_prompt=base_prompt,
+                voice=voice,
+                model=model,
+            )
+            return web.json_response({"assistant": row}, status=201)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def handle_update_assistant(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        if not self.management_store:
+            return web.json_response({"error": "management store unavailable"}, status=503)
+        try:
+            payload = await self._json_body(request)
+            if "base_prompt" in payload and str(payload.get("base_prompt") or "").strip():
+                from config.settings import validate_base_prompt_budget
+                validate_base_prompt_budget(str(payload["base_prompt"]), self.config)
+            if "model" in payload and str(payload.get("model") or "").strip() and hasattr(self.llm_engine, "list_models"):
+                if str(payload["model"]).strip() not in self.llm_engine.list_models():
+                    raise ValueError("model is not allowed")
+            if "voice" in payload and str(payload.get("voice") or "").strip() and hasattr(self.tts_engine, "available_voices"):
+                names = {name for _, name in self.tts_engine.available_voices()}
+                if names and str(payload["voice"]).strip() not in names:
+                    raise ValueError("voice is not available")
+            row = self.management_store.update_assistant(request.match_info["assistant_id"], payload)
+            return web.json_response({"assistant": row})
+        except KeyError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def handle_delete_assistant(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        try:
+            self.management_store.delete_assistant(request.match_info["assistant_id"])
+            return web.json_response({"ok": True})
+        except KeyError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+
+    async def handle_list_devices(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        rows = self.management_store.list_devices() if self.management_store else []
+        active_ids = {
+            (str(getattr(s, "device_id", "")), str(getattr(s, "client_id", "")))
+            for s in self.active_sessions.values()
+        }
+        for row in rows:
+            row["online"] = (str(row.get("device_id", "")), str(row.get("client_id", ""))) in active_ids
+        return web.json_response({"devices": rows}, headers={"Cache-Control": "no-store"})
+
+    async def handle_list_pending_devices(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        rows = self.management_store.list_pending() if self.management_store else []
+        return web.json_response({"pending": rows}, headers={"Cache-Control": "no-store"})
+
+    async def handle_pair_device(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        try:
+            payload = await self._json_body(request)
+            row = self.management_store.pair_code(
+                str(payload.get("code") or ""),
+                str(payload.get("assistant_id") or ""),
+                name=str(payload.get("name") or ""),
+                owner_id=str(payload.get("owner_id") or self.config.memory.trusted_owner_id or ""),
+            )
+            return web.json_response({"device": row})
+        except KeyError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def handle_update_device(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        try:
+            payload = await self._json_body(request)
+            row = self.management_store.update_device(
+                request.match_info["device_id"], request.match_info["client_id"],
+                name=payload.get("name") if "name" in payload else None,
+                assistant_id=payload.get("assistant_id") if "assistant_id" in payload else None,
+                owner_id=payload.get("owner_id") if "owner_id" in payload else None,
+                revoked=payload.get("revoked") if "revoked" in payload else None,
+            )
+            return web.json_response({"device": row})
+        except KeyError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def handle_revoke_device(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        try:
+            row = self.management_store.update_device(
+                request.match_info["device_id"], request.match_info["client_id"], revoked=True
+            )
+            for session in list(self.active_sessions.values()):
+                if (str(getattr(session, "device_id", "")) == request.match_info["device_id"]
+                        and str(getattr(session, "client_id", "")) == request.match_info["client_id"]):
+                    await session.close()
+            return web.json_response({"device": row})
+        except KeyError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+
+    async def handle_get_runtime_config(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        values = self.management_store.runtime_public() if self.management_store else {}
+        return web.json_response({
+            "values": values,
+            "restart_required": False,
+            "note": "Secret values are masked. Provider credential/pool changes require restart to rebuild clients safely.",
+        }, headers={"Cache-Control": "no-store"})
+
+    async def handle_update_runtime_config(self, request: web.Request) -> web.Response:
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+        try:
+            payload = await self._json_body(request)
+            changes = payload.get("values", payload)
+            values = self.management_store.update_runtime(changes)
+            restart_required = False
+            for key, value in changes.items():
+                key = str(key)
+                if key.startswith(("GROQ_API_KEY_", "DEEPGRAM_API_KEY", "HF_TOKEN")):
+                    if value is None or value == "":
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = str(value)
+                    restart_required = True
+                elif key in {"llm.model", "tts.voice"}:
+                    # Global defaults can be changed hot; Assistant-specific values remain isolated.
+                    if key == "llm.model" and value and hasattr(self.llm_engine, "set_model"):
+                        self.llm_engine.set_model(str(value), persist=False)
+                    if key == "tts.voice" and value and hasattr(self.tts_engine, "set_voice"):
+                        self.tts_engine.set_voice(str(value), persist=False)
+                else:
+                    restart_required = True
+            return web.json_response({"values": values, "restart_required": restart_required})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
     def _admit_test_voice(self) -> bool:
         now = time.monotonic()
@@ -490,7 +841,7 @@ class HttpServer:
     async def handle_health(self, request: web.Request) -> web.Response:
         readiness = await self._readiness_snapshot()
         return web.json_response({
-            "status": "healthy",
+            "status": "healthy" if readiness["status"] == "ready" else "degraded",
             "liveness": "alive",
             "readiness": readiness["status"],
             "degraded_reasons": readiness["degraded_reasons"],

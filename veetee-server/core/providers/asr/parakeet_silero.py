@@ -91,10 +91,23 @@ class _ParakeetRuntime:
         cached_checkpoint = _ParakeetRuntime._find_cached_checkpoint(model_name)
         if cached_checkpoint is not None:
             logger.info("Restoring cached Parakeet checkpoint: %s", cached_checkpoint)
-            model = nemo_asr.models.ASRModel.restore_from(
-                str(cached_checkpoint),
-                map_location=torch.device("cpu"),
-            )
+            try:
+                model = nemo_asr.models.ASRModel.restore_from(
+                    str(cached_checkpoint),
+                    map_location=torch.device("cpu"),
+                )
+            except (TypeError, RuntimeError, ValueError) as exc:
+                # NeMo releases can stop resolving the concrete model class
+                # from older cached .nemo metadata. Fall back to the registry
+                # loader instead of making a stale cache brick the server.
+                logger.warning(
+                    "Cached Parakeet restore failed (%s); falling back to from_pretrained",
+                    type(exc).__name__,
+                )
+                model = nemo_asr.models.ASRModel.from_pretrained(
+                    model_name,
+                    map_location=torch.device("cpu"),
+                )
         else:
             model = nemo_asr.models.ASRModel.from_pretrained(
                 model_name,
@@ -759,9 +772,9 @@ class ParakeetSileroASR(BaseASR):
             old_json.unlink(missing_ok=True)
 
         logger.info(
-            "Saved ASR diagnostic capture: %s transcript=%r",
+            "Saved ASR diagnostic capture: %s transcript_chars=%d",
             wav_path,
-            text,
+            len(text or ""),
         )
 
     def invalidate_capture(self, capture_generation: int):

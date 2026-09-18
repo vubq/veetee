@@ -1,8 +1,8 @@
 # Cài đặt và vận hành VeeTee Server
 
-Cập nhật: **2026-09-09**
+Cập nhật: **2026-09-18**
 
-VeeTee chạy trực tiếp trên host Linux/WSL, không cần Docker. ASR/TTS mặc định chạy local; LLM đi qua OmniRoute và route phía sau có thể dùng provider từ xa tùy cấu hình.
+VeeTee chạy trực tiếp trên host Linux/WSL, không cần Docker. ASR/TTS mặc định chạy local; LLM mặc định gọi Groq API trực tiếp qua quota-aware key pool. Nếu LLM credential chưa sẵn sàng, management/OTA vẫn khởi động ở trạng thái `degraded` để operator sửa cấu hình.
 
 ## 1. Prerequisites
 
@@ -41,7 +41,7 @@ Một số default đáng chú ý trong source/example hiện tại:
 | `tts.sample_rate` | `24000` |
 | `tools.max_calls_per_turn` | `3` (cho phép `1..8`) |
 | `tools.schema_limit` | `16` (max `64`) |
-| `tools.max_llm_rounds_per_turn` | `2` (cho phép `1..4`) |
+| `tools.max_llm_rounds_per_turn` | `3` (cho phép `1..4`) |
 | `llm.base_prompt_max_bytes` / `base_prompt_max_tokens` | `32768` / `8000` est. |
 | `tts.first_chunk_timeout_ms` / `stall_timeout_ms` | `4000` / `2500` |
 | `conversation.enabled` / `idle_timeout_seconds` | `false` / `120` (local test hay bật `true`; hết timeout không tương tác thì chào rồi đóng phiên) |
@@ -108,7 +108,7 @@ Không sao chép nội dung saved persona vào tài liệu hoặc benchmark arti
 export VEETEE_MANAGEMENT_TOKEN='<secret>'
 ```
 
-Có thể dùng `management.token` trong local config, nhưng không commit secret. Client management gửi một trong hai dạng:
+`start.sh` tự load file ignored `.env` nếu tồn tại. Production nên đặt `VEETEE_MANAGEMENT_TOKEN` và `GROQ_API_KEY_*` trong `.env` mode `0600` hoặc secure service environment, không ghi secret vào `config.yaml`. Client management gửi một trong hai dạng:
 
 ```text
 X-Veetee-Management-Token: <secret>
@@ -134,7 +134,7 @@ Giá trị sai trả `400`, không đổi gì. Đổi giọng làm mới clip fa
 ./start.sh
 ```
 
-`start.sh` dùng virtualenv ở `../../venv` tương đối với thư mục server và chạy `server.py` với `PYTHONPATH` phù hợp.
+`start.sh` dùng virtualenv ở `../../venv`, tự load `.env` local nếu có và chạy `server.py` với `PYTHONPATH` phù hợp.
 
 ### Chạy Python trực tiếp
 
@@ -165,14 +165,7 @@ Dashboard: http://<server>:8003/
 
 Chỉ chọn **một** process owner cho cùng port/GPU.
 
-Nếu môi trường đã có user service:
-
-```bash
-systemctl --user status veetee-server-bg.service
-systemctl --user restart veetee-server-bg.service
-```
-
-Nếu tự tạo systemd service mới, dùng placeholder theo máy của bạn thay vì copy user/path cá nhân:
+Repo có mẫu service đã harden tại `deploy/veetee.service`. Trên host hiện tại có thể cài bằng `systemctl`; khi chuyển máy phải sửa user/path cho phù hợp. Mẫu bật `Restart=on-failure`, chạy non-root, tách cache Numba/Torch dưới `/tmp` và hạn chế write path. Nếu tự tạo service mới, dùng placeholder theo máy của bạn:
 
 ```ini
 [Unit]

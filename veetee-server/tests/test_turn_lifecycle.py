@@ -343,6 +343,19 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.state, SessionState.LISTENING)
         self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
 
+    async def test_repeated_identical_text_chat_is_a_new_turn(self):
+        llm = NativeChatLLM()
+        session, _ = self.make_session(llm=llm, tts=TwoFrameTTS())
+
+        payload = json.dumps({"type": "chat", "text": "Hôm nay ngày mấy?"})
+        await session._handle_text_json(payload)
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        await session._handle_text_json(payload)
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(len(_assistant_texts(session)), 2)
+
     async def test_stale_asr_callback_cannot_start_new_turn(self):
         session, websocket = self.make_session()
         session._invalidate_capture()

@@ -1,6 +1,6 @@
 # Việc còn lại và hướng dẫn chi tiết
 
-Cập nhật: **2026-09-10**. Tổng hợp từ các task-plans còn `PARTIAL`.
+Cập nhật: **2026-09-18**. Chỉ giữ các việc vẫn cần evidence runtime/hardware hoặc quyết định vận hành; production-hardening code đã tách khỏi backlog này.
 Mỗi mục ghi: là gì, vì sao, làm từng bước, tiêu chí đạt, ai làm.
 
 ## 1. Corpus human-review 200 (M0.3)
@@ -53,16 +53,21 @@ Hậu quả: không ngắt bằng giọng nói khi robot đang nói.
    barge-in giọng nói thật thì đổi board có AEC reference. Không có đường
    code nào fix được thiếu hụt phần cứng này.
 
-## 5. Durable owner (memory bền + riêng tư)
+## 5. Durable owner (runtime acceptance còn lại)
 
-Durable hiện tắt. Bật = nhớ qua restart, nhưng loa dùng chung nên phải bind
-`trusted_owner_id`, nếu không rò dữ liệu giữa người dùng.
+Source đã có **owner mapping riêng theo paired device**. Khi session xác thực bằng
+device credential, memory ưu tiên `device.owner_id`; `memory.trusted_owner_id`
+chỉ còn fallback cho deployment legacy. Project default vẫn
+`durable_enabled: false` để fail-safe.
 
-1. Bạn quyết owner (tôi không tự đặt).
-2. Set `memory.trusted_owner_id` + `durable_enabled: true` → restart.
-3. Test: phiên 1 nhớ fact → restart → phiên 2 cùng owner hỏi lại phải nhớ;
-   khác/không owner không được đọc; forget → kiểm tra DB hết thật.
-4. Đạt: isolation đúng, forget barrier đúng, restart không mất/không rò.
+Phần còn lại là acceptance trên deployment thật, không phải thiếu lớp mapping:
+
+1. Gán `owner_id` cho từng device cần durable memory trong dashboard/API.
+2. Bật `memory.durable_enabled: true` trên deployment cần dùng.
+3. Test: owner A nhớ fact → restart → A hỏi lại phải nhớ; device owner B và
+   session không owner không được đọc fact A; forget → kiểm DB không còn fact active.
+4. Đạt: isolation/restart/forget barrier đều đúng. Không dùng
+   `Device-Id`/`Client-Id` tự khai báo làm owner.
 
 ## 6. MCP hardware (tool của board)
 

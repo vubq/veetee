@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -124,10 +125,18 @@ async def run_full_speech_test(uri: str, timeout_seconds: float, question_text: 
     print(f"Query: {question_text!r}; {len(opus_frames)} speech frames (~{len(opus_frames) * 0.06:.2f}s)")
 
     trace = E2ETrace()
+    device_id = os.getenv("VEETEE_DEVICE_ID", "00:11:22:33:44:55").strip()
+    client_id = os.getenv("VEETEE_CLIENT_ID", "veetee-e2e-stock-fw-contract").strip()
+    device_token = os.getenv("VEETEE_DEVICE_TOKEN", "").strip()
+    if not device_token:
+        raise E2EBlocked(
+            "VEETEE_DEVICE_TOKEN is required; pair this Device-Id/Client-Id through OTA first"
+        )
     headers = {
-        "Device-Id": "00:11:22:33:44:55",
-        "Client-Id": "veetee-e2e-stock-fw-contract",
+        "Device-Id": device_id,
+        "Client-Id": client_id,
         "Protocol-Version": "1",
+        "Authorization": f"Bearer {device_token}",
     }
 
     print(f"\n=== STEP 2: Connecting to {uri} ===")

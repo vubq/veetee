@@ -59,7 +59,7 @@ def _validate_value(schema: Any, value: Any, *, path: str, depth: int) -> None:
                     raise ToolValidationError(
                         f"{path or 'arguments'} matches no {key} branch: {errors[0] if errors else 'no branches'}"
                     )
-                return
+                continue
             matches = 0
             last_error = ""
             for option in options:
@@ -72,14 +72,13 @@ def _validate_value(schema: Any, value: Any, *, path: str, depth: int) -> None:
                 raise ToolValidationError(
                     f"{path or 'arguments'} must match exactly one {key} branch ({last_error or 'ambiguous'})"
                 )
-            return
+            continue
     all_of = schema.get("allOf")
     if all_of is not None:
         if not isinstance(all_of, list) or not all_of:
             raise ToolValidationError(f"{path or 'arguments'} has invalid allOf")
         for option in all_of:
             _validate_value(option, value, path=path, depth=depth + 1)
-        return
     not_schema = schema.get("not")
     if not_schema is not None:
         try:

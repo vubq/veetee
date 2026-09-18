@@ -104,6 +104,7 @@ class ClientSession:
         llm_engine: BaseLLM,
         response_audio_cache: Optional[ResponseAudioCache] = None,
         turn_trace_store: Optional[TurnTraceStore] = None,
+        authenticated_owner_id: Optional[str] = None,
     ):
         self.websocket = websocket
         self.config = app_config
@@ -136,7 +137,7 @@ class ClientSession:
         self._memory_owner_id: Optional[str] = None
         retriever = None
         if self.config.memory.enabled and self.config.memory.durable_enabled:
-            owner_id = self.config.memory.trusted_owner_id.strip()
+            owner_id = (authenticated_owner_id or "").strip()
             if owner_id:
                 self._memory_owner_id = owner_id
                 self._memory_store = MemoryStore(self.config.memory.database_path)
@@ -434,7 +435,7 @@ class ClientSession:
                     )
             elif state == "detect":
                 user_text = data.get("text", "").strip()
-                logger.info(f"Listen detect received: '{user_text}'")
+                logger.info("Listen detect received chars=%d", len(user_text))
                 if user_text:
                     await self._handle_wake_detect(user_text)
                 else:
@@ -451,6 +452,12 @@ class ClientSession:
                 self._cancel_pending_wake()
                 self._closing_reason = None
                 self._mark_conversation_activity(f"{msg_type}_input")
+                # Every explicit text/chat message is a new user turn, even if
+                # it repeats the previous sentence verbatim. processed_transcript
+                # only de-duplicates callbacks within one capture; carrying it
+                # across browser chat messages can otherwise drop a repeated
+                # prompt without any response.
+                self.processed_transcript = ""
                 await self._trigger_ai_turn(
                     user_text,
                     check_end_intent=True,
@@ -685,7 +692,7 @@ class ClientSession:
             return False
         cleaned = (text or "").strip()
         if not _is_valid_idle_farewell(cleaned, previous_reply):
-            logger.info("idle farewell retry session=%s first=%r", self.session_id, cleaned)
+            logger.info("idle farewell retry session=%s first_chars=%d", self.session_id, len(cleaned))
             retry_messages = [
                 {
                     "role": "system",
@@ -1251,20 +1258,22 @@ class ClientSession:
         # Treat those exactly like an empty ASR result so they never start an
         # LLM/TTS turn.
         if transcript and not any(char.isalnum() for char in transcript):
-            logger.info("Discarding non-lexical ASR transcript: %r", transcript)
+            logger.info("Discarding non-lexical ASR transcript chars=%d", len(transcript))
             transcript = ""
 
         if self._discard_asr_until_speech_final:
             logger.info(
-                f"Discarding ASR during TTS: '{transcript}' "
-                f"(final={is_final}, speech_final={speech_final})"
+                "Discarding ASR during TTS chars=%d final=%s speech_final=%s",
+                len(transcript),
+                is_final,
+                speech_final,
             )
             if speech_final:
                 self._discard_asr_until_speech_final = False
                 self.final_transcript_parts.clear()
                 self._speech_active = False
             return
-        logger.info(f"ASR transcript received: '{transcript}' (final={is_final}, speech_final={speech_final})")
+        logger.info("ASR transcript received chars=%d final=%s speech_final=%s", len(transcript), is_final, speech_final)
         self.last_transcript = transcript
 
         if is_final and transcript:
@@ -1377,7 +1386,7 @@ class ClientSession:
         self._mark_conversation_activity("ai_turn")
 
         self.processed_transcript = transcript
-        logger.info("Triggering AI Turn for prompt: %r", transcript)
+        logger.info("Triggering AI turn prompt_chars=%d", len(transcript))
 
         self._abort_turn()
 
@@ -1889,9 +1898,9 @@ class ClientSession:
                 if isinstance(event, SpeechSegmentEvent):
                     if not reply_segments:
                         logger.info(
-                            "Post-ASR first LLM clause ready in %.3fs: %r",
+                            "Post-ASR first LLM clause ready in %.3fs chars=%d",
                             time.perf_counter() - t_start,
-                            event.text,
+                            len(event.text or ""),
                         )
                         mark_current("llm_first_speech_committed")
                     speech_committed = True
@@ -2734,9 +2743,9 @@ class ClientSession:
             )
 
             logger.info(
-                "Completed post-ASR response pipeline in %.3fs: %r",
+                "Completed post-ASR response pipeline in %.3fs response_chars=%d",
                 time.perf_counter() - t_start,
-                complete_text,
+                len(complete_text),
             )
             logger.info(
                 "Audio pacing: sent=%.0fms max_lead=%.0fms wait=%.0fms tail=%.0fms",

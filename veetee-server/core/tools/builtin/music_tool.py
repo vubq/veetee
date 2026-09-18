@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import sys
 from typing import Any, Dict, List, Optional
@@ -90,13 +91,12 @@ async def ytdlp_search(
 async def ytdlp_resolve_url(video_id: str, *, timeout_s: float = 20.0) -> str:
     """Resolve a YouTube video id to a direct audio stream URL."""
     video_id = (video_id or "").strip()
-    if not video_id:
-        raise ValueError("video_id must not be empty")
-    watch_url = video_id if video_id.startswith("http") else \
-        f"https://www.youtube.com/watch?v={video_id}"
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise ValueError("video_id must be an 11-character YouTube ID")
+    watch_url = f"https://www.youtube.com/watch?v={video_id}"
     cmd = _ytdlp_base() + [
         "-g", "-f", "bestaudio[ext=m4a]/bestaudio/best",
-        "--no-warnings", "--socket-timeout", "10", watch_url,
+        "--ignore-config", "--no-playlist", "--no-warnings", "--socket-timeout", "10", "--", watch_url,
     ]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -164,7 +164,8 @@ class MusicToolProvider:
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "video_id": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "video_id": {"type": "string", "minLength": 11, "maxLength": 11,
+                                     "pattern": "^[A-Za-z0-9_-]{11}$"},
                     },
                     "required": ["video_id"],
                     "additionalProperties": False,

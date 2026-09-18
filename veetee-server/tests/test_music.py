@@ -451,7 +451,7 @@ class MusicSubprocessLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with patch("core.tools.builtin.music_tool.asyncio.create_subprocess_exec",
                    side_effect=fake_spawn):
             with self.assertRaisesRegex(TimeoutError, "music resolve timed out"):
-                await ytdlp_resolve_url("abc123", timeout_s=0.01)
+                await ytdlp_resolve_url("abcdefghijk", timeout_s=0.01)
         self.assertTrue(proc.kill_called)
         self.assertEqual(proc.communicate_calls, 2)
 

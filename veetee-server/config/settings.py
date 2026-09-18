@@ -9,6 +9,9 @@ DEFAULT_EXIT_COMMANDS = ["tạm biệt", "kết thúc trò chuyện", "thoát tr
 
 @dataclass
 class ServerConfig:
+    ws_allowed_origins: list[str] = field(default_factory=list)
+    ws_max_sessions: int = 8
+    ws_hello_timeout_seconds: int = 5
     timezone: str = "Asia/Bangkok"
     host: str = "0.0.0.0"
     ws_port: int = 8000
@@ -315,6 +318,14 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
 
 
 def _validate_app_config(config: AppConfig) -> None:
+    for name in ("ws_max_sessions", "ws_hello_timeout_seconds"):
+        if type(getattr(config.server, name)) is not int or getattr(config.server, name) < 1:
+            raise ValueError(f"server.{name} must be a positive integer")
+    if not isinstance(config.server.ws_allowed_origins, list) or any(
+        not isinstance(value, str) or not value.startswith(("http://", "https://"))
+        for value in config.server.ws_allowed_origins
+    ):
+        raise ValueError("server.ws_allowed_origins must be a list of HTTP origins")
     from zoneinfo import ZoneInfo
     ZoneInfo(config.server.timezone)
     for name in ("utterance_queue_max", "max_utterance_ms"):

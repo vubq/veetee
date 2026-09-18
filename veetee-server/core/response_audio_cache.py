@@ -97,7 +97,7 @@ class ResponseAudioCache:
             cached = self._entries.get(key)
             if cached is not None:
                 self._entries.move_to_end(key)
-                logger.info("fixed_audio_cache hit text=%r frames=%d", key.text, len(cached))
+                logger.info("fixed_audio_cache hit text_chars=%d frames=%d", len(key.text), len(cached))
                 return AudioCacheResult(cached, True, 0.0)
 
             task = self._inflight.get(key)
@@ -110,9 +110,9 @@ class ResponseAudioCache:
                 task.add_done_callback(self._consume_task_result)
                 self._inflight[key] = task
                 self._inflight_priority[key] = priority
-                logger.info("fixed_audio_cache miss/fill text=%r", key.text)
+                logger.info("fixed_audio_cache miss/fill text_chars=%d", len(key.text))
             else:
-                logger.info("fixed_audio_cache wait_existing_fill text=%r", key.text)
+                logger.info("fixed_audio_cache wait_existing_fill text_chars=%d", len(key.text))
 
         try:
             frames, synthesis_ms = await asyncio.wait_for(
@@ -121,7 +121,7 @@ class ResponseAudioCache:
             )
             return AudioCacheResult(frames, False, synthesis_ms)
         except asyncio.TimeoutError:
-            logger.warning("fixed_audio_cache waiter timeout text=%r", key.text)
+            logger.warning("fixed_audio_cache waiter timeout text_chars=%d", len(key.text))
             raise
 
     @staticmethod
@@ -302,8 +302,8 @@ class ResponseAudioCache:
                 if not self._closed:
                     self._publish(key, immutable_frames, total_bytes)
             logger.info(
-                "fixed_audio_cache fill_complete text=%r frames=%d bytes=%d cold_ms=%.0f",
-                key.text,
+                "fixed_audio_cache fill_complete text_chars=%d frames=%d bytes=%d cold_ms=%.0f",
+                len(key.text),
                 len(immutable_frames),
                 total_bytes,
                 synthesis_ms,
@@ -313,7 +313,7 @@ class ResponseAudioCache:
             cancel_event.set()
             raise
         except Exception:
-            logger.exception("fixed_audio_cache fill_error text=%r", key.text)
+            logger.exception("fixed_audio_cache fill_error text_chars=%d", len(key.text))
             raise
         finally:
             async with self._lock:
@@ -352,7 +352,7 @@ class ResponseAudioCache:
             try:
                 await self.get_or_fill(text, timeout_seconds, priority="prewarm")
             except Exception as exc:
-                logger.warning("fixed_audio_cache prewarm_failed text=%r error=%s", text, exc)
+                logger.warning("fixed_audio_cache prewarm_failed text_chars=%d error=%s", len(text), exc)
 
     async def shutdown(self) -> None:
         self._closed = True

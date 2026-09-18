@@ -1,0 +1,35 @@
+[Unit]
+Description=VeeTee Realtime Voice Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quangvu
+Group=quangvu
+WorkingDirectory=/home/quangvu/Project/veetee/veetee-server
+EnvironmentFile=-/home/quangvu/Project/veetee/veetee-server/.env
+Environment=PYTHONPATH=/home/quangvu/Project/veetee/veetee-server
+Environment=NUMBA_CACHE_DIR=/tmp/veetee-numba
+Environment=TORCHINDUCTOR_CACHE_DIR=/tmp/veetee-torchinductor
+ExecStart=/home/quangvu/Project/venv/bin/python /home/quangvu/Project/veetee/veetee-server/server.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/home/quangvu/Project/veetee/veetee-server/data
+ReadWritePaths=/home/quangvu/Project/veetee/veetee-server/benchmark-artifacts
+ReadWritePaths=/home/quangvu/.cache/huggingface
+ReadWritePaths=/home/quangvu/.cache/torch
+
+[Install]
+WantedBy=multi-user.target
