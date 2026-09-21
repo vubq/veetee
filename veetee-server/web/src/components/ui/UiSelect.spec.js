@@ -29,6 +29,32 @@ describe('UiSelect', () => {
     expect(wrapper.find('.ui-select__popover').exists()).toBe(false)
   })
 
+  it('opens upward when there is not enough viewport space below', async () => {
+    const wrapper = mount(UiSelect, {
+      props: {
+        modelValue: '',
+        options: [{ value: 'a', label: 'Alpha' }],
+      },
+    })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    wrapper.element.getBoundingClientRect = () => ({
+      top: 700,
+      bottom: 740,
+      left: 0,
+      right: 320,
+      width: 320,
+      height: 40,
+      x: 0,
+      y: 700,
+      toJSON: () => ({}),
+    })
+
+    await wrapper.get('.ui-select__trigger').trigger('click')
+    await Promise.resolve()
+
+    expect(wrapper.classes()).toContain('ui-select--dropup')
+  })
+
   it('does not open while disabled', async () => {
     const wrapper = mount(UiSelect, {
       props: {

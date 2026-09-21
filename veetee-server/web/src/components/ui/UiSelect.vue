@@ -14,6 +14,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'change'])
 const attrs = useAttrs()
 const open = ref(false)
+const dropUp = ref(false)
 const query = ref('')
 const root = ref(null)
 const searchInput = ref(null)
@@ -37,10 +38,18 @@ const selected = computed(() => normalized.value.find(option => option.value ===
 async function toggle() {
   if (props.disabled) return
   open.value = !open.value
-  if (open.value && props.searchable) {
+  if (open.value) {
     query.value = ''
     await nextTick()
-    searchInput.value?.focus()
+    const rect = root.value?.getBoundingClientRect()
+    const popover = root.value?.querySelector('.ui-select__popover')
+    if (rect) {
+      const below = window.innerHeight - rect.bottom
+      const above = rect.top
+      const popoverHeight = popover?.getBoundingClientRect().height || 280
+      dropUp.value = below < popoverHeight + 6 && above > below
+    }
+    if (props.searchable) searchInput.value?.focus()
   }
 }
 function choose(option) {
@@ -57,7 +66,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocument))
 </script>
 
 <template>
-  <div ref="root" class="ui-field ui-select" :class="{ 'ui-select--open': open, 'ui-select--disabled': disabled }">
+  <div
+    ref="root"
+    class="ui-field ui-select"
+    :class="{ 'ui-select--open': open, 'ui-select--disabled': disabled, 'ui-select--dropup': dropUp }"
+  >
     <span v-if="label" class="ui-field__label">{{ label }}</span>
     <button v-bind="attrs" type="button" class="ui-select__trigger" :disabled="disabled" @click="toggle">
       <span class="ui-select__value" :class="{ 'ui-select__value--placeholder': !selected }">

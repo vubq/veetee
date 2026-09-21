@@ -3,10 +3,10 @@ import { mount } from '@vue/test-utils'
 import AppTopbar from './AppTopbar.vue'
 
 describe('AppTopbar', () => {
-  it('renders degraded runtime state instead of a healthy badge', () => {
+  it('renders Xiaozhi-style navigation and degraded runtime state', () => {
     const wrapper = mount(AppTopbar, {
       props: {
-        activeView: 'overview',
+        activeView: 'assistants',
         health: {
           status: 'degraded',
           readiness: 'degraded',
@@ -14,7 +14,9 @@ describe('AppTopbar', () => {
         },
       },
     })
+    expect(wrapper.text()).toContain('VeeTee')
+    expect(wrapper.text()).toContain('Assistants')
+    expect(wrapper.text()).toContain('Voice Console')
     expect(wrapper.text()).toContain('degraded')
-    expect(wrapper.text()).toContain('Mission Control')
   })
 })

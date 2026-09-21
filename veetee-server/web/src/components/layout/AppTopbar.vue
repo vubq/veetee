@@ -1,23 +1,31 @@
 <script setup>
 import { computed } from 'vue'
-import { RefreshCw } from '@lucide/vue'
+import {
+  Activity,
+  Bot,
+  Cpu,
+  LayoutDashboard,
+  MessageCircleMore,
+  RefreshCw,
+  SlidersHorizontal,
+} from '@lucide/vue'
 import UiBadge from '../ui/UiBadge.vue'
 import UiButton from '../ui/UiButton.vue'
 
 const props = defineProps({
-  activeView: { type: String, default: 'overview' },
+  activeView: { type: String, default: 'assistants' },
   health: { type: Object, default: null },
   loading: Boolean,
+  counts: { type: Object, default: () => ({}) },
 })
-defineEmits(['refresh'])
+const emit = defineEmits(['refresh', 'navigate'])
 
-const meta = computed(() => ({
-  overview: { section: 'CONTROL', title: 'Mission Control' },
-  console: { section: 'LAB', title: 'Voice Console' },
-  assistants: { section: 'IDENTITY', title: 'Assistants' },
-  devices: { section: 'HARDWARE', title: 'Devices & Pairing' },
-  runtime: { section: 'SYSTEM', title: 'Runtime & Secrets' },
-}[props.activeView] || { section: 'VEETEE', title: 'Workspace' }))
+const navItems = [
+  { id: 'assistants', label: 'Assistants', icon: Bot },
+  { id: 'console', label: 'Voice Console', icon: MessageCircleMore },
+  { id: 'devices', label: 'Devices', icon: Cpu },
+  { id: 'runtime', label: 'Runtime', icon: SlidersHorizontal },
+]
 
 const healthTone = computed(() => {
   if (!props.health) return 'neutral'
@@ -26,28 +34,52 @@ const healthTone = computed(() => {
 const healthLabel = computed(() => {
   if (!props.health) return 'checking'
   const reasons = props.health.degraded_reasons || []
-  if (props.health.readiness === 'degraded' && reasons.includes('llm_not_warm')) {
-    return 'degraded · LLM unavailable'
-  }
+  if (props.health.readiness === 'degraded' && reasons.includes('llm_not_warm')) return 'degraded'
   return props.health.status || props.health.readiness || 'unknown'
 })
 </script>
 
 <template>
-  <header class="workspace-bar">
-    <div class="workspace-bar__heading">
-      <span>{{ meta.section }}</span>
-      <strong>{{ meta.title }}</strong>
-    </div>
+  <header class="xz-header">
+    <div class="xz-header__inner">
+      <button type="button" class="xz-brand" aria-label="VeeTee overview" @click="emit('navigate', 'overview')">
+        <span class="xz-brand__mark"><LayoutDashboard :size="18" /></span>
+        <span class="xz-brand__name">VeeTee</span>
+      </button>
 
-    <div class="workspace-bar__actions">
-      <UiBadge :tone="healthTone" dot>
-        {{ healthLabel }}
-      </UiBadge>
-      <UiButton variant="ghost" size="sm" :loading="loading" @click="$emit('refresh')">
-        <template #icon><RefreshCw :size="14" /></template>
-        Đồng bộ
-      </UiButton>
+      <nav class="xz-nav" aria-label="Main navigation">
+        <button
+          v-for="item in navItems"
+          :key="item.id"
+          type="button"
+          class="xz-nav__item"
+          :class="{ 'xz-nav__item--active': activeView === item.id }"
+          @click="emit('navigate', item.id)"
+        >
+          <component :is="item.icon" :size="16" />
+          <span>{{ item.label }}</span>
+          <small v-if="item.id === 'assistants' && counts.assistants">{{ counts.assistants }}</small>
+          <small v-if="item.id === 'devices' && counts.pending" class="xz-nav__alert">{{ counts.pending }}</small>
+        </button>
+      </nav>
+
+      <div class="xz-header__actions">
+        <UiBadge :tone="healthTone" dot class="xz-health">{{ healthLabel }}</UiBadge>
+        <UiButton
+          variant="ghost"
+          size="sm"
+          icon-only
+          :loading="loading"
+          aria-label="Đồng bộ"
+          title="Đồng bộ"
+          @click="emit('refresh')"
+        >
+          <template #icon><RefreshCw :size="16" /></template>
+        </UiButton>
+        <span class="xz-runtime-dot" :class="{ 'xz-runtime-dot--ready': health?.readiness === 'ready' }" title="Runtime">
+          <Activity :size="15" />
+        </span>
+      </div>
     </div>
   </header>
 </template>

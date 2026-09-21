@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { AlertTriangle, Bot, KeyRound, Save, ShieldAlert } from '@lucide/vue'
-import AppSidebar from './components/layout/AppSidebar.vue'
 import AppTopbar from './components/layout/AppTopbar.vue'
 import UiButton from './components/ui/UiButton.vue'
 import UiInput from './components/ui/UiInput.vue'
@@ -18,7 +17,7 @@ import OverviewView from './views/OverviewView.vue'
 import RuntimeView from './views/RuntimeView.vue'
 import VoiceConsoleView from './views/VoiceConsoleView.vue'
 
-const activeView = ref('overview')
+const activeView = ref('assistants')
 const showAssistantEditor = ref(false)
 const confirmState = reactive({ open: false, kind: '', item: null, title: '', description: '' })
 
@@ -103,18 +102,14 @@ onMounted(async () => {
 
 <template>
   <div class="studio-shell">
-    <AppSidebar
-      v-model="activeView"
-      :diagnostics="diagnostics"
-      :counts="sidebarCounts"
-    />
-
     <section class="studio-main">
       <AppTopbar
         :active-view="activeView"
         :health="health"
         :loading="loading"
+        :counts="sidebarCounts"
         @refresh="refreshAll"
+        @navigate="navigate"
       />
 
       <div v-if="loading" class="studio-progress"><span></span></div>
@@ -182,6 +177,7 @@ onMounted(async () => {
             key="assistants"
             :assistants="assistants"
             @create="openNewAssistant"
+            @add-device="navigate('devices')"
             @edit="openEditAssistant"
             @toggle="toggleAssistant"
             @delete="askDeleteAssistant"
@@ -277,6 +273,6 @@ onMounted(async () => {
       </form>
     </UiModal>
 
-    <UiToast :text="toast.text" :tone="toast.tone" />
+    <UiToast :message="toast.text" :tone="toast.tone" />
   </div>
 </template>

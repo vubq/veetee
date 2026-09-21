@@ -24,25 +24,26 @@ function statusLabel() {
 </script>
 
 <template>
-  <article class="fleet-row" :class="{ 'fleet-row--revoked': device.revoked }">
-    <div class="fleet-row__identity">
-      <div class="fleet-row__avatar"><Cpu :size="17" /></div>
-      <div>
-        <div class="fleet-row__name">
-          <strong>{{ device.name || device.device_id }}</strong>
-          <UiBadge :tone="statusTone()" dot>{{ statusLabel() }}</UiBadge>
+  <article class="device-item" :class="{ 'device-item--revoked': device.revoked }">
+    <div class="device-item__header">
+      <div class="device-item__identity">
+        <span class="device-item__icon"><Cpu :size="18" /></span>
+        <div>
+          <div class="device-item__title">
+            <strong>{{ device.name || device.device_id }}</strong>
+            <UiBadge :tone="statusTone()" dot>{{ statusLabel() }}</UiBadge>
+          </div>
+          <p>{{ device.device_id }} · {{ device.client_id }}</p>
         </div>
-        <span>{{ device.device_id }}</span>
-        <small>{{ device.client_id }}</small>
+      </div>
+
+      <div class="device-item__meta">
+        <span>Last seen</span>
+        <strong>{{ device.last_seen_label || 'Chưa có dữ liệu' }}</strong>
       </div>
     </div>
 
-    <div class="fleet-row__seen">
-      <span>LAST SEEN</span>
-      <strong>{{ device.last_seen_label || 'Chưa có dữ liệu' }}</strong>
-    </div>
-
-    <div class="fleet-row__controls">
+    <div class="device-item__controls">
       <UiInput
         :model-value="device.name"
         label="Device name"
@@ -52,7 +53,7 @@ function statusLabel() {
       />
       <UiSelect
         :model-value="device.assistant_id"
-        label="Assistant binding"
+        label="Assistant"
         :options="options()"
         placeholder="Chọn Assistant"
         :disabled="device.revoked"
@@ -68,12 +69,13 @@ function statusLabel() {
       />
     </div>
 
-    <div class="fleet-row__action">
+    <div class="device-item__footer">
+      <span v-if="device.revoked" class="device-item__revoked"><CircleOff :size="14" /> Credential disabled</span>
+      <span v-else class="device-item__hint">Thay đổi field sẽ được lưu khi rời input/chọn giá trị.</span>
       <UiButton v-if="!device.revoked" variant="danger-ghost" size="sm" @click="emit('revoke', device)">
-        <template #icon><ShieldOff :size="13" /></template>
+        <template #icon><ShieldOff :size="14" /></template>
         Revoke
       </UiButton>
-      <span v-else class="fleet-row__revoked"><CircleOff :size="13" /> Credential disabled</span>
     </div>
   </article>
 </template>

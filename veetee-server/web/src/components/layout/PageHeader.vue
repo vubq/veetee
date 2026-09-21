@@ -7,16 +7,14 @@ defineProps({
 </script>
 
 <template>
-  <header class="page-lead">
-    <div class="page-lead__marker">
-      <span>{{ eyebrow || 'VEETEE' }}</span>
+  <header class="page-header-card">
+    <div class="page-header-card__copy">
+      <span v-if="eyebrow" class="page-header-card__eyebrow">{{ eyebrow }}</span>
+      <h1>{{ title }}</h1>
+      <p v-if="description">{{ description }}</p>
     </div>
-    <div class="page-lead__body">
-      <div class="page-lead__copy">
-        <h1>{{ title }}</h1>
-        <p v-if="description">{{ description }}</p>
-      </div>
-      <div v-if="$slots.actions" class="page-lead__actions"><slot name="actions" /></div>
+    <div v-if="$slots.actions" class="page-header-card__actions">
+      <slot name="actions" />
     </div>
   </header>
 </template>
