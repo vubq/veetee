@@ -37,6 +37,7 @@ class CountingLLM:
     def __init__(self):
         self.calls = []
         self.reply = "Chào bạn, mình đây."
+        self.reply_segments = None
         self.goodbye = "Ừ, chào bạn nhé. Hẹn gặp lại!"
         self.base_prompt = "Bạn là VeeTee."
 
@@ -69,7 +70,12 @@ class CountingLLM:
             lifecycle="end" if should_end else "continue",
             emotion="relaxed" if should_end else "neutral",
         )
-        yield SpeechSegmentEvent(self.goodbye if should_end else self.reply, emotion="neutral")
+        if should_end:
+            segments = [self.goodbye]
+        else:
+            segments = list(self.reply_segments or [self.reply])
+        for segment in segments:
+            yield SpeechSegmentEvent(segment, emotion="neutral")
         yield CompletedEvent(finish_reason="stop")
 
     def get_base_prompt(self):
@@ -88,10 +94,23 @@ class CountingTTS:
         self.frame_duration_ms = 1
         self.denoise = True
         self.temperature = 0.7
+        self.frames_per_sentence = 1
+        self.pause_after_first_seconds = 0.0
+        self.stream_started = {}
+        self.stream_finished = {}
+        self._stream_lock = asyncio.Lock()
 
     async def stream_sentence_to_opus(self, text, cancel_event=None):
         self.calls += 1
-        yield b"opus:" + text.encode("utf-8")
+        loop = asyncio.get_running_loop()
+        async with self._stream_lock:
+            self.stream_started[text] = loop.time()
+            prefix = b"opus:" + text.encode("utf-8")
+            for index in range(self.frames_per_sentence):
+                yield prefix if index == 0 else prefix + f":{index}".encode("ascii")
+                if index == 0 and self.pause_after_first_seconds > 0:
+                    await asyncio.sleep(self.pause_after_first_seconds)
+            self.stream_finished[text] = loop.time()
 
     async def synthesize_wav(self, text):
         self.calls += 1
@@ -423,6 +442,56 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         second = await self.client.post("/api/test-voice", json={"text": "hai"}, headers=headers)
         self.assertEqual(first.status, 200)
         self.assertEqual(second.status, 429)
+
+    async def test_consecutive_speech_segments_prefetch_next_tts_without_delaying_first_audio(self):
+        first = "Đây là câu đầu tiên."
+        second = "Đây là câu thứ hai nối tiếp."
+        self.llm.reply_segments = [first, second, "."]
+        self.tts.frames_per_sentence = 40
+        # Keep the first native stream alive briefly after its first frame so
+        # the test proves first audio is delivered before full synthesis ends.
+        self.tts.pause_after_first_seconds = 0.01
+
+        ws = await self._connect(ProtocolVersion.V1)
+        loop = asyncio.get_running_loop()
+        sentence_start_times = {}
+        first_binary_at = None
+        try:
+            await ws.send_json({"type": "text", "text": "trả lời hai câu"})
+            while True:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                now = loop.time()
+                if message.type.name == "TEXT":
+                    item = json.loads(message.data)
+                    if item.get("type") == "tts" and item.get("state") == "sentence_start":
+                        sentence_start_times[item.get("text")] = now
+                    if item.get("type") == "tts" and item.get("state") == "stop":
+                        break
+                elif message.type.name == "BINARY":
+                    if first_binary_at is None:
+                        first_binary_at = now
+                else:
+                    self.fail(f"unexpected websocket message type: {message.type}")
+
+            self.assertIsNotNone(first_binary_at)
+            self.assertIn(first, self.tts.stream_started)
+            self.assertIn(first, self.tts.stream_finished)
+            self.assertIn(second, self.tts.stream_started)
+            self.assertIn(second, sentence_start_times)
+
+            # TTFA remains streaming: the first packet reaches the client while
+            # the first segment is still being synthesized.
+            self.assertLess(first_binary_at, self.tts.stream_finished[first])
+            # The single-engine second synthesis starts as soon as segment 1
+            # releases the engine, while segment 1 is still being paced. Its
+            # sentence_start remains ordered and is sent only at playback turn.
+            self.assertLess(
+                self.tts.stream_started[second],
+                sentence_start_times[second],
+            )
+        finally:
+            await ws.close()
+            await self._wait_sessions(0)
 
     async def test_diagnostics_retains_bounded_turn_trace_after_disconnect(self):
         self.config.management.token = "integration-secret"

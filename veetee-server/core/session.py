@@ -2390,6 +2390,16 @@ class ClientSession:
         trace_token = activate_trace(trace)
         stream = None
         producer_task: Optional[asyncio.Task] = None
+        speech_runner_task: Optional[asyncio.Task] = None
+        speech_producer_tasks: set[asyncio.Task] = set()
+        # Keep at most the currently playing segment plus one server-local
+        # lookahead. Future audio stays local until its turn reaches playback,
+        # so stock-client barge-in responsiveness is unchanged.
+        speech_slots = asyncio.Semaphore(2)
+        speech_queue: asyncio.Queue = asyncio.Queue()
+        speech_queue_done = object()
+        speech_audio_done = object()
+        speech_segment_count = 0
         completed = False
         close_reason: Optional[str] = None
         current_emotion = "neutral"
@@ -2716,127 +2726,159 @@ class ClientSession:
 
             producer_task = asyncio.create_task(produce_events())
 
-            async def speak_segment(text: str, emotion: Optional[str] = None):
-                nonlocal tts_started, first_binary_sent, playback_lease
-                nonlocal active_segment_text, active_segment_had_audio
-                cleaned = str(text or "").strip()
-                if not cleaned:
-                    return
+            async def ensure_speech_started(emotion: Optional[str] = None) -> bool:
+                nonlocal tts_started, playback_lease
+                if tts_started:
+                    return True
                 if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                    return
+                    return False
                 await self._duck_music_for_speech()
+                playback_lease = self._claim_assistant_playback(turn_generation)
+                if not self._owns_assistant_playback(playback_lease, turn_generation):
+                    return False
+                emo = emotion or current_emotion or "neutral"
+                if not await self.send_text(make_llm_message(self.session_id, emo, "😊")):
+                    raise ConnectionError("failed to send llm status")
+                if not await self.send_text(make_tts_message(self.session_id, "start")):
+                    raise ConnectionError("failed to send tts:start")
+                self.state = SessionState.SPEAKING
+                tts_started = True
+                return True
 
-                if not tts_started:
-                    playback_lease = self._claim_assistant_playback(turn_generation)
-                    if not self._owns_assistant_playback(playback_lease, turn_generation):
-                        return
-                    emo = emotion or current_emotion or "neutral"
-                    if not await self.send_text(make_llm_message(self.session_id, emo, "😊")):
-                        raise ConnectionError("failed to send llm status")
-                    if not await self.send_text(make_tts_message(self.session_id, "start")):
-                        raise ConnectionError("failed to send tts:start")
-                    self.state = SessionState.SPEAKING
-                    tts_started = True
-
-                if not await self.send_text(
-                    make_tts_message(self.session_id, "sentence_start", cleaned)
-                ):
-                    raise ConnectionError("failed to send sentence_start")
-
+            async def produce_segment_audio(item: dict) -> None:
+                frames: asyncio.Queue = item["frames"]
+                cleaned = item["text"]
+                live_priority = item["priority"]
                 prefetch_usable = bool(
                     speculative_llm_handle is not None
                     and not speculative_llm_handle.tts_prefetch_consumed
                     and speculative_llm_handle.tts_prefetch_queue is not None
                     and speculative_llm_handle.tts_prefetch_text == cleaned
                 )
-                live_priority = "live_first" if not first_binary_sent else "live"
                 mark_current(
                     "tts_enqueue",
                     chars=len(cleaned),
                     priority="speculative_reuse" if prefetch_usable else live_priority,
                 )
-                first_opus_for_segment = True
-                segment_audio_sent = False
-                active_segment_text = cleaned
-                active_segment_had_audio = False
 
-                async def deliver_opus(source):
-                    nonlocal first_opus_for_segment, segment_audio_sent
-                    nonlocal active_segment_had_audio, first_binary_sent
+                async def buffer_source(source) -> int:
+                    buffered = 0
                     async for opus_frame in source:
-                        if cancel_event.is_set() or not self._owns_assistant_playback(
-                            playback_lease, turn_generation
-                        ):
-                            return
-                        if first_opus_for_segment:
-                            mark_current("tts_first_opus")
-                            first_opus_for_segment = False
-                        if not await pacer.wait_for_send(cancel_event):
-                            return
-                        if not self._owns_assistant_playback(
-                            playback_lease, turn_generation
-                        ):
-                            return
-                        packet = self._pack_tts_audio(opus_frame)
-                        if not await self.send_binary(packet):
-                            raise ConnectionError("failed to send TTS audio")
-                        segment_audio_sent = True
-                        active_segment_had_audio = True
-                        pacer.record_frame_sent()
-                        if pacer.playback_end is not None:
-                            self._playback_guard_until = max(
-                                self._playback_guard_until,
-                                pacer.playback_end,
-                            )
-                        if not first_binary_sent:
-                            first_binary_sent = True
-                            mark_current("first_ws_binary_sent")
-                            logger.info(
-                                "Post-ASR first TTS binary sent in %.3fs",
-                                time.perf_counter() - t_start,
-                            )
+                        if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                            break
+                        # Server-local only: do not pace or send future audio here.
+                        frames.put_nowait(opus_frame)
+                        buffered += 1
+                        item["buffered_frames"] = int(item["buffered_frames"]) + 1
+                    return buffered
 
-                if prefetch_usable:
-                    try:
-                        await deliver_opus(
-                            self._iter_speculative_tts_prefetch(
-                                speculative_llm_handle,
-                                cleaned,
-                                cancel_event,
+                try:
+                    buffered = 0
+                    if prefetch_usable:
+                        try:
+                            buffered = await buffer_source(
+                                self._iter_speculative_tts_prefetch(
+                                    speculative_llm_handle,
+                                    cleaned,
+                                    cancel_event,
+                                )
                             )
-                        )
-                    except Exception:
-                        if segment_audio_sent:
-                            raise
-                        mark_current("tts_speculative_fallback")
-                        self._cancel_speculative_tts_prefetch(
-                            speculative_llm_handle, "prefetch_failed_before_audio"
-                        )
-                        await deliver_opus(
+                        except Exception:
+                            if item["buffered_frames"]:
+                                raise
+                            mark_current("tts_speculative_fallback")
+                            self._cancel_speculative_tts_prefetch(
+                                speculative_llm_handle,
+                                "prefetch_failed_before_audio",
+                            )
+                            buffered = await buffer_source(
+                                open_tts_stream(
+                                    self.tts_engine,
+                                    cleaned,
+                                    cancel_event,
+                                    priority=live_priority,
+                                    initial_turn_audio=item["initial_turn_audio"],
+                                    queue_deadline_seconds=(
+                                        self.config.latency.total_turn_timeout_ms / 1000.0
+                                    ),
+                                )
+                            )
+                    else:
+                        buffered = await buffer_source(
                             open_tts_stream(
                                 self.tts_engine,
                                 cleaned,
                                 cancel_event,
                                 priority=live_priority,
-                                initial_turn_audio=not first_binary_sent,
+                                initial_turn_audio=item["initial_turn_audio"],
                                 queue_deadline_seconds=(
                                     self.config.latency.total_turn_timeout_ms / 1000.0
                                 ),
                             )
                         )
-                else:
-                    await deliver_opus(
-                        open_tts_stream(
-                            self.tts_engine,
-                            cleaned,
-                            cancel_event,
-                            priority=live_priority,
-                            initial_turn_audio=not first_binary_sent,
-                            queue_deadline_seconds=(
-                                self.config.latency.total_turn_timeout_ms / 1000.0
-                            ),
+                    item["buffered_frames"] = buffered
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    item["error"] = exc
+                finally:
+                    frames.put_nowait(speech_audio_done)
+
+            async def play_segment_audio(item: dict) -> None:
+                nonlocal first_binary_sent, active_segment_text, active_segment_had_audio
+                cleaned = item["text"]
+                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                    return
+                if not await self.send_text(
+                    make_tts_message(self.session_id, "sentence_start", cleaned)
+                ):
+                    raise ConnectionError("failed to send sentence_start")
+
+                frames: asyncio.Queue = item["frames"]
+                first_opus_for_segment = True
+                segment_audio_sent = False
+                active_segment_text = cleaned
+                active_segment_had_audio = False
+
+                while True:
+                    opus_frame = await frames.get()
+                    if opus_frame is speech_audio_done:
+                        break
+                    if cancel_event.is_set() or not self._owns_assistant_playback(
+                        playback_lease, turn_generation
+                    ):
+                        return
+                    if first_opus_for_segment:
+                        mark_current("tts_first_opus")
+                        first_opus_for_segment = False
+                    if not await pacer.wait_for_send(cancel_event):
+                        return
+                    if not self._owns_assistant_playback(
+                        playback_lease, turn_generation
+                    ):
+                        return
+                    packet = self._pack_tts_audio(opus_frame)
+                    if not await self.send_binary(packet):
+                        raise ConnectionError("failed to send TTS audio")
+                    segment_audio_sent = True
+                    active_segment_had_audio = True
+                    pacer.record_frame_sent()
+                    if pacer.playback_end is not None:
+                        self._playback_guard_until = max(
+                            self._playback_guard_until,
+                            pacer.playback_end,
                         )
-                    )
+                    if not first_binary_sent:
+                        first_binary_sent = True
+                        mark_current("first_ws_binary_sent")
+                        logger.info(
+                            "Post-ASR first TTS binary sent in %.3fs",
+                            time.perf_counter() - t_start,
+                        )
+
+                producer_error = item.get("error")
+                if producer_error is not None:
+                    raise producer_error
                 if cancel_event.is_set() or not self._owns_turn(turn_generation):
                     return
                 if not segment_audio_sent:
@@ -2844,6 +2886,126 @@ class ClientSession:
                 fully_sent_segments.append(cleaned)
                 active_segment_text = None
                 active_segment_had_audio = False
+
+            async def run_speech_queue() -> None:
+                while True:
+                    item = await speech_queue.get()
+                    if item is speech_queue_done:
+                        return
+                    try:
+                        await play_segment_audio(item)
+                    finally:
+                        speech_slots.release()
+
+            async def queue_speech_segment(
+                text: str,
+                emotion: Optional[str] = None,
+            ) -> None:
+                nonlocal speech_runner_task, speech_segment_count
+                cleaned = str(text or "").strip()
+                if not cleaned:
+                    return
+                # Punctuation-only leftovers can be emitted as a final stream
+                # segment (for example a lone "." after a quoted sentence).
+                # They carry no pronounceable content and some TTS engines
+                # correctly return zero frames for them. Keep the text in the
+                # dialogue, but do not create a standalone TTS job.
+                if not any(char.isalnum() for char in cleaned):
+                    mark_current(
+                        "tts_segment_skipped_nonverbal",
+                        chars=len(cleaned),
+                    )
+                    return
+                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                    return
+                if not await ensure_speech_started(emotion):
+                    return
+
+                if speech_runner_task is None:
+                    speech_runner_task = asyncio.create_task(run_speech_queue())
+
+                slot_waiter = asyncio.create_task(speech_slots.acquire())
+                slot_owned = False
+                slot_accounted = False
+                try:
+                    done, _ = await asyncio.wait(
+                        (slot_waiter, speech_runner_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if slot_waiter in done:
+                        await slot_waiter
+                        slot_owned = True
+                    if speech_runner_task in done:
+                        if not slot_waiter.done():
+                            slot_waiter.cancel()
+                            await asyncio.gather(
+                                slot_waiter, return_exceptions=True
+                            )
+                        elif not slot_owned:
+                            # The slot may have completed in the same event-loop
+                            # turn as the runner. Claim/release it explicitly so
+                            # cancellation cannot leak semaphore capacity.
+                            try:
+                                await slot_waiter
+                            except asyncio.CancelledError:
+                                pass
+                            else:
+                                slot_owned = True
+                        if slot_owned:
+                            speech_slots.release()
+                            slot_owned = False
+                        slot_accounted = True
+                        await speech_runner_task
+                        return
+                    if not slot_owned:
+                        await slot_waiter
+                        slot_owned = True
+
+                    segment_index = speech_segment_count
+                    speech_segment_count += 1
+                    item = {
+                        "text": cleaned,
+                        "emotion": emotion,
+                        "frames": asyncio.Queue(),
+                        "error": None,
+                        "buffered_frames": 0,
+                        "priority": "live_first" if segment_index == 0 else "live",
+                        "initial_turn_audio": segment_index == 0,
+                    }
+                    producer = asyncio.create_task(produce_segment_audio(item))
+                    item["producer_task"] = producer
+                    speech_producer_tasks.add(producer)
+                    producer.add_done_callback(speech_producer_tasks.discard)
+                    speech_queue.put_nowait(item)
+                    slot_accounted = True
+                    slot_owned = False
+                finally:
+                    if not slot_waiter.done():
+                        slot_waiter.cancel()
+                        await asyncio.gather(
+                            slot_waiter, return_exceptions=True
+                        )
+                    elif not slot_accounted and not slot_owned:
+                        # If this coroutine was cancelled exactly as acquire()
+                        # completed, account for the acquired permit before
+                        # leaving the turn.
+                        try:
+                            await slot_waiter
+                        except asyncio.CancelledError:
+                            pass
+                        else:
+                            slot_owned = True
+                    if slot_owned:
+                        speech_slots.release()
+
+            async def finish_speech_pipeline() -> None:
+                nonlocal speech_runner_task
+                if speech_runner_task is None:
+                    return
+                await speech_queue.put(speech_queue_done)
+                task = speech_runner_task
+                speech_runner_task = None
+                await task
 
             while True:
                 if producer_task.done() and event_queue.empty():
@@ -2891,7 +3053,7 @@ class ClientSession:
                         mark_current("llm_first_speech_committed")
                     speech_committed = True
                     reply_segments.append(event.text)
-                    await speak_segment(event.text, event.emotion)
+                    await queue_speech_segment(event.text, event.emotion)
                     if cancel_event.is_set() or not self._owns_turn(turn_generation):
                         return
                     continue
@@ -3478,7 +3640,7 @@ class ClientSession:
                                 else:
                                     synthesized_segments += 1
                                     reply_segments.append(event.text)
-                                    await speak_segment(event.text, event.emotion)
+                                    await queue_speech_segment(event.text, event.emotion)
                                 continue
                             if isinstance(event, MemoryProposalEvent):
                                 if allow_follow_tools:
@@ -3699,7 +3861,7 @@ class ClientSession:
                             for text, emotion in round_speech:
                                 synthesized_segments += 1
                                 reply_segments.append(text)
-                                await speak_segment(text, emotion)
+                                await queue_speech_segment(text, emotion)
                             pending_receipt_index = len(action_round_records)
                             break
                         else:
@@ -3710,7 +3872,7 @@ class ClientSession:
                             for text, emotion in round_speech:
                                 synthesized_segments += 1
                                 reply_segments.append(text)
-                                await speak_segment(text, emotion)
+                                await queue_speech_segment(text, emotion)
                             pending_receipt_index = len(action_round_records)
                             break
                     except asyncio.CancelledError:
@@ -3741,7 +3903,7 @@ class ClientSession:
                                 logger.info("action receipt recovery unavailable: %s", exc)
                         if recovery_text:
                             reply_segments.append(recovery_text)
-                            await speak_segment(recovery_text, "neutral")
+                            await queue_speech_segment(recovery_text, "neutral")
                             mark_current("action_receipt_degraded_recovery_spoken",
                                          record_count=len(action_round_records))
                         else:
@@ -3749,6 +3911,12 @@ class ClientSession:
                                          record_count=len(action_round_records))
                     else:
                         mark_current("action_receipt_partial_kept", segments=synthesized_segments)
+
+            # Drain the local current+lookahead speech pipeline before
+            # closing the TTS envelope. The next segment may already be fully
+            # synthesized locally, so this wait preserves natural continuity
+            # without increasing client send-ahead.
+            await finish_speech_pipeline()
 
             if close_reason and tts_started:
                 drain_seconds = pacer.estimated_lead_ms() / 1000.0
@@ -3919,6 +4087,20 @@ class ClientSession:
             self._cancel_speculative_tts_prefetch(
                 speculative_llm_handle, "turn_finished"
             )
+            if speech_runner_task is not None:
+                if not speech_runner_task.done():
+                    speech_runner_task.cancel()
+                await asyncio.gather(speech_runner_task, return_exceptions=True)
+            active_speech_producers = [
+                task for task in speech_producer_tasks if not task.done()
+            ]
+            for task in active_speech_producers:
+                task.cancel()
+            if active_speech_producers:
+                await asyncio.gather(
+                    *active_speech_producers,
+                    return_exceptions=True,
+                )
             if producer_task is not None and not producer_task.done():
                 producer_task.cancel()
             if producer_task is not None:
