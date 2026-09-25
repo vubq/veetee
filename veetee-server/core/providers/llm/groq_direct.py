@@ -1,6 +1,6 @@
 """Groq direct provider with quota-aware multi-key routing.
 
-Standalone module: it does NOT import the OmniRoute provider. The wire
+Standalone Groq provider. The wire
 contract (control markers, emotion tags, typed turn events, persona
 persistence semantics) is intentionally identical so TurnRunner, session
 lifecycle, receipts and existing behavior tests keep passing; only the

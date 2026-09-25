@@ -10,7 +10,6 @@ import {
   ServerCog,
   ShieldCheck,
   Trash2,
-  Waves,
 } from '@lucide/vue'
 import PageHeader from '../components/layout/PageHeader.vue'
 import UiBadge from '../components/ui/UiBadge.vue'
@@ -45,7 +44,6 @@ const voiceOptions = () => props.voices.map(item => ({
   description: item.description || '',
 }))
 
-const deepgramConfigured = computed(() => Boolean(props.runtime?.DEEPGRAM_API_KEY?.configured))
 const hfConfigured = computed(() => Boolean(props.runtime?.HF_TOKEN?.configured))
 const groqConfiguredCount = computed(() => props.groqKeys.filter(item => item.configured).length)
 
@@ -131,37 +129,10 @@ function setValue(key, value) {
         <section class="section-card provider-card">
           <header class="section-card__header">
             <div class="section-card__title-with-icon">
-              <span><Waves :size="18" /></span>
-              <div>
-                <h2>ASR · Deepgram</h2>
-                <p>Chỉ cần khi ASR provider dùng Deepgram.</p>
-              </div>
-            </div>
-            <UiBadge :tone="deepgramConfigured ? 'success' : 'neutral'" dot>
-              {{ deepgramConfigured ? 'Configured' : 'Optional' }}
-            </UiBadge>
-          </header>
-
-          <div class="provider-card__body">
-            <UiInput
-              :model-value="draft.DEEPGRAM_API_KEY"
-              label="Deepgram API key"
-              type="password"
-              autocomplete="new-password"
-              :placeholder="secretPlaceholder('DEEPGRAM_API_KEY')"
-              class="mono-field"
-              @update:model-value="setValue('DEEPGRAM_API_KEY', $event)"
-            />
-          </div>
-        </section>
-
-        <section class="section-card provider-card">
-          <header class="section-card__header">
-            <div class="section-card__title-with-icon">
               <span><KeyRound :size="18" /></span>
               <div>
                 <h2>Models · Hugging Face</h2>
-                <p>Token cho model hoặc artifact cần xác thực.</p>
+                <p>Parakeet/NeMo dùng Hugging Face Hub để tải checkpoint khi cache local chưa có. Token là tùy chọn để tăng rate limit.</p>
               </div>
             </div>
             <UiBadge :tone="hfConfigured ? 'success' : 'neutral'" dot>
@@ -482,17 +453,6 @@ function setValue(key, value) {
           suffix="ms"
           hint="Loại speech burst quá ngắn; không nên giảm nếu môi trường có nhiều tiếng động."
           @update:model-value="setValue('asr.min_speech_duration_ms', $event)"
-        />
-        <UiInput
-          :model-value="draft['asr.endpointing_ms']"
-          label="Deepgram endpointing"
-          type="number"
-          min="100"
-          max="2000"
-          step="25"
-          suffix="ms"
-          hint="Chỉ áp dụng khi ASR provider là Deepgram; hot-reload ASR session."
-          @update:model-value="setValue('asr.endpointing_ms', $event)"
         />
         <UiSwitch
           :model-value="Boolean(draft['tts.speculative_prefetch_enabled'])"

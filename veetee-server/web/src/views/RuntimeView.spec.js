@@ -4,7 +4,6 @@ import RuntimeView from './RuntimeView.vue'
 
 const baseProps = {
   draft: {
-    DEEPGRAM_API_KEY: '',
     HF_TOKEN: '',
     'llm.model': 'openai/gpt-oss-20b',
     'tts.voice': 'Trúc Ly',
@@ -33,7 +32,6 @@ describe('RuntimeView', () => {
 
     expect(wrapper.findAll('.groq-key-row')).toHaveLength(1)
     expect(wrapper.text()).toContain('LLM · Groq')
-    expect(wrapper.text()).toContain('ASR · Deepgram')
     expect(wrapper.text()).toContain('Models · Hugging Face')
     expect(wrapper.find('.restart-alert').exists()).toBe(false)
 

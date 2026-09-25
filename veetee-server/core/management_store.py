@@ -421,7 +421,7 @@ class ManagementStore:
         name = str(key or "").strip()
         return (
             name.startswith("GROQ_API_KEY_")
-            or name in {"DEEPGRAM_API_KEY", "HF_TOKEN"}
+            or name == "HF_TOKEN"
         )
 
     @staticmethod
@@ -441,7 +441,6 @@ class ManagementStore:
                 char.isalnum() or char == "_" for char in suffix
             )
         return key in {
-            "DEEPGRAM_API_KEY",
             "HF_TOKEN",
             "llm.model",
             "llm.speech_segmentation.min_segment_chars",
@@ -470,7 +469,6 @@ class ManagementStore:
             "latency.target_first_audio_ms",
             "latency.first_token_timeout_ms",
             "latency.total_turn_timeout_ms",
-            "asr.endpointing_ms",
             "asr.min_silence_duration_ms",
             "asr.speculative_inference_enabled",
             "asr.speculative_start_silence_ms",

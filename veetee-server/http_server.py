@@ -571,7 +571,7 @@ class HttpServer:
             restart_required = False
             for key, value in changes.items():
                 key = str(key)
-                if key.startswith(("GROQ_API_KEY_", "DEEPGRAM_API_KEY", "HF_TOKEN")):
+                if key.startswith("GROQ_API_KEY_") or key == "HF_TOKEN":
                     if value is None or value == "":
                         os.environ.pop(key, None)
                     else:
@@ -1019,7 +1019,6 @@ class HttpServer:
             "asr": {
                 "provider": self.config.asr.provider,
                 "device": self.config.asr.device,
-                "endpointing_ms": self.config.asr.endpointing_ms,
                 "min_silence_duration_ms": self.config.asr.min_silence_duration_ms,
                 "min_speech_duration_ms": self.config.asr.min_speech_duration_ms,
                 "speech_start_frames": self.config.asr.speech_start_frames,
@@ -1064,8 +1063,7 @@ class HttpServer:
                 "asr": {
                     "provider": self.config.asr.provider,
                     "device": self.config.asr.device,
-                    "endpointing_ms": self.config.asr.endpointing_ms,
-                    "min_silence_duration_ms": self.config.asr.min_silence_duration_ms,
+                        "min_silence_duration_ms": self.config.asr.min_silence_duration_ms,
                     "speculative_inference_enabled": self.config.asr.speculative_inference_enabled,
                     "speculative_start_silence_ms": self.config.asr.speculative_start_silence_ms,
                     "speculative_min_confidence": self.config.asr.speculative_min_confidence,

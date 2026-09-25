@@ -29,15 +29,12 @@ class EndpointMatrixTests(unittest.TestCase):
     def test_parse_values_rejects_out_of_range(self):
         with self.assertRaises(MatrixError):
             parse_values("64", setting="asr.min_silence_duration_ms")
-        with self.assertRaises(MatrixError):
-            parse_values("50", setting="asr.endpointing_ms")
 
     def test_effective_value_uses_diagnostics_not_persisted_runtime(self):
         diagnostics = {
             "profile": {
                 "asr": {
                     "min_silence_duration_ms": 320,
-                    "endpointing_ms": 225,
                 }
             }
         }
@@ -46,10 +43,6 @@ class EndpointMatrixTests(unittest.TestCase):
                 diagnostics, "asr.min_silence_duration_ms"
             ),
             320,
-        )
-        self.assertEqual(
-            effective_endpoint_value(diagnostics, "asr.endpointing_ms"),
-            225,
         )
 
     def test_runtime_restore_mismatches_uses_effective_diagnostics(self):

@@ -24,7 +24,6 @@ from core.audio_utils import AudioCodec
 from core.audio_pacing import AudioPacer
 from core.dialogue import DialogueContext
 from core.providers.asr.base import BaseASR
-from core.providers.asr.deepgram_stream import DeepgramStreamASR
 from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.llm.base import BaseLLM
 from core.providers.tts.base import BaseTTS
@@ -333,47 +332,32 @@ class ClientSession:
         self.lifecycle.wake_generation = int(value)
 
     def _create_asr(self) -> BaseASR:
-        provider = self.config.asr.provider.strip().lower()
-        if provider in {"parakeet_silero", "parakeet", "silero_parakeet"}:
-            return ParakeetSileroASR(
-                model=self.config.asr.model,
-                sample_rate=self.config.asr.sample_rate,
-                device=self.config.asr.device,
-                vad_model_path=self.config.asr.vad_model_path,
-                vad_threshold=self.config.asr.vad_threshold,
-                vad_threshold_low=self.config.asr.vad_threshold_low,
-                vad_end_threshold=self.config.asr.vad_end_threshold,
-                min_silence_duration_ms=self.config.asr.min_silence_duration_ms,
-                speculative_inference_enabled=self.config.asr.speculative_inference_enabled,
-                speculative_start_silence_ms=self.config.asr.speculative_start_silence_ms,
-                speculative_min_confidence=self.config.asr.speculative_min_confidence,
-                min_speech_duration_ms=self.config.asr.min_speech_duration_ms,
-                speech_start_frames=self.config.asr.speech_start_frames,
-                pre_speech_pad_ms=self.config.asr.pre_speech_pad_ms,
-                utterance_queue_max=self.config.asr.utterance_queue_max,
-                max_utterance_ms=self.config.asr.max_utterance_ms,
-                diagnostic_capture_enabled=self.config.asr.diagnostic_capture_enabled,
-                diagnostic_capture_dir=self.config.asr.diagnostic_capture_dir,
-                diagnostic_capture_max_files=self.config.asr.diagnostic_capture_max_files,
-                metrics_recorder=self.turn_metrics,
-                on_transcript_callback=self._on_asr_transcript,
-                on_speech_started_callback=self._on_speech_started,
-                on_speculative_transcript_callback=self._on_asr_speculative_transcript,
-                on_speculative_invalidated_callback=self._on_asr_speculative_invalidated,
-            )
-        if provider == "deepgram":
-            return DeepgramStreamASR(
-                api_key=self.config.asr.api_key,
-                language=self.config.asr.language,
-                model=self.config.asr.model,
-                sample_rate=self.config.asr.sample_rate,
-                endpointing_ms=self.config.asr.endpointing_ms,
-                smart_format=self.config.asr.smart_format,
-                interim_results=self.config.asr.interim_results,
-                on_transcript_callback=self._on_asr_transcript,
-                on_speech_started_callback=self._on_speech_started,
-            )
-        raise ValueError(f"Unsupported ASR provider: {self.config.asr.provider}")
+        return ParakeetSileroASR(
+            model=self.config.asr.model,
+            sample_rate=self.config.asr.sample_rate,
+            device=self.config.asr.device,
+            vad_model_path=self.config.asr.vad_model_path,
+            vad_threshold=self.config.asr.vad_threshold,
+            vad_threshold_low=self.config.asr.vad_threshold_low,
+            vad_end_threshold=self.config.asr.vad_end_threshold,
+            min_silence_duration_ms=self.config.asr.min_silence_duration_ms,
+            speculative_inference_enabled=self.config.asr.speculative_inference_enabled,
+            speculative_start_silence_ms=self.config.asr.speculative_start_silence_ms,
+            speculative_min_confidence=self.config.asr.speculative_min_confidence,
+            min_speech_duration_ms=self.config.asr.min_speech_duration_ms,
+            speech_start_frames=self.config.asr.speech_start_frames,
+            pre_speech_pad_ms=self.config.asr.pre_speech_pad_ms,
+            utterance_queue_max=self.config.asr.utterance_queue_max,
+            max_utterance_ms=self.config.asr.max_utterance_ms,
+            diagnostic_capture_enabled=self.config.asr.diagnostic_capture_enabled,
+            diagnostic_capture_dir=self.config.asr.diagnostic_capture_dir,
+            diagnostic_capture_max_files=self.config.asr.diagnostic_capture_max_files,
+            metrics_recorder=self.turn_metrics,
+            on_transcript_callback=self._on_asr_transcript,
+            on_speech_started_callback=self._on_speech_started,
+            on_speculative_transcript_callback=self._on_asr_speculative_transcript,
+            on_speculative_invalidated_callback=self._on_asr_speculative_invalidated,
+        )
 
     async def replace_llm_engine(self, llm_engine: BaseLLM) -> None:
         """Hot-swap the LLM used by subsequent turns without dropping the session."""

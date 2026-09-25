@@ -17,7 +17,6 @@ from config.settings import (
 )
 from core.providers.asr.parakeet_silero import ParakeetSileroASR
 from core.providers.tts.vieneu_local import VieneuLocalTTS
-from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
 from core.providers.llm.groq_direct import build_engine_from_config
 from core.providers.llm.speech_segments import SpeechSegmentationPolicy
 from core.providers.llm.unavailable import UnavailableLLM
@@ -37,7 +36,6 @@ _RUNTIME_INT_SETTINGS = {
     "latency.target_first_audio_ms": ("latency", "target_first_audio_ms", 100, 5000),
     "latency.first_token_timeout_ms": ("latency", "first_token_timeout_ms", 100, 30000),
     "latency.total_turn_timeout_ms": ("latency", "total_turn_timeout_ms", 500, 120000),
-    "asr.endpointing_ms": ("asr", "endpointing_ms", 100, 2000),
     "asr.min_silence_duration_ms": ("asr", "min_silence_duration_ms", 96, 2000),
     "asr.speculative_start_silence_ms": (
         "asr", "speculative_start_silence_ms", 32, 1000
@@ -211,7 +209,7 @@ class VeeTeeServer:
         # Persisted manager values survive deploys. Secrets are materialized only
         # into this process and are never returned unmasked by the API.
         for key, value in runtime.items():
-            if key.startswith(("GROQ_API_KEY_", "DEEPGRAM_API_KEY", "HF_TOKEN")):
+            if key.startswith("GROQ_API_KEY_") or key == "HF_TOKEN":
                 os.environ[key] = str(value)
         if runtime.get("llm.model"):
             config.llm.model = str(runtime["llm.model"])
@@ -219,8 +217,6 @@ class VeeTeeServer:
             config.tts.voice = str(runtime["tts.voice"])
         if runtime.get("asr.device"):
             config.asr.device = str(runtime["asr.device"])
-        if runtime.get("DEEPGRAM_API_KEY"):
-            config.asr.api_key = str(runtime["DEEPGRAM_API_KEY"])
         if runtime.get("server.barge_in_policy"):
             config.server.barge_in_policy = str(runtime["server.barge_in_policy"])
         for key, (section, attr, _minimum, _maximum) in _RUNTIME_INT_SETTINGS.items():
@@ -313,26 +309,8 @@ class VeeTeeServer:
         # provider credentials are missing or malformed so an operator can
         # repair runtime configuration from the dashboard.
         try:
-            if config.llm.provider == "groq":
-                self.llm_engine = build_engine_from_config(
-                    config.llm, server_dir=server_dir)
-            else:
-                logger.info("Using legacy OmniRoute LLM provider")
-                self.llm_engine = OmnirouteGroqLLM(
-                    base_url=config.llm.base_url,
-                    api_key=config.llm.api_key,
-                    model=config.llm.model,
-                    temperature=config.llm.temperature,
-                    max_tokens=config.llm.max_tokens,
-                    request_timeout_ms=config.llm.request_timeout_ms,
-                    probe_timeout_ms=config.llm.probe_timeout_ms,
-                    control_timeout_ms=config.llm.control_timeout_ms,
-                    reasoning_format=config.llm.reasoning_format,
-                    base_prompt=config.llm.base_prompt,
-                    prompt_template_path=os.path.join(server_dir, config.llm.prompt_template),
-                    base_prompt_state_path=os.path.join(server_dir, "data", "base-prompt.txt"),
-                    speech_segmentation=SpeechSegmentationPolicy.from_config(config.llm),
-                )
+            self.llm_engine = build_engine_from_config(
+                config.llm, server_dir=server_dir)
         except Exception as exc:
             logger.error("LLM initialization unavailable; starting management plane degraded: %s", exc)
             self.llm_engine = UnavailableLLM(
@@ -372,7 +350,7 @@ class VeeTeeServer:
     def _runtime_secret_key(key: str) -> bool:
         return (
             key.startswith("GROQ_API_KEY_")
-            or key in {"DEEPGRAM_API_KEY", "HF_TOKEN"}
+            or key == "HF_TOKEN"
         )
 
     def _assistant_for_session(self, session):
@@ -397,10 +375,6 @@ class VeeTeeServer:
             raise ValueError("runtime changes must be an object")
 
         normalized = {str(key).strip(): value for key, value in changes.items()}
-        allowed_prefixes = (
-            "GROQ_API_KEY_", "DEEPGRAM_API_KEY", "HF_TOKEN",
-            "llm.", "tts.", "asr.", "server.",
-        )
         for key in normalized:
             if not ManagementStore.runtime_key_allowed(key):
                 raise ValueError(f"runtime setting is not allowed: {key}")
@@ -509,7 +483,6 @@ class VeeTeeServer:
         previous_model = self.config.llm.model
         previous_segmentation = copy.deepcopy(self.config.llm.speech_segmentation)
         previous_asr_device = self.config.asr.device
-        previous_asr_key = self.config.asr.api_key
         previous_barge_policy = self.config.server.barge_in_policy
         previous_voice = getattr(self.tts_engine, "voice", self.config.tts.voice)
         previous_tts_stream_queue_max_chunks = int(
@@ -547,7 +520,6 @@ class VeeTeeServer:
         )
         asr_changed = (
             "asr.device" in normalized
-            or "asr.endpointing_ms" in normalized
             or "asr.min_silence_duration_ms" in normalized
             or "asr.speculative_inference_enabled" in normalized
             or "asr.speculative_start_silence_ms" in normalized
@@ -558,10 +530,6 @@ class VeeTeeServer:
             or "asr.vad_threshold" in normalized
             or "asr.vad_threshold_low" in normalized
             or "asr.vad_end_threshold" in normalized
-            or (
-                "DEEPGRAM_API_KEY" in normalized
-                and self.config.asr.provider.strip().lower() == "deepgram"
-            )
         )
         new_llm = None
         llm_ready = self.runtime_readiness.get("llm_warm", False)
@@ -591,7 +559,7 @@ class VeeTeeServer:
                 setattr(staged_llm.routing, field_name, value)
             validate_speech_segmentation_config(staged_llm.speech_segmentation)
 
-            if llm_changed and staged_llm.provider == "groq":
+            if llm_changed:
                 has_groq_key = any(
                     name.startswith("GROQ_API_KEY_") and str(value or "").strip()
                     for name, value in os.environ.items()
@@ -612,21 +580,15 @@ class VeeTeeServer:
                         reason="llm_configuration_unavailable: no_groq_key",
                     )
                     llm_ready = False
-            elif "llm.model" in normalized and normalized["llm.model"]:
-                # Legacy provider: validate through its existing hot setter.
-                self.llm_engine.set_model(str(normalized["llm.model"]).strip(), persist=False)
 
             staged_asr_device = str(normalized.get("asr.device", self.config.asr.device) or "").strip()
             if "asr.device" in normalized:
                 if staged_asr_device not in {"cuda", "cpu"}:
                     raise ValueError("asr.device must be cuda or cpu")
-                if self.config.asr.provider.strip().lower() in {
-                    "parakeet_silero", "parakeet", "silero_parakeet",
-                }:
-                    await ParakeetSileroASR.preload(
-                        self.config.asr.model,
-                        staged_asr_device,
-                    )
+                await ParakeetSileroASR.preload(
+                    self.config.asr.model,
+                    staged_asr_device,
+                )
 
             if "tts.voice" in normalized and normalized["tts.voice"]:
                 requested_voice = str(normalized["tts.voice"]).strip()
@@ -645,8 +607,6 @@ class VeeTeeServer:
                 self.config.llm.model = str(normalized["llm.model"]).strip()
             if "asr.device" in normalized:
                 self.config.asr.device = staged_asr_device
-            if "DEEPGRAM_API_KEY" in normalized:
-                self.config.asr.api_key = str(os.environ.get("DEEPGRAM_API_KEY", ""))
             if "server.barge_in_policy" in normalized and normalized["server.barge_in_policy"]:
                 self.config.server.barge_in_policy = str(normalized["server.barge_in_policy"]).strip()
             if "tts.voice" in normalized and normalized["tts.voice"]:
@@ -890,7 +850,6 @@ class VeeTeeServer:
                     except Exception:
                         pass
             self.config.asr.device = previous_asr_device
-            self.config.asr.api_key = previous_asr_key
             self.config.server.barge_in_policy = previous_barge_policy
             if getattr(self.tts_engine, "voice", previous_voice) != previous_voice:
                 try:
@@ -1094,27 +1053,20 @@ class VeeTeeServer:
         # Parakeet is a large local model. Load it before opening the web/WS
         # listeners so the first microphone connection cannot time out while
         # waiting for a cold model restore.
-        if self.config.asr.provider.strip().lower() in {
-            "parakeet_silero",
-            "parakeet",
-            "silero_parakeet",
-        }:
-            logger.info("Preloading Parakeet ASR before accepting clients...")
-            try:
-                await ParakeetSileroASR.preload(
-                    self.config.asr.model,
-                    self.config.asr.device,
-                )
-                self.runtime_readiness["asr_ready"] = True
-            except Exception as exc:
-                self.runtime_readiness["asr_ready"] = False
-                self.runtime_readiness["asr_error"] = f"{type(exc).__name__}: {exc}"
-                logger.error(
-                    "ASR preload unavailable; starting management plane degraded: %s",
-                    exc,
-                )
-        else:
+        logger.info("Preloading Parakeet ASR before accepting clients...")
+        try:
+            await ParakeetSileroASR.preload(
+                self.config.asr.model,
+                self.config.asr.device,
+            )
             self.runtime_readiness["asr_ready"] = True
+        except Exception as exc:
+            self.runtime_readiness["asr_ready"] = False
+            self.runtime_readiness["asr_error"] = f"{type(exc).__name__}: {exc}"
+            logger.error(
+                "ASR preload unavailable; starting management plane degraded: %s",
+                exc,
+            )
 
         # 1. Start HTTP & OTA server
         await self.http_server.start()

@@ -35,7 +35,6 @@ except ModuleNotFoundError:  # direct execution: python scripts/...
 
 SUPPORTED_SETTINGS = {
     "asr.min_silence_duration_ms": (96, 2000),
-    "asr.endpointing_ms": (100, 2000),
 }
 
 

@@ -26,12 +26,7 @@ class ServerConfig:
 @dataclass
 class ASRConfig:
     provider: str = "parakeet_silero"
-    api_key: str = field(default_factory=lambda: os.getenv("DEEPGRAM_API_KEY", ""))
     model: str = "nvidia/parakeet-ctc-0.6b-vi"
-    language: str = "vi"
-    smart_format: bool = True
-    interim_results: bool = True
-    endpointing_ms: int = 250
     sample_rate: int = 16000
     device: str = "cuda"
     vad_model_path: str = "models/silero-vad/silero_vad.onnx"
@@ -109,10 +104,9 @@ QUOTA_DIMENSIONS = frozenset({"rpm", "rpd", "tpm", "tpd", "itpm", "otpm"})
 class LLMConfig:
     provider: str = "groq"
     base_url: str = "https://api.groq.com/openai/v1"
-    api_key: str = "local-omniroute"
     model: str = "qwen/qwen3.6-27b"
     # Pool of Groq credentials. Empty pool = auto-scan GROQ_API_KEY_* env
-    # (each alias gets its own quota group). Ignored by omniroute provider.
+    # (each alias gets its own quota group).
     key_pool: list = field(default_factory=list)
     # Quota caps per group, e.g. {"gA": {"rpm": 30, "tpm": 8000}}.
     # Omitted/empty groups run in discovery mode (bounded in-flight, caps
@@ -543,11 +537,9 @@ def _validate_app_config(config: AppConfig) -> None:
             raise ValueError(f"latency.{name} must be a positive integer")
     if config.latency.context_max_tokens <= config.llm.max_tokens:
         raise ValueError("latency.context_max_tokens must exceed llm.max_tokens")
-    if (
-        config.asr.provider.strip().lower()
-        in {"parakeet_silero", "parakeet", "silero_parakeet"}
-        and config.asr.sample_rate != 16000
-    ):
+    if config.asr.provider.strip().lower() != "parakeet_silero":
+        raise ValueError("asr.provider must be 'parakeet_silero'")
+    if config.asr.sample_rate != 16000:
         raise ValueError("Parakeet/Silero ASR requires asr.sample_rate=16000")
 
     for group_name, group, fields in (
@@ -559,8 +551,6 @@ def _validate_app_config(config: AppConfig) -> None:
             if type(getattr(group, name)) is not bool:
                 raise ValueError(f"{group_name}.{name} must be a boolean")
 
-    if type(config.asr.endpointing_ms) is not int or not 100 <= config.asr.endpointing_ms <= 2000:
-        raise ValueError("asr.endpointing_ms must be an integer between 100 and 2000")
     if type(config.tts.send_ahead_ms) is not int or not 60 <= config.tts.send_ahead_ms <= 1000:
         raise ValueError("tts.send_ahead_ms must be an integer between 60 and 1000")
     if type(config.tts.speculative_prefetch_enabled) is not bool:
@@ -626,8 +616,8 @@ def _validate_app_config(config: AppConfig) -> None:
         raise ValueError("llm.http_keepalive_seconds must be an integer between 15 and 900")
     if type(config.llm.dns_cache_ttl_seconds) is not int or not 15 <= config.llm.dns_cache_ttl_seconds <= 3600:
         raise ValueError("llm.dns_cache_ttl_seconds must be an integer between 15 and 3600")
-    if config.llm.provider not in ("groq", "omniroute"):
-        raise ValueError("llm.provider must be 'groq' or 'omniroute'")
+    if config.llm.provider != "groq":
+        raise ValueError("llm.provider must be 'groq'")
     if not isinstance(config.llm.model, str) or not config.llm.model.strip():
         raise ValueError("llm.model must be a non-empty string")
     if not isinstance(config.llm.key_pool, list):

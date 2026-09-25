@@ -16,20 +16,14 @@ from core.clock_context import CLOCK_CONTEXT_PREFIX, clock_context
 
 
 class PromptContractTests(unittest.TestCase):
-    def test_providers_share_single_control_prompt_source(self):
+    def test_groq_provider_uses_shared_control_prompt_source(self):
         from core.providers.llm.groq_direct import GroqDirectLLM
-        from core.providers.llm.omniroute_groq import OmnirouteGroqLLM
 
         self.assertIs(
             GroqDirectLLM.INLINE_CONVERSATION_CONTROL_PROMPT,
             INLINE_CONVERSATION_CONTROL_PROMPT,
         )
-        self.assertIs(
-            OmnirouteGroqLLM.INLINE_CONVERSATION_CONTROL_PROMPT,
-            INLINE_CONVERSATION_CONTROL_PROMPT,
-        )
         self.assertIs(GroqDirectLLM.ASR_CORRECTION_PROMPT, ASR_CORRECTION_PROMPT)
-        self.assertIs(OmnirouteGroqLLM.ASR_CORRECTION_PROMPT, ASR_CORRECTION_PROMPT)
 
     def test_control_prompt_fails_open_to_continue(self):
         self.assertIn("[continue]", INLINE_CONVERSATION_CONTROL_PROMPT)

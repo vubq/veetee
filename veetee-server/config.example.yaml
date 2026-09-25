@@ -17,14 +17,8 @@ server:
 
 asr:
   # Mặc định: Parakeet Vietnamese local + Silero VAD.
-  # Có thể đổi thành "deepgram"; khi đó cần api_key và các option Deepgram bên dưới.
   provider: "parakeet_silero"
-  api_key: ""
   model: "nvidia/parakeet-ctc-0.6b-vi"
-  language: "vi"
-  smart_format: true
-  interim_results: true
-  endpointing_ms: 250
   sample_rate: 16000
 
   # Parakeet + Silero VAD
@@ -71,12 +65,9 @@ asr:
   diagnostic_capture_max_files: 20
 
 llm:
-  # provider: "groq" (Groq API trực tiếp, quota-aware multi-key) hoặc
-  # "omniroute" (gateway local cũ). Không còn OmniRoute trong đường mới.
+  # Groq API trực tiếp, quota-aware multi-key.
   provider: "groq"
   base_url: "https://api.groq.com/openai/v1"
-  # Chỉ dùng cho provider omniroute legacy; GroqDirect lấy secret từ key pool/env.
-  api_key: ""
   model: "qwen/qwen3.8-27b"
   # Pool key Groq: secret CHỈ ở env (GROQ_API_KEY_<alias>), file này chỉ giữ
   # id + quota_group. Số lượng key linh hoạt; pool rỗng = tự quét env.

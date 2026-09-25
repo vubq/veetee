@@ -309,7 +309,6 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
                     'latency.target_first_audio_ms': 600,
                     'latency.first_token_timeout_ms': 1300,
                     'latency.total_turn_timeout_ms': 12000,
-                    'asr.endpointing_ms': 225,
                     'asr.min_silence_duration_ms': 320,
                     'asr.speculative_inference_enabled': True,
                     'asr.speculative_start_silence_ms': 64,
@@ -345,7 +344,6 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(config.latency.target_first_audio_ms, 600)
             self.assertEqual(config.latency.first_token_timeout_ms, 1300)
             self.assertEqual(config.latency.total_turn_timeout_ms, 12000)
-            self.assertEqual(config.asr.endpointing_ms, 225)
             self.assertEqual(config.asr.min_silence_duration_ms, 320)
             self.assertTrue(config.asr.speculative_inference_enabled)
             self.assertEqual(config.asr.speculative_start_silence_ms, 64)

@@ -22,7 +22,7 @@ Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool
 PYTHONPATH=. python test_e2e.py
 ```
 
-`test_e2e.py` synthesize input audio rồi đi qua ASR pipeline của server; không nên mô tả test này như một test riêng cho Deepgram. Kết quả runtime phải ghi model/route/config/source snapshot và phân biệt `PASS`, `BLOCKED`, `FAILED`.
+test_e2e.py synthesize input audio rồi đi qua pipeline Parakeet/Silero thực của server. Kết quả runtime phải ghi model/route/config/source snapshot và phân biệt PASS, BLOCKED, FAILED.
 
 Không coi timeout hoặc thiếu dependency/model là `PASS`.
 

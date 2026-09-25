@@ -53,19 +53,13 @@ Local `config.yaml` có thể override các giá trị này; local override khô
 
 ## 3. Provider và tính local/remote
 
-Default config dùng Parakeet CTC Vietnamese + Silero VAD cho ASR và VieNeu cho TTS. Deepgram là provider ASR thay thế khi operator cấu hình provider/API key phù hợp.
+Default config dùng Parakeet CTC Vietnamese + Silero VAD cho ASR và VieNeu cho TTS. ASR production hiện chỉ dùng local parakeet_silero.
 
-`asr.device` mặc định `cuda` nhưng server tự fallback `cpu` khi không có GPU (`core/providers/asr/parakeet_silero.py`) — vẫn chạy nhưng inference chậm hơn, không phù hợp đo latency SLA.
+asr.device mặc định cuda nhưng server tự fallback cpu khi không có GPU — vẫn chạy nhưng inference chậm hơn, không phù hợp đo latency SLA.
 
-Secret ASR cấp qua env (để `asr.api_key` trống trong `config.yaml` local):
+Parakeet dùng NeMo ASRModel.from_pretrained("nvidia/parakeet-ctc-0.6b-vi") khi checkpoint chưa có trong local cache, vì vậy Hugging Face Hub vẫn là dependency tải model. HF_TOKEN là optional cho public model nhưng hữu ích để tăng rate limit/tốc độ download.
 
-```bash
-export DEEPGRAM_API_KEY='<secret>'
-```
-
-`settings.py` fallback về env khi YAML để trống, nên không ghi key thật vào file.
-
-LLM provider `groq` gọi Groq API trực tiếp (`https://api.groq.com/openai/v1`) với pool nhiều key quota độc lập. Inference LLM là remote dù process VeeTee/ASR/TTS vẫn chạy local. Provider `omniroute` (gateway local cũ) chỉ còn là đường legacy khi cấu hình yêu cầu.
+LLM chỉ dùng Groq API trực tiếp với pool nhiều key quota độc lập. Inference LLM là remote dù process VeeTee/ASR/TTS vẫn chạy local.
 
 Groq keys cấp qua env, đặt tên `GROQ_API_KEY_<alias>` (số lượng linh hoạt; pool rỗng sẽ tự quét env). File YAML chỉ giữ id + quota_group, không chứa secret:
 

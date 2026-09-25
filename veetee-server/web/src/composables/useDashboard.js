@@ -29,7 +29,6 @@ export function useDashboard() {
   const assistantDraft = reactive({ id: '', name: '', base_prompt: '', voice: '', model: '', enabled: true })
   const pairing = reactive({ code: '', assistant_id: '', name: '', owner_id: '' })
   const runtimeDraft = reactive({
-    DEEPGRAM_API_KEY: '',
     HF_TOKEN: '',
     'llm.model': '',
     'tts.voice': '',
@@ -38,7 +37,6 @@ export function useDashboard() {
     'latency.target_first_audio_ms': '600',
     'latency.first_token_timeout_ms': '1800',
     'latency.total_turn_timeout_ms': '15000',
-    'asr.endpointing_ms': '250',
     'asr.min_silence_duration_ms': '192',
     'asr.speculative_inference_enabled': true,
     'asr.speculative_start_silence_ms': '64',
@@ -198,10 +196,6 @@ export function useDashboard() {
       'latency.total_turn_timeout_ms',
       diagnostics.value?.profile?.latency?.total_turn_timeout_ms ?? 15000,
     ))
-    runtimeDraft['asr.endpointing_ms'] = String(publicRuntimeValue(
-      'asr.endpointing_ms',
-      diagnostics.value?.profile?.asr?.endpointing_ms ?? 250,
-    ))
     runtimeDraft['asr.min_silence_duration_ms'] = String(publicRuntimeValue(
       'asr.min_silence_duration_ms',
       diagnostics.value?.profile?.asr?.min_silence_duration_ms ?? 192,
@@ -324,7 +318,6 @@ export function useDashboard() {
         segmentation[key] ?? '',
       ))
     }
-    runtimeDraft.DEEPGRAM_API_KEY = ''
     runtimeDraft.HF_TOKEN = ''
 
     removedGroqKeys.clear()
@@ -533,7 +526,7 @@ export function useDashboard() {
     }
     for (const key of removedGroqKeys) values[key] = null
 
-    for (const key of ['DEEPGRAM_API_KEY', 'HF_TOKEN']) {
+    for (const key of ['HF_TOKEN']) {
       const value = String(runtimeDraft[key] || '').trim()
       if (value) values[key] = value
     }
@@ -553,7 +546,6 @@ export function useDashboard() {
       'latency.target_first_audio_ms': diagnostics.value?.profile?.latency?.target_first_audio_ms ?? 600,
       'latency.first_token_timeout_ms': diagnostics.value?.profile?.latency?.first_token_timeout_ms ?? 1800,
       'latency.total_turn_timeout_ms': diagnostics.value?.profile?.latency?.total_turn_timeout_ms ?? 15000,
-      'asr.endpointing_ms': diagnostics.value?.profile?.asr?.endpointing_ms ?? 250,
       'asr.min_silence_duration_ms': diagnostics.value?.profile?.asr?.min_silence_duration_ms ?? 192,
       'asr.speculative_start_silence_ms': diagnostics.value?.profile?.asr?.speculative_start_silence_ms ?? 64,
       'asr.speculative_min_confidence': diagnostics.value?.profile?.asr?.speculative_min_confidence ?? 0.95,

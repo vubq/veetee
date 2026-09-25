@@ -28,7 +28,7 @@ flowchart LR
     C --> D[ASR queue tối đa 2, kiểm tra generation]
     D --> E[Parakeet dùng inference lock chung]
     E --> F[Kiểm tra transcript / memory explicit / context]
-    F --> G[OmniRoute: một LLM stream]
+    F --> G[Groq Direct: một LLM stream]
     G --> H[Control, speech, native tool calls]
     H --> I[Event queue tối đa 8]
     I --> J[VieNeu admission và sinh từng segment]
@@ -108,7 +108,7 @@ Runtime hiện chỉ bật calculator/time; rủi ro điều khiển thiết b�
 
 ### F6 — P1 trước khi bật side effects: EOF chưa xác nhận vẫn publish tool call
 
-Vị trí: `core/providers/llm/omniroute_groq.py:785`, `core/providers/llm/omniroute_groq.py:866`.
+Vị trí hiện tại: core/providers/llm/groq_direct.py (stream terminal-state/tool-call validation).
 
 Provider bỏ qua `[DONE]` và không yêu cầu terminal finish hợp lệ trước `tool_calls.finalize()`. Mock SSE chỉ có một delta chứa JSON args đầy đủ, kết thúc HTTP body không có finish reason/DONE: vẫn phát `ToolCallReadyEvent` và `CompletedEvent(finish_reason=None)`.
 

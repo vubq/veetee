@@ -203,11 +203,11 @@ describe('useDashboard', () => {
     const dashboard = useDashboard()
     dashboard.runtime.value = {
       GROQ_API_KEY_A: { configured: true, masked: 'abc••••••xyz' },
-      DEEPGRAM_API_KEY: { configured: true, masked: 'dg••••••key' },
+      HF_TOKEN: { configured: true, masked: 'hf_••••••key' },
     }
 
     expect(dashboard.secretPlaceholder('GROQ_API_KEY_A')).toBe('abc••••••xyz')
-    expect(dashboard.secretPlaceholder('DEEPGRAM_API_KEY')).toBe('dg••••••key')
-    expect(dashboard.runtimeDraft.DEEPGRAM_API_KEY).toBe('')
+    expect(dashboard.secretPlaceholder('HF_TOKEN')).toBe('hf_••••••key')
+    expect(dashboard.runtimeDraft.HF_TOKEN).toBe('')
   })
 })
