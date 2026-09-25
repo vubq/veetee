@@ -27,6 +27,8 @@ class _QueuedUtterance:
     endpoint_reason: str
     trailing_silence_ms: float
     voiced_ms: float
+    speculative_task: Optional[asyncio.Task] = None
+    speculative_valid: bool = False
 
 
 class _ParakeetRuntime:
@@ -221,7 +223,11 @@ class ParakeetSileroASR(BaseASR):
         vad_model_path: str = "models/silero-vad/silero_vad.onnx",
         vad_threshold: float = 0.5,
         vad_threshold_low: float = 0.3,
+        vad_end_threshold: Optional[float] = None,
         min_silence_duration_ms: int = 450,
+        speculative_inference_enabled: bool = False,
+        speculative_start_silence_ms: int = 64,
+        speculative_min_confidence: float = 0.95,
         min_speech_duration_ms: int = 160,
         speech_start_frames: int = 2,
         pre_speech_pad_ms: int = 512,
@@ -235,6 +241,12 @@ class ParakeetSileroASR(BaseASR):
             Callable[..., Awaitable[None]]
         ] = None,
         on_speech_started_callback: Optional[Callable[..., Awaitable[None]]] = None,
+        on_speculative_transcript_callback: Optional[
+            Callable[..., Awaitable[None]]
+        ] = None,
+        on_speculative_invalidated_callback: Optional[
+            Callable[..., Awaitable[None]]
+        ] = None,
     ):
         if sample_rate != 16000:
             raise ValueError("Silero VAD provider currently requires PCM16 16 kHz input")
@@ -245,7 +257,19 @@ class ParakeetSileroASR(BaseASR):
         self.vad_model_path = Path(vad_model_path)
         self.vad_threshold = float(vad_threshold)
         self.vad_threshold_low = float(vad_threshold_low)
-        self.min_silence_duration_ms = max(int(min_silence_duration_ms), 160)
+        self.vad_end_threshold = float(
+            vad_threshold_low if vad_end_threshold is None else vad_end_threshold
+        )
+        self.min_silence_duration_ms = max(int(min_silence_duration_ms), 96)
+        self.speculative_inference_enabled = bool(speculative_inference_enabled)
+        self.speculative_start_silence_ms = max(
+            self.FRAME_MS,
+            float(speculative_start_silence_ms),
+        )
+        self.speculative_min_confidence = min(
+            1.0,
+            max(0.0, float(speculative_min_confidence)),
+        )
         self.min_speech_duration_ms = max(int(min_speech_duration_ms), 64)
         self.speech_start_frames = max(int(speech_start_frames), 1)
         self.pre_speech_pad_ms = max(int(pre_speech_pad_ms), 0)
@@ -257,6 +281,8 @@ class ParakeetSileroASR(BaseASR):
         self.metrics_recorder = metrics_recorder
         self.on_transcript_callback = on_transcript_callback
         self.on_speech_started_callback = on_speech_started_callback
+        self.on_speculative_transcript_callback = on_speculative_transcript_callback
+        self.on_speculative_invalidated_callback = on_speculative_invalidated_callback
 
         pre_roll_frames = max(1, int(round(self.pre_speech_pad_ms / self.FRAME_MS)))
         self._pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames)
@@ -281,6 +307,9 @@ class ParakeetSileroASR(BaseASR):
         self._utterance_generation = 0
         self._diagnostic_tasks: set[asyncio.Task] = set()
         self._audio_idle_task: Optional[asyncio.Task] = None
+        self._speculative_task: Optional[asyncio.Task] = None
+        self._speculative_valid = False
+        self._speculative_tasks: set[asyncio.Task] = set()
 
     async def start(self):
         if self._running:
@@ -390,6 +419,111 @@ class ParakeetSileroASR(BaseASR):
             if self._audio_idle_task is asyncio.current_task():
                 self._audio_idle_task = None
 
+    def _prepare_pcm(self, audio_bytes: bytes, *, log_audio: bool = False) -> np.ndarray:
+        pcm = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        if not pcm.size:
+            return pcm
+        pcm = pcm - float(np.mean(pcm))
+        rms = float(np.sqrt(np.mean(np.square(pcm), dtype=np.float64)))
+        peak = float(np.max(np.abs(pcm)))
+        gain = 1.0
+        if rms > 1e-5 and rms < 0.075:
+            gain = min(0.09 / rms, 8.0)
+            if peak > 1e-5:
+                gain = min(gain, 0.95 / peak)
+            pcm = np.clip(pcm * gain, -0.98, 0.98).astype(np.float32, copy=False)
+        if log_audio:
+            logger.info(
+                "ASR utterance audio: %.0f ms, %d samples, rms=%.4f, peak=%.4f, gain=%.2fx",
+                pcm.size * 1000 / self.sample_rate,
+                pcm.size,
+                rms,
+                peak,
+                gain,
+            )
+        return pcm
+
+    def _on_speculative_done(self, task: asyncio.Task) -> None:
+        self._speculative_tasks.discard(task)
+        if self._speculative_task is task and not self._speculative_valid:
+            self._speculative_task = None
+        try:
+            result, _elapsed_ms = task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.debug("Speculative ASR inference failed: %s", exc)
+            return
+
+        if (
+            task is not self._speculative_task
+            or not self._speculative_valid
+            or self.on_speculative_transcript_callback is None
+        ):
+            return
+
+        text, confidence, skipped = result
+        if skipped or not str(text or "").strip() or confidence is None:
+            return
+
+        # Preview delivery and final-ASR reuse intentionally have different
+        # confidence policies. The session may use a lower-confidence preview
+        # to precompute an LLM turn, but it cannot produce side effects or
+        # playback until the final transcript matches exactly. Final ASR reuse
+        # below still requires speculative_min_confidence, so lowering the
+        # LLM preview threshold never lowers recognition quality.
+        generation = self._utterance_generation
+        asyncio.create_task(
+            self.on_speculative_transcript_callback(
+                str(text).strip(),
+                float(confidence),
+                generation,
+            )
+        )
+
+    def _maybe_start_speculative_inference(self) -> None:
+        if (
+            not self.speculative_inference_enabled
+            or not self._speech_active
+            or self._silence_ms < self.speculative_start_silence_ms
+            or self._voiced_ms < self.min_speech_duration_ms
+        ):
+            return
+        task = self._speculative_task
+        if task is not None:
+            # Keep one valid snapshot for the whole trailing-silence run,
+            # including after it has already completed. Only a snapshot that
+            # was invalidated by resumed speech may be replaced.
+            if self._speculative_valid or not task.done():
+                return
+            self._speculative_task = None
+
+        generation = self._utterance_generation
+        pcm = self._prepare_pcm(bytes(self._speech_buffer), log_audio=False)
+        if not pcm.size:
+            return
+        started = time.perf_counter()
+
+        async def run_snapshot():
+            result = await _ParakeetRuntime.transcribe_if_current(
+                pcm,
+                is_current=lambda: generation == self._capture_generation,
+            )
+            return result, (time.perf_counter() - started) * 1000.0
+
+        task = asyncio.create_task(run_snapshot())
+        self._speculative_task = task
+        self._speculative_valid = True
+        self._speculative_tasks.add(task)
+        task.add_done_callback(self._on_speculative_done)
+        if self.metrics_recorder is not None:
+            self.metrics_recorder.record_capture_event(
+                generation,
+                "asr_speculative_start",
+                silence_ms=round(self._silence_ms, 3),
+                audio_ms=round(pcm.size * 1000.0 / self.sample_rate, 3),
+            )
+
     def _speech_probability(self, frame: bytes) -> float:
         if self._vad_session is None:
             return 0.0
@@ -442,11 +576,35 @@ class ParakeetSileroASR(BaseASR):
             return
 
         self._speech_buffer.extend(frame)
-        if is_voice:
+        # Speech-start uses hysteresis to avoid noise-triggered starts. Once an
+        # utterance is active, ending is a separate policy: this lets operators
+        # cut a lingering neural-VAD tail without making speech-start less
+        # sensitive. The default equals vad_threshold_low, preserving legacy
+        # behavior exactly.
+        end_is_voice = probability >= self.vad_end_threshold
+        if end_is_voice:
+            if self._silence_ms > 0 and self._speculative_task is not None:
+                # The user resumed speaking. Let any already-dispatched GPU
+                # work finish safely, but never reuse its incomplete snapshot.
+                self._speculative_valid = False
+                if self.on_speculative_invalidated_callback is not None:
+                    asyncio.create_task(
+                        self.on_speculative_invalidated_callback(
+                            self._utterance_generation
+                        )
+                    )
+                if self.metrics_recorder is not None:
+                    self.metrics_recorder.record_capture_event(
+                        self._utterance_generation,
+                        "asr_speculative_discarded",
+                        reason="speech_resumed",
+                    )
             self._voiced_ms += self.FRAME_MS
             self._silence_ms = 0.0
         else:
             self._silence_ms += self.FRAME_MS
+            if self._silence_ms < self.min_silence_duration_ms:
+                self._maybe_start_speculative_inference()
 
         if self._silence_ms >= self.min_silence_duration_ms:
             await self._finish_utterance(endpoint_reason="silence")
@@ -462,6 +620,14 @@ class ParakeetSileroASR(BaseASR):
         voiced_ms = self._voiced_ms
         trailing_silence_ms = self._silence_ms
         utterance_generation = self._utterance_generation
+        speculative_task = (
+            self._speculative_task
+            if self._speculative_valid and self._speculative_task is not None
+            else None
+        )
+        speculative_valid = speculative_task is not None
+        self._speculative_task = None
+        self._speculative_valid = False
         self._reset_utterance_state()
 
         logger.info(
@@ -495,35 +661,18 @@ class ParakeetSileroASR(BaseASR):
                 await self.on_transcript_callback("", True, True, utterance_generation)
             return
 
-        pcm = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        if pcm.size:
-            # Remove a small DC offset and normalize quiet browser microphones.
-            # iOS/WebKit can deliver valid speech at a much lower level than the
-            # audio used to train/test Parakeet. Silero still detects it, but the
-            # acoustic model may otherwise collapse to the unknown token.
-            pcm = pcm - float(np.mean(pcm))
-            rms = float(np.sqrt(np.mean(np.square(pcm), dtype=np.float64)))
-            peak = float(np.max(np.abs(pcm)))
-            gain = 1.0
-            if rms > 1e-5 and rms < 0.075:
-                gain = min(0.09 / rms, 8.0)
-                if peak > 1e-5:
-                    gain = min(gain, 0.95 / peak)
-                pcm = np.clip(pcm * gain, -0.98, 0.98).astype(np.float32, copy=False)
-            logger.info(
-                "ASR utterance audio: %.0f ms, %d samples, rms=%.4f, peak=%.4f, gain=%.2fx",
-                pcm.size * 1000 / self.sample_rate,
-                pcm.size,
-                rms,
-                peak,
-                gain,
-            )
+        # Speculative and final inference share identical preprocessing so a
+        # reused result differs only in when computation started, not in the
+        # acoustic transform.
+        pcm = self._prepare_pcm(audio_bytes, log_audio=True)
         await self._enqueue_utterance(
             utterance_generation,
             pcm,
             endpoint_reason=endpoint_reason,
             trailing_silence_ms=trailing_silence_ms,
             voiced_ms=voiced_ms,
+            speculative_task=speculative_task,
+            speculative_valid=speculative_valid,
         )
 
     async def _enqueue_utterance(
@@ -534,6 +683,8 @@ class ParakeetSileroASR(BaseASR):
         endpoint_reason: str,
         trailing_silence_ms: float,
         voiced_ms: float,
+        speculative_task: Optional[asyncio.Task] = None,
+        speculative_valid: bool = False,
     ) -> None:
         audio_ms = pcm.size * 1000.0 / self.sample_rate
         if self._utterance_queue.full():
@@ -585,6 +736,8 @@ class ParakeetSileroASR(BaseASR):
             endpoint_reason=endpoint_reason,
             trailing_silence_ms=trailing_silence_ms,
             voiced_ms=voiced_ms,
+            speculative_task=speculative_task,
+            speculative_valid=speculative_valid,
         )
         self._utterance_queue.put_nowait(item)
         if self.metrics_recorder is not None:
@@ -637,28 +790,105 @@ class ParakeetSileroASR(BaseASR):
                             )
 
                     infer_started = time.perf_counter()
-                    text, confidence, skipped = await _ParakeetRuntime.transcribe_if_current(
-                        pcm,
-                        is_current=lambda: utterance_generation == self._capture_generation,
-                        on_lock_acquired=_on_lock_acquired,
-                    )
-                    if skipped:
-                        logger.info(
-                            "Dropped stale ASR job after lock generation=%s current=%s",
-                            utterance_generation,
-                            self._capture_generation,
+                    text = ""
+                    confidence = None
+                    skipped = False
+                    speculative_reused = False
+
+                    if queued.speculative_valid and queued.speculative_task is not None:
+                        try:
+                            (
+                                (spec_text, spec_confidence, spec_skipped),
+                                spec_infer_ms,
+                            ) = await queued.speculative_task
+                            if (
+                                not spec_skipped
+                                and utterance_generation == self._capture_generation
+                                and spec_text
+                                and spec_confidence is not None
+                                and float(spec_confidence) >= self.speculative_min_confidence
+                            ):
+                                text = spec_text
+                                confidence = spec_confidence
+                                speculative_reused = True
+                                if self.metrics_recorder is not None:
+                                    self.metrics_recorder.record_capture_event(
+                                        utterance_generation,
+                                        "asr_speculative_reused",
+                                        infer_ms=round(float(spec_infer_ms), 3),
+                                        endpoint_wait_ms=round(
+                                            (time.perf_counter() - infer_started) * 1000.0,
+                                            3,
+                                        ),
+                                        min_word_confidence=round(
+                                            float(spec_confidence), 4
+                                        ),
+                                    )
+                            elif self.metrics_recorder is not None:
+                                self.metrics_recorder.record_capture_event(
+                                    utterance_generation,
+                                    "asr_speculative_discarded",
+                                    reason=(
+                                        "stale"
+                                        if spec_skipped
+                                        else "confidence_or_empty"
+                                    ),
+                                    min_word_confidence=(
+                                        round(float(spec_confidence), 4)
+                                        if spec_confidence is not None
+                                        else None
+                                    ),
+                                )
+                        except Exception as exc:
+                            logger.debug(
+                                "Speculative ASR result unavailable; using final inference: %s",
+                                exc,
+                            )
+                            if self.metrics_recorder is not None:
+                                self.metrics_recorder.record_capture_event(
+                                    utterance_generation,
+                                    "asr_speculative_discarded",
+                                    reason="error",
+                                    error=type(exc).__name__,
+                                )
+
+                    if not speculative_reused:
+                        text, confidence, skipped = await _ParakeetRuntime.transcribe_if_current(
+                            pcm,
+                            is_current=lambda: utterance_generation == self._capture_generation,
+                            on_lock_acquired=_on_lock_acquired,
                         )
+                        if skipped:
+                            logger.info(
+                                "Dropped stale ASR job after lock generation=%s current=%s",
+                                utterance_generation,
+                                self._capture_generation,
+                            )
+                            if self.metrics_recorder is not None:
+                                self.metrics_recorder.record_capture_event(
+                                    utterance_generation,
+                                    "asr_drop_stale_after_lock",
+                                )
+                            continue
                         if self.metrics_recorder is not None:
                             self.metrics_recorder.record_capture_event(
                                 utterance_generation,
-                                "asr_drop_stale_after_lock",
+                                "asr_infer_end",
+                                infer_ms=round(
+                                    (time.perf_counter() - infer_started) * 1000.0,
+                                    3,
+                                ),
+                                speculative=False,
                             )
-                        continue
-                    if self.metrics_recorder is not None:
+                    elif self.metrics_recorder is not None:
                         self.metrics_recorder.record_capture_event(
                             utterance_generation,
                             "asr_infer_end",
-                            infer_ms=round((time.perf_counter() - infer_started) * 1000.0, 3),
+                            infer_ms=round(
+                                (time.perf_counter() - infer_started) * 1000.0,
+                                3,
+                            ),
+                            speculative=True,
                         )
                     self.last_word_confidence = confidence
                     logger.info(
@@ -780,6 +1010,7 @@ class ParakeetSileroASR(BaseASR):
     def invalidate_capture(self, capture_generation: int):
         self._capture_generation = int(capture_generation)
         self._utterance_generation = self._capture_generation
+        self._speculative_valid = False
         self._pcm_pending.clear()
         self._reset_utterance_state()
 
@@ -813,6 +1044,13 @@ class ParakeetSileroASR(BaseASR):
 
         if self._diagnostic_tasks:
             await asyncio.gather(*tuple(self._diagnostic_tasks), return_exceptions=True)
+        if self._speculative_tasks:
+            # Do not cancel executor-backed inference: cancelling the asyncio
+            # wrapper cannot stop the GPU thread and could let teardown race
+            # the shared model. Drain the bounded in-flight set instead.
+            await asyncio.gather(*tuple(self._speculative_tasks), return_exceptions=True)
+        self._speculative_task = None
+        self._speculative_valid = False
 
         self._vad_session = None
         self._pcm_pending.clear()

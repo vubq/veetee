@@ -2,7 +2,7 @@ import asyncio
 import json
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -10,6 +10,7 @@ from config.settings import AppConfig
 from core.management_store import ManagementStore
 from core.protocol import ProtocolVersion, unpack_audio_payload
 from core.response_audio_cache import ResponseAudioCache
+from core.providers.tts.scheduler import TTSPreempted
 from core.session import ClientSession
 from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent
 from http_server import HttpServer
@@ -251,6 +252,11 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(latest_user["content"], "VeeTee ơi")
 
                     if version == ProtocolVersion.V3:
+                        # Auto-end is disabled by default in production. This
+                        # branch explicitly opts in to keep compatibility mode
+                        # covered without giving normal chat authority to close.
+                        self.config.intent.semantic_end_enabled = True
+                        self.config.conversation.end_intent_ai_enabled = True
                         await ws.send_json({"type": "text", "text": "thôi mình đi ngủ đây"})
                         await self._receive_ai_response(ws, version, self.llm.goodbye)
                         closed = await asyncio.wait_for(ws.receive(), timeout=1)
@@ -393,6 +399,22 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied_prompt.status, 401)
         self.assertEqual(denied_voice.status, 401)
 
+    async def test_test_voice_preemption_is_reported_as_live_priority_conflict(self):
+        self.config.management.token = "integration-secret"
+        headers = {"X-Veetee-Management-Token": "integration-secret"}
+        self.tts.synthesize_wav = AsyncMock(
+            side_effect=TTSPreempted("dashboard yielded to live")
+        )
+
+        response = await self.client.post(
+            "/api/test-voice",
+            json={"text": "đọc thử"},
+            headers=headers,
+        )
+        self.assertEqual(response.status, 409)
+        payload = await response.json()
+        self.assertEqual(payload["code"], "TTS_PREEMPTED")
+
     async def test_test_voice_rate_limit_is_bounded(self):
         self.config.management.token = "integration-secret"
         self.config.management.test_voice_requests_per_minute = 1
@@ -409,6 +431,11 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self._wait_sessions(1)
         session = next(iter(self.active_sessions.values()))
         trace = session.turn_metrics.start_turn(7, "integration")
+        trace.mark("review_probe", semantic="continue", token="must-not-leak")
+        trace.mark("tts_lock_acquired", queue_wait_ms=10.0)
+        trace.mark("tts_lease_held", held_ms=100.0)
+        trace.mark("tts_lock_acquired", queue_wait_ms=20.0)
+        trace.mark("tts_lease_held", held_ms=200.0)
         trace.mark("first_ws_binary_sent")
         trace.finish("completed", llm_rounds=1, tool_calls=0)
         turn_id = trace.turn_id
@@ -420,8 +447,35 @@ class ConversationWebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         diagnostics = await response.json()
         self.assertEqual(diagnostics["runtime"]["recent_turn_count"], 1)
-        self.assertEqual(diagnostics["runtime"]["latest_turns"][-1]["turn_id"], turn_id)
-        self.assertEqual(diagnostics["runtime"]["latest_turns"][-1]["outcome"], "completed")
+        latest = diagnostics["runtime"]["latest_turns"][-1]
+        self.assertEqual(latest["turn_id"], turn_id)
+        self.assertEqual(latest["outcome"], "completed")
+        self.assertEqual(
+            latest["stage_aggregates_ms"]["tts_queue_wait"]["max_ms"],
+            20.0,
+        )
+        self.assertEqual(
+            latest["stage_aggregates_ms"]["tts_lease_held"]["total_ms"],
+            300.0,
+        )
+
+        denied_detail = await self.client.get(f"/api/turns/{turn_id}")
+        self.assertEqual(denied_detail.status, 401)
+        detail_response = await self.client.get(
+            f"/api/turns/{turn_id}",
+            headers=headers,
+        )
+        self.assertEqual(detail_response.status, 200)
+        detail = await detail_response.json()
+        self.assertEqual(detail["turn_id"], turn_id)
+        review_event = next(
+            item for item in detail["events"] if item["name"] == "review_probe"
+        )
+        self.assertEqual(review_event["semantic"], "continue")
+        self.assertEqual(review_event["token"], "<redacted>")
+
+        missing = await self.client.get("/api/turns/not-found", headers=headers)
+        self.assertEqual(missing.status, 404)
 
 
 if __name__ == "__main__":

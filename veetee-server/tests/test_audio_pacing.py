@@ -27,6 +27,16 @@ class AudioPacingTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(pacer.estimated_lead_ms(), 120.0, places=6)
         self.assertAlmostEqual(pacer.next_wait_seconds(), 0.06, places=6)
 
+    def test_six_60ms_frames_fit_360ms_music_jitter_budget(self):
+        clock = FakeClock()
+        pacer = AudioPacer(60, 360, clock=clock)
+
+        for _ in range(6):
+            self.assertEqual(pacer.next_wait_seconds(), 0.0)
+            pacer.record_frame_sent()
+        self.assertAlmostEqual(pacer.estimated_lead_ms(), 360.0, places=6)
+        self.assertAlmostEqual(pacer.next_wait_seconds(), 0.06, places=6)
+
     def test_stall_resets_old_schedule_instead_of_bursting_catchup(self):
         clock = FakeClock()
         pacer = AudioPacer(60, 120, clock=clock)

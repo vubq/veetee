@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
 DEFAULT_WAKE_WORDS = ["你好小智", "小爱同学", "小美同学", "VeeTee ơi"]
 DEFAULT_EXIT_COMMANDS = ["tạm biệt", "kết thúc trò chuyện", "thoát trò chuyện"]
 
@@ -12,7 +13,7 @@ class ServerConfig:
     ws_allowed_origins: list[str] = field(default_factory=list)
     ws_max_sessions: int = 8
     ws_hello_timeout_seconds: int = 5
-    timezone: str = "Asia/Bangkok"
+    timezone: str = DEFAULT_TIMEZONE
     host: str = "0.0.0.0"
     ws_port: int = 8000
     http_port: int = 8003
@@ -36,7 +37,18 @@ class ASRConfig:
     vad_model_path: str = "models/silero-vad/silero_vad.onnx"
     vad_threshold: float = 0.5
     vad_threshold_low: float = 0.3
-    min_silence_duration_ms: int = 450
+    # Active-speech end threshold is independent from speech-start hysteresis.
+    # Default 0.3 preserves the historical behavior; tune only with labelled audio.
+    vad_end_threshold: float = 0.3
+    min_silence_duration_ms: int = 192
+    speculative_inference_enabled: bool = True
+    speculative_start_silence_ms: int = 64
+    speculative_min_confidence: float = 0.95
+    # Start the same AI turn during trailing silence, but buffer all events
+    # until ASR final confirms the exact transcript. No audio/tool/memory side
+    # effect is allowed before commit.
+    speculative_llm_enabled: bool = False
+    speculative_llm_min_confidence: float = 0.95
     min_speech_duration_ms: int = 160
     speech_start_frames: int = 2
     pre_speech_pad_ms: int = 512
@@ -65,8 +77,29 @@ class LLMRoutingConfig:
     headroom_pct: float = 10.0
     max_attempts: int = 2
     admission_wait_ms: float = 50.0
+    discovery_wait_ms: float = 750.0
     discovery_max_inflight: int = 1
     inflight_penalty_s: float = 0.4
+    latency_ewma_alpha: float = 0.3
+    latency_jitter_penalty: float = 0.75
+
+
+@dataclass
+class SpeechSegmentationConfig:
+    # Streaming LLM -> TTS policy. These are transport/prosody thresholds,
+    # not semantic intent rules, and can be A/B tuned without code changes.
+    min_segment_chars: int = 28
+    clause_target_chars: int = 150
+    clause_min_chars: int = 80
+    first_clause_min_chars: int = 24
+    first_clause_min_words: int = 4
+    hard_max_segment_chars: int = 240
+    hard_cut_search_back: int = 45
+    hard_cut_search_forward: int = 40
+    first_segment_min_chars: int = 8
+    first_segment_min_words: int = 2
+    first_soft_cut_chars: int = 0
+    first_soft_cut_min_words: int = 3
 
 
 QUOTA_DIMENSIONS = frozenset({"rpm", "rpd", "tpm", "tpd", "itpm", "otpm"})
@@ -86,6 +119,9 @@ class LLMConfig:
     # learned from response headers). Never fabricate another account's caps.
     quota_groups: dict = field(default_factory=dict)
     routing: LLMRoutingConfig = field(default_factory=LLMRoutingConfig)
+    speech_segmentation: SpeechSegmentationConfig = field(
+        default_factory=SpeechSegmentationConfig
+    )
     # Reasoning effort for Qwen-style models ("none" suppresses <think>).
     # gpt-oss only accepts low/medium/high -> use model_reasoning_effort.
     reasoning_effort: str = "none"
@@ -94,7 +130,16 @@ class LLMConfig:
     extra_models: list = field(default_factory=list)
     model_reasoning_effort: dict = field(default_factory=dict)
     temperature: float = 0.6
-    max_tokens: int = 600
+    max_tokens: int = 320
+    # Provider transport budgets. TurnRunner still owns the stricter
+    # first-usable-event/whole-turn deadlines; these prevent socket/probe
+    # requests from outliving the configured runtime budget.
+    request_timeout_ms: int = 15000
+    probe_timeout_ms: int = 8000
+    control_timeout_ms: int = 2000
+    # Keep Groq TCP/TLS connections warm across natural conversational pauses.
+    http_keepalive_seconds: int = 120
+    dns_cache_ttl_seconds: int = 300
     reasoning_format: str = "hidden"
     base_prompt: str = "Bạn là VeeTee, một trợ lý ảo giọng nói tiếng Việt thông minh, thân thiện và hữu ích."
     prompt_template: str = "agent-base-prompt.txt"
@@ -103,9 +148,6 @@ class LLMConfig:
     # overflow the model context. Runtime and management paths share this.
     base_prompt_max_bytes: int = 32 * 1024
     base_prompt_max_tokens: int = 8000
-    # Incremented every time the persona changes so all rounds of one turn
-    # pin the same snapshot. See OmnirouteGroqLLM.persona_version.
-    persona_version: int = 0
 
 @dataclass
 class TTSConfig:
@@ -115,14 +157,24 @@ class TTSConfig:
     sample_rate: int = 24000
     frame_duration_ms: int = 60
     send_ahead_ms: int = 120
+    # Optional local-only speculative TTS. Audio is buffered and never sent
+    # until the exact speculative transcript is confirmed by ASR final.
+    speculative_prefetch_enabled: bool = False
     stream_queue_max_chunks: int = 4
+    # Scheduler policy: first audio of a new turn may jump ahead of continuation
+    # segments, while aging prevents continuation starvation under sustained load.
+    first_audio_priority_boost: float = 5.0
+    scheduler_aging_per_second: float = 2.0
+    # Explicit low-TTFA VieNeu streamer profile instead of a machine literal.
+    native_chunk_frames: int = 1
     denoise: bool = True
     temperature: float = 0.7
     # Split deadlines so a long playback is never cut by the generation
     # timeout. Generation/tool, first-chunk, stall and delivery budgets are
     # measured separately (M6.7).
-    first_chunk_timeout_ms: int = 4000
-    stall_timeout_ms: int = 2500
+    admission_timeout_ms: int = 5000
+    first_chunk_timeout_ms: int = 1500
+    stall_timeout_ms: int = 1500
 
 
 @dataclass
@@ -138,11 +190,20 @@ class ConversationConfig:
     greeting_pool_size: int = 3
     audio_cache_enabled: bool = True
     idle_timeout_seconds: int = 120
+    history_turns: int = 6
+    # Long-history compression is AI-generated off the live turn. It is
+    # cancelled when a new turn starts, so it never competes intentionally
+    # with the latency-critical response path.
+    history_summary_enabled: bool = True
+    history_summary_high_water_turns: int = 5
+    history_summary_min_new_turns: int = 3
+    history_summary_max_chars: int = 1200
+    history_summary_defer_ms: int = 250
     exit_commands: list[str] = field(default_factory=lambda: list(DEFAULT_EXIT_COMMANDS))
     goodbye_enabled: bool = True
     goodbye_text: str = ""
     goodbye_ai_enabled: bool = True
-    end_intent_ai_enabled: bool = True
+    end_intent_ai_enabled: bool = False
     ai_control_timeout_ms: int = 1800
     wake_start_wait_ms: int = 150
     fixed_response_timeout_seconds: float = 5.0
@@ -151,9 +212,14 @@ class ConversationConfig:
 
 @dataclass
 class LatencyConfig:
+    # Compatibility switch for old configs. Runtime uses the unified path.
     unified_turn_enabled: bool = True
-    first_token_timeout_ms: int = 6000
+    # Warm-path objective; timeout remains looser so jitter does not turn a
+    # 600 ms performance target into avoidable failed turns.
+    target_first_audio_ms: int = 600
+    first_token_timeout_ms: int = 1800
     total_turn_timeout_ms: int = 15000
+    # Deprecated alias migrated to memory.lookup_timeout_ms when needed.
     context_lookup_timeout_ms: int = 10
     # Request budgeting uses a conservative character/token estimate so the
     # realtime path stays bounded without adding a tokenizer dependency.
@@ -164,7 +230,7 @@ class LatencyConfig:
 @dataclass
 class IntentConfig:
     enabled: bool = True
-    semantic_end_enabled: bool = True
+    semantic_end_enabled: bool = False
     confirmation_ttl_seconds: float = 15.0
 
 
@@ -213,6 +279,10 @@ class MusicConfig:
     search_results: int = 5
     resolve_timeout_s: float = 20.0
     stall_timeout_s: float = 12.0
+    # Bounded client-side jitter buffer. Stock Xiaozhi keeps about 1.2s of
+    # Opus packets; 360ms absorbs normal scheduler/network jitter while
+    # keeping pause/stop responsive.
+    send_ahead_ms: int = 360
 
 
 @dataclass
@@ -281,6 +351,7 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
         "goodbye_enabled",
         "goodbye_ai_enabled",
         "end_intent_ai_enabled",
+        "history_summary_enabled",
     )
     for name in bool_fields:
         if type(getattr(config, name)) is not bool:
@@ -298,12 +369,33 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
         if any(not item.strip() for item in values):
             raise ValueError(f"conversation.{name} cannot contain empty aliases")
 
-    for name in ("idle_timeout_seconds", "wake_start_wait_ms", "close_grace_ms", "greeting_pool_size", "ai_control_timeout_ms"):
+    for name in (
+        "idle_timeout_seconds",
+        "history_turns",
+        "history_summary_high_water_turns",
+        "history_summary_min_new_turns",
+        "history_summary_max_chars",
+        "history_summary_defer_ms",
+        "wake_start_wait_ms",
+        "close_grace_ms",
+        "greeting_pool_size",
+        "ai_control_timeout_ms",
+    ):
         value = getattr(config, name)
         if type(value) is not int or value < 0:
             raise ValueError(f"conversation.{name} must be a non-negative integer")
     if config.greeting_pool_size < 1:
         raise ValueError("conversation.greeting_pool_size must be at least 1")
+    if not 1 <= config.history_turns <= 50:
+        raise ValueError("conversation.history_turns must be between 1 and 50")
+    if not 2 <= config.history_summary_high_water_turns <= 50:
+        raise ValueError("conversation.history_summary_high_water_turns must be between 2 and 50")
+    if not 1 <= config.history_summary_min_new_turns <= 20:
+        raise ValueError("conversation.history_summary_min_new_turns must be between 1 and 20")
+    if not 256 <= config.history_summary_max_chars <= 8000:
+        raise ValueError("conversation.history_summary_max_chars must be between 256 and 8000")
+    if not 0 <= config.history_summary_defer_ms <= 5000:
+        raise ValueError("conversation.history_summary_defer_ms must be between 0 and 5000")
     if config.ai_control_timeout_ms < 100:
         raise ValueError("conversation.ai_control_timeout_ms must be at least 100")
 
@@ -315,6 +407,53 @@ def _validate_conversation_config(config: ConversationConfig) -> None:
     # Legacy wake/exit lists are retained as inert compatibility data. They
     # are not semantic routing tables and therefore do not need matcher-style
     # normalization/overlap rules.
+
+
+def validate_speech_segmentation_config(config: SpeechSegmentationConfig) -> None:
+    if not isinstance(config, SpeechSegmentationConfig):
+        raise ValueError("llm.speech_segmentation must be a mapping")
+    for name in (
+        "min_segment_chars",
+        "clause_target_chars",
+        "clause_min_chars",
+        "first_clause_min_chars",
+        "first_clause_min_words",
+        "hard_max_segment_chars",
+        "hard_cut_search_back",
+        "hard_cut_search_forward",
+        "first_segment_min_chars",
+        "first_segment_min_words",
+        "first_soft_cut_min_words",
+    ):
+        value = getattr(config, name)
+        if type(value) is not int or value < 1:
+            raise ValueError(
+                f"llm.speech_segmentation.{name} must be a positive integer"
+            )
+    if (
+        type(config.first_soft_cut_chars) is not int
+        or not 0 <= config.first_soft_cut_chars <= 200
+    ):
+        raise ValueError(
+            "llm.speech_segmentation.first_soft_cut_chars must be an integer "
+            "between 0 and 200"
+        )
+    if config.clause_min_chars > config.clause_target_chars:
+        raise ValueError(
+            "llm.speech_segmentation.clause_min_chars must be <= clause_target_chars"
+        )
+    if config.first_clause_min_chars > config.clause_target_chars:
+        raise ValueError(
+            "llm.speech_segmentation.first_clause_min_chars must be <= clause_target_chars"
+        )
+    if config.hard_max_segment_chars < config.clause_target_chars:
+        raise ValueError(
+            "llm.speech_segmentation.hard_max_segment_chars must be >= clause_target_chars"
+        )
+    if config.hard_cut_search_back >= config.hard_max_segment_chars:
+        raise ValueError(
+            "llm.speech_segmentation.hard_cut_search_back must be < hard_max_segment_chars"
+        )
 
 
 def _validate_app_config(config: AppConfig) -> None:
@@ -332,6 +471,59 @@ def _validate_app_config(config: AppConfig) -> None:
         value = getattr(config.asr, name)
         if type(value) is not int or value < 1:
             raise ValueError(f"asr.{name} must be a positive integer")
+    if type(config.asr.min_silence_duration_ms) is not int or not 96 <= config.asr.min_silence_duration_ms <= 2000:
+        raise ValueError("asr.min_silence_duration_ms must be an integer between 96 and 2000")
+    if type(config.asr.speculative_inference_enabled) is not bool:
+        raise ValueError("asr.speculative_inference_enabled must be a boolean")
+    if (
+        type(config.asr.speculative_start_silence_ms) is not int
+        or not 32 <= config.asr.speculative_start_silence_ms <= 1000
+    ):
+        raise ValueError(
+            "asr.speculative_start_silence_ms must be an integer between 32 and 1000"
+        )
+    if (
+        isinstance(config.asr.speculative_min_confidence, bool)
+        or not isinstance(config.asr.speculative_min_confidence, (int, float))
+        or not 0 <= float(config.asr.speculative_min_confidence) <= 1
+    ):
+        raise ValueError(
+            "asr.speculative_min_confidence must be a number between 0 and 1"
+        )
+    if type(config.asr.speculative_llm_enabled) is not bool:
+        raise ValueError("asr.speculative_llm_enabled must be a boolean")
+    if (
+        isinstance(config.asr.speculative_llm_min_confidence, bool)
+        or not isinstance(config.asr.speculative_llm_min_confidence, (int, float))
+        or not 0 <= float(config.asr.speculative_llm_min_confidence) <= 1
+    ):
+        raise ValueError(
+            "asr.speculative_llm_min_confidence must be a number between 0 and 1"
+        )
+    if (
+        config.asr.speculative_inference_enabled
+        and config.asr.speculative_start_silence_ms >= config.asr.min_silence_duration_ms
+    ):
+        raise ValueError(
+            "asr.speculative_start_silence_ms must be < "
+            "asr.min_silence_duration_ms when speculative inference is enabled"
+        )
+    if config.asr.speculative_llm_enabled and not config.asr.speculative_inference_enabled:
+        raise ValueError(
+            "asr.speculative_llm_enabled requires asr.speculative_inference_enabled"
+        )
+    if type(config.asr.min_speech_duration_ms) is not int or not 64 <= config.asr.min_speech_duration_ms <= 2000:
+        raise ValueError("asr.min_speech_duration_ms must be an integer between 64 and 2000")
+    if type(config.asr.speech_start_frames) is not int or not 1 <= config.asr.speech_start_frames <= 8:
+        raise ValueError("asr.speech_start_frames must be an integer between 1 and 8")
+    if type(config.asr.pre_speech_pad_ms) is not int or not 0 <= config.asr.pre_speech_pad_ms <= 2000:
+        raise ValueError("asr.pre_speech_pad_ms must be an integer between 0 and 2000")
+    for name in ("vad_threshold", "vad_threshold_low", "vad_end_threshold"):
+        value = getattr(config.asr, name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < float(value) < 1:
+            raise ValueError(f"asr.{name} must be a number between 0 and 1")
+    if config.asr.vad_threshold_low >= config.asr.vad_threshold:
+        raise ValueError("asr.vad_threshold_low must be < asr.vad_threshold")
     if config.asr.max_utterance_ms < config.asr.min_speech_duration_ms:
         raise ValueError("asr.max_utterance_ms must be >= asr.min_speech_duration_ms")
 
@@ -339,6 +531,7 @@ def _validate_app_config(config: AppConfig) -> None:
         if type(getattr(config.latency, name)) is not bool:
             raise ValueError(f"latency.{name} must be a boolean")
     for name in (
+        "target_first_audio_ms",
         "first_token_timeout_ms",
         "total_turn_timeout_ms",
         "context_lookup_timeout_ms",
@@ -350,6 +543,12 @@ def _validate_app_config(config: AppConfig) -> None:
             raise ValueError(f"latency.{name} must be a positive integer")
     if config.latency.context_max_tokens <= config.llm.max_tokens:
         raise ValueError("latency.context_max_tokens must exceed llm.max_tokens")
+    if (
+        config.asr.provider.strip().lower()
+        in {"parakeet_silero", "parakeet", "silero_parakeet"}
+        and config.asr.sample_rate != 16000
+    ):
+        raise ValueError("Parakeet/Silero ASR requires asr.sample_rate=16000")
 
     for group_name, group, fields in (
         ("intent", config.intent, ("enabled", "semantic_end_enabled")),
@@ -359,6 +558,13 @@ def _validate_app_config(config: AppConfig) -> None:
         for name in fields:
             if type(getattr(group, name)) is not bool:
                 raise ValueError(f"{group_name}.{name} must be a boolean")
+
+    if type(config.asr.endpointing_ms) is not int or not 100 <= config.asr.endpointing_ms <= 2000:
+        raise ValueError("asr.endpointing_ms must be an integer between 100 and 2000")
+    if type(config.tts.send_ahead_ms) is not int or not 60 <= config.tts.send_ahead_ms <= 1000:
+        raise ValueError("tts.send_ahead_ms must be an integer between 60 and 1000")
+    if type(config.tts.speculative_prefetch_enabled) is not bool:
+        raise ValueError("tts.speculative_prefetch_enabled must be a boolean")
 
     for name in ("lookup_timeout_ms", "top_k", "max_memory_chars"):
         value = getattr(config.memory, name)
@@ -406,10 +612,20 @@ def _validate_app_config(config: AppConfig) -> None:
         value = getattr(config.music, name)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"music.{name} must be a positive number")
+    if type(config.music.send_ahead_ms) is not int or not 60 <= config.music.send_ahead_ms <= 900:
+        raise ValueError("music.send_ahead_ms must be an integer between 60 and 900")
     for name in ("base_prompt_max_bytes", "base_prompt_max_tokens"):
         value = getattr(config.llm, name)
         if type(value) is not int or value < 256:
             raise ValueError(f"llm.{name} must be an integer >= 256")
+    for name in ("request_timeout_ms", "probe_timeout_ms", "control_timeout_ms"):
+        value = getattr(config.llm, name)
+        if type(value) is not int or value < 100:
+            raise ValueError(f"llm.{name} must be an integer >= 100")
+    if type(config.llm.http_keepalive_seconds) is not int or not 15 <= config.llm.http_keepalive_seconds <= 900:
+        raise ValueError("llm.http_keepalive_seconds must be an integer between 15 and 900")
+    if type(config.llm.dns_cache_ttl_seconds) is not int or not 15 <= config.llm.dns_cache_ttl_seconds <= 3600:
+        raise ValueError("llm.dns_cache_ttl_seconds must be an integer between 15 and 3600")
     if config.llm.provider not in ("groq", "omniroute"):
         raise ValueError("llm.provider must be 'groq' or 'omniroute'")
     if not isinstance(config.llm.model, str) or not config.llm.model.strip():
@@ -450,10 +666,17 @@ def _validate_app_config(config: AppConfig) -> None:
         raise ValueError("llm.routing.max_attempts must be between 1 and 16")
     if not 0.0 <= routing.admission_wait_ms <= 5000.0:
         raise ValueError("llm.routing.admission_wait_ms must be between 0 and 5000")
+    if not 0.0 <= routing.discovery_wait_ms <= 5000.0:
+        raise ValueError("llm.routing.discovery_wait_ms must be between 0 and 5000")
     if type(routing.discovery_max_inflight) is not int or routing.discovery_max_inflight < 1:
         raise ValueError("llm.routing.discovery_max_inflight must be a positive integer")
     if not 0.0 <= routing.inflight_penalty_s <= 10.0:
         raise ValueError("llm.routing.inflight_penalty_s must be between 0 and 10")
+    if not 0.0 <= routing.latency_ewma_alpha <= 1.0:
+        raise ValueError("llm.routing.latency_ewma_alpha must be between 0 and 1")
+    if not 0.0 <= routing.latency_jitter_penalty <= 10.0:
+        raise ValueError("llm.routing.latency_jitter_penalty must be between 0 and 10")
+    validate_speech_segmentation_config(config.llm.speech_segmentation)
     if config.llm.reasoning_effort not in ("none", "low", "medium", "high"):
         raise ValueError("llm.reasoning_effort must be none/low/medium/high")
     if not isinstance(config.llm.extra_models, list) or any(
@@ -468,10 +691,18 @@ def _validate_app_config(config: AppConfig) -> None:
     if config.asr.text_correction_enabled and config.latency.unified_turn_enabled:
         raise ValueError("fast unified-turn profile requires asr.text_correction_enabled=false")
 
-    for name in ("first_chunk_timeout_ms", "stall_timeout_ms"):
+    for name in ("admission_timeout_ms", "first_chunk_timeout_ms", "stall_timeout_ms"):
         value = getattr(config.tts, name)
         if type(value) is not int or value < 100:
             raise ValueError(f"tts.{name} must be an integer >= 100")
+    if type(config.tts.native_chunk_frames) is not int or not 1 <= config.tts.native_chunk_frames <= 32:
+        raise ValueError("tts.native_chunk_frames must be an integer between 1 and 32")
+    if type(config.tts.stream_queue_max_chunks) is not int or not 1 <= config.tts.stream_queue_max_chunks <= 256:
+        raise ValueError("tts.stream_queue_max_chunks must be an integer between 1 and 256")
+    if not 0.0 <= float(config.tts.first_audio_priority_boost) <= 50.0:
+        raise ValueError("tts.first_audio_priority_boost must be between 0 and 50")
+    if not 0.1 <= float(config.tts.scheduler_aging_per_second) <= 20.0:
+        raise ValueError("tts.scheduler_aging_per_second must be between 0.1 and 20")
     if not isinstance(config.management.token, str):
         raise ValueError("management.token must be a string")
     for name in ("test_voice_max_concurrency", "test_voice_requests_per_minute"):
@@ -486,8 +717,18 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
     if not os.path.exists(config_file):
         return AppConfig()
     
-    with open(config_file, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Cannot read VeeTee config file {config_file!r}; "
+            "check file owner/mode for the service user"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot open VeeTee config file {config_file!r}: {exc}"
+        ) from exc
 
     server_data = raw.get("server", {})
     asr_data = raw.get("asr", {})
@@ -510,6 +751,17 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         **{k: v for k, v in conversation_data.items() if k in ConversationConfig.__annotations__}
     )
     _validate_conversation_config(conversation)
+
+    # Backward-compatible migration for the old latency-scoped lookup timeout.
+    # The memory subsystem is the actual owner of this deadline.
+    if (
+        isinstance(latency_data, dict)
+        and "context_lookup_timeout_ms" in latency_data
+        and isinstance(memory_data, dict)
+        and "lookup_timeout_ms" not in memory_data
+    ):
+        memory_data = dict(memory_data)
+        memory_data["lookup_timeout_ms"] = latency_data["context_lookup_timeout_ms"]
 
     for section_name, section_data in (
         ("latency", latency_data),
@@ -560,6 +812,18 @@ def load_settings(config_file: Optional[str] = None) -> AppConfig:
         raise ValueError("llm.routing must be a mapping")
     llm_data["routing"] = LLMRoutingConfig(
         **{k: v for k, v in routing_data.items() if k in LLMRoutingConfig.__annotations__}
+    )
+    segmentation_data = llm_data.get("speech_segmentation", {})
+    if segmentation_data is None:
+        segmentation_data = {}
+    if not isinstance(segmentation_data, dict):
+        raise ValueError("llm.speech_segmentation must be a mapping")
+    llm_data["speech_segmentation"] = SpeechSegmentationConfig(
+        **{
+            k: v
+            for k, v in segmentation_data.items()
+            if k in SpeechSegmentationConfig.__annotations__
+        }
     )
     quota_groups = llm_data.get("quota_groups", {})
     if quota_groups is None:

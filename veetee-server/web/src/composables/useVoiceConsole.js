@@ -1,13 +1,16 @@
 import { nextTick, onBeforeUnmount, ref } from 'vue'
-import { OpusDecoder } from 'opus-decoder'
 import {
   createMicProcessor,
   createStreamingPcm16Resampler,
   extractOpusPacket,
+  pcm16LeBytesToFloat32,
   resampleFloatToPcm16,
 } from '../lib/voiceAudio'
 
-export function useVoiceConsole({ authRequired, notify }) {
+const INPUT_SAMPLE_RATE = 16000
+const DEFAULT_OUTPUT_SAMPLE_RATE = 24000
+
+export function useVoiceConsole({ authRequired, notify, health }) {
   const chatInput = ref('')
   const chatMessages = ref([])
   const protocolLog = ref([])
@@ -29,7 +32,6 @@ export function useVoiceConsole({ authRequired, notify }) {
 
   let ws = null
   let audioCtx = null
-  let opusDecoder = null
   let nextPlayTime = 0
   let turnStartedAt = 0
   let micStream = null
@@ -37,7 +39,8 @@ export function useVoiceConsole({ authRequired, notify }) {
   let micSource = null
   let micProcessor = null
   let micMute = null
-  const micResampler = createStreamingPcm16Resampler(16000)
+  const micResampler = createStreamingPcm16Resampler(INPUT_SAMPLE_RATE)
+  let outputSampleRate = DEFAULT_OUTPUT_SAMPLE_RATE
   let syntheticCancelled = false
   let activeSyntheticSource = null
   const activeSources = new Set()
@@ -57,33 +60,92 @@ export function useVoiceConsole({ authRequired, notify }) {
     pipelineTts.value = 'Chờ LLM'
   }
 
-  async function ensureAudio() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-    if (audioCtx.state === 'suspended') await audioCtx.resume()
-    if (!opusDecoder) {
-      opusDecoder = new OpusDecoder({ sampleRate: 24000, channels: 1 })
-      await opusDecoder.ready
+  async function ensureAudio({ reportBlocked = true, prime = false } = {}) {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext
+    if (!AudioContextCtor) throw new Error('Trình duyệt không hỗ trợ Web Audio')
+    if (!audioCtx || audioCtx.state === 'closed') audioCtx = new AudioContextCtor()
+
+    if (audioCtx.state !== 'running') {
+      try {
+        await audioCtx.resume()
+      } catch (error) {
+        if (reportBlocked) {
+          audioStatus.value = 'Audio bị trình duyệt chặn'
+          addProtocol('AUDIO ERR', `AudioContext resume failed: ${error.message || error}`)
+        }
+      }
+    }
+
+    // Some browsers require an actual source.start() during a user gesture,
+    // not only AudioContext.resume(), before allowing later streamed playback.
+    if (prime && audioCtx.state === 'running') {
+      try {
+        const unlockBuffer = audioCtx.createBuffer(
+          1,
+          1,
+          audioCtx.sampleRate || DEFAULT_OUTPUT_SAMPLE_RATE,
+        )
+        const unlockSource = audioCtx.createBufferSource()
+        unlockSource.buffer = unlockBuffer
+        unlockSource.connect(audioCtx.destination)
+        unlockSource.start()
+      } catch (error) {
+        addProtocol('AUDIO WARN', `Output prime failed: ${error.message || error}`)
+      }
+    }
+
+    if (audioCtx.state !== 'running' && reportBlocked) {
+      audioStatus.value = 'Audio bị trình duyệt chặn · bấm “Bật âm thanh”'
+    }
+    return audioCtx.state === 'running'
+  }
+
+  async function unlockAudio() {
+    try {
+      const running = await ensureAudio({ prime: true })
+      if (!running) {
+        notify('Trình duyệt vẫn đang chặn audio. Kiểm tra tab/site sound rồi bấm lại.', 'warning')
+        return false
+      }
+      audioStatus.value = 'Audio sẵn sàng'
+      addProtocol('AUDIO ✓', `AudioContext running · output ${audioCtx.sampleRate || 'auto'} Hz`)
+      return true
+    } catch (error) {
+      const message = error.message || String(error)
+      audioStatus.value = `Lỗi audio: ${message}`
+      addProtocol('AUDIO ERR', message)
+      notify(message, 'error')
+      return false
     }
   }
 
-  function extractOpus(buffer) {
+  function extractAudioPayload(buffer) {
     return extractOpusPacket(buffer, protocolVersion.value)
   }
 
-  function playAudio(channelData) {
-    const samples = channelData?.[0]
-    if (!samples?.length || !audioCtx) return
-    const buffer = audioCtx.createBuffer(1, samples.length, 24000)
+  function playAudioSamples(samples, sampleRate = DEFAULT_OUTPUT_SAMPLE_RATE) {
+    if (!samples?.length) throw new Error('PCM TTS rỗng')
+    if (!audioCtx) throw new Error('AudioContext chưa khởi tạo')
+    if (audioCtx.state !== 'running') throw new Error(`AudioContext đang ${audioCtx.state}`)
+
+    const rate = Number(sampleRate) || DEFAULT_OUTPUT_SAMPLE_RATE
+    const buffer = audioCtx.createBuffer(1, samples.length, rate)
     buffer.getChannelData(0).set(samples)
+
     const source = audioCtx.createBufferSource()
     source.buffer = buffer
     source.connect(audioCtx.destination)
+
     const now = audioCtx.currentTime
-    if (nextPlayTime < now) nextPlayTime = now + 0.025
-    source.start(nextPlayTime)
-    nextPlayTime += buffer.duration
+    if (!Number.isFinite(nextPlayTime) || nextPlayTime < now) nextPlayTime = now + 0.035
+    const scheduledAt = nextPlayTime
+    source.start(scheduledAt)
+    nextPlayTime = scheduledAt + buffer.duration
+
     activeSources.add(source)
     source.onended = () => activeSources.delete(source)
+    audioStatus.value = `Đang phát TTS · ${rate / 1000} kHz`
+    return buffer.duration
   }
 
   function sendWs(payload, label = '→') {
@@ -100,6 +162,15 @@ export function useVoiceConsole({ authRequired, notify }) {
   }
 
   function handleTextMessage(data) {
+    if (data.type === 'hello') {
+      const negotiatedRate = Number(data.audio_params?.sample_rate)
+      if (Number.isFinite(negotiatedRate) && negotiatedRate >= 8000 && negotiatedRate <= 96000) {
+        outputSampleRate = negotiatedRate
+        addProtocol('AUDIO ✓', `Negotiated output ${outputSampleRate} Hz`)
+      }
+      return
+    }
+
     if (data.type === 'vad') {
       if (data.state === 'speech_started') {
         pipelineVad.value = 'Có giọng nói'
@@ -139,7 +210,12 @@ export function useVoiceConsole({ authRequired, notify }) {
         if (last) last.text += `${last.text ? ' ' : ''}${data.text || ''}`
       } else if (data.state === 'stop') {
         pipelineTts.value = 'Hoàn tất'
-        audioStatus.value = 'TTS hoàn tất'
+        const remainingMs = audioCtx
+          ? Math.max(0, Math.round((nextPlayTime - audioCtx.currentTime) * 1000))
+          : 0
+        audioStatus.value = remainingMs > 0
+          ? `TTS hoàn tất · còn ${remainingMs} ms đang phát`
+          : 'TTS hoàn tất'
       }
     }
   }
@@ -149,8 +225,9 @@ export function useVoiceConsole({ authRequired, notify }) {
       ws.close(1000, 'browser_disconnect')
       return
     }
-    await ensureAudio()
+    await ensureAudio({ prime: true })
     wsState.value = 'connecting'
+    outputSampleRate = DEFAULT_OUTPUT_SAMPLE_RATE
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${scheme}//${location.host}/ws`
     addProtocol('INFO', `Connecting ${url}`)
@@ -164,7 +241,13 @@ export function useVoiceConsole({ authRequired, notify }) {
         type: 'hello',
         version: Number(protocolVersion.value),
         transport: 'websocket',
-        audio_params: { format: 'pcm16', sample_rate: 16000, channels: 1, frame_duration: 20 },
+        audio_params: {
+          format: 'pcm16',
+          sample_rate: INPUT_SAMPLE_RATE,
+          channels: 1,
+          frame_duration: 20,
+          output_format: 'pcm16',
+        },
       }, 'HELLO →')
     }
     ws.onmessage = async event => {
@@ -174,18 +257,26 @@ export function useVoiceConsole({ authRequired, notify }) {
         try { data = JSON.parse(event.data) } catch (_) { return }
         handleTextMessage(data)
         await scrollChat()
-      } else if (event.data instanceof ArrayBuffer && opusDecoder) {
+      } else if (event.data instanceof ArrayBuffer) {
         try {
+          await ensureAudio()
           if (turnStartedAt && !firstAudioLatency.value) {
             firstAudioLatency.value = Math.round(performance.now() - turnStartedAt)
             pipelineTts.value = `Audio đầu ${firstAudioLatency.value} ms`
           }
-          const raw = extractOpus(event.data)
-          addProtocol('WS ← BIN', `${event.data.byteLength} bytes · opus ${raw.byteLength} bytes`)
-          const decoded = await opusDecoder.decodeFrame(raw)
-          playAudio(decoded.channelData)
+          const raw = extractAudioPayload(event.data)
+          const samples = pcm16LeBytesToFloat32(raw)
+          addProtocol('WS ← BIN', `${event.data.byteLength} bytes · pcm16 ${raw.byteLength} bytes`)
+          const duration = playAudioSamples(samples, outputSampleRate)
+          addProtocol(
+            'AUDIO ▶',
+            `${samples.length} samples · ${outputSampleRate} Hz · ${Math.round(duration * 1000)} ms`,
+          )
         } catch (error) {
-          addProtocol('ERR', error.message || String(error))
+          const message = error.message || String(error)
+          audioStatus.value = `Lỗi phát TTS: ${message}`
+          pipelineTts.value = 'Lỗi playback'
+          addProtocol('AUDIO ERR', message)
         }
       }
     }
@@ -220,6 +311,14 @@ export function useVoiceConsole({ authRequired, notify }) {
   async function sendChat() {
     const text = chatInput.value.trim()
     if (!text || !wsConnected()) return
+    await ensureAudio({ prime: true })
+    const degradedReasons = health?.value?.degraded_reasons || []
+    if (degradedReasons.includes('llm_not_warm')) {
+      pipelineLlm.value = 'LLM chưa sẵn sàng'
+      pipelineTts.value = 'Chờ LLM'
+      notify('LLM chưa sẵn sàng. Hãy cấu hình Groq API key trong Runtime; cấu hình mới sẽ được áp dụng ngay.', 'warning')
+      return
+    }
     chatInput.value = ''
     if (useRealAudio.value) {
       await runTextThroughRealAudio(text)
@@ -253,7 +352,7 @@ export function useVoiceConsole({ authRequired, notify }) {
 
   async function startMic() {
     if (!wsConnected() || !navigator.mediaDevices?.getUserMedia) return
-    await ensureAudio()
+    await ensureAudio({ prime: true })
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -328,7 +427,11 @@ export function useVoiceConsole({ authRequired, notify }) {
       let message = `HTTP ${response.status}`
       try {
         const data = await response.json()
-        if (data?.error) message = data.error
+        if (data?.code === 'TTS_PREEMPTED') {
+          message = 'TTS thử đã nhường GPU cho cuộc hội thoại trực tiếp. Hãy thử lại sau khi VeeTee nói xong.'
+        } else if (data?.error) {
+          message = data.error
+        }
       } catch (_) {}
       throw new Error(message)
     }
@@ -338,7 +441,7 @@ export function useVoiceConsole({ authRequired, notify }) {
   async function directTts() {
     const text = chatInput.value.trim() || 'Xin chào, đây là bài kiểm tra giọng nói VeeTee.'
     try {
-      await ensureAudio()
+      await ensureAudio({ prime: true })
       const response = await managementVoiceRequest(text)
       addProtocol('TTS → HTTP', text)
       const blob = await response.blob()
@@ -360,7 +463,7 @@ export function useVoiceConsole({ authRequired, notify }) {
     resetPipeline()
     audioStatus.value = 'VieNeu đang tạo audio test…'
     try {
-      await ensureAudio()
+      await ensureAudio({ prime: true })
       const response = await managementVoiceRequest(text)
       const sourceBytes = await response.arrayBuffer()
       const decodeCtx = new (window.AudioContext || window.webkitAudioContext)()
@@ -468,7 +571,6 @@ export function useVoiceConsole({ authRequired, notify }) {
     if (activeSyntheticSource) try { activeSyntheticSource.stop() } catch (_) {}
     if (ws) try { ws.close() } catch (_) {}
     await stopMic(false)
-    if (opusDecoder) try { opusDecoder.free?.() } catch (_) {}
     if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close()
   }
 
@@ -478,7 +580,7 @@ export function useVoiceConsole({ authRequired, notify }) {
     chatInput, chatMessages, protocolLog, wsState, protocolVersion, listenMode, rawProtocol,
     useRealAudio, isMicRecording, isSyntheticAudioRunning, audioStatus, firstAudioLatency,
     currentEmotion, chatScroll, pipelineVad, pipelineAsr, pipelineLlm, pipelineTts,
-    wsConnected, connectWs, reconnectWs, sendChat, abortTurn, toggleMic, directTts,
+    wsConnected, connectWs, reconnectWs, unlockAudio, sendChat, abortTurn, toggleMic, directTts,
     runTextThroughRealAudio, listenStart, listenStop, wakeDetect, sendEndIntent,
     sendRawProtocol, testHealth, testOta, sendWs, clearConversation, dispose,
   }

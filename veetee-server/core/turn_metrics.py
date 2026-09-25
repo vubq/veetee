@@ -22,6 +22,60 @@ _current_trace: contextvars.ContextVar[Optional["TurnTrace"]] = contextvars.Cont
 )
 
 
+def normalize_llm_usage(usage: Any) -> Dict[str, Any]:
+    """Extract portable token/cache fields without guessing provider behavior."""
+    if not isinstance(usage, dict):
+        return {}
+
+    def as_int(value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
+    fields: Dict[str, Any] = {}
+    for output_name, candidates in {
+        "prompt_tokens": ("prompt_tokens", "input_tokens"),
+        "completion_tokens": ("completion_tokens", "output_tokens"),
+        "total_tokens": ("total_tokens",),
+    }.items():
+        for candidate in candidates:
+            parsed = as_int(usage.get(candidate))
+            if parsed is not None:
+                fields[output_name] = parsed
+                break
+
+    cached = None
+    for details in (
+        usage.get("prompt_tokens_details"),
+        usage.get("input_tokens_details"),
+        usage.get("prompt_details"),
+    ):
+        if not isinstance(details, dict):
+            continue
+        for key in ("cached_tokens", "cache_read_input_tokens", "cached_input_tokens"):
+            cached = as_int(details.get(key))
+            if cached is not None:
+                break
+        if cached is not None:
+            break
+    if cached is None:
+        for key in ("cached_tokens", "cache_read_input_tokens", "cached_input_tokens"):
+            cached = as_int(usage.get(key))
+            if cached is not None:
+                break
+
+    if cached is not None:
+        fields["cached_prompt_tokens"] = cached
+        prompt = fields.get("prompt_tokens")
+        if isinstance(prompt, int) and prompt > 0:
+            fields["prompt_cache_ratio"] = round(min(1.0, cached / prompt), 4)
+    return fields
+
+
 def _repo_commit() -> str:
     repo = Path(__file__).resolve().parents[2]
     try:
@@ -48,12 +102,17 @@ def config_fingerprint(config: Any) -> str:
     else:
         value = str(config)
 
+    def is_secret_field(key: Any) -> bool:
+        lowered = str(key or "").strip().lower()
+        if lowered in {"api_key", "token", "password", "secret"}:
+            return True
+        return lowered.endswith(("_api_key", "_token", "_password", "_secret"))
+
     def scrub(obj: Any) -> Any:
         if isinstance(obj, dict):
             result = {}
             for key, item in obj.items():
-                lowered = str(key).lower()
-                if any(secret in lowered for secret in ("key", "token", "password", "secret")):
+                if is_secret_field(key):
                     result[key] = "<redacted>"
                 else:
                     result[key] = scrub(item)
@@ -150,13 +209,59 @@ def summarize_trace(trace: TurnTrace) -> Dict[str, Any]:
             return None
         return round(max(0.0, end.at_ms - start.at_ms), 3)
 
+    def event_field_ms(event_name: str, field_name: str) -> Optional[float]:
+        event = trace.first(event_name)
+        if event is None:
+            return None
+        raw = event.fields.get(field_name)
+        if isinstance(raw, bool):
+            return None
+        try:
+            return round(max(0.0, float(raw)), 3)
+        except (TypeError, ValueError):
+            return None
+
+    def event_field_aggregate(event_name: str, field_name: str) -> Optional[Dict[str, Any]]:
+        values: list[float] = []
+        for event in trace.events:
+            if event.name != event_name:
+                continue
+            raw = event.fields.get(field_name)
+            if isinstance(raw, bool):
+                continue
+            try:
+                values.append(max(0.0, float(raw)))
+            except (TypeError, ValueError):
+                continue
+        if not values:
+            return None
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        if len(ordered) % 2:
+            median = ordered[middle]
+        else:
+            median = (ordered[middle - 1] + ordered[middle]) / 2.0
+        return {
+            "count": len(values),
+            "total_ms": round(sum(values), 3),
+            "max_ms": round(max(values), 3),
+            "p50_ms": round(median, 3),
+        }
+
     latency_ms = {
         "context_lookup": delta_ms("context_lookup_start", "context_lookup_end"),
+        "llm_route_acquire": delta_ms("llm_request_start", "llm_route_acquired"),
+        "llm_upstream_headers": delta_ms("llm_route_acquired", "llm_headers"),
         "llm_headers": delta_ms("llm_request_start", "llm_headers"),
         "llm_first_content_token": delta_ms("llm_request_start", "llm_first_content_token"),
         "llm_tool_ready": delta_ms("llm_request_start", "llm_tool_call_ready"),
         "llm_first_speech_segment": delta_ms("llm_request_start", "llm_speech_segment"),
+        "tts_queue_to_lock": delta_ms("tts_enqueue", "tts_lock_acquired"),
+        "tts_first_pcm": delta_ms("tts_enqueue", "tts_first_pcm"),
         "tts_first_opus": delta_ms("tts_enqueue", "tts_first_opus"),
+        "tts_first_pcm_to_opus": delta_ms("tts_first_pcm", "tts_first_opus"),
+        "tts_inference": delta_ms("tts_lock_acquired", "tts_inference_done"),
+        "tts_lease_held": event_field_ms("tts_lease_held", "held_ms"),
         "tts_opus_to_ws_binary": delta_ms("tts_first_opus", "first_ws_binary_sent"),
         "speech_endpoint_to_first_ws_binary": delta_ms("speech_endpoint", "first_ws_binary_sent"),
         "last_voice_to_first_ws_binary": delta_ms("last_voiced_sample_estimate", "first_ws_binary_sent"),
@@ -165,6 +270,22 @@ def summarize_trace(trace: TurnTrace) -> Dict[str, Any]:
     }
     payload["latency_ms"] = {
         name: value for name, value in latency_ms.items() if value is not None
+    }
+    stage_aggregates = {
+        "tts_queue_wait": event_field_aggregate(
+            "tts_lock_acquired", "queue_wait_ms"
+        ),
+        "tts_lease_held": event_field_aggregate(
+            "tts_lease_held", "held_ms"
+        ),
+        "tts_inference": event_field_aggregate(
+            "tts_inference_done", "inference_ms"
+        ),
+    }
+    payload["stage_aggregates_ms"] = {
+        name: value
+        for name, value in stage_aggregates.items()
+        if value is not None
     }
     first_binary = trace.first("first_ws_binary_sent")
     if first_binary is not None:

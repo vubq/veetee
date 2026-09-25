@@ -67,6 +67,8 @@ class CompletedEvent:
 @dataclass(frozen=True)
 class FailedEvent:
     error: str
+    code: Optional[str] = None
+    retryable: Optional[bool] = None
     type: TurnEventType = field(default=TurnEventType.FAILED, init=False)
 
 

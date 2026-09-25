@@ -1,6 +1,6 @@
 # VeeTee Testing
 
-Cập nhật: **2026-09-18**
+Cập nhật: **2026-09-25**
 
 Tài liệu này sở hữu cách kiểm thử và cách diễn giải evidence. Unit test, runtime/model test và ESP32 thật là các loại bằng chứng khác nhau; không dùng một loại để suy kết luận của loại khác.
 
@@ -12,9 +12,9 @@ Chạy từ `veetee-server/` bằng venv của project (không dùng `python3` h
 ../../venv/bin/python -m unittest discover -s tests -v
 ```
 
-Baseline 2026-09-18 sau production hardening: `282/282 PASS` (4.684s). Suite gồm auth/OTA one-time credential, pairing bounds, device-owner memory mapping, degraded boot khi thiếu LLM credential, permanent-error retry classification, health/security headers, quota/router/provider/config, lifecycle/tool/memory regressions. `compileall`, `pip check` và `git diff --check` là các gate bắt buộc trước release.
+Baseline production-hardening 2026-09-18 là `282/282 PASS`. Verification working tree 2026-09-25 sau playback ownership, speculative ASR/LLM, hot latency tuning, benchmark isolation, corpus/continuity metrics, lifecycle-state extraction, deterministic TTS lease teardown, semantic-review tooling và TTS-buffer matrix: **`427/427 PASS` (6.110s)**. Suite gồm auth/OTA one-time credential, pairing bounds, device-owner memory mapping, degraded boot khi thiếu LLM credential, quota/router/provider/config, playback stale-writer ownership, speculative ASR reuse/invalidate/fallback, speculative LLM no-side-effect/exact-final reuse/mismatch discard, management turn-detail auth/redaction, semantic held-out protection, lifecycle/tool/memory và benchmark helpers. `compileall`, `git diff --check` và `systemd-analyze verify deploy/veetee.service` đều PASS trong cùng verification. Focused TTS/load reconciliation tests còn kiểm cooperative preemption, deterministic scheduler release và first-chunk deadline bao gồm scheduler wait.
 
-Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Frontend có Vitest/Vue Test Utils (`cd web && npm test`) và production build gate (`npm run build`); baseline hiện tại `12/12` tests PASS trên 5 file, gồm management 401, pairing validation, runtime secret masking/save, degraded badge, UI controls và voice audio framing/resampling. Các suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
+Suite này dùng để kiểm protocol/lifecycle, cancellation, validation, tool/memory contract, semantic event plumbing và các invariant server-side. Frontend có Vitest/Vue Test Utils (`cd web && npm test`) và production build gate (`npm run build`); verification 2026-09-25 hiện là **`26/26` tests PASS trên 9 file**, production build PASS và `npm audit --audit-level=high` báo **0 vulnerabilities**. Các suite xanh không tự chứng minh route/model production, latency SLA, AEC hoặc playback vật lý.
 
 ## 2. Runtime E2E
 
@@ -49,6 +49,21 @@ Cả hai report p50/p90/p95/max và không cộng p95 các stage thành p95 end-
 
 Không đổi tên metric thành “first binary” hoặc “first audio sent”. First binary server-side là diagnostic khác và không chứng minh loa đã phát âm hữu ích.
 
+### Endpoint matrix không restart
+
+Khi server hiện hành có management token và fixture audio gắn nhãn, có thể A/B cùng source/runtime mà không sửa YAML/restart từng mức:
+
+```bash
+VEETEE_MANAGEMENT_TOKEN='...' ../../venv/bin/python scripts/benchmark_endpoint_matrix.py \
+  --wav eval/audio/<fixture>.wav \
+  --values 450,320,256,192 \
+  --runs 20
+```
+
+Runner hot-apply `asr.min_silence_duration_ms` và có thể A/B thêm `vad_end_threshold`, speculative ASR/LLM; chạy `benchmark_pipeline` cho từng mức, lưu raw/summary theo variant và restore toàn bộ effective value ban đầu trong `finally`. Runner tạo paired benchmark device tạm qua OTA/auth chuẩn, revoke sau chạy, chờ `active_sessions=0`, chờ HTTP ready sau cold restart và dùng process-wide lock để hai matrix không restore đè nhau. Với fixture có expected transcript, report thêm split/missing-final + WER/CER; benchmark còn ghi `audio_frame_gap_p95_ms`, max gap và số gap >2× frame để phát hiện TTS segmentation gây stall. **Latency không tự chọn winner**. Dùng `--certification --runs 100` khi đủ corpus và hardware evidence.
+
+Evidence nhỏ hiện tại: 192ms + speculative ASR đạt 8/8 success, 0 split/missing; 160ms làm WER/CER xấu hơn nên bị loại, còn 96ms từng split câu dài thành hai utterance nên không promote. Speculative LLM 0.95 giữ nguyên quality và giảm mean fixture p50 ~37ms. Soft-cut 8/3 giữ nguyên quality, continuity smoke 4 fixture không có gap >2× frame và giảm mean p50 so với soft-cut 0. Đây vẫn là smoke/corpus nhỏ, không thay thế acoustic listening/hardware certification.
+
 ## 4. Semantic/tool quality
 
 Corpus semantic nên đánh expected outcome thay vì exact-match câu trả lời AI. Tách tối thiểu các nhóm:
@@ -64,6 +79,14 @@ Corpus semantic nên đánh expected outcome thay vì exact-match câu trả l�
 - cancellation/late output.
 
 Mỗi report cần ghi source HEAD/dirty state, route/model quan sát được, config fingerprint đã loại secret, corpus/sample size và failure count.
+
+### Semantic human-review tooling
+
+`scripts/build_semantic_review_queue.py` tạo deterministic review queue **200 case / 143 critical / 52 held-out** từ seed + generated candidates. Mọi case đều giữ `review_status=needs_human_review`; tool không tự biến generated label thành gold.
+
+`scripts/semantic_review_probe.py` chạy case qua WS/auth thật và lấy event-level trace từ management-only `GET /api/turns/{turn_id}`. Runner **không auto-grade semantic**; output giữ `human_verdict: null` và `reviewer_notes` trống. Held-out bị loại mặc định và chỉ chạy khi reviewer truyền `--include-held-out`. Smoke `chat-001,neg-001` đã tạo evidence packet thành công, paired credential tạm được revoke sau chạy.
+
+`scripts/durable_owner_acceptance.py` dùng flow hai pha `prepare → restart service minh bạch → resume` để chứng minh durable memory trên deployment thật mà không đụng fact user. State chỉ chứa owner/marker synthetic; resume yêu cầu MainPID service đổi rồi kiểm persistence, optimistic revision conflict, paired-device owner binding, runtime context durable-ID isolation A/B và forget barrier. Evidence hiện tại: `docs/benchmarks/durable-owner-acceptance.json` PASS; memory acceptance rows được hard-delete, state file xóa, device test revoke/offline sau chạy.
 
 ## 5. Hardware ESP32/Xiaozhi stock
 

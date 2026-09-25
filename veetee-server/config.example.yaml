@@ -7,7 +7,7 @@ server:
   ws_allowed_origins: [] # Same-origin browser accepted; exact extra origins only.
   ws_max_sessions: 8
   ws_hello_timeout_seconds: 5
-  timezone: "Asia/Bangkok"
+  timezone: "Asia/Ho_Chi_Minh"
   host: "0.0.0.0"
   ws_port: 8000
   http_port: 8003
@@ -32,7 +32,26 @@ asr:
   vad_model_path: "models/silero-vad/silero_vad.onnx"
   vad_threshold: 0.5
   vad_threshold_low: 0.3
-  min_silence_duration_ms: 450
+  # Khi speech đã bắt đầu, probability dưới ngưỡng này được tính là silence.
+  # Default 0.3 giữ behavior cũ; tăng chỉ sau A/B false-cut/WER.
+  vad_end_threshold: 0.3
+  # Fast profile validated by the small labelled smoke corpus on 2026-09-24:
+  # 192ms + speculative ASR kept 0 splits and the same mean WER as the
+  # previous 384ms/non-speculative profile while reducing mean TTFA ~20%.
+  # Re-certify on a larger noisy/hesitant corpus before treating this as SLA.
+  min_silence_duration_ms: 192
+  # Start the same local Parakeet inference during trailing silence and reuse
+  # it only when speech does not resume and acoustic confidence is high.
+  speculative_inference_enabled: true
+  speculative_start_silence_ms: 64
+  speculative_min_confidence: 0.95
+  # Optional second-stage latency optimization: use a high-confidence
+  # speculative ASR snapshot to start the SAME AI/tool turn early, but buffer
+  # every TurnEvent until ASR final confirms the exact transcript and context.
+  # No TTS, tool execution, memory mutation, or lifecycle side effect happens
+  # before commit. Requires speculative_inference_enabled=true.
+  speculative_llm_enabled: false
+  speculative_llm_min_confidence: 0.95
   min_speech_duration_ms: 160
   speech_start_frames: 2
   pre_speech_pad_ms: 512
@@ -56,28 +75,56 @@ llm:
   # "omniroute" (gateway local cũ). Không còn OmniRoute trong đường mới.
   provider: "groq"
   base_url: "https://api.groq.com/openai/v1"
-  api_key: "local-omniroute"
-  model: "qwen/qwen3.6-27b"
+  # Chỉ dùng cho provider omniroute legacy; GroqDirect lấy secret từ key pool/env.
+  api_key: ""
+  model: "qwen/qwen3.8-27b"
   # Pool key Groq: secret CHỈ ở env (GROQ_API_KEY_<alias>), file này chỉ giữ
   # id + quota_group. Số lượng key linh hoạt; pool rỗng = tự quét env.
   # Mỗi alias mặc định một quota_group riêng (quota độc lập).
-  key_pool:
-    - {id: "A", api_key_env: "GROQ_API_KEY_A", quota_group: "gA", enabled: true}
-    - {id: "B", api_key_env: "GROQ_API_KEY_B", quota_group: "gB", enabled: true}
-    - {id: "C", api_key_env: "GROQ_API_KEY_C", quota_group: "gC", enabled: true}
-    - {id: "D", api_key_env: "GROQ_API_KEY_D", quota_group: "gD", enabled: true}
+  # Rỗng = tự quét mọi GROQ_API_KEY_<alias> trong env. Không giới hạn A-D.
+  key_pool: []
   # Caps quota theo group (rpm/rpd/tpm/tpd/itpm/otpm). Bỏ trống group nào thì
   # group đó chạy discovery mode (giới hạn in-flight, học caps từ headers).
   # Không bịa quota tài khoản khác.
   quota_groups: {}
   routing:
     headroom_pct: 10.0
-    max_attempts: 4
-    admission_wait_ms: 2500.0
+    max_attempts: 2
+    admission_wait_ms: 60.0
+    # Chờ ngắn khi failover gặp quota-group đang có request discovery in-flight.
+    # Không áp cho quota đã biết/cạn thật, nên không làm chậm capacity failure bình thường.
+    discovery_wait_ms: 750.0
     discovery_max_inflight: 1
     inflight_penalty_s: 0.4
+    # Route selection learns first-usable-event latency per quota group.
+    # Penalize jitter so a slightly faster-but-spiky key does not dominate p95.
+    latency_ewma_alpha: 0.3
+    latency_jitter_penalty: 0.75
+  # Policy cắt stream LLM thành các đơn vị TTS. Đây là tuning transport/prosody,
+  # không phải matcher intent. Có thể A/B để giảm TTFA mà không sửa provider.
+  speech_segmentation:
+    min_segment_chars: 28
+    clause_target_chars: 150
+    clause_min_chars: 80
+    first_clause_min_chars: 24
+    first_clause_min_words: 4
+    hard_max_segment_chars: 240
+    hard_cut_search_back: 45
+    hard_cut_search_forward: 40
+    first_segment_min_chars: 8
+    first_segment_min_words: 2
+    # 0 = disabled. When enabled, the first spoken unit may be cut at a
+    # whitespace boundary after this many visible chars to reduce TTFA.
+    first_soft_cut_chars: 0
+    first_soft_cut_min_words: 3
   temperature: 0.6
-  max_tokens: 600
+  max_tokens: 320
+  request_timeout_ms: 15000
+  probe_timeout_ms: 8000
+  control_timeout_ms: 2000
+  # Giữ TCP/TLS Groq qua các khoảng im lặng tự nhiên của hội thoại.
+  http_keepalive_seconds: 120
+  dns_cache_ttl_seconds: 300
   reasoning_format: "hidden"
   # Effort suy luận cho model mặc định ("none" tắt <think> kiểu Qwen).
   reasoning_effort: "none"
@@ -101,55 +148,56 @@ tts:
   frame_duration_ms: 60
   # Giới hạn audio gửi trước để giảm đuôi âm khi client ngắt lượt.
   send_ahead_ms: 120
-  # Backpressure cho bridge VieNeu thread -> async.
+  # Optional: synthesize clause đầu trong lúc chờ ASR final nhưng chỉ buffer
+  # local; không gửi audio trước khi transcript final khớp chính xác.
+  speculative_prefetch_enabled: false
+  # Backpressure cho bridge VieNeu thread -> async. A/B 4/16/64 trên
+  # production streaming path không cho thấy buffer lớn giảm contention;
+  # giữ 4 để bounded memory và tránh synthesize-ahead vô ích.
   stream_queue_max_chunks: 4
+  # Ưu tiên PCM đầu của turn mới hơn continuation segment; aging tránh starvation.
+  first_audio_priority_boost: 5.0
+  scheduler_aging_per_second: 2.0
+  native_chunk_frames: 1
   denoise: true
   temperature: 0.7
+  # Chờ scheduler riêng với timeout tạo PCM đầu tiên. Multi-session có thể
+  # queue bounded mà không bị hiểu nhầm thành native inference treo.
+  admission_timeout_ms: 5000
   # Deadline tách riêng: generation không cắt playback dài đang phát bình thường.
-  first_chunk_timeout_ms: 4000
-  stall_timeout_ms: 2500
+  first_chunk_timeout_ms: 1500
+  stall_timeout_ms: 1500
 
 # Hành vi hội thoại tự nhiên phía server. Không yêu cầu sửa/build firmware Xiaozhi nguyên bản.
 # Semantic intent luôn do AI quyết định; các field legacy bên dưới vẫn được parser
 # chấp nhận để cấu hình cũ load được nhưng không dùng làm matcher user text/template.
 conversation:
+  # Các field wake_words/exit_commands/greeting_* legacy vẫn load được từ
+  # config cũ nhưng không còn nằm trên config surface vì semantic routing do AI.
   enabled: false
-  # LEGACY/INERT: không dùng để nhận wake phrase.
-  wake_words:
-    - "你好小智"
-    - "小爱同学"
-    - "小美同学"
-    - "VeeTee ơi"
-  greeting_enabled: true
-  greeting_ai_enabled: true
-  # LEGACY/INERT: không còn round-robin greeting pool.
-  greeting_pool_size: 3
-  # LEGACY/INERT: không dùng làm literal greeting fallback.
-  greeting_text: ""
   audio_cache_enabled: true
-  # 0 = tắt idle watchdog. Khi >0, mỗi inactivity epoch được AI đánh giá 1 lần.
+  # 0 = tắt idle watchdog.
   idle_timeout_seconds: 120
-  # LEGACY/INERT: không dùng để nhận exit phrase.
-  exit_commands:
-    - "tạm biệt"
-    - "kết thúc trò chuyện"
-    - "thoát trò chuyện"
+  history_turns: 6
+  # AI summary chỉ chạy nền sau response, bị cancel ngay khi có turn mới và
+  # dùng low-priority quota để không tranh critical path voice.
+  history_summary_enabled: true
+  history_summary_high_water_turns: 5
+  history_summary_min_new_turns: 3
+  history_summary_max_chars: 1200
+  history_summary_defer_ms: 250
   goodbye_enabled: true
-  goodbye_ai_enabled: true
-  end_intent_ai_enabled: true
+  end_intent_ai_enabled: false
   ai_control_timeout_ms: 1800
-  # LEGACY/INERT: không dùng làm literal goodbye fallback.
-  goodbye_text: ""
-  # Giá trị khởi điểm cần đo trên thiết bị thật.
   wake_start_wait_ms: 150
   fixed_response_timeout_seconds: 5
   close_grace_ms: 250
 
 latency:
-  unified_turn_enabled: true
-  first_token_timeout_ms: 6000
+  # 600ms là mục tiêu warm-path tới audio đầu; timeout rộng hơn để chịu jitter.
+  target_first_audio_ms: 600
+  first_token_timeout_ms: 1800
   total_turn_timeout_ms: 15000
-  context_lookup_timeout_ms: 10
   # Toàn request LLM được giữ trong budget này. Server ước lượng 4 ký tự/token
   # để tránh thêm tokenizer vào đường realtime; llm.max_tokens được giữ lại làm
   # output reserve trước khi history/memory/tool schema được nhét vào request.
@@ -165,7 +213,7 @@ management:
 
 intent:
   enabled: true
-  semantic_end_enabled: true
+  semantic_end_enabled: false
   confirmation_ttl_seconds: 15
 
 memory:
@@ -200,3 +248,5 @@ music:
   search_results: 5
   resolve_timeout_s: 20.0
   stall_timeout_s: 12.0
+  # 6 frame x 60 ms để hấp thụ jitter; stock Xiaozhi có ~1.2s decode queue.
+  send_ahead_ms: 360

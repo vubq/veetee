@@ -10,6 +10,7 @@ from config.settings import AppConfig, load_settings
 from core.music_player import MusicPlayer, MusicTrack, ffmpeg_pcm24_frames
 from core.tools.builtin.music_tool import (
     MusicToolProvider,
+    ResolvedStreamURL,
     ytdlp_resolve_url,
     ytdlp_search,
 )
@@ -190,6 +191,79 @@ class MusicPlayerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await session.close()
 
+    async def test_session_music_player_honors_pcm16_output_negotiation(self):
+        from core.session import ClientSession
+
+        class BareSession(ClientSession):
+            def _create_asr(self):
+                class _Asr:
+                    async def stop(self):
+                        return None
+                return _Asr()
+
+        class StubSocket:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, payload):
+                self.sent.append(payload)
+                return True
+
+        socket = StubSocket()
+        session = BareSession(socket, AppConfig(), None, None)
+        try:
+            session.output_audio_format = "pcm16"
+            session.codec.decode_output_opus_to_pcm16 = (
+                lambda _payload: b"decoded-pcm16-frame"
+            )
+            session.music_player._frame_source_factory = sine_pcm24_chunks(0.15)
+
+            await session.music_player.play(
+                MusicTrack(video_id="x", title="PCM16 music")
+            )
+            for _ in range(100):
+                binary = [item for item in socket.sent if isinstance(item, bytes)]
+                if binary:
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(binary)
+            self.assertEqual(binary[0], b"decoded-pcm16-frame")
+        finally:
+            await session.close()
+
+    async def test_pending_music_can_reuse_existing_tts_envelope(self):
+        sender = FakeSender()
+        player, _ = make_player(
+            sender,
+            frame_source_factory=sine_pcm24_chunks(0.15),
+            send_ahead_ms=360,
+        )
+        try:
+            player.set_pending(MusicTrack(video_id="x", title="Handoff"))
+            await player.start_pending(reuse_envelope=True)
+            for _ in range(100):
+                if sender.binaries:
+                    break
+                await asyncio.sleep(0.01)
+
+            messages = [
+                json.loads(item) for item in sender.texts if isinstance(item, str)
+            ]
+            starts = [
+                item for item in messages
+                if item.get("type") == "tts" and item.get("state") == "start"
+            ]
+            titles = [
+                item for item in messages
+                if item.get("type") == "tts" and item.get("state") == "sentence_start"
+            ]
+            self.assertEqual(starts, [])
+            self.assertTrue(any(item.get("text") == "♫ Handoff" for item in titles))
+            self.assertTrue(sender.binaries)
+        finally:
+            await player.stop(announce=False)
+
     async def test_natural_end_returns_idle(self):
         player, sender = make_player(
             frame_source_factory=sine_pcm24_chunks(0.2))
@@ -329,12 +403,75 @@ class MusicToolTests(unittest.IsolatedAsyncioTestCase):
             result = await provider.search_music({"query": "zzz qqq"})
         self.assertEqual(result["status"], "not_found")
 
-    async def test_play_needs_exact_video_id(self):
+    async def test_play_needs_query_or_video_id(self):
         provider = self.make_provider()
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "query or video_id"):
             await provider.play_music({})
-        with self.assertRaises(ValueError):
-            await provider.play_music({"query": "Song 1"})
+
+    async def test_play_by_query_selects_top_candidate_and_queues(self):
+        provider = self.make_provider()
+
+        async def fake_search(query, max_results=5, timeout_s=20.0):
+            self.assertEqual(query, "Sóng Gió")
+            return [
+                {
+                    "video_id": "j8U06veqxdU",
+                    "title": "Sóng Gió",
+                    "channel": "Jack - J97",
+                    "duration_s": 351,
+                },
+                {
+                    "video_id": "2-k2ziSu9b8",
+                    "title": "Sóng Gió remix",
+                    "channel": "Other",
+                    "duration_s": 300,
+                },
+            ]
+
+        async def fake_resolve(video_id, timeout_s=20.0):
+            self.assertEqual(video_id, "j8U06veqxdU")
+            return "http://example.invalid/song.m4a"
+
+        with patch(
+            "core.tools.builtin.music_tool.ytdlp_search",
+            side_effect=fake_search,
+        ), patch(
+            "core.tools.builtin.music_tool.ytdlp_resolve_url",
+            side_effect=fake_resolve,
+        ):
+            result = await provider.play_music({"query": "Sóng Gió"})
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["video_id"], "j8U06veqxdU")
+        self.assertEqual(result["title"], "Sóng Gió")
+        self.assertEqual(result["channel"], "Jack - J97")
+        self.assertEqual(result["query"], "Sóng Gió")
+
+    async def test_play_music_preserves_resolved_http_headers(self):
+        player, _ = make_player(frame_source_factory=sine_pcm24_chunks(0.1))
+        provider = MusicToolProvider(player)
+
+        async def fake_search(query, max_results=5, timeout_s=20.0):
+            return [{
+                "video_id": "j8U06veqxdU",
+                "title": "Sóng Gió",
+                "channel": "ICM",
+                "duration_s": 240,
+            }]
+
+        async def fake_resolve(video_id, timeout_s=20.0):
+            return ResolvedStreamURL(
+                "https://example.invalid/audio",
+                {"User-Agent": "yt-dlp-browser", "Referer": "https://www.youtube.com/"},
+            )
+
+        with patch("core.tools.builtin.music_tool.ytdlp_search", side_effect=fake_search), \
+             patch("core.tools.builtin.music_tool.ytdlp_resolve_url", side_effect=fake_resolve):
+            await provider.play_music({"query": "Sóng Gió"})
+
+        self.assertIsNotNone(player._pending_track)
+        self.assertEqual(player._pending_track.http_headers["User-Agent"], "yt-dlp-browser")
+        self.assertEqual(player._pending_track.http_headers["Referer"], "https://www.youtube.com/")
 
     async def test_play_by_id_resolves_and_starts(self):
         sender = FakeSender()
@@ -378,7 +515,7 @@ class MusicToolTests(unittest.IsolatedAsyncioTestCase):
              patch("core.tools.builtin.music_tool.ytdlp_resolve_url", side_effect=fake_resolve):
             search = await provider.search_music({"query": "Song"})
             self.assertEqual(len(search["candidates"]), 2)
-            result = await provider.play_music({"video_id": "song2"})
+            result = await provider.play_music({"query": "Song 2", "video_id": "song2"})
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["video_id"], "song2")
             self.assertEqual(result["title"], "Song 2")
@@ -403,9 +540,24 @@ class MusicToolTests(unittest.IsolatedAsyncioTestCase):
     def test_descriptors_register_cleanly(self):
         from core.tools.registry import ToolRegistry
         player, _ = make_player()
-        registry = ToolRegistry(MusicToolProvider(player).descriptors())
+        descriptors = MusicToolProvider(player).descriptors()
+        registry = ToolRegistry(descriptors)
         names = {d.name for d in registry.search("music", limit=10)}
         self.assertTrue({"music_search", "music_play", "music_control"} <= names)
+        self.assertEqual(descriptors[0].name, "music_play")
+        play_schema = descriptors[0].input_schema
+        self.assertIn("query", play_schema["properties"])
+        self.assertIn("video_id", play_schema["properties"])
+        from core.tools.registry import ToolValidationError, validate_arguments
+        with self.assertRaises(ToolValidationError):
+            validate_arguments(play_schema, {})
+        with self.assertRaises(ToolValidationError):
+            validate_arguments(play_schema, {"video_id": "abcdefghijk"})
+        validate_arguments(play_schema, {"query": "Sóng gió"})
+        validate_arguments(
+            play_schema,
+            {"query": "Sóng gió", "video_id": "abcdefghijk"},
+        )
 
 
 class MusicSubprocessLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -531,7 +683,7 @@ class SessionAbortHookTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await session.close()
 
-    async def test_listen_start_stops_music_and_closes_tts_envelope(self):
+    async def test_listen_start_pauses_music_and_arms_action_gate(self):
         from core.session import ClientSession
 
         class BareSession(ClientSession):
@@ -570,7 +722,10 @@ class SessionAbortHookTests(unittest.IsolatedAsyncioTestCase):
                 "type": "listen", "state": "start", "mode": "auto"
             }))
 
-            self.assertFalse(player.playing)
+            self.assertTrue(player.playing)
+            self.assertEqual(player.state, "paused")
+            self.assertTrue(session._music_ducked)
+            self.assertTrue(session._music_interruption_gate)
             messages = [
                 _json.loads(item) for item in socket.sent if isinstance(item, str)
             ]
@@ -699,6 +854,7 @@ class MusicConfigTests(unittest.TestCase):
         config = AppConfig()
         self.assertTrue(config.music.enabled)
         self.assertEqual(config.music.search_results, 5)
+        self.assertEqual(config.music.send_ahead_ms, 360)
 
     def test_music_config_invalid_rejected(self):
         import tempfile

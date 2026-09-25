@@ -1,0 +1,200 @@
+{
+  "metric": "speech_end_to_first_voiced_pcm_received_ms",
+  "metric_version": "v2",
+  "certification_metric": "speech_end_to_first_useful_voiced_audio_received_ms",
+  "certification_mode": false,
+  "requested_samples": 2,
+  "successful_samples": 2,
+  "timeout_samples": 0,
+  "cancelled_samples": 0,
+  "failed_samples": 0,
+  "valid_metric_samples": 2,
+  "missing_metric_samples": 0,
+  "minimum_samples": 20,
+  "minimum_success_rate": 0.95,
+  "success_rate": 1.0,
+  "sample_gate_passed": false,
+  "success_rate_gate_passed": true,
+  "outcomes": {
+    "completed": 2
+  },
+  "p50_ms": 1337.302,
+  "p90_ms": 1755.41,
+  "p95_ms": 1755.41,
+  "max_ms": 1755.41,
+  "sla_p95_lt_1000_ms": false,
+  "target_p50_lte_600_ms": false,
+  "sla_status": "SMOKE_ONLY",
+  "stage_latency_ms": {
+    "speech_end_to_stt_final_ms": {
+      "samples": 2,
+      "p50": 613.894,
+      "p90": 750.788,
+      "p95": 750.788,
+      "max": 750.788
+    },
+    "stt_final_to_first_clause_ms": {
+      "samples": 2,
+      "p50": 507.722,
+      "p90": 736.255,
+      "p95": 736.255,
+      "max": 736.255
+    },
+    "first_clause_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 151.777,
+      "p90": 205.094,
+      "p95": 205.094,
+      "max": 205.094
+    },
+    "first_binary_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 63.909,
+      "p90": 64.545,
+      "p95": 64.545,
+      "max": 64.545
+    },
+    "speech_end_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 1273.392,
+      "p90": 1692.136,
+      "p95": 1692.136,
+      "max": 1692.136
+    },
+    "speech_end_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 1337.302,
+      "p90": 1755.41,
+      "p95": 1755.41,
+      "max": 1755.41
+    }
+  },
+  "audio_continuity": {
+    "samples": 2,
+    "run_gap_p95_p50_ms": 65.918,
+    "run_gap_p95_max_ms": 66.129,
+    "run_gap_max_p50_ms": 120.951,
+    "run_gap_max_ms": 131.529,
+    "gap_over_2x_frame_count": 1
+  },
+  "quality": {
+    "labelled_samples": 2,
+    "split_or_missing_final_samples": 0,
+    "wer_mean": 0.0,
+    "wer_max": 0.0,
+    "cer_mean": 0.0,
+    "cer_max": 0.0
+  },
+  "note": "p95 values are end-to-end percentiles; stage p95s are never summed. Voiced PCM is a proxy until quality/grounding passes.",
+  "generated_at": "2026-09-25T05:12:22.339067+00:00",
+  "uri": "ws://127.0.0.1:8000/",
+  "mode": "auto",
+  "warmup_runs": 0,
+  "reconnect_each": true,
+  "fixture": "eval/audio/bench_question_16k.wav",
+  "fixture_source_sample_rate": 16000,
+  "speech_end_sample_16k": 16933,
+  "expected_transcript": "Mấy giờ rồi.",
+  "quality_labeled": true,
+  "voiced_rms_threshold_pcm16": 160.0,
+  "auto_silence_ms": 720,
+  "turn_cooldown_ms": 1000,
+  "server_latency_ms": {
+    "context_lookup": {
+      "samples": 2,
+      "p50": 1.429,
+      "p95": 5.304,
+      "max": 5.304
+    },
+    "llm_route_acquire": {
+      "samples": 1,
+      "p50": 0.169,
+      "p95": 0.169,
+      "max": 0.169
+    },
+    "llm_upstream_headers": {
+      "samples": 1,
+      "p50": 728.491,
+      "p95": 728.491,
+      "max": 728.491
+    },
+    "llm_headers": {
+      "samples": 1,
+      "p50": 728.66,
+      "p95": 728.66,
+      "max": 728.66
+    },
+    "llm_first_content_token": {
+      "samples": 1,
+      "p50": 728.932,
+      "p95": 728.932,
+      "max": 728.932
+    },
+    "llm_first_speech_segment": {
+      "samples": 1,
+      "p50": 729.43,
+      "p95": 729.43,
+      "max": 729.43
+    },
+    "tts_queue_to_lock": {
+      "samples": 2,
+      "p50": 0.166,
+      "p95": 0.205,
+      "max": 0.205
+    },
+    "tts_first_pcm": {
+      "samples": 2,
+      "p50": 96.772,
+      "p95": 202.302,
+      "max": 202.302
+    },
+    "tts_first_opus": {
+      "samples": 2,
+      "p50": 98.149,
+      "p95": 204.84,
+      "max": 204.84
+    },
+    "tts_first_pcm_to_opus": {
+      "samples": 2,
+      "p50": 1.377,
+      "p95": 2.538,
+      "max": 2.538
+    },
+    "tts_inference": {
+      "samples": 2,
+      "p50": 1008.912,
+      "p95": 1055.434,
+      "max": 1055.434
+    },
+    "tts_lease_held": {
+      "samples": 2,
+      "p50": 848.257,
+      "p95": 887.983,
+      "max": 887.983
+    },
+    "tts_opus_to_ws_binary": {
+      "samples": 2,
+      "p50": 0.285,
+      "p95": 0.306,
+      "max": 0.306
+    },
+    "speech_endpoint_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 378.434,
+      "p95": 1215.614,
+      "max": 1215.614
+    },
+    "last_voice_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 538.434,
+      "p95": 1375.614,
+      "max": 1375.614
+    },
+    "asr_final_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 377.975,
+      "p95": 941.545,
+      "max": 941.545
+    }
+  }
+}

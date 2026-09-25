@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -43,6 +44,34 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         self.patch.stop()
         self.tempdir.cleanup()
+
+    async def test_runtime_config_endpoint_uses_hot_applier(self):
+        applied = []
+
+        async def apply(changes):
+            applied.append(dict(changes))
+            values = self.store.update_runtime(changes)
+            return {
+                'values': values,
+                'llm_reloaded': True,
+                'sessions_updated': 2,
+            }
+
+        self.server.runtime_config_applier = apply
+        response = await self.client.patch(
+            '/api/runtime-config',
+            headers={'X-Veetee-Management-Token': 'test-token'},
+            json={'values': {'GROQ_API_KEY_7': 'gsk_endpoint_test'}},
+        )
+        self.assertEqual(response.status, 200)
+        payload = await response.json()
+        self.assertFalse(payload['restart_required'])
+        self.assertTrue(payload['applied'])
+        self.assertTrue(payload['llm_reloaded'])
+        self.assertEqual(payload['sessions_updated'], 2)
+        self.assertEqual(applied, [{'GROQ_API_KEY_7': 'gsk_endpoint_test'}])
+        self.assertTrue(payload['values']['GROQ_API_KEY_7']['configured'])
+        self.assertNotEqual(payload['values']['GROQ_API_KEY_7']['masked'], 'gsk_endpoint_test')
 
     async def test_missing_wrong_token_and_cross_origin_rejected(self):
         manager_cookie = self.access.manager_cookie()
@@ -204,6 +233,376 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(server.runtime_readiness['llm_retryable'])
             self.assertIn('llm_configuration_unavailable', server.runtime_readiness['llm_error'])
             await server.response_audio_cache.shutdown()
+
+    async def test_runtime_groq_key_hot_reload_persists_without_restart(self):
+        class WarmLLM:
+            def __init__(self):
+                self.model = 'qwen/qwen3.6-27b'
+                self.warmed = False
+                self.closed = False
+
+            async def warmup(self):
+                self.warmed = True
+
+            async def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            config.llm.provider = 'groq'
+            replacement = WarmLLM()
+            old_value = os.environ.pop('GROQ_API_KEY_1', None)
+            try:
+                with (
+                    patch('server.ManagementStore', return_value=store),
+                    patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                    patch(
+                        'server.build_engine_from_config',
+                        side_effect=[ValueError('Groq key pool is empty'), replacement],
+                    ),
+                ):
+                    server = VeeTeeServer(config)
+                    result = await server.apply_runtime_config({
+                        'GROQ_API_KEY_1': 'gsk_test_runtime_key',
+                    })
+
+                self.assertIs(server.llm_engine, replacement)
+                self.assertTrue(replacement.warmed)
+                self.assertTrue(server.runtime_readiness['llm_warm'])
+                self.assertFalse(result['values']['GROQ_API_KEY_1'].get('masked') == 'gsk_test_runtime_key')
+                self.assertTrue(result['values']['GROQ_API_KEY_1']['configured'])
+                self.assertEqual(store.runtime_raw()['GROQ_API_KEY_1'], 'gsk_test_runtime_key')
+                self.assertEqual(os.environ.get('GROQ_API_KEY_1'), 'gsk_test_runtime_key')
+                self.assertFalse(result.get('restart_required', False))
+                await server.response_audio_cache.shutdown()
+                await replacement.close()
+            finally:
+                if old_value is None:
+                    os.environ.pop('GROQ_API_KEY_1', None)
+                else:
+                    os.environ['GROQ_API_KEY_1'] = old_value
+
+    async def test_runtime_latency_policy_hot_applies_without_restart(self):
+        class RoutingAwareLLM(CountingLLM):
+            def __init__(self):
+                super().__init__()
+                self.routing_updates = []
+
+            async def configure_routing(self, **kwargs):
+                self.routing_updates.append(dict(kwargs))
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            routing_llm = RoutingAwareLLM()
+            with (
+                patch('server.ManagementStore', return_value=store),
+                patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                patch(
+                    'server.build_engine_from_config',
+                    return_value=routing_llm,
+                ),
+            ):
+                server = VeeTeeServer(config)
+                result = await server.apply_runtime_config({
+                    'latency.target_first_audio_ms': 600,
+                    'latency.first_token_timeout_ms': 1300,
+                    'latency.total_turn_timeout_ms': 12000,
+                    'asr.endpointing_ms': 225,
+                    'asr.min_silence_duration_ms': 320,
+                    'asr.speculative_inference_enabled': True,
+                    'asr.speculative_start_silence_ms': 64,
+                    'asr.speculative_min_confidence': 0.96,
+                    'asr.speculative_llm_enabled': True,
+                    'asr.speculative_llm_min_confidence': 0.97,
+                    'asr.min_speech_duration_ms': 128,
+                    'asr.speech_start_frames': 1,
+                    'asr.pre_speech_pad_ms': 256,
+                    'asr.vad_threshold': 0.45,
+                    'asr.vad_threshold_low': 0.25,
+                    'asr.vad_end_threshold': 0.8,
+                    'tts.send_ahead_ms': 180,
+                    'tts.stream_queue_max_chunks': 16,
+                    'tts.first_audio_priority_boost': 7.5,
+                    'tts.scheduler_aging_per_second': 3.0,
+                    'tts.admission_timeout_ms': 4500,
+                    'tts.speculative_prefetch_enabled': True,
+                    'memory.lookup_timeout_ms': 18,
+                    'conversation.history_turns': 8,
+                    'tools.max_parallel_read_only': 3,
+                    'tools.max_llm_rounds_per_turn': 3,
+                    'llm.routing.headroom_pct': 12.5,
+                    'llm.routing.max_attempts': 4,
+                    'llm.routing.admission_wait_ms': 80.0,
+                    'llm.routing.discovery_wait_ms': 900.0,
+                    'llm.routing.discovery_max_inflight': 2,
+                    'llm.routing.inflight_penalty_s': 0.6,
+                    'llm.routing.latency_ewma_alpha': 0.4,
+                    'llm.routing.latency_jitter_penalty': 0.9,
+                })
+
+            self.assertEqual(config.latency.target_first_audio_ms, 600)
+            self.assertEqual(config.latency.first_token_timeout_ms, 1300)
+            self.assertEqual(config.latency.total_turn_timeout_ms, 12000)
+            self.assertEqual(config.asr.endpointing_ms, 225)
+            self.assertEqual(config.asr.min_silence_duration_ms, 320)
+            self.assertTrue(config.asr.speculative_inference_enabled)
+            self.assertEqual(config.asr.speculative_start_silence_ms, 64)
+            self.assertEqual(config.asr.speculative_min_confidence, 0.96)
+            self.assertTrue(config.asr.speculative_llm_enabled)
+            self.assertEqual(config.asr.speculative_llm_min_confidence, 0.97)
+            self.assertEqual(config.asr.min_speech_duration_ms, 128)
+            self.assertEqual(config.asr.speech_start_frames, 1)
+            self.assertEqual(config.asr.pre_speech_pad_ms, 256)
+            self.assertEqual(config.asr.vad_threshold, 0.45)
+            self.assertEqual(config.asr.vad_threshold_low, 0.25)
+            self.assertEqual(config.asr.vad_end_threshold, 0.8)
+            self.assertEqual(config.tts.send_ahead_ms, 180)
+            self.assertEqual(config.tts.stream_queue_max_chunks, 16)
+            self.assertEqual(server.tts_engine.stream_queue_max_chunks, 16)
+            self.assertEqual(config.tts.first_audio_priority_boost, 7.5)
+            self.assertEqual(server.tts_engine.first_audio_priority_boost, 7.5)
+            self.assertEqual(config.tts.scheduler_aging_per_second, 3.0)
+            self.assertEqual(server.tts_engine.scheduler_aging_per_second, 3.0)
+            self.assertEqual(config.tts.admission_timeout_ms, 4500)
+            self.assertEqual(server.tts_engine.admission_timeout_ms, 4500)
+            self.assertTrue(config.tts.speculative_prefetch_enabled)
+            self.assertEqual(config.memory.lookup_timeout_ms, 18)
+            self.assertEqual(config.conversation.history_turns, 8)
+            self.assertEqual(config.tools.max_parallel_read_only, 3)
+            self.assertEqual(config.tools.max_llm_rounds_per_turn, 3)
+            self.assertEqual(config.llm.routing.headroom_pct, 12.5)
+            self.assertEqual(config.llm.routing.max_attempts, 4)
+            self.assertEqual(config.llm.routing.admission_wait_ms, 80.0)
+            self.assertEqual(config.llm.routing.discovery_wait_ms, 900.0)
+            self.assertEqual(config.llm.routing.discovery_max_inflight, 2)
+            self.assertEqual(config.llm.routing.inflight_penalty_s, 0.6)
+            self.assertEqual(config.llm.routing.latency_ewma_alpha, 0.4)
+            self.assertEqual(config.llm.routing.latency_jitter_penalty, 0.9)
+            self.assertEqual(len(routing_llm.routing_updates), 1)
+            self.assertEqual(
+                routing_llm.routing_updates[0]['discovery_wait_ms'], 900.0
+            )
+            self.assertEqual(
+                routing_llm.routing_updates[0]['discovery_max_inflight'], 2
+            )
+            self.assertFalse(result['llm_reloaded'])
+            self.assertEqual(
+                store.runtime_raw()['latency.first_token_timeout_ms'], 1300
+            )
+            self.assertEqual(
+                store.runtime_public()['latency.first_token_timeout_ms'], 1300
+            )
+            self.assertEqual(
+                result['values']['latency.first_token_timeout_ms'], 1300
+            )
+            self.assertEqual(
+                store.runtime_raw()['tools.max_llm_rounds_per_turn'], 3
+            )
+            self.assertEqual(
+                store.runtime_raw()['llm.routing.discovery_wait_ms'], 900.0
+            )
+            self.assertEqual(
+                store.runtime_raw()['llm.routing.discovery_max_inflight'], 2
+            )
+            self.assertEqual(
+                store.runtime_raw()['asr.min_silence_duration_ms'], 320
+            )
+            self.assertTrue(
+                store.runtime_raw()['asr.speculative_llm_enabled']
+            )
+            self.assertEqual(
+                store.runtime_raw()['asr.speculative_llm_min_confidence'], 0.97
+            )
+            self.assertEqual(store.runtime_raw()['asr.pre_speech_pad_ms'], 256)
+            self.assertEqual(store.runtime_raw()['asr.vad_threshold'], 0.45)
+            self.assertEqual(store.runtime_raw()['asr.vad_end_threshold'], 0.8)
+            self.assertEqual(
+                store.runtime_raw()['tts.send_ahead_ms'], 180
+            )
+            self.assertEqual(
+                store.runtime_raw()['tts.stream_queue_max_chunks'], 16
+            )
+            self.assertEqual(
+                store.runtime_raw()['tts.first_audio_priority_boost'], 7.5
+            )
+            self.assertEqual(
+                store.runtime_raw()['tts.scheduler_aging_per_second'], 3.0
+            )
+            self.assertEqual(
+                store.runtime_raw()['tts.admission_timeout_ms'], 4500
+            )
+            self.assertTrue(
+                store.runtime_raw()['tts.speculative_prefetch_enabled']
+            )
+            self.assertFalse(result.get('restart_required', False))
+            await server.response_audio_cache.shutdown()
+
+    async def test_runtime_speech_segmentation_hot_applies_without_restart(self):
+        class SegmentationAwareLLM:
+            def __init__(self):
+                self.policies = []
+
+            def set_speech_segmentation(self, policy):
+                self.policies.append(policy)
+
+        class ActiveSession:
+            def __init__(self):
+                self.session_id = "active-segmentation"
+                self.llm_engine = SegmentationAwareLLM()
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            with (
+                patch('server.ManagementStore', return_value=store),
+                patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                patch(
+                    'server.build_engine_from_config',
+                    side_effect=ValueError('Groq key pool is empty'),
+                ),
+            ):
+                server = VeeTeeServer(config)
+                base_llm = SegmentationAwareLLM()
+                session = ActiveSession()
+                server.llm_engine = base_llm
+                server.http_server.llm_engine = base_llm
+                server.active_sessions[session.session_id] = session
+
+                result = await server.apply_runtime_config({
+                    'llm.speech_segmentation.first_clause_min_chars': 18,
+                    'llm.speech_segmentation.first_clause_min_words': 3,
+                    'llm.speech_segmentation.clause_target_chars': 140,
+                    'llm.speech_segmentation.first_soft_cut_chars': 10,
+                    'llm.speech_segmentation.first_soft_cut_min_words': 3,
+                })
+
+            self.assertEqual(
+                config.llm.speech_segmentation.first_clause_min_chars, 18
+            )
+            self.assertEqual(
+                config.llm.speech_segmentation.first_clause_min_words, 3
+            )
+            self.assertEqual(
+                config.llm.speech_segmentation.clause_target_chars, 140
+            )
+            self.assertEqual(
+                config.llm.speech_segmentation.first_soft_cut_chars, 10
+            )
+            self.assertEqual(
+                config.llm.speech_segmentation.first_soft_cut_min_words, 3
+            )
+            self.assertEqual(base_llm.policies[-1].first_clause_min_chars, 18)
+            self.assertEqual(
+                session.llm_engine.policies[-1].first_clause_min_words, 3
+            )
+            self.assertEqual(
+                store.runtime_raw()[
+                    'llm.speech_segmentation.first_clause_min_chars'
+                ],
+                18,
+            )
+            self.assertEqual(
+                store.runtime_raw()[
+                    'llm.speech_segmentation.first_soft_cut_chars'
+                ],
+                10,
+            )
+            self.assertFalse(result.get('restart_required', False))
+            await server.response_audio_cache.shutdown()
+
+    async def test_runtime_speech_segmentation_rejects_invalid_policy_before_persist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            with (
+                patch('server.ManagementStore', return_value=store),
+                patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                patch(
+                    'server.build_engine_from_config',
+                    side_effect=ValueError('Groq key pool is empty'),
+                ),
+            ):
+                server = VeeTeeServer(config)
+                with self.assertRaisesRegex(ValueError, 'clause_min_chars'):
+                    await server.apply_runtime_config({
+                        'llm.speech_segmentation.clause_min_chars': 220,
+                        'llm.speech_segmentation.clause_target_chars': 120,
+                    })
+
+            self.assertNotIn(
+                'llm.speech_segmentation.clause_min_chars',
+                store.runtime_raw(),
+            )
+            self.assertEqual(
+                config.llm.speech_segmentation.clause_min_chars,
+                80,
+            )
+            await server.response_audio_cache.shutdown()
+
+    async def test_runtime_latency_policy_rejects_impossible_deadline_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            with (
+                patch('server.ManagementStore', return_value=store),
+                patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                patch(
+                    'server.build_engine_from_config',
+                    side_effect=ValueError('Groq key pool is empty'),
+                ),
+            ):
+                server = VeeTeeServer(config)
+                with self.assertRaisesRegex(
+                    ValueError, 'first_token_timeout_ms must be >= target_first_audio_ms'
+                ):
+                    await server.apply_runtime_config({
+                        'latency.target_first_audio_ms': 900,
+                        'latency.first_token_timeout_ms': 500,
+                    })
+
+            self.assertNotIn(
+                'latency.target_first_audio_ms', store.runtime_raw()
+            )
+            await server.response_audio_cache.shutdown()
+
+    async def test_runtime_groq_key_hot_reload_rolls_back_failed_probe(self):
+        class BadLLM:
+            async def warmup(self):
+                raise RuntimeError('401 invalid_api_key')
+
+            async def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = ManagementStore(directory + '/state.json')
+            config = AppConfig()
+            config.llm.provider = 'groq'
+            old_value = os.environ.pop('GROQ_API_KEY_2', None)
+            try:
+                with (
+                    patch('server.ManagementStore', return_value=store),
+                    patch('server.VieneuLocalTTS', return_value=CountingTTS()),
+                    patch(
+                        'server.build_engine_from_config',
+                        side_effect=[ValueError('Groq key pool is empty'), BadLLM()],
+                    ),
+                ):
+                    server = VeeTeeServer(config)
+                    old_engine = server.llm_engine
+                    with self.assertRaisesRegex(RuntimeError, 'invalid_api_key'):
+                        await server.apply_runtime_config({
+                            'GROQ_API_KEY_2': 'gsk_invalid_runtime_key',
+                        })
+
+                self.assertIs(server.llm_engine, old_engine)
+                self.assertNotIn('GROQ_API_KEY_2', store.runtime_raw())
+                self.assertNotIn('GROQ_API_KEY_2', os.environ)
+                await server.response_audio_cache.shutdown()
+            finally:
+                if old_value is not None:
+                    os.environ['GROQ_API_KEY_2'] = old_value
 
     async def test_llm_retry_classifier_stops_permanent_auth_failures(self):
         self.assertFalse(VeeTeeServer._llm_error_retryable(RuntimeError('401 invalid_api_key')))

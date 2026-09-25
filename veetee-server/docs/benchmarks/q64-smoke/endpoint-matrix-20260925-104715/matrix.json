@@ -1,0 +1,491 @@
+{
+  "generated_at": "2026-09-25T03:48:18.256319+00:00",
+  "setting": "asr.min_silence_duration_ms",
+  "values_ms": [
+    450,
+    320,
+    256,
+    192
+  ],
+  "original_value_ms": 192,
+  "restored": true,
+  "restore_error": null,
+  "benchmark_device_revoked": true,
+  "benchmark_device_cleanup_error": null,
+  "fixture": "eval/audio/vn_may_gio_roi.wav",
+  "mode": "auto",
+  "runs_per_value": 2,
+  "warmup_per_value": 1,
+  "certification_mode": false,
+  "quality_not_measured": false,
+  "speculative_override": null,
+  "speculative_llm_override": null,
+  "vad_end_threshold_override": null,
+  "selection_policy": "Do not choose a production endpoint from latency alone. Require labelled false-endpoint and WER/CER acceptance.",
+  "rows": [
+    {
+      "value_ms": 450,
+      "requested_samples": 2,
+      "successful_samples": 2,
+      "success_rate": 1.0,
+      "p50_ms": 722.578,
+      "p90_ms": 740.523,
+      "p95_ms": 740.523,
+      "max_ms": 740.523,
+      "sla_status": "SMOKE_ONLY",
+      "stage_latency_ms": {
+        "speech_end_to_stt_final_ms": {
+          "samples": 2,
+          "p50": 517.588,
+          "p90": 517.967,
+          "p95": 517.967,
+          "max": 517.967
+        },
+        "stt_final_to_first_clause_ms": {
+          "samples": 2,
+          "p50": 42.31,
+          "p90": 56.387,
+          "p95": 56.387,
+          "max": 56.387
+        },
+        "first_clause_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 98.417,
+          "p90": 100.453,
+          "p95": 100.453,
+          "max": 100.453
+        },
+        "first_binary_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 64.263,
+          "p90": 65.717,
+          "p95": 65.717,
+          "max": 65.717
+        },
+        "speech_end_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 658.315,
+          "p90": 674.807,
+          "p95": 674.807,
+          "max": 674.807
+        },
+        "speech_end_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 722.578,
+          "p90": 740.523,
+          "p95": 740.523,
+          "max": 740.523
+        }
+      },
+      "server_latency_ms": {
+        "context_lookup": {
+          "samples": 2,
+          "p50": 1.392,
+          "p95": 1.462,
+          "max": 1.462
+        },
+        "tts_queue_to_lock": {
+          "samples": 2,
+          "p50": 0.173,
+          "p95": 0.237,
+          "max": 0.237
+        },
+        "tts_first_pcm": {
+          "samples": 2,
+          "p50": 94.951,
+          "p95": 98.373,
+          "max": 98.373
+        },
+        "tts_first_opus": {
+          "samples": 2,
+          "p50": 96.227,
+          "p95": 100.095,
+          "max": 100.095
+        },
+        "tts_first_pcm_to_opus": {
+          "samples": 2,
+          "p50": 1.276,
+          "p95": 1.722,
+          "max": 1.722
+        },
+        "tts_inference": {
+          "samples": 2,
+          "p50": 953.703,
+          "p95": 1065.231,
+          "max": 1065.231
+        },
+        "tts_lease_held": {
+          "samples": 2,
+          "p50": 784.413,
+          "p95": 900.336,
+          "max": 900.336
+        },
+        "tts_opus_to_ws_binary": {
+          "samples": 2,
+          "p50": 0.28,
+          "p95": 0.395,
+          "max": 0.395
+        },
+        "speech_endpoint_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 125.308,
+          "p95": 157.579,
+          "max": 157.579
+        },
+        "last_voice_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 541.308,
+          "p95": 573.579,
+          "max": 573.579
+        },
+        "asr_final_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 124.887,
+          "p95": 157.113,
+          "max": 157.113
+        }
+      },
+      "quality": {
+        "labelled_samples": 2,
+        "split_or_missing_final_samples": 0,
+        "wer_mean": 0.0,
+        "wer_max": 0.0,
+        "cer_mean": 0.0,
+        "cer_max": 0.0
+      }
+    },
+    {
+      "value_ms": 320,
+      "requested_samples": 2,
+      "successful_samples": 0,
+      "success_rate": 0.0,
+      "p50_ms": null,
+      "p90_ms": null,
+      "p95_ms": null,
+      "max_ms": null,
+      "sla_status": "SMOKE_ONLY",
+      "stage_latency_ms": {
+        "speech_end_to_stt_final_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        },
+        "stt_final_to_first_clause_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        },
+        "first_clause_to_first_binary_received_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        },
+        "first_binary_to_first_voiced_pcm_received_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        },
+        "speech_end_to_first_binary_received_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        },
+        "speech_end_to_first_voiced_pcm_received_ms": {
+          "samples": 0,
+          "p50": null,
+          "p90": null,
+          "p95": null,
+          "max": null
+        }
+      },
+      "server_latency_ms": {
+        "context_lookup": {
+          "samples": 2,
+          "p50": 1.43,
+          "p95": 1.475,
+          "max": 1.475
+        }
+      },
+      "quality": {
+        "labelled_samples": 2,
+        "split_or_missing_final_samples": 0,
+        "wer_mean": 0.0,
+        "wer_max": 0.0,
+        "cer_mean": 0.0,
+        "cer_max": 0.0
+      }
+    },
+    {
+      "value_ms": 256,
+      "requested_samples": 2,
+      "successful_samples": 2,
+      "success_rate": 1.0,
+      "p50_ms": 705.791,
+      "p90_ms": 705.888,
+      "p95_ms": 705.888,
+      "max_ms": 705.888,
+      "sla_status": "SMOKE_ONLY",
+      "stage_latency_ms": {
+        "speech_end_to_stt_final_ms": {
+          "samples": 2,
+          "p50": 335.466,
+          "p90": 336.187,
+          "p95": 336.187,
+          "max": 336.187
+        },
+        "stt_final_to_first_clause_ms": {
+          "samples": 2,
+          "p50": 211.281,
+          "p90": 213.122,
+          "p95": 213.122,
+          "max": 213.122
+        },
+        "first_clause_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 96.845,
+          "p90": 97.68,
+          "p95": 97.68,
+          "max": 97.68
+        },
+        "first_binary_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 62.199,
+          "p90": 62.386,
+          "p95": 62.386,
+          "max": 62.386
+        },
+        "speech_end_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 643.592,
+          "p90": 643.877,
+          "p95": 643.877,
+          "max": 643.877
+        },
+        "speech_end_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 705.791,
+          "p90": 705.888,
+          "p95": 705.888,
+          "max": 705.888
+        }
+      },
+      "server_latency_ms": {
+        "context_lookup": {
+          "samples": 2,
+          "p50": 1.312,
+          "p95": 1.392,
+          "max": 1.392
+        },
+        "tts_queue_to_lock": {
+          "samples": 2,
+          "p50": 0.183,
+          "p95": 0.22,
+          "max": 0.22
+        },
+        "tts_first_pcm": {
+          "samples": 2,
+          "p50": 94.477,
+          "p95": 96.402,
+          "max": 96.402
+        },
+        "tts_first_opus": {
+          "samples": 2,
+          "p50": 95.722,
+          "p95": 97.448,
+          "max": 97.448
+        },
+        "tts_first_pcm_to_opus": {
+          "samples": 2,
+          "p50": 1.046,
+          "p95": 1.245,
+          "max": 1.245
+        },
+        "tts_inference": {
+          "samples": 2,
+          "p50": 942.711,
+          "p95": 1784.045,
+          "max": 1784.045
+        },
+        "tts_lease_held": {
+          "samples": 2,
+          "p50": 765.189,
+          "p95": 1524.804,
+          "max": 1524.804
+        },
+        "tts_opus_to_ws_binary": {
+          "samples": 2,
+          "p50": 0.25,
+          "p95": 0.279,
+          "max": 0.279
+        },
+        "speech_endpoint_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 307.8,
+          "p95": 309.763,
+          "max": 309.763
+        },
+        "last_voice_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 531.8,
+          "p95": 533.763,
+          "max": 533.763
+        },
+        "asr_final_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 307.42,
+          "p95": 309.411,
+          "max": 309.411
+        }
+      },
+      "quality": {
+        "labelled_samples": 2,
+        "split_or_missing_final_samples": 0,
+        "wer_mean": 0.0,
+        "wer_max": 0.0,
+        "cer_mean": 0.0,
+        "cer_max": 0.0
+      }
+    },
+    {
+      "value_ms": 192,
+      "requested_samples": 2,
+      "successful_samples": 2,
+      "success_rate": 1.0,
+      "p50_ms": 766.161,
+      "p90_ms": 802.364,
+      "p95_ms": 802.364,
+      "max_ms": 802.364,
+      "sla_status": "SMOKE_ONLY",
+      "stage_latency_ms": {
+        "speech_end_to_stt_final_ms": {
+          "samples": 2,
+          "p50": 243.012,
+          "p90": 243.625,
+          "p95": 243.625,
+          "max": 243.625
+        },
+        "stt_final_to_first_clause_ms": {
+          "samples": 2,
+          "p50": 363.573,
+          "p90": 400.457,
+          "p95": 400.457,
+          "max": 400.457
+        },
+        "first_clause_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 96.508,
+          "p90": 96.71,
+          "p95": 96.71,
+          "max": 96.71
+        },
+        "first_binary_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 63.067,
+          "p90": 63.201,
+          "p95": 63.201,
+          "max": 63.201
+        },
+        "speech_end_to_first_binary_received_ms": {
+          "samples": 2,
+          "p50": 703.094,
+          "p90": 739.164,
+          "p95": 739.164,
+          "max": 739.164
+        },
+        "speech_end_to_first_voiced_pcm_received_ms": {
+          "samples": 2,
+          "p50": 766.161,
+          "p90": 802.364,
+          "p95": 802.364,
+          "max": 802.364
+        }
+      },
+      "server_latency_ms": {
+        "context_lookup": {
+          "samples": 2,
+          "p50": 1.386,
+          "p95": 1.445,
+          "max": 1.445
+        },
+        "tts_queue_to_lock": {
+          "samples": 2,
+          "p50": 0.193,
+          "p95": 0.194,
+          "max": 0.194
+        },
+        "tts_first_pcm": {
+          "samples": 2,
+          "p50": 94.864,
+          "p95": 95.302,
+          "max": 95.302
+        },
+        "tts_first_opus": {
+          "samples": 2,
+          "p50": 96.06,
+          "p95": 96.457,
+          "max": 96.457
+        },
+        "tts_first_pcm_to_opus": {
+          "samples": 2,
+          "p50": 1.155,
+          "p95": 1.197,
+          "max": 1.197
+        },
+        "tts_inference": {
+          "samples": 2,
+          "p50": 1063.411,
+          "p95": 1307.011,
+          "max": 1307.011
+        },
+        "tts_lease_held": {
+          "samples": 2,
+          "p50": 884.883,
+          "p95": 1083.899,
+          "max": 1083.899
+        },
+        "tts_opus_to_ws_binary": {
+          "samples": 2,
+          "p50": 0.263,
+          "p95": 0.264,
+          "max": 0.264
+        },
+        "speech_endpoint_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 423.848,
+          "p95": 497.278,
+          "max": 497.278
+        },
+        "last_voice_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 615.848,
+          "p95": 689.278,
+          "max": 689.278
+        },
+        "asr_final_to_first_ws_binary": {
+          "samples": 2,
+          "p50": 423.588,
+          "p95": 496.977,
+          "max": 496.977
+        }
+      },
+      "quality": {
+        "labelled_samples": 2,
+        "split_or_missing_final_samples": 0,
+        "wer_mean": 0.0,
+        "wer_max": 0.0,
+        "cer_mean": 0.0,
+        "cer_max": 0.0
+      }
+    }
+  ]
+}

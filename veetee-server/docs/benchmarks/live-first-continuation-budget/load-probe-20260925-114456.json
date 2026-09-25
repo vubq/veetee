@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-09-25T04:44:45.132402+00:00",
+  "levels": [
+    {
+      "sessions": 4,
+      "turns_requested": 4,
+      "completed": 3,
+      "failed": 1,
+      "success_rate": 0.75,
+      "p50_s": 8.632116661872715,
+      "p95_s": 10.875111940782517,
+      "max_s": 10.875111940782517,
+      "protocol_completed": 4,
+      "protocol_failed": 0,
+      "protocol_success_rate": 1.0,
+      "observed_turns": 4,
+      "unobserved_turns": 0,
+      "trace_complete": true,
+      "binaries": 251,
+      "errors": [],
+      "auth_mode": "paired_ephemeral_devices",
+      "server_metrics": {
+        "observed_turns": 4,
+        "completed_turns": 3,
+        "outcomes": {
+          "completed": 3,
+          "failed": 1
+        },
+        "turn_start_to_first_ws_binary_ms": {
+          "samples": 3,
+          "p50_ms": 1457.583,
+          "p95_ms": 2290.974,
+          "max_ms": 2290.974
+        },
+        "llm_headers": {
+          "samples": 3,
+          "p50_ms": 404.556,
+          "p95_ms": 536.471,
+          "max_ms": 536.471
+        },
+        "llm_first_speech_segment": {
+          "samples": 3,
+          "p50_ms": 415.025,
+          "p95_ms": 542.346,
+          "max_ms": 542.346
+        },
+        "tts_queue_to_lock": {
+          "samples": 3,
+          "p50_ms": 907.037,
+          "p95_ms": 1625.923,
+          "max_ms": 1625.923
+        },
+        "tts_first_pcm": {
+          "samples": 3,
+          "p50_ms": 1001.46,
+          "p95_ms": 1717.916,
+          "max_ms": 1717.916
+        },
+        "tts_lease_held": {
+          "samples": 3,
+          "p50_ms": 889.627,
+          "p95_ms": 920.752,
+          "max_ms": 920.752
+        },
+        "tts_queue_wait_max": {
+          "samples": 3,
+          "p50_ms": 3378.914,
+          "p95_ms": 4879.129,
+          "max_ms": 4879.129
+        },
+        "tts_queue_wait_total": {
+          "samples": 3,
+          "p50_ms": 4285.752,
+          "p95_ms": 6504.875,
+          "max_ms": 6504.875
+        },
+        "tts_lease_held_max": {
+          "samples": 3,
+          "p50_ms": 2395.558,
+          "p95_ms": 2715.816,
+          "max_ms": 2715.816
+        },
+        "tts_lease_held_total": {
+          "samples": 3,
+          "p50_ms": 3232.716,
+          "p95_ms": 3636.568,
+          "max_ms": 3636.568
+        },
+        "tts_inference_max": {
+          "samples": 3,
+          "p50_ms": 2693.046,
+          "p95_ms": 3013.862,
+          "max_ms": 3013.862
+        },
+        "tts_inference_total": {
+          "samples": 3,
+          "p50_ms": 3696.391,
+          "p95_ms": 4081.985,
+          "max_ms": 4081.985
+        },
+        "tts_segment_count": {
+          "samples": 3,
+          "p50": 2,
+          "max": 2
+        }
+      }
+    }
+  ],
+  "note": "text turns only; paired/authenticated sessions; no ASR audio decode load. Top-level success is authoritative server turn_finish outcome=completed; protocol TTS completion (including recovery audio) is reported separately.",
+  "artifact_path": "docs/benchmarks/live-first-continuation-budget/load-probe-20260925-114456.json"
+}

@@ -1,0 +1,49 @@
+{
+  "phase": "resume",
+  "database_path": "/home/quangvu/Project/veetee/veetee-server/data/memory.sqlite3",
+  "durable_enabled": true,
+  "owners_are_synthetic": true,
+  "checks": {
+    "service_restart": {
+      "pid_before": 4185296,
+      "pid_after": 4193598,
+      "changed": true
+    },
+    "persistence": true,
+    "store_owner_isolation": true,
+    "revision_conflict_rejected": true,
+    "paired_device_owner_binding": true,
+    "runtime_owner_isolation": {
+      "owner_a": {
+        "turn_id": "01cbc2feb93c415cb71e3f46eb9a6d6f:1",
+        "protocol_completed": true,
+        "outcome": "completed",
+        "memory_status": "hit",
+        "memory_returned": 1,
+        "durable_ids": [
+          "durable:6"
+        ]
+      },
+      "owner_b_same_query": {
+        "turn_id": "740b827929d448888545d325910baa25:1",
+        "protocol_completed": true,
+        "outcome": "completed",
+        "memory_status": "hit",
+        "memory_returned": 1,
+        "durable_ids": [
+          "durable:7"
+        ]
+      }
+    },
+    "forget_barrier": {
+      "turn_id": "93d53494339c413c96539a913b14a693:1",
+      "protocol_completed": true,
+      "outcome": "completed",
+      "memory_status": "miss",
+      "memory_returned": 0,
+      "durable_ids": []
+    }
+  },
+  "passed": true,
+  "cleanup_errors": []
+}

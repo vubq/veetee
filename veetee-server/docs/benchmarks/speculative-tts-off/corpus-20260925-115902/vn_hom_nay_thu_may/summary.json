@@ -1,0 +1,206 @@
+{
+  "metric": "speech_end_to_first_voiced_pcm_received_ms",
+  "metric_version": "v2",
+  "certification_metric": "speech_end_to_first_useful_voiced_audio_received_ms",
+  "certification_mode": false,
+  "requested_samples": 2,
+  "successful_samples": 2,
+  "timeout_samples": 0,
+  "cancelled_samples": 0,
+  "failed_samples": 0,
+  "valid_metric_samples": 2,
+  "missing_metric_samples": 0,
+  "minimum_samples": 20,
+  "minimum_success_rate": 0.95,
+  "success_rate": 1.0,
+  "sample_gate_passed": false,
+  "success_rate_gate_passed": true,
+  "outcomes": {
+    "completed": 2
+  },
+  "p50_ms": 911.429,
+  "p90_ms": 916.21,
+  "p95_ms": 916.21,
+  "max_ms": 916.21,
+  "sla_p95_lt_1000_ms": false,
+  "target_p50_lte_600_ms": false,
+  "sla_status": "SMOKE_ONLY",
+  "stage_latency_ms": {
+    "speech_end_to_stt_final_ms": {
+      "samples": 2,
+      "p50": 437.702,
+      "p90": 448.919,
+      "p95": 448.919,
+      "max": 448.919
+    },
+    "stt_final_to_first_clause_ms": {
+      "samples": 2,
+      "p50": 366.336,
+      "p90": 380.573,
+      "p95": 380.573,
+      "max": 380.573
+    },
+    "first_clause_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 107.392,
+      "p90": 109.153,
+      "p95": 109.153,
+      "max": 109.153
+    },
+    "first_binary_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 0.0,
+      "p90": 0.0,
+      "p95": 0.0,
+      "max": 0.0
+    },
+    "speech_end_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 911.429,
+      "p90": 916.21,
+      "p95": 916.21,
+      "max": 916.21
+    },
+    "speech_end_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 911.429,
+      "p90": 916.21,
+      "p95": 916.21,
+      "max": 916.21
+    }
+  },
+  "audio_continuity": {
+    "samples": 2,
+    "run_gap_p95_p50_ms": 66.93,
+    "run_gap_p95_max_ms": 67.665,
+    "run_gap_max_p50_ms": 96.12,
+    "run_gap_max_ms": 96.76,
+    "gap_over_2x_frame_count": 0
+  },
+  "quality": {
+    "labelled_samples": 2,
+    "split_or_missing_final_samples": 0,
+    "wer_mean": 0.25,
+    "wer_max": 0.25,
+    "cer_mean": 0.166667,
+    "cer_max": 0.166667
+  },
+  "note": "p95 values are end-to-end percentiles; stage p95s are never summed. Voiced PCM is a proxy until quality/grounding passes.",
+  "generated_at": "2026-09-25T04:59:36.538251+00:00",
+  "uri": "ws://127.0.0.1:8000/",
+  "mode": "auto",
+  "warmup_runs": 0,
+  "reconnect_each": true,
+  "fixture": "eval/audio/vn_hom_nay_thu_may.wav",
+  "fixture_source_sample_rate": 48000,
+  "speech_end_sample_16k": 17600,
+  "expected_transcript": "Hôm nay thứ mấy?",
+  "quality_labeled": true,
+  "voiced_rms_threshold_pcm16": 160.0,
+  "auto_silence_ms": 720,
+  "turn_cooldown_ms": 1000,
+  "server_latency_ms": {
+    "context_lookup": {
+      "samples": 2,
+      "p50": 3.515,
+      "p95": 5.805,
+      "max": 5.805
+    },
+    "llm_route_acquire": {
+      "samples": 2,
+      "p50": 0.183,
+      "p95": 0.222,
+      "max": 0.222
+    },
+    "llm_upstream_headers": {
+      "samples": 2,
+      "p50": 341.101,
+      "p95": 366.885,
+      "max": 366.885
+    },
+    "llm_headers": {
+      "samples": 2,
+      "p50": 341.284,
+      "p95": 367.107,
+      "max": 367.107
+    },
+    "llm_first_content_token": {
+      "samples": 2,
+      "p50": 341.516,
+      "p95": 367.364,
+      "max": 367.364
+    },
+    "llm_first_speech_segment": {
+      "samples": 2,
+      "p50": 347.388,
+      "p95": 373.613,
+      "max": 373.613
+    },
+    "tts_queue_to_lock": {
+      "samples": 2,
+      "p50": 0.199,
+      "p95": 0.232,
+      "max": 0.232
+    },
+    "tts_first_pcm": {
+      "samples": 2,
+      "p50": 104.131,
+      "p95": 107.657,
+      "max": 107.657
+    },
+    "tts_first_opus": {
+      "samples": 2,
+      "p50": 105.359,
+      "p95": 108.906,
+      "max": 108.906
+    },
+    "tts_first_pcm_to_opus": {
+      "samples": 2,
+      "p50": 1.228,
+      "p95": 1.249,
+      "max": 1.249
+    },
+    "tts_inference": {
+      "samples": 2,
+      "p50": 955.003,
+      "p95": 1011.918,
+      "max": 1011.918
+    },
+    "tts_lease_held": {
+      "samples": 2,
+      "p50": 799.273,
+      "p95": 836.339,
+      "max": 836.339
+    },
+    "tts_opus_to_ws_binary": {
+      "samples": 2,
+      "p50": 0.252,
+      "p95": 0.267,
+      "max": 0.267
+    },
+    "speech_endpoint_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 531.887,
+      "p95": 542.565,
+      "max": 542.565
+    },
+    "last_voice_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 691.887,
+      "p95": 702.565,
+      "max": 702.565
+    },
+    "asr_infer": {
+      "samples": 2,
+      "p50": 52.183,
+      "p95": 73.481,
+      "max": 73.481
+    },
+    "asr_final_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 457.95,
+      "p95": 489.932,
+      "max": 489.932
+    }
+  }
+}

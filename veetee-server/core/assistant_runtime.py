@@ -12,7 +12,8 @@ class AssistantTTSView:
         self.frame_duration_ms = getattr(base_engine, "frame_duration_ms", 60)
 
     async def stream_sentence_to_opus(self, text, cancel_event=None, *, priority="live",
-                                      queue_deadline_seconds=None):
+                                      queue_deadline_seconds=None,
+                                      initial_turn_audio=True):
         method = getattr(self._base, "stream_sentence_to_opus")
         try:
             async for frame in method(
@@ -20,6 +21,7 @@ class AssistantTTSView:
                 cancel_event,
                 priority=priority,
                 queue_deadline_seconds=queue_deadline_seconds,
+                initial_turn_audio=initial_turn_audio,
                 voice_override=self.voice or None,
             ):
                 yield frame

@@ -61,9 +61,10 @@
     "group": "semantics",
     "critical": false,
     "user": "Mấy giờ rồi, và 2+3 bằng mấy?",
-    "expected_semantic_outcome": "two read-only tools then one AI synthesis",
+    "expected_semantic_outcome": "time from server_clock + calculator tool, then one AI synthesis",
     "evidence_needed": [
-      "2 receipts",
+      "tool calculate only",
+      "server_clock current time",
       "1 synthesis speech"
     ]
   },
@@ -73,11 +74,11 @@
     "group": "tool",
     "critical": false,
     "user": "Mấy giờ rồi?",
-    "expected_semantic_outcome": "call get_current_time then AI-phrased time from receipt",
+    "expected_semantic_outcome": "answer current server time directly from authoritative server_clock without tool",
     "evidence_needed": [
-      "tool get_current_time",
-      "receipt provenance",
-      "no direct template"
+      "tool_calls==0",
+      "server_clock time",
+      "no extra date unless asked"
     ]
   },
   {
@@ -86,9 +87,10 @@
     "group": "tool",
     "critical": true,
     "user": "Hôm nay ngày mấy?",
-    "expected_semantic_outcome": "date from receipt, timezone default Asia/Bangkok unless asked",
+    "expected_semantic_outcome": "answer current date from server_clock in Asia/Ho_Chi_Minh without tool",
     "evidence_needed": [
-      "receipt date",
+      "tool_calls==0",
+      "server_clock date",
       "no hallucinated time"
     ]
   },
@@ -132,10 +134,11 @@
     "group": "tool",
     "critical": false,
     "user": "Cho tôi giờ hiện tại rồi cộng 2+3",
-    "expected_semantic_outcome": "A->receipt->B->speech across bounded rounds",
+    "expected_semantic_outcome": "use server_clock for current time + calculate tool for 2+3, then synthesize",
     "evidence_needed": [
-      "2 receipts",
-      "llm_rounds>=3 when allowed"
+      "tool calculate",
+      "server_clock current time",
+      "one tool receipt"
     ]
   },
   {
@@ -676,10 +679,10 @@
     "group": "tool",
     "critical": false,
     "user": "Mấy giờ rồi?",
-    "expected_semantic_outcome": "time tool then speak real time",
+    "expected_semantic_outcome": "speak real current time from server_clock without time tool",
     "evidence_needed": [
-      "tool get_current_time",
-      "real time spoken"
+      "tool_calls==0",
+      "server_clock time"
     ],
     "origin": "template-2026-09-10"
   },
@@ -689,10 +692,10 @@
     "group": "tool",
     "critical": false,
     "user": "Hôm nay ngày mấy?",
-    "expected_semantic_outcome": "time tool then speak real date",
+    "expected_semantic_outcome": "speak real current date from server_clock without time tool",
     "evidence_needed": [
-      "tool get_current_time",
-      "real date spoken"
+      "tool_calls==0",
+      "server_clock date"
     ],
     "origin": "template-2026-09-10"
   },
@@ -715,10 +718,11 @@
     "group": "tool",
     "critical": false,
     "user": "Ngày mai là thứ mấy?",
-    "expected_semantic_outcome": "time tool, weekday math from receipt",
+    "expected_semantic_outcome": "derive tomorrow weekday from current-turn server_clock without time tool",
     "evidence_needed": [
-      "tool get_current_time",
-      "no hallucinated weekday"
+      "tool_calls==0",
+      "server_clock date/weekday",
+      "correct next weekday"
     ],
     "origin": "template-2026-09-10"
   },
@@ -789,9 +793,10 @@
     "group": "persona",
     "critical": false,
     "user": "What time is it now?",
-    "expected_semantic_outcome": "answer in English via time tool",
+    "expected_semantic_outcome": "answer in English from authoritative server_clock without time tool",
     "evidence_needed": [
-      "tool get_current_time",
+      "tool_calls==0",
+      "server_clock time",
       "English reply"
     ],
     "origin": "template-2026-09-10"

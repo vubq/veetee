@@ -20,6 +20,23 @@ class UnavailableLLM(BaseLLM):
         self.reason = str(reason or "llm_unavailable").strip()
         self._models = [m for m in [self.model, *(extra_models or [])] if str(m).strip()]
 
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            "streaming": False,
+            "native_tools": False,
+            "history_summary": False,
+            "transcript_correction": False,
+        }
+
+    def health(self) -> Dict[str, Any]:
+        return {
+            "available": False,
+            "provider": "unavailable",
+            "model": self.model,
+            "reason": self.reason,
+            "capabilities": self.capabilities(),
+        }
+
     async def warmup(self) -> None:
         raise RuntimeError(self.reason)
 

@@ -72,6 +72,14 @@ class QuotaLedger:
         for name, limits in (groups or {}).items():
             self.configure_group(name, limits)
 
+    async def configure_discovery_max_inflight(self, value: int) -> None:
+        """Hot-apply the per-group discovery concurrency guard."""
+        parsed = int(value)
+        if parsed < 1:
+            raise ValueError("discovery_max_inflight must be positive")
+        async with self._lock:
+            self._discovery_max_inflight = parsed
+
     def configure_group(self, name: str, limits: Dict[str, float]) -> None:
         """Set (or replace) known caps for a group. Unknown dims raise."""
         clean: Dict[str, float] = {}

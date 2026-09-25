@@ -20,6 +20,19 @@ export function extractOpusPacket(buffer, protocolVersion = 1) {
   return bytes
 }
 
+export function pcm16LeBytesToFloat32(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input || 0)
+  if (bytes.byteLength < 2) return new Float32Array(0)
+  const sampleCount = Math.floor(bytes.byteLength / 2)
+  const view = new DataView(bytes.buffer, bytes.byteOffset, sampleCount * 2)
+  const out = new Float32Array(sampleCount)
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = view.getInt16(index * 2, true)
+    out[index] = sample < 0 ? sample / 32768 : sample / 32767
+  }
+  return out
+}
+
 export function resampleFloatToPcm16(input, sourceRate, targetRate = 16000) {
   if (!input?.length) return new Int16Array(0)
   const ratio = sourceRate / targetRate

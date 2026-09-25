@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from config.settings import AppConfig, load_settings
+from config.settings import AppConfig, DEFAULT_TIMEZONE, load_settings
 
 
 MINIMAL_YAML = """\
@@ -38,11 +38,12 @@ class GroqProviderConfigTests(unittest.TestCase):
         config = load_settings("config.example.yaml")
         self.assertEqual(config.llm.provider, "groq")
         self.assertTrue(config.llm.model)
-        self.assertGreaterEqual(len(config.llm.key_pool), 1)
-        for entry in config.llm.key_pool:
-            self.assertTrue(entry.id)
-            self.assertTrue(entry.api_key_env)
-            self.assertTrue(entry.quota_group)
+        # Example config demonstrates dynamic env discovery instead of
+        # pretending the pool is limited to A-D aliases.
+        self.assertEqual(config.llm.key_pool, [])
+        self.assertEqual(config.server.timezone, DEFAULT_TIMEZONE)
+        self.assertEqual(config.latency.target_first_audio_ms, 600)
+        self.assertEqual(config.llm.max_tokens, 320)
 
     def test_minimal_pool_parses_and_defaults_group(self):
         path = write_temp(MINIMAL_YAML)
@@ -95,7 +96,73 @@ class GroqProviderConfigTests(unittest.TestCase):
             os.unlink(path)
 
     def test_default_config_uses_groq(self):
-        self.assertEqual(AppConfig().llm.provider, "groq")
+        config = AppConfig()
+        self.assertEqual(config.llm.provider, "groq")
+        self.assertEqual(config.server.timezone, DEFAULT_TIMEZONE)
+        self.assertEqual(config.latency.target_first_audio_ms, 600)
+
+    def test_speech_segmentation_nested_config_loads(self):
+        path = write_temp(
+            "llm:\n"
+            "  speech_segmentation:\n"
+            "    first_clause_min_chars: 18\n"
+            "    first_clause_min_words: 3\n"
+            "    clause_target_chars: 140\n"
+        )
+        try:
+            config = load_settings(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(config.llm.speech_segmentation.first_clause_min_chars, 18)
+        self.assertEqual(config.llm.speech_segmentation.first_clause_min_words, 3)
+        self.assertEqual(config.llm.speech_segmentation.clause_target_chars, 140)
+
+    def test_speech_segmentation_rejects_invalid_cross_bounds(self):
+        path = write_temp(
+            "llm:\n"
+            "  speech_segmentation:\n"
+            "    clause_min_chars: 180\n"
+            "    clause_target_chars: 120\n"
+        )
+        try:
+            with self.assertRaisesRegex(ValueError, "clause_min_chars"):
+                load_settings(path)
+        finally:
+            os.unlink(path)
+
+    def test_legacy_context_timeout_migrates_to_memory_owner(self):
+        path = write_temp(
+            "latency:\n  context_lookup_timeout_ms: 37\n"
+            "memory:\n  enabled: true\n"
+        )
+        try:
+            config = load_settings(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(config.memory.lookup_timeout_ms, 37)
+
+    def test_explicit_memory_timeout_wins_over_legacy_alias(self):
+        path = write_temp(
+            "latency:\n  context_lookup_timeout_ms: 37\n"
+            "memory:\n  lookup_timeout_ms: 11\n"
+        )
+        try:
+            config = load_settings(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(config.memory.lookup_timeout_ms, 11)
+
+    def test_parakeet_sample_rate_is_an_explicit_invariant(self):
+        path = write_temp(
+            "asr:\n"
+            "  provider: parakeet_silero\n"
+            "  sample_rate: 24000\n"
+        )
+        try:
+            with self.assertRaisesRegex(ValueError, "requires asr.sample_rate=16000"):
+                load_settings(path)
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

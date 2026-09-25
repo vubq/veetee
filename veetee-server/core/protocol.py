@@ -63,13 +63,18 @@ def pack_audio_payload(opus_bytes: bytes, version: int = 1, timestamp: int = 0) 
     else:
         return opus_bytes
 
-def make_hello_response(session_id: str, sample_rate: int = 24000, frame_duration_ms: int = 60) -> str:
+def make_hello_response(
+    session_id: str,
+    sample_rate: int = 24000,
+    frame_duration_ms: int = 60,
+    output_format: str = "opus",
+) -> str:
     return json.dumps({
         "type": "hello",
         "transport": "websocket",
         "session_id": session_id,
         "audio_params": {
-            "format": "opus",
+            "format": output_format,
             "sample_rate": sample_rate,
             "channels": 1,
             "frame_duration": frame_duration_ms
@@ -112,6 +117,8 @@ def make_tts_message(
     session_id: str,
     state: str,
     text: Optional[str] = None,
+    *,
+    response_kind: Optional[str] = None,
 ) -> str:
     msg: Dict[str, Any] = {
         "session_id": session_id,
@@ -120,6 +127,8 @@ def make_tts_message(
     }
     if text is not None:
         msg["text"] = text
+    if response_kind is not None:
+        msg["response_kind"] = str(response_kind)
     return json.dumps(msg)
 
 def parse_incoming_json(data: str) -> Optional[Dict[str, Any]]:

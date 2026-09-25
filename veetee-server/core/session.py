@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
 import time
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
 import websockets
 
@@ -28,7 +30,7 @@ from core.providers.llm.base import BaseLLM
 from core.providers.tts.base import BaseTTS
 from core.providers.tts.base import open_tts_stream
 from core.response_audio_cache import ResponseAudioCache
-from core.context_builder import ContextBuilder
+from core.context_builder import ContextBuilder, MemoryContextPrefetch
 from core.clock_context import clock_context
 from core.intent import PendingActionStore
 from core.ai_contract import (
@@ -37,6 +39,7 @@ from core.ai_contract import (
     IDLE_FAREWELL_SYSTEM_PROMPT,
     IDLE_FAREWELL_USER_PROMPT,
     MEMORY_TOOL_NAME,
+    NO_ACTION_TOOL_NAME,
     SEMANTIC_SYSTEM_PROMPT,
     semantic_tools,
 )
@@ -45,9 +48,10 @@ from core.memory.models import MemoryApplyResult, MemoryProposal, SessionMemoryF
 from core.memory.retrieval import MemoryRetriever
 from core.memory.store import MemoryStore
 from core.tools.builtin.calculator import calculator_descriptor
-from core.tools.builtin.time_tool import time_descriptor
 from core.tools.builtin.music_tool import MusicToolProvider
 from core.music_player import MusicPlayer
+from core.playback import PlaybackCoordinator, PlaybackLease
+from core.session_lifecycle import SessionLifecycleState
 from core.tools.executor import ToolExecutor
 from core.tools.mcp_device import MCPDeviceClient
 from core.tools.registry import ToolRegistry, ToolValidationError, validate_arguments
@@ -61,11 +65,46 @@ from core.turn_events import (
     SpeechSegmentEvent,
     ToolCallReadyEvent,
 )
-from core.turn_metrics import TurnMetricsRecorder, TurnTraceStore, activate_trace, mark_current, reset_trace
+from core.turn_metrics import (
+    TurnMetricsRecorder,
+    TurnTraceStore,
+    activate_trace,
+    mark_current,
+    normalize_llm_usage,
+    reset_trace,
+)
 from core.turn_runner import TurnRunner
 from config.settings import AppConfig
 
 logger = logging.getLogger("ClientSession")
+
+
+_SPECULATIVE_LLM_DONE = object()
+
+
+class _ExpectedTurnFailure(RuntimeError):
+    def __init__(self, message: str, *, code: str):
+        super().__init__(message)
+        self.code = str(code or "expected_failure")
+
+
+@dataclass
+class _SpeculativeLLMHandle:
+    text: str
+    capture_generation: int
+    queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    metadata_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    metadata: Optional[dict[str, Any]] = None
+    error: Optional[BaseException] = None
+    task: Optional[asyncio.Task] = None
+    tts_prefetch_text: str = ""
+    tts_prefetch_queue: Optional[asyncio.Queue] = None
+    tts_prefetch_done: asyncio.Event = field(default_factory=asyncio.Event)
+    tts_prefetch_cancel_event: Optional[asyncio.Event] = None
+    tts_prefetch_error: Optional[BaseException] = None
+    tts_prefetch_task: Optional[asyncio.Task] = None
+    tts_prefetch_consumed: bool = False
+
 
 def _normalize_farewell_text(text: str) -> str:
     return " ".join(
@@ -103,6 +142,7 @@ class ClientSession:
         tts_engine: BaseTTS,
         llm_engine: BaseLLM,
         response_audio_cache: Optional[ResponseAudioCache] = None,
+        recovery_audio_cache: Optional[ResponseAudioCache] = None,
         turn_trace_store: Optional[TurnTraceStore] = None,
         authenticated_owner_id: Optional[str] = None,
     ):
@@ -111,6 +151,11 @@ class ClientSession:
         self.tts_engine = tts_engine
         self.llm_engine = llm_engine
         self.response_audio_cache = response_audio_cache
+        # Emergency recovery is system-level and prewarmed once at startup.
+        # Keep it separate from assistant-specific fixed-response caching so a
+        # custom assistant can recover from LLM/TTS control-plane failures
+        # without forcing its normal speech through the default voice cache.
+        self.recovery_audio_cache = recovery_audio_cache or response_audio_cache
         
         self.session_id = str(uuid.uuid4()).replace("-", "")
         self.turn_metrics = TurnMetricsRecorder(
@@ -122,6 +167,7 @@ class ClientSession:
         self.device_id = "unknown"
         self.client_id = "unknown"
         self.input_audio_format = "opus"
+        self.output_audio_format = "opus"
         
         self.state = SessionState.IDLE
         self.codec = AudioCodec(
@@ -130,7 +176,9 @@ class ClientSession:
             frame_duration_ms=app_config.tts.frame_duration_ms
         )
         
-        self.dialogue = DialogueContext(max_history_turns=5)
+        self.dialogue = DialogueContext(
+            max_history_turns=self.config.conversation.history_turns
+        )
         self.turn_runner = TurnRunner(self.llm_engine)
         self._session_memory: list[SessionMemoryFact] = []
         self._memory_store: Optional[MemoryStore] = None
@@ -150,15 +198,23 @@ class ClientSession:
         )
         descriptors = []
         if self.config.tools.enabled:
-            descriptors = [time_descriptor(self.config.server.timezone), calculator_descriptor()]
+            # Local date/time is always available through authoritative
+            # server_clock. Do not expose a time tool on every turn: models
+            # can otherwise waste a tool round or misuse it for local time.
+            descriptors = [calculator_descriptor()]
+        self.playback = PlaybackCoordinator()
         self.music_player = MusicPlayer(
             send_text=self.send_text,
             send_binary=self.send_binary,
             session_id=self.session_id,
             version=lambda: self.version,
             stall_timeout_s=self.config.music.stall_timeout_s,
+            send_ahead_ms=self.config.music.send_ahead_ms,
+            pack_audio=self._pack_tts_audio,
+            playback=self.playback,
         )
         self._music_ducked = False
+        self._music_interruption_gate = False
         self.music_tools = None
         if self.config.tools.enabled and self.config.music.enabled:
             self.music_tools = MusicToolProvider(
@@ -171,6 +227,7 @@ class ClientSession:
         self.tool_executor = ToolExecutor(
             self.tool_registry,
             max_calls_per_turn=self.config.tools.max_calls_per_turn,
+            max_parallel_read_only=self.config.tools.max_parallel_read_only,
         )
         self.pending_actions = PendingActionStore()
         self.mcp_device: Optional[MCPDeviceClient] = None
@@ -179,13 +236,13 @@ class ClientSession:
                 send_payload=self._send_mcp_payload,
                 registry=self.tool_registry,
             )
-        self.current_turn_task: Optional[asyncio.Task] = None
-        self.current_cancel_event: Optional[asyncio.Event] = None
-        self.is_active = True
-        self._turn_generation = 0
-        self._capture_generation = 0
+        self.lifecycle = SessionLifecycleState()
+        self._speculative_llm_task: Optional[asyncio.Task] = None
+        self._speculative_llm_handle: Optional[_SpeculativeLLMHandle] = None
+        self._speculative_llm_text = ""
+        self._speculative_llm_capture_generation: Optional[int] = None
+        self._history_summary_task: Optional[asyncio.Task] = None
         self._playback_guard_until = 0.0
-        self._wake_generation = 0
         self._pending_wake_task: Optional[asyncio.Task] = None
         self._pending_wake_text: Optional[str] = None
         self._pending_wake_detected_at: Optional[float] = None
@@ -197,7 +254,6 @@ class ClientSession:
         self._idle_not_before = self._last_activity_monotonic
         self._idle_watchdog_task: Optional[asyncio.Task] = None
         self._final_stage_in_progress = False
-        self._closed = False
         
         self.last_transcript = ""
         self.processed_transcript = ""
@@ -218,6 +274,64 @@ class ClientSession:
         
         self.asr: BaseASR = self._create_asr()
 
+    # Compatibility properties keep the historical ClientSession surface
+    # while lifecycle ownership lives in SessionLifecycleState.
+    @property
+    def current_turn_task(self) -> Optional[asyncio.Task]:
+        return self.lifecycle.current_turn_task
+
+    @current_turn_task.setter
+    def current_turn_task(self, task: Optional[asyncio.Task]) -> None:
+        self.lifecycle.current_turn_task = task
+
+    @property
+    def current_cancel_event(self) -> Optional[asyncio.Event]:
+        return self.lifecycle.current_cancel_event
+
+    @current_cancel_event.setter
+    def current_cancel_event(self, event: Optional[asyncio.Event]) -> None:
+        self.lifecycle.current_cancel_event = event
+
+    @property
+    def is_active(self) -> bool:
+        return self.lifecycle.active
+
+    @is_active.setter
+    def is_active(self, value: bool) -> None:
+        self.lifecycle.active = bool(value)
+
+    @property
+    def _closed(self) -> bool:
+        return self.lifecycle.closed
+
+    @_closed.setter
+    def _closed(self, value: bool) -> None:
+        self.lifecycle.closed = bool(value)
+
+    @property
+    def _turn_generation(self) -> int:
+        return self.lifecycle.turn_generation
+
+    @_turn_generation.setter
+    def _turn_generation(self, value: int) -> None:
+        self.lifecycle.turn_generation = int(value)
+
+    @property
+    def _capture_generation(self) -> int:
+        return self.lifecycle.capture_generation
+
+    @_capture_generation.setter
+    def _capture_generation(self, value: int) -> None:
+        self.lifecycle.capture_generation = int(value)
+
+    @property
+    def _wake_generation(self) -> int:
+        return self.lifecycle.wake_generation
+
+    @_wake_generation.setter
+    def _wake_generation(self, value: int) -> None:
+        self.lifecycle.wake_generation = int(value)
+
     def _create_asr(self) -> BaseASR:
         provider = self.config.asr.provider.strip().lower()
         if provider in {"parakeet_silero", "parakeet", "silero_parakeet"}:
@@ -228,7 +342,11 @@ class ClientSession:
                 vad_model_path=self.config.asr.vad_model_path,
                 vad_threshold=self.config.asr.vad_threshold,
                 vad_threshold_low=self.config.asr.vad_threshold_low,
+                vad_end_threshold=self.config.asr.vad_end_threshold,
                 min_silence_duration_ms=self.config.asr.min_silence_duration_ms,
+                speculative_inference_enabled=self.config.asr.speculative_inference_enabled,
+                speculative_start_silence_ms=self.config.asr.speculative_start_silence_ms,
+                speculative_min_confidence=self.config.asr.speculative_min_confidence,
                 min_speech_duration_ms=self.config.asr.min_speech_duration_ms,
                 speech_start_frames=self.config.asr.speech_start_frames,
                 pre_speech_pad_ms=self.config.asr.pre_speech_pad_ms,
@@ -240,6 +358,8 @@ class ClientSession:
                 metrics_recorder=self.turn_metrics,
                 on_transcript_callback=self._on_asr_transcript,
                 on_speech_started_callback=self._on_speech_started,
+                on_speculative_transcript_callback=self._on_asr_speculative_transcript,
+                on_speculative_invalidated_callback=self._on_asr_speculative_invalidated,
             )
         if provider == "deepgram":
             return DeepgramStreamASR(
@@ -254,6 +374,44 @@ class ClientSession:
                 on_speech_started_callback=self._on_speech_started,
             )
         raise ValueError(f"Unsupported ASR provider: {self.config.asr.provider}")
+
+    async def replace_llm_engine(self, llm_engine: BaseLLM) -> None:
+        """Hot-swap the LLM used by subsequent turns without dropping the session."""
+        self._cancel_history_summary()
+        self._cancel_speculative_llm("llm_engine_replaced")
+        if self.current_cancel_event is not None:
+            self.current_cancel_event.set()
+        task = self.current_turn_task
+        current = asyncio.current_task()
+        if task is not None and not task.done() and task is not current:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.current_turn_task = None
+        self.current_cancel_event = None
+        self.llm_engine = llm_engine
+        self.turn_runner = TurnRunner(llm_engine)
+
+    async def reload_asr_engine(self) -> None:
+        """Prepare a replacement ASR first, then swap it into the live session."""
+        self._cancel_speculative_llm("asr_engine_reloaded")
+        replacement = self._create_asr()
+        await replacement.start()
+        previous = self.asr
+        self.asr = replacement
+        try:
+            await previous.stop()
+        except Exception as exc:
+            logger.debug("Previous ASR cleanup failed during hot reload: %s", exc)
+
+    def reload_session_policy(self) -> None:
+        policy = str(self.config.server.barge_in_policy or "client_only").strip().lower()
+        if policy != "client_only":
+            logger.warning(
+                "Unsupported barge_in_policy=%r; falling back to client_only",
+                policy,
+            )
+            policy = "client_only"
+        self.barge_in_policy = policy
 
     def _fit_llm_context(
         self,
@@ -361,6 +519,9 @@ class ClientSession:
             requested_format = str(audio_params.get("format", "opus")).lower()
             if requested_format in ("opus", "pcm16", "linear16"):
                 self.input_audio_format = requested_format
+            requested_output = str(audio_params.get("output_format", "opus")).lower()
+            if requested_output in ("opus", "pcm16", "linear16"):
+                self.output_audio_format = requested_output
             input_frame_duration = audio_params.get("frame_duration", 60)
             if self.input_audio_format == "opus" and not self.codec.configure_input_frame_duration(input_frame_duration):
                 logger.warning(
@@ -372,19 +533,21 @@ class ClientSession:
             hello_resp = make_hello_response(
                 self.session_id,
                 sample_rate=self.config.tts.sample_rate,
-                frame_duration_ms=self.config.tts.frame_duration_ms
+                frame_duration_ms=self.config.tts.frame_duration_ms,
+                output_format=self.output_audio_format,
             )
             await self.send_text(hello_resp)
             if self.mcp_device is not None:
                 await self.mcp_device.on_hello(features.get("mcp") is True)
             logger.info(
-                "Handshake acknowledged for session %s (Ver=%s, mode=%s, reported_server_aec=%s, barge_in_policy=%s, input_frame=%sms)",
+                "Handshake acknowledged for session %s (Ver=%s, mode=%s, reported_server_aec=%s, barge_in_policy=%s, input_frame=%sms, output=%s)",
                 self.session_id,
                 self.version,
                 self.listening_mode,
                 self.server_side_aec_requested,
                 self.barge_in_policy,
                 self.codec.in_frame_duration_ms,
+                self.output_audio_format,
             )
 
         elif msg_type == MessageType.MCP:
@@ -406,17 +569,21 @@ class ClientSession:
                     self.listening_mode = requested_mode
                 if not pending_wake:
                     self._abort_turn()
-                # A new listen also stops music so the user can talk over it.
+                # When the user interrupts active music, pause rather than
+                # destroying the player task. The next AI turn then gets a
+                # one-shot structured action gate: it must explicitly choose
+                # a real tool (for example music_play/music_control) or the
+                # no-action marker. This prevents an ungrounded spoken claim
+                # such as "mình đổi bài rồi" without any tool receipt.
                 if was_music_playing:
-                    await self.music_player.stop(announce=False)
-                    self._music_ducked = False
+                    await self.music_player.pause()
+                    self._music_ducked = True
+                    self._music_interruption_gate = True
                 self._invalidate_capture()
                 self._playback_guard_until = 0.0
-                if was_speaking or was_music_playing:
-                    # Reference FW accepts tts:stop and moves from speaking to
-                    # listening (except manual-stop mode, where it owns the
-                    # subsequent state transition itself). Explicit listening
-                    # start interrupts any buffered playback.
+                if was_speaking and not was_music_playing:
+                    # music_player.pause() already closes the stock TTS
+                    # envelope. Avoid sending a duplicate tts:stop here.
                     await self.send_text(make_tts_message(self.session_id, "stop"))
                 self.state = SessionState.LISTENING
                 self.final_transcript_parts.clear()
@@ -509,36 +676,98 @@ class ClientSession:
             pass
 
     def _abort_turn(self):
-        self._turn_generation += 1
+        self._cancel_speculative_llm("turn_abort")
+        self.playback.invalidate(owner="assistant")
         if self.music_player is not None:
             self.music_player.clear_pending()
-        if self.current_cancel_event:
-            self.current_cancel_event.set()
-            self.current_cancel_event = None
-        current_task = asyncio.current_task()
-        if (
-            self.current_turn_task
-            and not self.current_turn_task.done()
-            and self.current_turn_task is not current_task
-        ):
-            self.current_turn_task.cancel()
-            self.current_turn_task = None
+        self.lifecycle.abort_turn(current_task=asyncio.current_task())
         self._fixed_response_kind = None
 
     def _invalidate_capture(self):
-        self._capture_generation += 1
+        self._cancel_speculative_llm("capture_invalidated")
+        capture_generation = self.lifecycle.advance_capture()
         # Transcript de-duplication is scoped to one capture. The same phrase
         # spoken again after a new capture is a new user turn.
         self.processed_transcript = ""
         invalidate = getattr(self.asr, "invalidate_capture", None)
         if invalidate is not None:
-            invalidate(self._capture_generation)
+            invalidate(capture_generation)
 
     def _owns_turn(self, turn_generation: int) -> bool:
-        return self.is_active and self._turn_generation == turn_generation
+        return self.lifecycle.owns_turn(turn_generation)
+
+    def _claim_assistant_playback(self, turn_generation: int) -> PlaybackLease:
+        return self.playback.claim("assistant", turn_generation)
+
+    def _owns_assistant_playback(
+        self,
+        lease: Optional[PlaybackLease],
+        turn_generation: int,
+    ) -> bool:
+        return self._owns_turn(turn_generation) and self.playback.is_current(lease)
+
+    def _cancel_history_summary(self) -> None:
+        task = self._history_summary_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._history_summary_task = None
+
+    def _schedule_history_summary(self) -> None:
+        cfg = self.config.conversation
+        if not cfg.history_summary_enabled or not self.is_active:
+            return
+        if not self.dialogue.history_summary_due(
+            high_water_turns=cfg.history_summary_high_water_turns,
+            min_new_turns=cfg.history_summary_min_new_turns,
+        ):
+            return
+        if self._history_summary_task is not None and not self._history_summary_task.done():
+            return
+
+        snapshot_revision, _summary_revision, turns, previous_summary = (
+            self.dialogue.summary_snapshot(keep_recent_turns=2)
+        )
+        if not turns:
+            return
+
+        async def worker() -> None:
+            try:
+                defer_seconds = max(0, cfg.history_summary_defer_ms) / 1000.0
+                if defer_seconds:
+                    await asyncio.sleep(defer_seconds)
+                if not self.is_active:
+                    return
+                summarizer = getattr(self.llm_engine, "summarize_history", None)
+                if not callable(summarizer):
+                    return
+                summary = await summarizer(
+                    turns,
+                    previous_summary=previous_summary,
+                    max_chars=cfg.history_summary_max_chars,
+                )
+                committed = self.dialogue.commit_history_summary(
+                    summary,
+                    snapshot_revision=snapshot_revision,
+                )
+                logger.info(
+                    "history_summary session=%s committed=%s revision=%d chars=%d",
+                    self.session_id,
+                    committed,
+                    snapshot_revision,
+                    len(summary or ""),
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.debug("History summary failed session=%s: %s", self.session_id, exc)
+            finally:
+                if self._history_summary_task is asyncio.current_task():
+                    self._history_summary_task = None
+
+        self._history_summary_task = asyncio.create_task(worker())
 
     def _cancel_pending_wake(self):
-        self._wake_generation += 1
+        self.lifecycle.advance_wake()
         task = self._pending_wake_task
         if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
@@ -788,9 +1017,8 @@ class ClientSession:
         self._abort_turn()
         cancel_event = asyncio.Event()
         turn_generation = self._turn_generation
-        self.current_cancel_event = cancel_event
         self._fixed_response_kind = kind
-        self.current_turn_task = asyncio.create_task(
+        task = asyncio.create_task(
             self._process_fixed_response(
                 text,
                 cancel_event,
@@ -801,6 +1029,7 @@ class ClientSession:
                 metric_started_at=metric_started_at,
             )
         )
+        self.lifecycle.bind_turn(task, cancel_event)
 
     async def _collect_fixed_audio(self, text: str, cancel_event: asyncio.Event) -> tuple[bytes, ...]:
         frames = []
@@ -834,6 +1063,7 @@ class ClientSession:
         started = time.perf_counter()
         sent_start = False
         first_binary_sent = False
+        playback_lease: Optional[PlaybackLease] = None
         pacer = AudioPacer(
             frame_duration_ms=self.config.tts.frame_duration_ms,
             send_ahead_ms=self.config.tts.send_ahead_ms,
@@ -843,6 +1073,9 @@ class ClientSession:
                 return
             self.state = SessionState.THINKING
             await self._duck_music_for_speech()
+            playback_lease = self._claim_assistant_playback(turn_generation)
+            if not self._owns_assistant_playback(playback_lease, turn_generation):
+                return
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 raise ConnectionError("failed to send live fixed-response tts:start")
             sent_start = True
@@ -857,11 +1090,13 @@ class ClientSession:
                 priority="live",
                 queue_deadline_seconds=self.config.latency.total_turn_timeout_ms / 1000.0,
             ):
-                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                if cancel_event.is_set() or not self._owns_assistant_playback(playback_lease, turn_generation):
                     return
                 if not await pacer.wait_for_send(cancel_event):
                     return
-                if not await self.send_binary(pack_audio_payload(opus_frame, self.version)):
+                if not self._owns_assistant_playback(playback_lease, turn_generation):
+                    return
+                if not await self.send_binary(self._pack_tts_audio(opus_frame)):
                     raise ConnectionError("failed to send live fixed-response audio")
                 pacer.record_frame_sent()
                 if pacer.playback_end is not None:
@@ -891,7 +1126,7 @@ class ClientSession:
                 if not await self._wait_cancelable(drain_seconds, cancel_event):
                     return
 
-            if cancel_event.is_set() or not self._owns_turn(turn_generation):
+            if cancel_event.is_set() or not self._owns_assistant_playback(playback_lease, turn_generation):
                 return
             if not await self.send_text(make_tts_message(self.session_id, "stop")):
                 raise ConnectionError("failed to send live fixed-response tts:stop")
@@ -912,16 +1147,15 @@ class ClientSession:
                 kind,
                 exc,
             )
-            if self._owns_turn(turn_generation) and sent_start:
+            if self._owns_assistant_playback(playback_lease, turn_generation) and sent_start:
                 await self.send_text(make_tts_message(self.session_id, "stop"))
             if close_after and self.is_active:
                 await self._close_transport_and_session(closing_reason or kind)
             elif self._owns_turn(turn_generation):
                 self.state = SessionState.IDLE if self.listening_mode == "manual" else SessionState.LISTENING
         finally:
-            if self.current_turn_task is asyncio.current_task():
-                self.current_turn_task = None
-                self.current_cancel_event = None
+            self.playback.release(playback_lease)
+            if self.lifecycle.clear_turn_if_current():
                 self._fixed_response_kind = None
                 await self._unduck_music()
 
@@ -940,10 +1174,10 @@ class ClientSession:
         turn_generation: int,
     ) -> bool:
         """Send the startup AI-generated recovery clip without invoking LLM/TTS."""
-        if self.response_audio_cache is None:
+        if self.recovery_audio_cache is None:
             return False
         try:
-            recovery = await self.response_audio_cache.get_recovery()
+            recovery = await self.recovery_audio_cache.get_recovery()
         except (KeyError, RuntimeError) as exc:
             logger.info("cached_error_fallback_unavailable session=%s reason=%s", self.session_id, exc)
             return False
@@ -961,22 +1195,33 @@ class ClientSession:
         )
         sent_start = False
         sent_audio = False
+        playback_lease: Optional[PlaybackLease] = None
         try:
             await self._duck_music_for_speech()
+            playback_lease = self._claim_assistant_playback(turn_generation)
+            if not self._owns_assistant_playback(playback_lease, turn_generation):
+                return False
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 return False
             sent_start = True
             if not await self.send_text(
-                make_tts_message(self.session_id, "sentence_start", recovery.text)
+                make_tts_message(
+                    self.session_id,
+                    "sentence_start",
+                    recovery.text,
+                    response_kind="recovery",
+                )
             ):
                 return False
             self.state = SessionState.SPEAKING
             for opus_frame in frames:
-                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                if cancel_event.is_set() or not self._owns_assistant_playback(playback_lease, turn_generation):
                     return False
                 if not await pacer.wait_for_send(cancel_event):
                     return False
-                if not await self.send_binary(pack_audio_payload(opus_frame, self.version)):
+                if not self._owns_assistant_playback(playback_lease, turn_generation):
+                    return False
+                if not await self.send_binary(self._pack_tts_audio(opus_frame)):
                     return False
                 sent_audio = True
                 pacer.record_frame_sent()
@@ -985,7 +1230,7 @@ class ClientSession:
                         self._playback_guard_until,
                         pacer.playback_end,
                     )
-            if sent_audio and self._owns_turn(turn_generation) and not cancel_event.is_set():
+            if sent_audio and self._owns_assistant_playback(playback_lease, turn_generation) and not cancel_event.is_set():
                 await self.send_text(make_tts_message(self.session_id, "stop"))
                 self._mark_response_complete(self._playback_guard_until)
                 mark_current(
@@ -999,8 +1244,9 @@ class ClientSession:
             logger.warning("cached_error_fallback_send_failed session=%s error=%s", self.session_id, exc)
             return False
         finally:
-            if sent_start and not sent_audio and self._owns_turn(turn_generation):
+            if sent_start and not sent_audio and self._owns_assistant_playback(playback_lease, turn_generation):
                 await self.send_text(make_tts_message(self.session_id, "stop"))
+            self.playback.release(playback_lease)
 
     async def _process_fixed_response(
         self,
@@ -1015,6 +1261,7 @@ class ClientSession:
     ):
         started = time.perf_counter()
         sent_start = False
+        playback_lease: Optional[PlaybackLease] = None
         pacer = AudioPacer(
             frame_duration_ms=self.config.tts.frame_duration_ms,
             send_ahead_ms=self.config.tts.send_ahead_ms,
@@ -1053,6 +1300,9 @@ class ClientSession:
             if cancel_event.is_set() or not self._owns_turn(turn_generation):
                 return
             await self._duck_music_for_speech()
+            playback_lease = self._claim_assistant_playback(turn_generation)
+            if not self._owns_assistant_playback(playback_lease, turn_generation):
+                return
             if not await self.send_text(make_tts_message(self.session_id, "start")):
                 raise ConnectionError("failed to send fixed-response tts:start")
             sent_start = True
@@ -1062,11 +1312,13 @@ class ClientSession:
 
             first_binary_sent = False
             for opus_frame in frames:
-                if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                if cancel_event.is_set() or not self._owns_assistant_playback(playback_lease, turn_generation):
                     return
                 if not await pacer.wait_for_send(cancel_event):
                     return
-                packet = pack_audio_payload(opus_frame, self.version)
+                if not self._owns_assistant_playback(playback_lease, turn_generation):
+                    return
+                packet = self._pack_tts_audio(opus_frame)
                 if not await self.send_binary(packet):
                     raise ConnectionError("failed to send fixed-response audio")
                 pacer.record_frame_sent()
@@ -1094,7 +1346,7 @@ class ClientSession:
                 if not await self._wait_cancelable(drain_seconds, cancel_event):
                     return
 
-            if cancel_event.is_set() or not self._owns_turn(turn_generation):
+            if cancel_event.is_set() or not self._owns_assistant_playback(playback_lease, turn_generation):
                 return
             if not await self.send_text(make_tts_message(self.session_id, "stop")):
                 raise ConnectionError("failed to send fixed-response tts:stop")
@@ -1127,7 +1379,7 @@ class ClientSession:
                 kind,
                 exc,
             )
-            if self._owns_turn(turn_generation) and sent_start:
+            if self._owns_assistant_playback(playback_lease, turn_generation) and sent_start:
                 await self.send_text(make_tts_message(self.session_id, "stop"))
             if close_after and self.is_active:
                 await self._close_transport_and_session(closing_reason or kind)
@@ -1138,9 +1390,8 @@ class ClientSession:
                     else SessionState.LISTENING
                 )
         finally:
-            if self.current_turn_task is asyncio.current_task():
-                self.current_turn_task = None
-                self.current_cancel_event = None
+            self.playback.release(playback_lease)
+            if self.lifecycle.clear_turn_if_current():
                 self._fixed_response_kind = None
                 await self._unduck_music()
 
@@ -1301,7 +1552,25 @@ class ClientSession:
                 final_stage_started = time.perf_counter()
                 raw_final_text = " ".join(self.final_transcript_parts).strip() or transcript.strip()
                 self.final_transcript_parts.clear()
+                context_prefetch_task: Optional[asyncio.Task] = None
+                if raw_final_text:
+                    self.turn_metrics.record_capture_event(
+                        self._capture_generation,
+                        "context_prefetch_start",
+                        chars=len(raw_final_text),
+                    )
+                    context_prefetch_task = asyncio.create_task(
+                        self.context_builder.prefetch_memory(
+                            query=raw_final_text,
+                            owner_id=self._memory_owner_id,
+                            session_memory=self._session_memory,
+                        )
+                    )
                 final_text = await self._maybe_correct_asr_transcript(raw_final_text)
+                if context_prefetch_task is not None and final_text != raw_final_text:
+                    context_prefetch_task.cancel()
+                    await asyncio.gather(context_prefetch_task, return_exceptions=True)
+                    context_prefetch_task = None
                 logger.info(
                     "ASR final stage completed in %.0f ms after speech-final callback (correction included when enabled)",
                     (time.perf_counter() - final_stage_started) * 1000,
@@ -1317,6 +1586,10 @@ class ClientSession:
                 if self._speech_active or final_text:
                     await self.send_text(make_vad_message(self.session_id, "speech_ended"))
                 self._speech_active = False
+                if not final_text and context_prefetch_task is not None:
+                    context_prefetch_task.cancel()
+                    await asyncio.gather(context_prefetch_task, return_exceptions=True)
+                    context_prefetch_task = None
                 if final_text:
                     self._mark_conversation_activity("asr_final")
                     self.turn_metrics.record_capture_event(
@@ -1329,6 +1602,7 @@ class ClientSession:
                         check_end_intent=True,
                         source="asr",
                         asr_confidence=getattr(self.asr, "last_word_confidence", None),
+                        context_prefetch_task=context_prefetch_task,
                     )
             finally:
                 self._final_stage_in_progress = False
@@ -1367,6 +1641,458 @@ class ClientSession:
         )
         return corrected
 
+    def _cancel_speculative_tts_prefetch(
+        self,
+        handle: Optional[_SpeculativeLLMHandle],
+        reason: str = "",
+    ) -> None:
+        if handle is None:
+            return
+        cancel_event = handle.tts_prefetch_cancel_event
+        task = handle.tts_prefetch_task
+        was_active = task is not None and not task.done()
+        had_buffered_audio = bool(
+            handle.tts_prefetch_queue is not None
+            and not handle.tts_prefetch_queue.empty()
+        )
+        if cancel_event is not None:
+            cancel_event.set()
+        if was_active:
+            task.cancel()
+        if (
+            reason
+            and handle.tts_prefetch_text
+            and not handle.tts_prefetch_consumed
+            and (was_active or had_buffered_audio)
+        ):
+            self.turn_metrics.record_capture_event(
+                handle.capture_generation,
+                "tts_speculative_discarded",
+                reason=reason,
+                chars=len(handle.tts_prefetch_text),
+            )
+
+    async def _run_speculative_tts_prefetch(
+        self,
+        handle: _SpeculativeLLMHandle,
+        text: str,
+    ) -> None:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return
+        frame_ms = max(1, int(self.config.tts.frame_duration_ms))
+        buffered_frames = max(
+            1,
+            (int(self.config.tts.send_ahead_ms) + frame_ms - 1) // frame_ms,
+        )
+        queue: asyncio.Queue = asyncio.Queue(maxsize=buffered_frames)
+        cancel_event = asyncio.Event()
+        handle.tts_prefetch_text = cleaned
+        handle.tts_prefetch_queue = queue
+        handle.tts_prefetch_cancel_event = cancel_event
+        lead_ms = max(
+            1,
+            int(self.config.asr.min_silence_duration_ms)
+            - int(self.config.asr.speculative_start_silence_ms),
+        )
+        emitted = 0
+        try:
+            async for opus_frame in open_tts_stream(
+                self.tts_engine,
+                cleaned,
+                cancel_event,
+                priority="live",
+                queue_deadline_seconds=lead_ms / 1000.0,
+            ):
+                if (
+                    cancel_event.is_set()
+                    or handle.capture_generation != self._capture_generation
+                    or not self.is_active
+                ):
+                    return
+                await queue.put(opus_frame)
+                emitted += 1
+                if emitted == 1:
+                    self.turn_metrics.record_capture_event(
+                        handle.capture_generation,
+                        "tts_speculative_first_opus_ready",
+                        chars=len(cleaned),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            handle.tts_prefetch_error = exc
+            self.turn_metrics.record_capture_event(
+                handle.capture_generation,
+                "tts_speculative_failed",
+                error=type(exc).__name__,
+            )
+        finally:
+            handle.tts_prefetch_done.set()
+
+    def _maybe_start_speculative_tts_prefetch(
+        self,
+        handle: _SpeculativeLLMHandle,
+        event: SpeechSegmentEvent,
+    ) -> None:
+        if (
+            not self.config.tts.speculative_prefetch_enabled
+            or handle.tts_prefetch_task is not None
+            or handle.tts_prefetch_consumed
+        ):
+            return
+        text = str(event.text or "").strip()
+        if not text:
+            return
+        task = asyncio.create_task(
+            self._run_speculative_tts_prefetch(handle, text)
+        )
+        handle.tts_prefetch_task = task
+
+    async def _iter_speculative_tts_prefetch(
+        self,
+        handle: _SpeculativeLLMHandle,
+        text: str,
+        cancel_event: asyncio.Event,
+    ):
+        cleaned = str(text or "").strip()
+        queue = handle.tts_prefetch_queue
+        if (
+            handle.tts_prefetch_consumed
+            or queue is None
+            or cleaned != handle.tts_prefetch_text
+        ):
+            return
+        handle.tts_prefetch_consumed = True
+        mark_current(
+            "tts_speculative_adopted",
+            chars=len(cleaned),
+            buffered_frames=queue.qsize(),
+        )
+        while True:
+            if cancel_event.is_set():
+                return
+            if queue.empty() and handle.tts_prefetch_done.is_set():
+                if handle.tts_prefetch_error is not None:
+                    raise RuntimeError("speculative TTS prefetch failed") from handle.tts_prefetch_error
+                return
+            try:
+                frame = await asyncio.wait_for(queue.get(), timeout=0.05)
+            except asyncio.TimeoutError:
+                continue
+            yield frame
+
+    def _on_speculative_llm_done(
+        self,
+        handle: _SpeculativeLLMHandle,
+        task: asyncio.Task,
+    ) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError as exc:
+            handle.error = exc
+        except Exception as exc:
+            handle.error = exc
+            logger.debug("Speculative LLM task failed: %s", exc)
+        finally:
+            handle.metadata_ready.set()
+            handle.queue.put_nowait(_SPECULATIVE_LLM_DONE)
+
+    def _cancel_speculative_llm(self, reason: str = "") -> None:
+        handle = self._speculative_llm_handle
+        self._cancel_speculative_tts_prefetch(handle, reason or "llm_cancelled")
+        task = handle.task if handle is not None else self._speculative_llm_task
+        generation = self._speculative_llm_capture_generation
+        self._speculative_llm_task = None
+        self._speculative_llm_handle = None
+        self._speculative_llm_text = ""
+        self._speculative_llm_capture_generation = None
+        if task is not None and not task.done():
+            task.cancel()
+        if reason and generation is not None:
+            self.turn_metrics.record_capture_event(
+                generation,
+                "llm_speculative_discarded",
+                reason=reason,
+            )
+
+    async def _on_asr_speculative_invalidated(
+        self,
+        capture_generation: Optional[int] = None,
+    ) -> None:
+        if (
+            capture_generation is not None
+            and capture_generation != self._speculative_llm_capture_generation
+        ):
+            return
+        self._cancel_speculative_llm("speech_resumed")
+
+    @staticmethod
+    def _message_fingerprint(messages: list[dict[str, Any]]) -> str:
+        payload = json.dumps(
+            messages,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()[:16]
+
+    async def _collect_speculative_llm_events(
+        self,
+        handle: _SpeculativeLLMHandle,
+        user_text: str,
+        *,
+        asr_confidence: float,
+        capture_generation: int,
+    ) -> None:
+        if capture_generation != self._capture_generation or not self.is_active:
+            raise asyncio.CancelledError()
+
+        persona_version = self._persona_snapshot()
+        catalog_hash = self.tool_registry.catalog_fingerprint()
+        base_dialogue = list(self.dialogue.get_messages_for_llm())
+        base_dialogue_hash = self._message_fingerprint(base_dialogue)
+        dialogue_messages = list(base_dialogue)
+        dialogue_messages.append({"role": "user", "content": user_text})
+        messages = await self.context_builder.build(
+            dialogue_messages,
+            query=user_text,
+            owner_id=self._memory_owner_id,
+            session_memory=self._session_memory,
+        )
+        if capture_generation != self._capture_generation or not self.is_active:
+            raise asyncio.CancelledError()
+
+        messages.insert(0, clock_context(self.config.server.timezone))
+        music_runtime = self.music_player.status() if self.music_player is not None else None
+        if music_runtime and (
+            music_runtime.get("title")
+            or music_runtime.get("history")
+            or music_runtime.get("state") != "idle"
+            or music_runtime.get("has_pending")
+        ):
+            messages.insert(1, {
+                "role": "system",
+                "content": (
+                    "music_runtime="
+                    + json.dumps(
+                        music_runtime,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + ". Đây là trạng thái nhạc tươi do server cung cấp, không đọc thành lời. "
+                      "Nếu người dùng muốn bài khác, music_play sẽ thay bài hiện tại/gần nhất và "
+                      "không cần hỏi xác nhận riêng. Nếu câu trước vừa hỏi muốn nghe bài nào và "
+                      "lời mới chỉ là một cụm tên bài/ca sĩ/thể loại, dùng chính cụm đó làm query "
+                      "để tiếp tục phát; không hỏi lại cùng một dữ kiện."
+                ),
+            })
+
+        provenance = json.dumps(
+            {
+                "source": "voice_asr",
+                "min_word_confidence": round(float(asr_confidence), 4),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        messages.insert(1, {
+            "role": "system",
+            "content": (
+                f"input_provenance={provenance}. "
+                "Đây là metadata kỹ thuật, không đọc thành lời. Nếu confidence thấp hơn "
+                f"{self.config.memory.min_asr_confidence_for_write:.2f} và lượt này sẽ thay đổi memory, "
+                "không suy diễn fact: hỏi lại ngắn gọn để xác nhận. Các intent không liên quan memory vẫn xử lý bình thường."
+            ),
+        })
+
+        business_tools = (
+            self.tool_registry.openai_tools(limit=self.config.tools.schema_limit)
+            if self.config.tools.enabled and self.config.tools.native_enabled
+            else []
+        )
+        pending_action = self.pending_actions.peek()
+        pending_action_id = pending_action.action_id if pending_action is not None else ""
+        if pending_action is not None:
+            messages.insert(
+                -1 if messages and messages[-1].get("role") == "user" else len(messages),
+                {
+                    "role": "system",
+                    "content": (
+                        "Pending action hiện tại là dữ liệu trạng thái do server quản lý. "
+                        "Hãy hiểu câu người dùng theo ngữ cảnh và dùng veetee_confirmation_decision "
+                        "với đúng action_id nếu họ approve/reject/clarify. Nếu họ đổi tham số, gọi tool nghiệp vụ mới.\n"
+                        + json.dumps(
+                            {
+                                "action_id": pending_action.action_id,
+                                "tool_name": pending_action.tool_name,
+                                "arguments": pending_action.arguments,
+                                "expires_in_ms": max(
+                                    0,
+                                    int((pending_action.expires_at - time.monotonic()) * 1000),
+                                ),
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                            separators=(",", ":"),
+                        )
+                    ),
+                },
+            )
+
+        music_action_gate = bool(self._music_interruption_gate)
+        if music_action_gate:
+            messages.insert(
+                -1 if messages and messages[-1].get("role") == "user" else len(messages),
+                {
+                    "role": "system",
+                    "content": (
+                        "music_interruption_decision=required. Người dùng vừa ngắt một bài đang phát "
+                        "để nói lượt mới. Ở round đầu này không được trả lời bằng speech: phải chọn đúng "
+                        "một structured tool. Nếu họ muốn phát/đổi bài thì dùng music_play; nếu muốn "
+                        "pause/resume/stop/next/previous/status thì dùng music_control; nếu là action khác "
+                        "thì chọn tool action tương ứng; chỉ dùng veetee_no_action khi lời mới thật sự "
+                        "không yêu cầu bất kỳ action/tool nào."
+                    ),
+                },
+            )
+
+        tools = business_tools + semantic_tools(
+            memory_enabled=self.config.memory.enabled,
+            pending_action=pending_action is not None,
+            include_no_action=music_action_gate,
+        )
+        detect_end_intent = bool(
+            self.config.intent.enabled
+            and self.config.intent.semantic_end_enabled
+            and self.config.conversation.end_intent_ai_enabled
+        )
+        messages = self._fit_llm_context(
+            messages,
+            tools=tools,
+            detect_end_intent=detect_end_intent,
+        )
+        handle.metadata = {
+            "text": user_text,
+            "capture_generation": capture_generation,
+            "pending_action_id": pending_action_id,
+            "music_action_gate": music_action_gate,
+            "persona_version": persona_version,
+            "catalog_hash": catalog_hash,
+            "base_dialogue_hash": base_dialogue_hash,
+        }
+        handle.metadata_ready.set()
+
+        started = time.perf_counter()
+        event_count = 0
+        stream = self.turn_runner.stream(
+            messages,
+            tools=tools,
+            detect_end_intent=detect_end_intent,
+            tool_choice="required" if music_action_gate else None,
+            first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
+            total_timeout_ms=self.config.latency.total_turn_timeout_ms,
+        )
+        try:
+            async for event in stream:
+                if (
+                    capture_generation != self._capture_generation
+                    or not self.is_active
+                ):
+                    raise asyncio.CancelledError()
+                event_count += 1
+                if isinstance(event, SpeechSegmentEvent):
+                    self._maybe_start_speculative_tts_prefetch(handle, event)
+                await handle.queue.put(event)
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                try:
+                    await aclose()
+                except RuntimeError:
+                    pass
+
+        self.turn_metrics.record_capture_event(
+            capture_generation,
+            "llm_speculative_ready",
+            duration_ms=round((time.perf_counter() - started) * 1000.0, 3),
+            event_count=event_count,
+        )
+
+    async def _on_asr_speculative_transcript(
+        self,
+        transcript: str,
+        confidence: float,
+        capture_generation: Optional[int] = None,
+    ) -> None:
+        text = str(transcript or "").strip()
+        generation = (
+            self._capture_generation
+            if capture_generation is None
+            else int(capture_generation)
+        )
+        if (
+            not text
+            or not self.config.asr.speculative_llm_enabled
+            or generation != self._capture_generation
+            or not self.is_active
+            or float(confidence) < float(self.config.asr.speculative_llm_min_confidence)
+        ):
+            return
+        if self.current_turn_task is not None and not self.current_turn_task.done():
+            return
+
+        self._cancel_speculative_llm("superseded")
+        self._speculative_llm_text = text
+        self._speculative_llm_capture_generation = generation
+        self.turn_metrics.record_capture_event(
+            generation,
+            "llm_speculative_start",
+            chars=len(text),
+            min_word_confidence=round(float(confidence), 4),
+        )
+        handle = _SpeculativeLLMHandle(
+            text=text,
+            capture_generation=generation,
+        )
+        task = asyncio.create_task(
+            self._collect_speculative_llm_events(
+                handle,
+                text,
+                asr_confidence=float(confidence),
+                capture_generation=generation,
+            )
+        )
+        handle.task = task
+        self._speculative_llm_handle = handle
+        self._speculative_llm_task = task
+        task.add_done_callback(
+            lambda completed, owned=handle: self._on_speculative_llm_done(
+                owned, completed
+            )
+        )
+
+    def _take_speculative_llm(
+        self,
+        transcript: str,
+        capture_generation: int,
+    ) -> Optional[_SpeculativeLLMHandle]:
+        handle = self._speculative_llm_handle
+        if handle is None:
+            return None
+        if (
+            capture_generation != self._speculative_llm_capture_generation
+            or str(transcript or "").strip() != self._speculative_llm_text
+        ):
+            self._cancel_speculative_llm("final_transcript_mismatch")
+            return None
+        self._speculative_llm_task = None
+        self._speculative_llm_handle = None
+        self._speculative_llm_text = ""
+        self._speculative_llm_capture_generation = None
+        return handle
+
     async def _trigger_ai_turn(
         self,
         transcript: str,
@@ -1374,6 +2100,7 @@ class ClientSession:
         check_end_intent: bool = False,
         source: str = "chat",
         asr_confidence: Optional[float] = None,
+        context_prefetch_task: Optional[asyncio.Task] = None,
     ):
         if not transcript.strip():
             return
@@ -1382,18 +2109,31 @@ class ClientSession:
             return
 
         self._cancel_pending_wake()
+        self._cancel_history_summary()
         self._closing_reason = None
         self._mark_conversation_activity("ai_turn")
 
         self.processed_transcript = transcript
         logger.info("Triggering AI turn prompt_chars=%d", len(transcript))
 
+        speculative_llm_handle = (
+            self._take_speculative_llm(
+                transcript,
+                self._capture_generation,
+            )
+            if source == "asr"
+            else None
+        )
+        speculative_base_dialogue_hash = (
+            self._message_fingerprint(self.dialogue.get_messages_for_llm())
+            if speculative_llm_handle is not None
+            else ""
+        )
         self._abort_turn()
 
         turn_cancel_event = asyncio.Event()
         turn_generation = self._turn_generation
-        self.current_cancel_event = turn_cancel_event
-        self.current_turn_task = asyncio.create_task(
+        task = asyncio.create_task(
             self._process_ai_response(
                 transcript,
                 turn_cancel_event,
@@ -1401,8 +2141,12 @@ class ClientSession:
                 check_end_intent=check_end_intent,
                 source=source,
                 asr_confidence=asr_confidence,
+                context_prefetch_task=context_prefetch_task,
+                speculative_llm_handle=speculative_llm_handle,
+                speculative_base_dialogue_hash=speculative_base_dialogue_hash,
             )
         )
+        self.lifecycle.bind_turn(task, turn_cancel_event)
 
     def _confirmation_owner_scope(self) -> str:
         if self._memory_owner_id:
@@ -1628,6 +2372,9 @@ class ClientSession:
         check_end_intent: bool = False,
         source: str = "chat",
         asr_confidence: Optional[float] = None,
+        context_prefetch_task: Optional[asyncio.Task] = None,
+        speculative_llm_handle: Optional[_SpeculativeLLMHandle] = None,
+        speculative_base_dialogue_hash: str = "",
     ):
         if not self._owns_turn(turn_generation):
             return
@@ -1647,6 +2394,7 @@ class ClientSession:
         close_reason: Optional[str] = None
         current_emotion = "neutral"
         tts_started = False
+        playback_lease: Optional[PlaybackLease] = None
         first_binary_sent = False
         reply_segments: list[str] = []
         fully_sent_segments: list[str] = []
@@ -1661,7 +2409,13 @@ class ClientSession:
         speech_committed = False
         executed_call_keys: set[tuple[str, str]] = set()
         persona_version = self._persona_snapshot()
-        event_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        music_action_gate = bool(self._music_interruption_gate)
+        self._music_interruption_gate = False
+        # Small bounded producer/consumer queue. Scale only with configured
+        # parallel read capacity instead of hiding an unrelated magic literal.
+        event_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=max(4, self.config.tools.max_parallel_read_only * 4)
+        )
         queue_done = object()
         producer_errors: list[BaseException] = []
 
@@ -1686,19 +2440,71 @@ class ClientSession:
             )
 
         try:
-            self.dialogue.add_user_message(user_text)
+            self.dialogue.add_user_message(user_text, turn_id=trace.turn_id)
 
             mark_current("context_lookup_start")
+            prefetched_context: Optional[MemoryContextPrefetch] = None
+            if context_prefetch_task is not None:
+                try:
+                    prefetched_context = await context_prefetch_task
+                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                        return
+                    mark_current(
+                        "context_prefetch_ready",
+                        status=prefetched_context.lookup.get("status"),
+                        durable_count=prefetched_context.lookup.get("durable_count"),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    mark_current(
+                        "context_prefetch_failed",
+                        error=type(exc).__name__,
+                    )
+                    prefetched_context = None
             messages = await self.context_builder.build(
                 self.dialogue.get_messages_for_llm(),
                 query=user_text,
                 owner_id=self._memory_owner_id,
                 session_memory=self._session_memory,
+                prefetched=prefetched_context,
+            )
+            lookup_snapshot = dict(getattr(self.context_builder, "last_lookup", {}) or {})
+            mark_current(
+                "context_memory",
+                status=lookup_snapshot.get("status"),
+                speculative_reused=bool(lookup_snapshot.get("speculative_reused")),
+                returned=lookup_snapshot.get("returned"),
+                durable_ids=lookup_snapshot.get("durable_ids"),
             )
             # Supply fresh facts for every turn, without classifying user text.
             # AI decides whether these facts are relevant. Never persist this
             # snapshot in dialogue or reuse a previous turn's clock.
             messages.insert(0, clock_context(self.config.server.timezone))
+            if self.music_player is not None:
+                music_runtime = self.music_player.status()
+                if (
+                    music_runtime.get("title")
+                    or music_runtime.get("history")
+                    or music_runtime.get("state") != "idle"
+                    or music_runtime.get("has_pending")
+                ):
+                    messages.insert(1, {
+                        "role": "system",
+                        "content": (
+                            "music_runtime="
+                            + json.dumps(
+                                music_runtime,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                            + ". Đây là trạng thái nhạc tươi do server cung cấp, không đọc thành lời. "
+                              "Nếu người dùng muốn bài khác, music_play sẽ thay bài hiện tại/gần nhất và "
+                              "không cần hỏi xác nhận riêng. Nếu câu trước vừa hỏi muốn nghe bài nào và "
+                              "lời mới chỉ là một cụm tên bài/ca sĩ/thể loại, dùng chính cụm đó làm query "
+                              "để tiếp tục phát; không hỏi lại cùng một dữ kiện."
+                        ),
+                    })
             if source == "asr":
                 confidence_value = (
                     round(float(asr_confidence), 4)
@@ -1747,9 +2553,22 @@ class ClientSession:
                         )
                     ),
                 })
+            if music_action_gate:
+                messages.insert(-1 if messages and messages[-1].get("role") == "user" else len(messages), {
+                    "role": "system",
+                    "content": (
+                        "music_interruption_decision=required. Người dùng vừa ngắt một bài đang phát "
+                        "để nói lượt mới. Ở round đầu này không được trả lời bằng speech: phải chọn đúng "
+                        "một structured tool. Nếu họ muốn phát/đổi bài thì dùng music_play; nếu muốn "
+                        "pause/resume/stop/next/previous/status thì dùng music_control; nếu là action khác "
+                        "thì chọn tool action tương ứng; chỉ dùng veetee_no_action khi lời mới thật sự "
+                        "không yêu cầu bất kỳ action/tool nào."
+                    ),
+                })
             tools = business_tools + semantic_tools(
                 memory_enabled=self.config.memory.enabled,
                 pending_action=pending_action is not None,
+                include_no_action=music_action_gate,
             )
             detect_end_intent = bool(
                 check_end_intent
@@ -1765,21 +2584,125 @@ class ClientSession:
             mark_current("context_lookup_end", message_count=len(messages))
             remaining_generation_timeout_ms()
 
-            stream = self.turn_runner.stream(
-                messages,
-                tools=tools,
-                detect_end_intent=detect_end_intent,
-                tool_choice=None,
-                first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
-                total_timeout_ms=remaining_generation_timeout_ms(),
-            )
-
             async def produce_events():
+                nonlocal stream
                 try:
-                    async for event in stream:
-                        if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                            return
-                        await event_queue.put(event)
+                    speculative_reused = False
+                    if speculative_llm_handle is not None:
+                        handle = speculative_llm_handle
+                        emitted_speculative_events = 0
+                        try:
+                            await asyncio.wait_for(
+                                handle.metadata_ready.wait(),
+                                timeout=max(
+                                    0.001,
+                                    remaining_generation_timeout_ms() / 1000.0,
+                                ),
+                            )
+                            result = handle.metadata or {}
+                            current_pending = self.pending_actions.peek()
+                            current_pending_id = (
+                                current_pending.action_id
+                                if current_pending is not None
+                                else ""
+                            )
+                            state_matches = (
+                                result.get("text") == user_text
+                                and result.get("capture_generation")
+                                == self._capture_generation
+                                and result.get("pending_action_id")
+                                == current_pending_id
+                                and bool(result.get("music_action_gate"))
+                                == music_action_gate
+                                and result.get("persona_version")
+                                == persona_version
+                                and result.get("catalog_hash")
+                                == self.tool_registry.catalog_fingerprint()
+                                and result.get("base_dialogue_hash")
+                                == speculative_base_dialogue_hash
+                            )
+                            if state_matches:
+                                speculative_reused = True
+                                mark_current("llm_speculative_adopted")
+                                while True:
+                                    item = await asyncio.wait_for(
+                                        handle.queue.get(),
+                                        timeout=max(
+                                            0.001,
+                                            remaining_generation_timeout_ms() / 1000.0,
+                                        ),
+                                    )
+                                    if item is _SPECULATIVE_LLM_DONE:
+                                        if handle.error is not None:
+                                            if emitted_speculative_events == 0:
+                                                speculative_reused = False
+                                            else:
+                                                raise handle.error
+                                        break
+                                    if (
+                                        cancel_event.is_set()
+                                        or not self._owns_turn(turn_generation)
+                                    ):
+                                        return
+                                    emitted_speculative_events += 1
+                                    if emitted_speculative_events == 1:
+                                        mark_current("llm_speculative_first_event_reused")
+                                    await event_queue.put(item)
+                                if speculative_reused:
+                                    mark_current(
+                                        "llm_speculative_reused",
+                                        event_count=emitted_speculative_events,
+                                    )
+                            else:
+                                self._cancel_speculative_tts_prefetch(
+                                    handle, "state_changed"
+                                )
+                                if handle.task is not None and not handle.task.done():
+                                    handle.task.cancel()
+                                mark_current(
+                                    "llm_speculative_discarded",
+                                    reason="state_changed",
+                                )
+                        except asyncio.CancelledError:
+                            self._cancel_speculative_tts_prefetch(
+                                handle, "cancelled_before_commit"
+                            )
+                            if handle.task is not None and not handle.task.done():
+                                handle.task.cancel()
+                            if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                                raise
+                            mark_current(
+                                "llm_speculative_discarded",
+                                reason="cancelled_before_commit",
+                            )
+                        except Exception as exc:
+                            self._cancel_speculative_tts_prefetch(
+                                handle, "speculative_llm_failed"
+                            )
+                            if handle.task is not None and not handle.task.done():
+                                handle.task.cancel()
+                            if emitted_speculative_events > 0:
+                                raise
+                            speculative_reused = False
+                            mark_current(
+                                "llm_speculative_discarded",
+                                reason="failed",
+                                error=type(exc).__name__,
+                            )
+
+                    if not speculative_reused:
+                        stream = self.turn_runner.stream(
+                            messages,
+                            tools=tools,
+                            detect_end_intent=detect_end_intent,
+                            tool_choice="required" if music_action_gate else None,
+                            first_event_timeout_ms=self.config.latency.first_token_timeout_ms,
+                            total_timeout_ms=remaining_generation_timeout_ms(),
+                        )
+                        async for event in stream:
+                            if cancel_event.is_set() or not self._owns_turn(turn_generation):
+                                return
+                            await event_queue.put(event)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1794,7 +2717,7 @@ class ClientSession:
             producer_task = asyncio.create_task(produce_events())
 
             async def speak_segment(text: str, emotion: Optional[str] = None):
-                nonlocal tts_started, first_binary_sent
+                nonlocal tts_started, first_binary_sent, playback_lease
                 nonlocal active_segment_text, active_segment_had_audio
                 cleaned = str(text or "").strip()
                 if not cleaned:
@@ -1804,6 +2727,9 @@ class ClientSession:
                 await self._duck_music_for_speech()
 
                 if not tts_started:
+                    playback_lease = self._claim_assistant_playback(turn_generation)
+                    if not self._owns_assistant_playback(playback_lease, turn_generation):
+                        return
                     emo = emotion or current_emotion or "neutral"
                     if not await self.send_text(make_llm_message(self.session_id, emo, "😊")):
                         raise ConnectionError("failed to send llm status")
@@ -1817,43 +2743,100 @@ class ClientSession:
                 ):
                     raise ConnectionError("failed to send sentence_start")
 
-                mark_current("tts_enqueue", chars=len(cleaned), priority="live")
+                prefetch_usable = bool(
+                    speculative_llm_handle is not None
+                    and not speculative_llm_handle.tts_prefetch_consumed
+                    and speculative_llm_handle.tts_prefetch_queue is not None
+                    and speculative_llm_handle.tts_prefetch_text == cleaned
+                )
+                live_priority = "live_first" if not first_binary_sent else "live"
+                mark_current(
+                    "tts_enqueue",
+                    chars=len(cleaned),
+                    priority="speculative_reuse" if prefetch_usable else live_priority,
+                )
                 first_opus_for_segment = True
                 segment_audio_sent = False
                 active_segment_text = cleaned
                 active_segment_had_audio = False
-                async for opus_frame in open_tts_stream(
-                    self.tts_engine,
-                    cleaned,
-                    cancel_event,
-                    priority="live",
-                    queue_deadline_seconds=self.config.latency.total_turn_timeout_ms / 1000.0,
-                ):
-                    if cancel_event.is_set() or not self._owns_turn(turn_generation):
-                        return
-                    if first_opus_for_segment:
-                        mark_current("tts_first_opus")
-                        first_opus_for_segment = False
-                    if not await pacer.wait_for_send(cancel_event):
-                        return
-                    packet = pack_audio_payload(opus_frame, self.version)
-                    if not await self.send_binary(packet):
-                        raise ConnectionError("failed to send TTS audio")
-                    segment_audio_sent = True
-                    active_segment_had_audio = True
-                    pacer.record_frame_sent()
-                    if pacer.playback_end is not None:
-                        self._playback_guard_until = max(
-                            self._playback_guard_until,
-                            pacer.playback_end,
+
+                async def deliver_opus(source):
+                    nonlocal first_opus_for_segment, segment_audio_sent
+                    nonlocal active_segment_had_audio, first_binary_sent
+                    async for opus_frame in source:
+                        if cancel_event.is_set() or not self._owns_assistant_playback(
+                            playback_lease, turn_generation
+                        ):
+                            return
+                        if first_opus_for_segment:
+                            mark_current("tts_first_opus")
+                            first_opus_for_segment = False
+                        if not await pacer.wait_for_send(cancel_event):
+                            return
+                        if not self._owns_assistant_playback(
+                            playback_lease, turn_generation
+                        ):
+                            return
+                        packet = self._pack_tts_audio(opus_frame)
+                        if not await self.send_binary(packet):
+                            raise ConnectionError("failed to send TTS audio")
+                        segment_audio_sent = True
+                        active_segment_had_audio = True
+                        pacer.record_frame_sent()
+                        if pacer.playback_end is not None:
+                            self._playback_guard_until = max(
+                                self._playback_guard_until,
+                                pacer.playback_end,
+                            )
+                        if not first_binary_sent:
+                            first_binary_sent = True
+                            mark_current("first_ws_binary_sent")
+                            logger.info(
+                                "Post-ASR first TTS binary sent in %.3fs",
+                                time.perf_counter() - t_start,
+                            )
+
+                if prefetch_usable:
+                    try:
+                        await deliver_opus(
+                            self._iter_speculative_tts_prefetch(
+                                speculative_llm_handle,
+                                cleaned,
+                                cancel_event,
+                            )
                         )
-                    if not first_binary_sent:
-                        first_binary_sent = True
-                        mark_current("first_ws_binary_sent")
-                        logger.info(
-                            "Post-ASR first TTS binary sent in %.3fs",
-                            time.perf_counter() - t_start,
+                    except Exception:
+                        if segment_audio_sent:
+                            raise
+                        mark_current("tts_speculative_fallback")
+                        self._cancel_speculative_tts_prefetch(
+                            speculative_llm_handle, "prefetch_failed_before_audio"
                         )
+                        await deliver_opus(
+                            open_tts_stream(
+                                self.tts_engine,
+                                cleaned,
+                                cancel_event,
+                                priority=live_priority,
+                                initial_turn_audio=not first_binary_sent,
+                                queue_deadline_seconds=(
+                                    self.config.latency.total_turn_timeout_ms / 1000.0
+                                ),
+                            )
+                        )
+                else:
+                    await deliver_opus(
+                        open_tts_stream(
+                            self.tts_engine,
+                            cleaned,
+                            cancel_event,
+                            priority=live_priority,
+                            initial_turn_audio=not first_binary_sent,
+                            queue_deadline_seconds=(
+                                self.config.latency.total_turn_timeout_ms / 1000.0
+                            ),
+                        )
+                    )
                 if cancel_event.is_set() or not self._owns_turn(turn_generation):
                     return
                 if not segment_audio_sent:
@@ -1879,7 +2862,10 @@ class ClientSession:
 
                 if isinstance(event, ControlEvent):
                     current_emotion = event.emotion or current_emotion
-                    if event.lifecycle == "end" or event.intent == "end_conversation":
+                    if detect_end_intent and (
+                        event.lifecycle == "end"
+                        or event.intent == "end_conversation"
+                    ):
                         close_reason = "ai_end_intent"
                         self._cancel_pending_wake()
                         self._invalidate_capture()
@@ -2129,6 +3115,24 @@ class ClientSession:
                     if speech_committed:
                         mark_current("action_rejected_after_speech_commit", action=event.name)
                         raise RuntimeError("tool action emitted after speech commit")
+                    if event.name == NO_ACTION_TOOL_NAME:
+                        tool_calls_seen += 1
+                        mark_current("semantic_no_action_selected", gate="music_interruption")
+                        action_round_records.append({
+                            "call_id": event.call_id,
+                            "name": NO_ACTION_TOOL_NAME,
+                            "arguments": {},
+                            "receipt": make_receipt(
+                                call_id=event.call_id,
+                                name=NO_ACTION_TOOL_NAME,
+                                arguments={},
+                                status="no_action",
+                                turn_id=trace.turn_id,
+                                data={"reason": "structured semantic no-action"},
+                                provenance="semantic:no_action",
+                            ),
+                        })
+                        continue
                     tool_calls_seen += 1
                     # Loop detection is structural: same origin turn/call with
                     # different args, or a repeated fingerprint after dispatch,
@@ -2271,6 +3275,19 @@ class ClientSession:
                                     turn_id=trace.turn_id, data=result.data, error=result.error,
                                     provenance=f"tool:{event.name}",
                                 )
+                    if result.status == ToolStatus.SUCCEEDED:
+                        data = result.data if isinstance(result.data, dict) else {}
+                        music_action_applied = (
+                            event.name == "music_play" and data.get("status") == "ready"
+                        ) or (
+                            event.name == "music_control"
+                            and str(event.arguments.get("action") or "") != "status"
+                        )
+                        if music_action_applied:
+                            # A real music mutation supersedes the temporary
+                            # pause created by the interruption gate. Let the
+                            # normal speech ducking logic own any later resume.
+                            self._music_ducked = False
                     action_round_records.append({
                         "call_id": event.call_id,
                         "name": event.name,
@@ -2280,9 +3297,17 @@ class ClientSession:
                     continue
 
                 if isinstance(event, FailedEvent):
+                    if event.code == "capacity_exhausted":
+                        raise _ExpectedTurnFailure(
+                            event.error,
+                            code=event.code,
+                        )
                     raise RuntimeError(event.error)
 
                 if isinstance(event, CompletedEvent):
+                    usage_fields = normalize_llm_usage(event.usage)
+                    if usage_fields:
+                        mark_current("llm_usage", round=1, **usage_fields)
                     completed = True
                     continue
 
@@ -2440,7 +3465,10 @@ class ClientSession:
                                 return
                             if isinstance(event, ControlEvent):
                                 current_emotion = event.emotion or current_emotion
-                                if event.lifecycle == "end" or event.intent == "end_conversation":
+                                if detect_end_intent and (
+                                    event.lifecycle == "end"
+                                    or event.intent == "end_conversation"
+                                ):
                                     close_reason = "ai_end_intent"
                                     self._closing_reason = close_reason
                                 continue
@@ -2480,9 +3508,26 @@ class ClientSession:
                                     break
                                 continue
                             if isinstance(event, FailedEvent):
+                                mark_current(
+                                    "llm_round_failed",
+                                    round=synthesized_round,
+                                    error=event.error,
+                                )
+                                logger.warning(
+                                    "LLM synthesis round failed round=%s error=%s",
+                                    synthesized_round,
+                                    event.error,
+                                )
                                 round_failed = True
                                 break
                             if isinstance(event, CompletedEvent):
+                                usage_fields = normalize_llm_usage(event.usage)
+                                if usage_fields:
+                                    mark_current(
+                                        "llm_usage",
+                                        round=synthesized_round,
+                                        **usage_fields,
+                                    )
                                 round_completed = True
                         mark_current("llm_round_end", round=synthesized_round,
                                      completed=round_completed, failed=round_failed,
@@ -2688,9 +3733,9 @@ class ClientSession:
                         # decides that a recovery is needed.
                         self.dialogue.add_system_message(_degraded_note(), turn_id=trace.turn_id)
                         recovery_text = ""
-                        if self.response_audio_cache is not None:
+                        if self.recovery_audio_cache is not None:
                             try:
-                                recovery = await self.response_audio_cache.get_recovery()
+                                recovery = await self.recovery_audio_cache.get_recovery()
                                 recovery_text = str(recovery.text or "").strip()
                             except Exception as exc:
                                 logger.info("action receipt recovery unavailable: %s", exc)
@@ -2717,12 +3762,25 @@ class ClientSession:
                 if not await self._wait_cancelable(drain_seconds, cancel_event):
                     return
 
-            if tts_started:
+            music_handoff = bool(
+                self.music_player is not None
+                and self.music_player.has_pending
+                and tts_started
+                and not close_reason
+            )
+            if tts_started and not music_handoff:
+                if not self._owns_assistant_playback(playback_lease, turn_generation):
+                    return
                 if not await self.send_text(make_tts_message(self.session_id, "stop")):
                     raise ConnectionError("failed to send tts:stop")
                 logger.info(
                     "Post-ASR tts:stop sent in %.3fs",
                     time.perf_counter() - t_start,
+                )
+            elif music_handoff:
+                logger.info(
+                    "Music handoff keeps TTS envelope open session=%s",
+                    self.session_id,
                 )
 
             complete_text = " ".join(reply_segments).strip()
@@ -2733,14 +3791,33 @@ class ClientSession:
                     turn_id=trace.turn_id,
                 )
             if structured_receipts:
-                # Structured receipt history survives into the next turn so
-                # follow-ups reconcile dispatch/cancel outcomes with provenance.
-                self.dialogue.add_tool_receipts(structured_receipts, turn_id=trace.turn_id)
+                # Read-only receipts (clock/calculator/search) are already
+                # reflected in the assistant's spoken answer and must not be
+                # promoted into a high-priority system message on the next turn.
+                # Persist only stateful/side-effect receipts for follow-up
+                # reconciliation.
+                history_receipts = []
+                for record in action_round_records:
+                    record_name = str(record.get("name") or "")
+                    if record_name == NO_ACTION_TOOL_NAME:
+                        continue
+                    descriptor = self.tool_registry.get(record_name)
+                    if descriptor is not None and descriptor.read_only:
+                        continue
+                    receipt = record.get("receipt")
+                    if isinstance(receipt, dict):
+                        history_receipts.append(dict(receipt))
+                if history_receipts:
+                    self.dialogue.add_tool_receipts(
+                        history_receipts,
+                        turn_id=trace.turn_id,
+                    )
             self.dialogue.record_structured_turn(
                 turn_id=trace.turn_id, user_text=user_text,
                 assistant_text=complete_text, receipts=structured_receipts,
                 playback="sent" if first_binary_sent else ("generated" if complete_text else "unknown"),
             )
+            self._schedule_history_summary()
 
             logger.info(
                 "Completed post-ASR response pipeline in %.3fs response_chars=%d",
@@ -2779,7 +3856,7 @@ class ClientSession:
             self.final_transcript_parts.clear()
             self._mark_response_complete(self._playback_guard_until)
             if self.music_player is not None:
-                await self.music_player.start_pending()
+                await self.music_player.start_pending(reuse_envelope=music_handoff)
 
         except asyncio.CancelledError:
             logger.info("Response task cancelled")
@@ -2800,11 +3877,30 @@ class ClientSession:
                 trace.finish("cancelled")
             return
         except Exception as exc:
-            logger.error("Error during AI response processing: %s", exc, exc_info=True)
-            if trace.outcome == "running":
-                trace.finish("failed", error=type(exc).__name__)
+            if isinstance(exc, _ExpectedTurnFailure):
+                logger.warning(
+                    "AI turn failed with expected bounded condition code=%s: %s",
+                    exc.code,
+                    exc,
+                )
+                if trace.outcome == "running":
+                    trace.finish("failed", error=exc.code)
+            else:
+                logger.error(
+                    "Error during AI response processing: %s",
+                    exc,
+                    exc_info=True,
+                )
+                if trace.outcome == "running":
+                    trace.finish("failed", error=type(exc).__name__)
+            if (
+                not first_binary_sent
+                and tool_calls_seen == 0
+                and not action_round_records
+            ):
+                self.dialogue.discard_unanswered_turn(trace.turn_id)
             if self._owns_turn(turn_generation):
-                if tts_started:
+                if tts_started and self._owns_assistant_playback(playback_lease, turn_generation):
                     await self.send_text(make_tts_message(self.session_id, "stop"))
                 if not first_binary_sent:
                     await self._send_cached_error_fallback(cancel_event, turn_generation)
@@ -2820,6 +3916,9 @@ class ClientSession:
                 self._speech_active = False
                 self.final_transcript_parts.clear()
         finally:
+            self._cancel_speculative_tts_prefetch(
+                speculative_llm_handle, "turn_finished"
+            )
             if producer_task is not None and not producer_task.done():
                 producer_task.cancel()
             if producer_task is not None:
@@ -2835,9 +3934,8 @@ class ClientSession:
                     except RuntimeError:
                         pass
             reset_trace(trace_token)
-            if self.current_turn_task is asyncio.current_task():
-                self.current_turn_task = None
-                self.current_cancel_event = None
+            self.playback.release(playback_lease)
+            if self.lifecycle.clear_turn_if_current():
                 await self._unduck_music()
 
     async def send_text(self, text: str) -> bool:
@@ -2859,6 +3957,14 @@ class ClientSession:
         return await self.send_text(
             json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         )
+
+    def _pack_tts_audio(self, opus_frame: bytes) -> bytes:
+        payload = opus_frame
+        if self.output_audio_format in ("pcm16", "linear16"):
+            payload = self.codec.decode_output_opus_to_pcm16(opus_frame)
+            if not payload:
+                raise RuntimeError("failed to decode outgoing TTS Opus to PCM16")
+        return pack_audio_payload(payload, self.version)
 
     async def send_binary(self, data: bytes) -> bool:
         if not self.is_active:
@@ -2886,10 +3992,8 @@ class ClientSession:
             logger.debug("Error closing websocket: %s", exc)
 
     async def close(self, close_transport: bool = True):
-        if self._closed:
+        if not self.lifecycle.begin_close():
             return
-        self._closed = True
-        self.is_active = False
         self._conversation_armed = False
         self._closing_reason = None
 
@@ -2901,16 +4005,18 @@ class ClientSession:
             await self.music_player.close()
         except Exception as exc:
             logger.debug("Music player close failed: %s", exc)
+        finally:
+            # No producer may retain playback authority after session teardown.
+            self.playback.invalidate()
 
-        if self.current_cancel_event is not None:
-            self.current_cancel_event.set()
-        self._turn_generation += 1
         current = asyncio.current_task()
         tasks = []
         for task in (
             self.current_turn_task,
+            self._speculative_llm_task,
             self._pending_wake_task,
             self._idle_watchdog_task,
+            self._history_summary_task,
         ):
             if task is not None and not task.done() and task is not current:
                 task.cancel()
@@ -2919,6 +4025,7 @@ class ClientSession:
         self.current_cancel_event = None
         self._pending_wake_task = None
         self._idle_watchdog_task = None
+        self._history_summary_task = None
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 

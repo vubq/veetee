@@ -48,7 +48,8 @@ class Lease:
 
 @dataclass
 class _GroupStats:
-    ewma_latency_s: float = 1.0
+    ewma_latency_s: float = 0.0
+    ewma_abs_deviation_s: float = 0.0
     samples: int = 0
 
 
@@ -65,8 +66,10 @@ class GroqRouter:
         clock: Callable[[], float] | None = None,
         headroom_pct: float = 10.0,
         admission_wait_ms: float = 50.0,
+        discovery_wait_ms: float = 750.0,
         inflight_penalty_s: float = 0.4,
         ewma_alpha: float = 0.3,
+        jitter_penalty: float = 0.75,
         low_priority_purposes: frozenset = LOW_PRIORITY_PURPOSES,
     ) -> None:
         self._targets = list(targets)
@@ -74,8 +77,10 @@ class GroqRouter:
         self._now = clock or time.monotonic
         self._headroom = max(0.0, float(headroom_pct)) / 100.0
         self._admission_wait_s = max(0.0, float(admission_wait_ms) / 1000.0)
+        self._discovery_wait_s = max(0.0, float(discovery_wait_ms) / 1000.0)
         self._penalty = max(0.0, float(inflight_penalty_s))
         self._alpha = min(1.0, max(0.0, float(ewma_alpha)))
+        self._jitter_penalty = max(0.0, float(jitter_penalty))
         self._low_priority = frozenset(low_priority_purposes)
         self._stats: Dict[str, _GroupStats] = {}
         # Settled reservation ids: first settle wins, later ones no-op.
@@ -83,23 +88,141 @@ class GroqRouter:
         # here, so no path can double-charge or double-release a slot.
         self._settled: Dict[int, float] = {}
 
+    async def configure(
+        self,
+        *,
+        headroom_pct: Optional[float] = None,
+        admission_wait_ms: Optional[float] = None,
+        discovery_wait_ms: Optional[float] = None,
+        discovery_max_inflight: Optional[int] = None,
+        inflight_penalty_s: Optional[float] = None,
+        ewma_alpha: Optional[float] = None,
+        jitter_penalty: Optional[float] = None,
+    ) -> None:
+        """Hot-apply non-semantic routing/admission policy."""
+        if headroom_pct is not None:
+            self._headroom = max(0.0, float(headroom_pct)) / 100.0
+        if admission_wait_ms is not None:
+            self._admission_wait_s = max(
+                0.0, float(admission_wait_ms) / 1000.0
+            )
+        if discovery_wait_ms is not None:
+            self._discovery_wait_s = max(
+                0.0, float(discovery_wait_ms) / 1000.0
+            )
+        if inflight_penalty_s is not None:
+            self._penalty = max(0.0, float(inflight_penalty_s))
+        if ewma_alpha is not None:
+            self._alpha = min(1.0, max(0.0, float(ewma_alpha)))
+        if jitter_penalty is not None:
+            self._jitter_penalty = max(0.0, float(jitter_penalty))
+        if discovery_max_inflight is not None:
+            await self._ledger.configure_discovery_max_inflight(
+                int(discovery_max_inflight)
+            )
+
+    def config_snapshot(self) -> Dict[str, float]:
+        return {
+            "headroom_pct": round(self._headroom * 100.0, 3),
+            "admission_wait_ms": round(self._admission_wait_s * 1000.0, 3),
+            "discovery_wait_ms": round(self._discovery_wait_s * 1000.0, 3),
+            "inflight_penalty_s": round(self._penalty, 6),
+            "latency_ewma_alpha": round(self._alpha, 6),
+            "latency_jitter_penalty": round(self._jitter_penalty, 6),
+        }
+
     def disable_alias(self, alias: str, reason: str = "") -> None:
         for target in self._targets:
             if target.alias == alias:
                 target.enabled = False
 
     def note_latency(self, group: str, latency_s: float) -> None:
+        observed = max(0.0, float(latency_s))
         stats = self._stats.setdefault(group, _GroupStats())
-        stats.samples += 1
+        if stats.samples == 0:
+            # Do not blend the first real measurement with an arbitrary 1s
+            # prior; that made newly observed fast routes look slow for many
+            # turns and prevented the router from converging quickly.
+            stats.ewma_latency_s = observed
+            stats.ewma_abs_deviation_s = 0.0
+            stats.samples = 1
+            return
+        previous = stats.ewma_latency_s
+        deviation = abs(observed - previous)
         stats.ewma_latency_s = (
-            self._alpha * max(0.0, float(latency_s))
-            + (1.0 - self._alpha) * stats.ewma_latency_s
+            self._alpha * observed
+            + (1.0 - self._alpha) * previous
         )
+        stats.ewma_abs_deviation_s = (
+            self._alpha * deviation
+            + (1.0 - self._alpha) * stats.ewma_abs_deviation_s
+        )
+        stats.samples += 1
 
     def _predicted(self, group: str, in_flight: int) -> float:
         stats = self._stats.get(group)
-        base = stats.ewma_latency_s if stats else 1.0
+        if stats is None or stats.samples <= 0:
+            # Explore an unseen eligible group before repeatedly trusting a
+            # measured route. Each group pays this cold-start bonus only until
+            # it has one real first-event sample.
+            base = 0.0
+        else:
+            base = (
+                stats.ewma_latency_s
+                + self._jitter_penalty * stats.ewma_abs_deviation_s
+            )
         return base + in_flight * self._penalty
+
+    def latency_snapshot(self) -> Dict[str, Dict[str, float | int]]:
+        return {
+            group: {
+                "samples": stats.samples,
+                "ewma_latency_ms": round(stats.ewma_latency_s * 1000.0, 3),
+                "ewma_abs_deviation_ms": round(
+                    stats.ewma_abs_deviation_s * 1000.0, 3
+                ),
+                "predicted_idle_ms": round(
+                    (
+                        stats.ewma_latency_s
+                        + self._jitter_penalty * stats.ewma_abs_deviation_s
+                    )
+                    * 1000.0,
+                    3,
+                ),
+            }
+            for group, stats in sorted(self._stats.items())
+        }
+
+    async def quota_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Return sanitized live quota state grouped by provider scope.
+
+        API keys are intentionally never exposed. The snapshot is diagnostics
+        only; admission decisions still go through the atomic ledger.
+        """
+        aliases_by_group: Dict[str, list[str]] = {}
+        enabled_by_group: Dict[str, bool] = {}
+        for target in self._targets:
+            aliases_by_group.setdefault(target.quota_group, []).append(target.alias)
+            enabled_by_group[target.quota_group] = (
+                enabled_by_group.get(target.quota_group, False)
+                or bool(target.enabled and target.api_key)
+            )
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for group in sorted(aliases_by_group):
+            snap = await self._ledger.snapshot(group)
+            result[group] = {
+                "aliases": sorted(aliases_by_group[group]),
+                "enabled": enabled_by_group.get(group, False),
+                "known": bool(snap.get("known")),
+                "limits": dict(snap.get("limits") or {}),
+                "remaining": dict(snap.get("remaining") or {}),
+                "in_flight": int(snap.get("in_flight") or 0),
+                "discovery": bool(snap.get("discovery", False)),
+                "cooldown_until": float(snap.get("cooldown_until") or 0.0),
+                "cooldown_reason": str(snap.get("cooldown_reason") or ""),
+            }
+        return result
 
     async def _try_once(
         self,
@@ -145,6 +268,30 @@ class GroqRouter:
                 )
         return None
 
+    async def _has_busy_discovery_group(
+        self,
+        exclude_groups: frozenset,
+    ) -> bool:
+        now = self._now()
+        seen_groups: set[str] = set()
+        for target in self._targets:
+            if (
+                not target.enabled
+                or not target.api_key
+                or target.quota_group in exclude_groups
+                or target.quota_group in seen_groups
+            ):
+                continue
+            seen_groups.add(target.quota_group)
+            snap = await self._ledger.snapshot(target.quota_group)
+            if (
+                bool(snap.get("discovery"))
+                and int(snap.get("in_flight") or 0) > 0
+                and now >= float(snap.get("cooldown_until") or 0.0)
+            ):
+                return True
+        return False
+
     async def acquire(
         self,
         estimated_tokens: int,
@@ -164,12 +311,44 @@ class GroqRouter:
                 budget = min(budget, max(0.0, deadline - self._now()))
             if budget > 0:
                 step = min(0.2, budget)
-                steps = max(1, int(budget / step))
-                for _ in range(steps):
-                    await asyncio.sleep(step)
-                    lease = await self._try_once(estimated_tokens, purpose, exclude_groups)
+                remaining_wait = budget
+                while remaining_wait > 0:
+                    sleep_for = min(step, remaining_wait)
+                    await asyncio.sleep(sleep_for)
+                    remaining_wait -= sleep_for
+                    lease = await self._try_once(
+                        estimated_tokens, purpose, exclude_groups
+                    )
                     if lease is not None:
                         return lease
+
+        # Bootstrap/failover race: unknown quota groups intentionally allow
+        # only a bounded number of discovery requests. If another request is
+        # already discovering one of those groups, a short, separately
+        # configured wait lets its response headers unlock real quota instead
+        # of reporting false capacity exhaustion. Known exhausted groups still
+        # fail after the normal admission wait above.
+        if (
+            self._discovery_wait_s > 0
+            and await self._has_busy_discovery_group(exclude_groups)
+        ):
+            budget = self._discovery_wait_s
+            if deadline is not None:
+                budget = min(budget, max(0.0, deadline - self._now()))
+            if budget > 0:
+                step = min(0.05, budget)
+                remaining_wait = budget
+                while remaining_wait > 0:
+                    sleep_for = min(step, remaining_wait)
+                    await asyncio.sleep(sleep_for)
+                    remaining_wait -= sleep_for
+                    lease = await self._try_once(
+                        estimated_tokens, purpose, exclude_groups
+                    )
+                    if lease is not None:
+                        return lease
+                    if not await self._has_busy_discovery_group(exclude_groups):
+                        break
         states = []
         for target in self._targets:
             snap = await self._ledger.snapshot(target.quota_group)

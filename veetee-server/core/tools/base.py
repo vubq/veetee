@@ -27,14 +27,11 @@ class ToolDescriptor:
         description = self.description
         if self.read_only:
             description += (
-                f" {READ_ONLY_TOOL_DESCRIPTION_MARKER} nếu cần dữ liệu này để trả lời người dùng, hãy gọi ngay trong cùng lượt; "
-                "không cần xin xác nhận và không kết thúc bằng câu chờ trước khi gọi tool."
+                f" {READ_ONLY_TOOL_DESCRIPTION_MARKER} gọi ngay khi cần dữ liệu; "
+                "không cần xin xác nhận."
             )
         elif self.requires_confirmation:
-            description += (
-                " Action này có thể cần xác nhận; hãy phát tool call khi người dùng yêu cầu, "
-                "server sẽ quản lý bước xác nhận trước khi thực thi."
-            )
+            description += " Server sẽ quản lý bước xác nhận trước khi thực thi."
         return {
             "type": "function",
             "function": {

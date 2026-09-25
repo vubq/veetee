@@ -19,7 +19,13 @@ class ClockContextTests(unittest.TestCase):
         snapshot = clock_snapshot("UTC")
         self.assertEqual(snapshot["timezone"], "UTC")
         self.assertIn(snapshot["weekday_iso"], range(1, 8))
-        self.assertEqual(time_descriptor("UTC").handler({})["timezone"], "UTC")
+        descriptor = time_descriptor("UTC")
+        self.assertEqual(
+            descriptor.handler({"timezone": "Asia/Tokyo"})["timezone"],
+            "Asia/Tokyo",
+        )
+        with self.assertRaisesRegex(ValueError, "server_clock"):
+            descriptor.handler({"timezone": "UTC"})
 
     def test_clock_cannot_be_silently_trimmed(self):
         builder = ContextBuilder()

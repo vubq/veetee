@@ -7,6 +7,7 @@ from core.providers.llm.groq_direct import (
     SpeechSegmentSplitter,
     build_targets_from_env,
 )
+from core.providers.llm.speech_segments import SpeechSegmentationPolicy
 from core.providers.llm.quota import QuotaLedger
 from core.providers.llm.router import GroqRouter, RouteTarget
 from core.turn_events import (
@@ -92,6 +93,25 @@ def make_provider(session, groups=None, targets=None, **kwargs):
     return GroqDirectLLM(router, **params), router, ledger
 
 
+class GroqTransportConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transport_keepalive_and_dns_ttl_are_configurable(self):
+        provider, _, _ = make_provider(
+            FakeSession([]),
+            http_keepalive_seconds=180,
+            dns_cache_ttl_seconds=420,
+        )
+
+        self.assertEqual(provider._http_keepalive_seconds, 180)
+        self.assertEqual(provider._dns_cache_ttl_seconds, 420)
+        transport = provider.health()["transport"]
+        self.assertEqual(transport["http_keepalive_seconds"], 180)
+        self.assertEqual(transport["dns_cache_ttl_seconds"], 420)
+        self.assertEqual(transport["connections_created"], 0)
+        self.assertEqual(transport["connections_reused"], 0)
+        self.assertEqual(transport["dns_resolve_started"], 0)
+        self.assertEqual(transport["dns_resolve_completed"], 0)
+
+
 class GroqSpeechSegmentSplitterTests(unittest.TestCase):
     def test_short_intro_clause_is_not_split_too_early(self):
         splitter = SpeechSegmentSplitter()
@@ -116,6 +136,52 @@ class GroqSpeechSegmentSplitterTests(unittest.TestCase):
 
         self.assertEqual(splitter.add_token("Giá trị là 3.14 và vẫn đang tiếp tục"), [])
 
+    def test_first_clause_threshold_is_policy_driven(self):
+        text = "Mình kiểm tra nhanh cho bạn nhé, phần còn lại nói ngay sau đó"
+        fast = SpeechSegmentSplitter(SpeechSegmentationPolicy(
+            first_clause_min_chars=16,
+            first_clause_min_words=3,
+        ))
+        conservative = SpeechSegmentSplitter(SpeechSegmentationPolicy(
+            first_clause_min_chars=80,
+            first_clause_min_words=3,
+        ))
+
+        self.assertEqual(
+            fast.add_token(text),
+            ["Mình kiểm tra nhanh cho bạn nhé,"],
+        )
+        self.assertEqual(conservative.add_token(text), [])
+
+    def test_first_soft_cut_is_disabled_by_default(self):
+        splitter = SpeechSegmentSplitter()
+        self.assertEqual(
+            splitter.add_token("Bây giờ là mười bảy giờ ba mươi phút"),
+            [],
+        )
+
+    def test_first_soft_cut_emits_only_on_word_boundary(self):
+        splitter = SpeechSegmentSplitter(SpeechSegmentationPolicy(
+            first_soft_cut_chars=8,
+            first_soft_cut_min_words=3,
+        ))
+        self.assertEqual(
+            splitter.add_token("Bây giờ là 17"),
+            ["Bây giờ là"],
+        )
+        self.assertEqual(splitter.flush(), ["17"])
+
+    def test_first_soft_cut_respects_minimum_word_count(self):
+        splitter = SpeechSegmentSplitter(SpeechSegmentationPolicy(
+            first_soft_cut_chars=4,
+            first_soft_cut_min_words=4,
+        ))
+        self.assertEqual(splitter.add_token("Xin chào bạn "), [])
+        self.assertEqual(
+            splitter.add_token("nhé phần sau"),
+            ["Xin chào bạn nhé"],
+        )
+
 
 def collect(stream):
     async def _run():
@@ -139,6 +205,27 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         llm, _, _ = make_provider(session)
         with self.assertRaisesRegex(RuntimeError, "configured model probe failed HTTP 404"):
             await llm.warmup()
+
+    async def test_warmup_uses_next_key_when_first_key_fails(self):
+        session = FakeSession([
+            FakeResponse(status=401),
+            FakeResponse(status=200, json_body={"choices": []}),
+        ])
+        targets = [
+            RouteTarget(alias="A", api_key="bad", quota_group="gA",
+                        base_url="https://api.groq.com/openai/v1"),
+            RouteTarget(alias="B", api_key="good", quota_group="gB",
+                        base_url="https://api.groq.com/openai/v1"),
+        ]
+        llm, _, _ = make_provider(
+            session,
+            groups={"gA": {}, "gB": {}},
+            targets=targets,
+        )
+        await llm.warmup()
+        self.assertEqual(len(session.requests), 2)
+        self.assertEqual(session.requests[1]["headers"]["Authorization"], "Bearer good")
+
     async def test_stream_turn_chat_uses_first_eligible_key(self):
         chunks = [chat_chunk("[continue][happy]Xin chào"),
                   chat_chunk(" bạn nhé.", finish="stop"),
@@ -189,6 +276,46 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         snap_a = await ledger.snapshot("gA")
         self.assertGreater(snap_a["cooldown_until"], 0)
 
+    async def test_transient_503_fails_over_before_stream_commit(self):
+        unavailable = FakeResponse(status=503)
+        good_chunks = [
+            chat_chunk("[continue]Đã chuyển route."),
+            chat_chunk(" Xong.", finish="stop"),
+            b"data: [DONE]\n\n",
+        ]
+        session = FakeSession([
+            unavailable,
+            FakeResponse(status=200, chunks=good_chunks),
+        ])
+        targets = [
+            RouteTarget(alias="A", api_key="kA", quota_group="gA",
+                        base_url="https://x"),
+            RouteTarget(alias="B", api_key="kB", quota_group="gB",
+                        base_url="https://x"),
+        ]
+        llm, _, ledger = make_provider(
+            session,
+            groups={"gA": {}, "gB": {}},
+            targets=targets,
+        )
+
+        events = [
+            event
+            async for event in llm.stream_turn(
+                [{"role": "user", "content": "xin chào"}],
+                detect_end_intent=True,
+            )
+        ]
+
+        self.assertTrue(any(isinstance(event, CompletedEvent) for event in events))
+        self.assertEqual(
+            [request["headers"]["Authorization"] for request in session.requests],
+            ["Bearer kA", "Bearer kB"],
+        )
+        self.assertTrue(unavailable.released)
+        self.assertEqual((await ledger.snapshot("gA"))["in_flight"], 0)
+        self.assertEqual((await ledger.snapshot("gB"))["in_flight"], 0)
+
     async def test_all_exhausted_yields_failure_without_http(self):
         session = FakeSession([])
         llm, _, _ = make_provider(
@@ -199,7 +326,10 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(rid)
         events = [e async for e in llm.stream_turn(
             [{"role": "user", "content": "hi"}])]
-        self.assertTrue(any(isinstance(e, FailedEvent) for e in events))
+        failures = [e for e in events if isinstance(e, FailedEvent)]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].code, "capacity_exhausted")
+        self.assertTrue(failures[0].retryable)
         self.assertEqual(session.requests, [])
 
     async def test_correct_transcript_non_streaming(self):
@@ -241,9 +371,89 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clean("Để tôi bật nhạc cho bạn nhé."),
                          "Để tôi bật nhạc cho bạn nhé.")
 
+    async def test_internal_tool_name_in_speech_is_blocked_and_retried_as_tool_call(self):
+        leak_chunks = [
+            chat_chunk("[continue]Tool music_play yêu cầu tham số query.", finish="stop"),
+            b"data: [DONE]\n\n",
+        ]
+        tool_delta = [{
+            "index": 0,
+            "id": "call-music",
+            "function": {
+                "name": "music_play",
+                "arguments": '{"query":"Sóng gió"}',
+            },
+        }]
+        retry_chunks = [
+            sse_data({"choices": [{"delta": {"tool_calls": tool_delta},
+                                   "finish_reason": None}]}),
+            sse_data({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+            b"data: [DONE]\n\n",
+        ]
+        session = FakeSession([
+            FakeResponse(status=200, chunks=leak_chunks),
+            FakeResponse(status=200, chunks=retry_chunks),
+        ])
+        llm, _, _ = make_provider(session)
+        events = [e async for e in llm.stream_turn(
+            [{"role": "user", "content": "Sóng gió"}],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "music_play",
+                    "description": "Phát nhạc",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            detect_end_intent=True,
+        )]
+        self.assertFalse(any(isinstance(e, SpeechSegmentEvent) for e in events))
+        calls = [e for e in events if isinstance(e, ToolCallReadyEvent)]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].name, "music_play")
+        self.assertEqual(calls[0].arguments, {"query": "Sóng gió"})
+        self.assertEqual(len(session.requests), 2)
+
+    async def test_tool_name_from_receipt_history_is_blocked_when_final_round_has_no_tools(self):
+        leak_chunks = [
+            chat_chunk("[continue]Tool music_play đang thiếu query.", finish="stop"),
+            b"data: [DONE]\n\n",
+        ]
+        safe_chunks = [
+            chat_chunk("[continue]Bạn cho mình tên bài nhé.", finish="stop"),
+            b"data: [DONE]\n\n",
+        ]
+        session = FakeSession([
+            FakeResponse(status=200, chunks=leak_chunks),
+            FakeResponse(status=200, chunks=safe_chunks),
+        ])
+        llm, _, _ = make_provider(session)
+        history = [
+            {"role": "user", "content": "Sóng gió"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call-music",
+                "type": "function",
+                "function": {"name": "music_play", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_call_id": "call-music", "name": "music_play",
+             "content": '{"status":"failed"}'},
+        ]
+        events = [e async for e in llm.stream_turn(
+            history,
+            tools=[],
+            detect_end_intent=True,
+            tool_choice="none",
+        )]
+        speech = " ".join(
+            e.text for e in events if isinstance(e, SpeechSegmentEvent)
+        )
+        self.assertNotIn("music_play", speech)
+        self.assertIn("tên bài", speech)
+        self.assertEqual(len(session.requests), 2)
+
     async def test_native_tool_call_end_to_end(self):
         tool_delta = [{"index": 0, "id": "call-1",
-                       "function": {"name": "get_current_time",
+                       "function": {"name": "get_time_in_timezone",
                                     "arguments": "{}"}}]
         chunks = [
             sse_data({"choices": [{"delta": {"tool_calls": tool_delta},
@@ -256,17 +466,29 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         events = [e async for e in llm.stream_turn(
             [{"role": "user", "content": "mấy giờ"}],
             tools=[{"type": "function",
-                    "function": {"name": "get_current_time"}}])]
+                    "function": {"name": "get_time_in_timezone"}}])]
         calls = [e for e in events if isinstance(e, ToolCallReadyEvent)]
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0].name, "get_current_time")
+        self.assertEqual(calls[0].name, "get_time_in_timezone")
 
-    def test_reasoning_params_none_sends_both_keys(self):
+    def test_reasoning_params_none_sends_both_keys_for_qwen(self):
         session = FakeSession([])
         llm, _, _ = make_provider(session)
         params = llm._reasoning_params()
-        self.assertEqual(params, {"reasoning_format": "hidden",
-                                 "reasoning_effort": "none"})
+        self.assertEqual(
+            params,
+            {"reasoning_format": "hidden", "reasoning_effort": "none"},
+        )
+
+    def test_gpt_oss_reasoning_is_not_returned_to_voice_pipeline(self):
+        session = FakeSession([])
+        llm, _, _ = make_provider(session, reasoning_effort="none")
+        llm.model = "openai/gpt-oss-20b"
+        llm.set_model_effort_overrides({"openai/gpt-oss-20b": "low"})
+        self.assertEqual(
+            llm._reasoning_params(),
+            {"include_reasoning": False, "reasoning_effort": "low"},
+        )
 
     def test_reasoning_params_low_omits_format(self):
         session = FakeSession([])
@@ -281,9 +503,12 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         base.set_model_effort_overrides({"openai/gpt-oss-20b": "low"})
         clone = engine_for_model(base, "openai/gpt-oss-20b")
         self.assertIs(clone._router, base._router)
+        self.assertIs(clone._shared_transport_owner, base)
         self.assertEqual(clone.model, "openai/gpt-oss-20b")
-        self.assertEqual(clone._reasoning_params(),
-                         {"reasoning_effort": "low"})
+        self.assertEqual(
+            clone._reasoning_params(),
+            {"include_reasoning": False, "reasoning_effort": "low"},
+        )
         self.assertEqual(base.model, "qwen/qwen3.6-27b")
 
     async def test_cancelled_stream_settles_uncertain_once(self):
@@ -355,6 +580,24 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "B", "api_key_env": "GROQ_API_KEY_MISSING"},
             ])
             self.assertEqual([t.alias for t in targets], ["A"])
+        finally:
+            os.environ.clear()
+            os.environ.update(backup)
+
+    def test_runtime_keys_merge_with_explicit_pool(self):
+        import os
+        backup = dict(os.environ)
+        try:
+            for key in list(os.environ):
+                if key.startswith("GROQ_API_KEY_"):
+                    del os.environ[key]
+            os.environ["GROQ_API_KEY_A"] = "sA"
+            os.environ["GROQ_API_KEY_1"] = "s1"
+            targets = build_targets_from_env([
+                {"id": "A", "api_key_env": "GROQ_API_KEY_A"},
+                {"id": "B", "api_key_env": "GROQ_API_KEY_B"},
+            ])
+            self.assertEqual([t.alias for t in targets], ["A", "1"])
         finally:
             os.environ.clear()
             os.environ.update(backup)

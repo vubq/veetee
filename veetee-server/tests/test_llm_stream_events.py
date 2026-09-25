@@ -137,7 +137,7 @@ class LLMStreamCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_tool_selection_keeps_context_and_all_tool_schemas(self):
         payload = (
             'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-time",'
-            '"function":{"name":"get_current_time","arguments":"{}"}}]}}]}\n\n'
+            '"function":{"name":"get_time_in_timezone","arguments":"{}"}}]}}]}\n\n'
             'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
             'data: [DONE]\n\n'
         ).encode("utf-8")
@@ -162,7 +162,7 @@ class LLMStreamCancellationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(request["tools"]), 2)
         self.assertEqual(
             {tool["function"]["name"] for tool in request["tools"]},
-            {"get_current_time", "other_tool"},
+            {"get_time_in_timezone", "other_tool"},
         )
         self.assertEqual(request["messages"][-1]["content"], "Mấy giờ rồi?")
         joined = "\n".join(str(message.get("content") or "") for message in request["messages"])
@@ -170,23 +170,26 @@ class LLMStreamCancellationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Semantic contract", joined)
         self.assertTrue(any(isinstance(event, ToolCallReadyEvent) for event in events))
 
-    async def test_mixed_content_then_read_only_tool_call_is_allowed(self):
+    async def test_mixed_content_then_read_only_tool_call_is_ignored(self):
         payload = (
-            'data: {"choices":[{"delta":{"content":"Để mình kiểm tra."}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"[continue][neutral]Chào bạn nha."}}]}\n\n'
             'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-time",'
-            '"function":{"name":"get_current_time","arguments":"{}"}}]}}]}\n\n'
+            '"function":{"name":"get_time_in_timezone","arguments":"{}"}}]}}]}\n\n'
             'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
             'data: [DONE]\n\n'
         ).encode("utf-8")
 
-        events = await self._stream_events(payload, tools=[time_descriptor().as_openai_tool()])
+        events = await self._stream_events(
+            payload,
+            tools=[time_descriptor().as_openai_tool()],
+        )
 
         self.assertTrue(any(isinstance(event, SpeechSegmentEvent) for event in events))
+        self.assertFalse(any(isinstance(event, ToolCallReadyEvent) for event in events))
         self.assertTrue(any(
-            isinstance(event, ToolCallReadyEvent) and event.name == "get_current_time"
+            isinstance(event, CompletedEvent) and event.finish_reason == "stop"
             for event in events
         ))
-        self.assertTrue(any(isinstance(event, CompletedEvent) for event in events))
         self.assertFalse(any(isinstance(event, FailedEvent) for event in events))
 
     async def test_mixed_content_then_side_effect_tool_call_is_rejected(self):

@@ -24,19 +24,19 @@ const confirmState = reactive({ open: false, kind: '', item: null, title: '', de
 const dashboard = useDashboard()
 const {
   loading, busy, authRequired, managerToken, loginError, loginBusy,
-  health, diagnostics, assistants, devices, pendingDevices, runtime, restartRequired, voices, models,
+  health, diagnostics, assistants, devices, pendingDevices, runtime, restartRequired, groqKeys, voices, models,
   assistantDraft, pairing, runtimeDraft, toast, pairedActiveDevices, onlineDevices,
   notify, fmtTime, secretPlaceholder, login, loadPublicData, loadManagedData, refreshAll,
   prepareNewAssistant, prepareEditAssistant, saveAssistant, toggleAssistant, deleteAssistant,
-  pairDevice, updateDevice, revokeDevice, saveRuntime,
+  pairDevice, updateDevice, revokeDevice, addGroqKey, updateGroqKey, removeGroqKey, saveRuntime,
 } = dashboard
 
-const voice = useVoiceConsole({ authRequired, notify })
+const voice = useVoiceConsole({ authRequired, notify, health })
 const {
   chatInput, chatMessages, protocolLog, wsState, protocolVersion, listenMode, rawProtocol,
   useRealAudio, isMicRecording, isSyntheticAudioRunning, audioStatus, firstAudioLatency,
   currentEmotion, pipelineVad, pipelineAsr, pipelineLlm, pipelineTts,
-  connectWs, reconnectWs, sendChat, abortTurn, toggleMic, directTts, testHealth, testOta,
+  connectWs, reconnectWs, unlockAudio, sendChat, abortTurn, toggleMic, directTts, testHealth, testOta,
   listenStart, listenStop, wakeDetect, sendEndIntent, sendRawProtocol, sendWs, clearConversation,
 } = voice
 
@@ -149,6 +149,7 @@ onMounted(async () => {
             :pipeline-asr="pipelineAsr"
             :pipeline-llm="pipelineLlm"
             :pipeline-tts="pipelineTts"
+            :health="health"
             @update:chat-input="chatInput = $event"
             @update:protocol-version="setProtocolVersion"
             @update:listen-mode="listenMode = $event"
@@ -156,6 +157,7 @@ onMounted(async () => {
             @update:use-real-audio="useRealAudio = $event"
             @connect="connectWs"
             @reconnect="reconnectWs"
+            @unlock-audio="unlockAudio"
             @send="sendChat"
             @toggle-mic="toggleMic"
             @abort="abortTurn"
@@ -170,6 +172,7 @@ onMounted(async () => {
             @end-intent="sendEndIntent"
             @send-raw="sendRawProtocol"
             @clear="clearConversation"
+            @runtime="navigate('runtime')"
           />
 
           <AssistantsView
@@ -206,9 +209,12 @@ onMounted(async () => {
             :models="models"
             :voices="voices"
             :busy="busy"
-            :restart-required="restartRequired"
+            :groq-keys="groqKeys"
             :secret-placeholder="secretPlaceholder"
             @update="updateRuntime"
+            @add-groq-key="addGroqKey"
+            @update-groq-key="updateGroqKey"
+            @remove-groq-key="removeGroqKey"
             @save="saveRuntime"
           />
         </Transition>

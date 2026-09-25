@@ -6,23 +6,29 @@ from typing import Any, Dict, List
 CONTRACT_VERSION = "veetee.semantic.v1"
 MEMORY_TOOL_NAME = "veetee_memory"
 CONFIRMATION_TOOL_NAME = "veetee_confirmation_decision"
+NO_ACTION_TOOL_NAME = "veetee_no_action"
 
 
 SEMANTIC_SYSTEM_PROMPT = f"""Semantic contract {CONTRACT_VERSION}.
-Hiểu intent từ toàn bộ hội thoại. Mặc định nói tiếng Việt; giữ ngôn ngữ/chữ viết khác khi ngữ cảnh yêu cầu.
+Hiểu intent từ toàn bộ hội thoại; mặc định tiếng Việt, giữ ngôn ngữ khác khi ngữ cảnh yêu cầu.
 
-Memory: AI tự quyết định mutation từ toàn bộ hội thoại, không dựa vào từ khóa. Có thể gọi {MEMORY_TOOL_NAME} khi người dùng yêu cầu lưu/sửa/quên HOẶC khi người dùng trực tiếp cung cấp một fact cá nhân ổn định, đáng tin và hữu ích cho các phiên sau (ví dụ danh tính, quan hệ, cách xưng hô mong muốn, sở thích bền, thói quen hay ràng buộc lâu dài). Không tự suy diễn fact chưa được người dùng khẳng định; không lưu trạng thái thoáng qua, chi tiết chỉ có giá trị cho tác vụ hiện tại, câu giả định/trích dẫn/phủ định, hoặc thông tin nhạy cảm nếu người dùng không chủ động yêu cầu lưu. Recall không tạo mutation. Khi fact mới mâu thuẫn hoặc thay thế fact đã có trong memory context, cập nhật đúng fact đó bằng fact_id/revision đã được server cung cấp thay vì tạo bản trùng. Với memory MỚI: action=upsert, có value và TUYỆT ĐỐI bỏ fact_id/revision. Chỉ khi sửa/quên fact ĐÃ CÓ mới dùng đúng fact_id/revision do server cung cấp; cấm tự đặt/bịa fact_id. Mục tiêu mơ hồ thì hỏi lại.
+Memory: chỉ gọi {MEMORY_TOOL_NAME} cho fact cá nhân ổn định/hữu ích lâu dài hoặc khi user yêu cầu lưu-sửa-quên. Không lưu suy diễn, trạng thái thoáng qua, giả định/trích dẫn/phủ định; recall không mutation. Fact mới: upsert+value, bỏ fact_id/revision. Sửa/quên fact cũ: dùng đúng fact_id/revision server cấp; mơ hồ thì hỏi lại.
 
-Confirmation: khi có pending action, chỉ gọi {CONFIRMATION_TOOL_NAME} nếu câu mới thực sự approve/reject/clarify và dùng đúng action_id. Nếu người dùng đổi tham số, gọi lại tool nghiệp vụ với args mới.
+Confirmation: chỉ gọi {CONFIRMATION_TOOL_NAME} cho pending action khi lời mới thật sự approve/reject/clarify và dùng đúng action_id; đổi tham số thì gọi tool nghiệp vụ mới.
 
-Tools: AI quyết định từ toàn bộ context và schema, không keyword routing. Nếu lượt này cần bất kỳ tool nào, phát structured tool call TRƯỚC mọi nội dung nói; trong cùng một round, đã bắt đầu nội dung nói thì TUYỆT ĐỐI không gọi tool về sau. Với các yêu cầu điều khiển/hành động (dừng/bật/đổi nhạc, thao tác thiết bị, lưu/xóa memory): BẮT BUỘC phát tool call tương ứng trong chính lượt này để thực thi thật; TUYỆT ĐỐI CẤM chỉ nói suông bằng lời rằng đã làm xong mà không gọi tool. Mọi câu hỏi về giờ/ngày/thứ HIỆN TẠI: đọc con số trong server_clock của chính lượt này (luôn có sẵn, đúng múi giờ server); cấm đoán, cấm bịa, cấm lấy giờ từ persona/ví dụ/lượt cũ. Chỉ gọi get_current_time khi cần múi giờ khác, hoặc khi phải cập nhật lại sau tác vụ lâu. Chỉ trả lời đúng thành phần thời gian người dùng hỏi: hỏi thứ thì chỉ nói thứ; hỏi ngày thì chỉ nói ngày; hỏi giờ thì chỉ nói giờ. Không tự kèm ngày/thứ/giờ khác nếu người dùng không hỏi. AI diễn đạt theo persona, ngôn ngữ và đúng phần thông tin người dùng hỏi. Không đọc metadata kỹ thuật. Thiếu dữ kiện thì hỏi lại, không bịa. Tool chỉ đọc không cần xác nhận. Không tuyên bố action thành công trước receipt thật; không bịa quyền, ID, revision hoặc kết quả.
+Tools: chọn từ context+schema, không keyword routing. Cần tool thì tool call phải trước speech; hành động thật bắt buộc có tool và receipt, không bịa kết quả/quyền/ID/revision. Tên tool/schema/args/call id/receipt/status/lỗi là metadata nội bộ: tuyệt đối không đọc/hiển thị. Tool thiếu/sai args nhưng user đã cho đủ dữ kiện thì tự gọi lại tool; chỉ hỏi khi thật sự thiếu. Follow-up slot filling: nếu trợ lý vừa hỏi dữ kiện còn thiếu và user trả lời bằng một cụm ngắn, dùng ngay làm tham số; không lặp lại cùng câu hỏi.
+
+Time: server_clock của lượt là authoritative cho giờ/ngày/thứ local. Dùng trực tiếp; không gọi tool cho giờ/ngày local. Nếu hỏi timezone khác mà chưa có dữ liệu thì không bịa. Trả đúng phần được hỏi, không tự thêm giờ/ngày/thứ khác.
+
+Luôn theo persona; thiếu dữ kiện thì hỏi ngắn.
 """
 
-INLINE_CONVERSATION_CONTROL_PROMPT = """Tự quyết định lifecycle của phiên trong chính lượt này. Quy tắc lifecycle chỉ là metadata nội bộ, không được làm lời nói cứng, dài hơn hay mang giọng hướng dẫn hệ thống.
-Nếu cần tool, gọi tool ngay; không nói câu chờ và không cần [end]/[continue] trước tool call. Nếu trả lời bằng lời nói, mở đầu bằng [end] hoặc [continue], rồi thẻ cảm xúc và nội dung.
-[end] CHỈ khi lời mới nhất thể hiện rõ người dùng muốn kết thúc CHÍNH phiên hội thoại hiện tại: lời chào tạm biệt dứt khoát hoặc yêu cầu đóng/kết thúc/thoát cuộc trò chuyện, và không kèm câu hỏi hay tác vụ khác cần xử lý. Khi chọn [end], nói đúng một câu chào ngắn đúng persona.
-[continue] cho MỌI trường hợp còn lại, kể cả câu hỏi, câu cụt/nghe không rõ, câu trích dẫn/đùa, câu chỉ nhắc tới việc "tạm biệt/kết thúc" như một nội dung để bàn, hoặc yêu cầu kết thúc một tác vụ khác chứ không phải phiên hội thoại. Hoàn thành một tác vụ KHÔNG đồng nghĩa kết thúc phiên. Khi không hiểu, chọn [continue] rồi hỏi lại ngắn gọn, không bao giờ chọn [end].
-Định dạng: [continue][happy]Nội dung... hoặc [end][relaxed]Nội dung.... Không đọc hay giải thích hai nhãn này."""
+INLINE_CONVERSATION_CONTROL_PROMPT = """Lifecycle là metadata nội bộ.
+Cần tool: gọi tool trước speech, không cần marker trước tool call.
+Trả lời bằng lời: đúng dạng [continue][emotion]Nội dung... hoặc [end][emotion]Nội dung....
+[end] chỉ khi lời mới nhất rõ ràng muốn kết thúc CHÍNH phiên hiện tại và không còn câu hỏi/tác vụ khác; nói một câu chào ngắn.
+[continue] cho mọi trường hợp khác, kể cả mơ hồ/trích dẫn/giả định hay kết thúc tác vụ khác; không hiểu thì hỏi lại. hoàn tất tác vụ không đồng nghĩa đóng phiên.
+Không đọc/giải thích marker."""
 
 RECOVERY_MESSAGE_PROMPT = """Tạo đúng một câu hoàn chỉnh để trợ lý giọng nói dùng khi một lượt xử lý không hoàn tất.
 Nói tự nhiên theo personality hiện tại, không đọc lỗi kỹ thuật, không nhắc hệ thống/API, không thêm nhãn và không dùng câu chăm sóc khách hàng sáo rỗng.
@@ -42,24 +48,46 @@ ASR_CORRECTION_PROMPT = """Bạn là tầng hiệu chỉnh cuối của ASR cho 
 Hãy khôi phục câu người dùng có khả năng thực sự đã nói dựa trên toàn bộ câu và ngữ cảnh đây là lời nói với trợ lý giọng nói. Được phép sửa từ nghe nhầm khi câu hiện tại không tự nhiên hoặc không tạo thành ý định hợp lý. Với tên người, ứng dụng, nghệ sĩ, thương hiệu và chữ viết tắt, chuẩn hóa về tên quen thuộc khi ngữ cảnh cho độ chắc chắn cao. Không trả lời câu hỏi, không thực hiện lệnh, không thêm chi tiết ngoài câu nói. Giữ nguyên ý định câu hỏi: câu hỏi vẫn là câu hỏi sau hiệu chỉnh. Nếu câu đã tự nhiên hoặc không đủ chắc chắn thì giữ nguyên. Chỉ xuất đúng transcript cuối cùng, không giải thích, không dấu ngoặc kép."""
 
 
-def semantic_tools(*, memory_enabled: bool, pending_action: bool) -> List[Dict[str, Any]]:
+def semantic_tools(
+    *,
+    memory_enabled: bool,
+    pending_action: bool,
+    include_no_action: bool = False,
+) -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
+    if include_no_action:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": NO_ACTION_TOOL_NAME,
+                "description": (
+                    "Marker ngữ nghĩa không có side effect. Chỉ chọn khi lời mới của người dùng "
+                    "không yêu cầu bất kỳ action/tool nào đang có. Nếu họ muốn phát/đổi bài, "
+                    "điều khiển nhạc, tính toán, memory hoặc action khác thì phải chọn tool tương ứng, "
+                    "không chọn marker này."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        })
     if memory_enabled:
         tools.append({
             "type": "function",
             "function": {
                 "name": MEMORY_TOOL_NAME,
                 "description": (
-                    "Đề xuất mutation memory khi AI xác định từ toàn bộ hội thoại rằng có fact cá nhân ổn định, đáng tin và hữu ích cho các phiên sau, hoặc khi người dùng yêu cầu lưu/sửa/quên. "
-                    "Không dùng keyword routing, không lưu suy diễn hay trạng thái thoáng qua; recall là chat bình thường, không gọi tool này."
+                    "Ghi/sửa/quên memory cá nhân ổn định; recall không gọi tool."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["upsert", "forget", "forget_all"], "description": "upsert tạo memory mới hoặc sửa fact có sẵn; memory mới phải bỏ fact_id/revision."},
-                        "value": {"type": "string", "maxLength": 500, "description": "Nội dung cần nhớ. Bắt buộc cho upsert."},
-                        "fact_id": {"type": "string", "maxLength": 96, "description": "Chỉ dùng ID opaque do server đã cung cấp cho fact hiện có. Cấm tự tạo ID; memory mới phải bỏ trường này."},
-                        "revision": {"type": "integer", "minimum": 1, "description": "Chỉ dùng revision đi cùng fact_id hiện có; memory mới phải bỏ trường này."},
+                        "action": {"type": "string", "enum": ["upsert", "forget", "forget_all"]},
+                        "value": {"type": "string", "maxLength": 500},
+                        "fact_id": {"type": "string", "maxLength": 96},
+                        "revision": {"type": "integer", "minimum": 1},
                         "evidence": {"type": "string", "maxLength": 500},
                     },
                     "required": ["action"],

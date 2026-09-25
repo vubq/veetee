@@ -22,6 +22,15 @@ from core.tools.base import ToolDescriptor
 logger = logging.getLogger("MusicTools")
 
 
+class ResolvedStreamURL(str):
+    """String-compatible resolved URL carrying yt-dlp HTTP request headers."""
+
+    def __new__(cls, value: str, http_headers: Optional[Dict[str, str]] = None):
+        obj = str.__new__(cls, value)
+        obj.http_headers = dict(http_headers or {})
+        return obj
+
+
 def _ytdlp_base() -> List[str]:
     direct = shutil.which("yt-dlp")
     if direct:
@@ -89,14 +98,21 @@ async def ytdlp_search(
 
 
 async def ytdlp_resolve_url(video_id: str, *, timeout_s: float = 20.0) -> str:
-    """Resolve a YouTube video id to a direct audio stream URL."""
+    """Resolve a YouTube video id to a direct audio URL plus request headers.
+
+    The return value remains string-compatible for callers/tests, while the
+    ``http_headers`` attribute carries the exact headers yt-dlp used to obtain
+    the signed GoogleVideo URL. Passing only the URL to ffmpeg can produce an
+    immediate HTTP 403 when its default User-Agent differs from yt-dlp's.
+    """
     video_id = (video_id or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
         raise ValueError("video_id must be an 11-character YouTube ID")
     watch_url = f"https://www.youtube.com/watch?v={video_id}"
     cmd = _ytdlp_base() + [
-        "-g", "-f", "bestaudio[ext=m4a]/bestaudio/best",
-        "--ignore-config", "--no-playlist", "--no-warnings", "--socket-timeout", "10", "--", watch_url,
+        "-J", "-f", "bestaudio[ext=m4a]/bestaudio/best",
+        "--ignore-config", "--no-playlist", "--no-warnings",
+        "--socket-timeout", "10", "--", watch_url,
     ]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -112,11 +128,27 @@ async def ytdlp_resolve_url(video_id: str, *, timeout_s: float = 20.0) -> str:
     except asyncio.CancelledError:
         await _kill_and_reap(proc)
         raise
-    url = raw.decode("utf-8", "ignore").strip().splitlines()
-    url = url[0].strip() if url else ""
+    try:
+        data = json.loads(raw.decode("utf-8", "ignore"))
+    except (ValueError, UnicodeError) as exc:
+        raise RuntimeError(f"music resolve returned bad data: {exc}") from exc
+
+    requested = data.get("requested_downloads") or []
+    selected = requested[0] if requested and isinstance(requested[0], dict) else data
+    url = str(selected.get("url") or data.get("url") or "").strip()
     if not url.startswith("http"):
         raise RuntimeError("music resolve produced no stream URL")
-    return url
+
+    raw_headers = selected.get("http_headers") or data.get("http_headers") or {}
+    headers: Dict[str, str] = {}
+    if isinstance(raw_headers, dict):
+        for key, value in raw_headers.items():
+            name = str(key or "").strip()
+            text = str(value or "").strip()
+            if not name or not text or "\r" in name or "\n" in name or "\r" in text or "\n" in text:
+                continue
+            headers[name] = text
+    return ResolvedStreamURL(url, headers)
 
 
 class MusicToolProvider:
@@ -137,12 +169,50 @@ class MusicToolProvider:
     def descriptors(self) -> List[ToolDescriptor]:
         return [
             ToolDescriptor(
-                name="music_search",
-                description="Tìm bài hát trên YouTube khi cần lấy danh sách ứng viên (video_id, tiêu đề, kênh). Tool chỉ đọc.",
+                name="music_play",
+                description=(
+                    "Phát/đổi bài nhạc thật. query là tên, ca sĩ hoặc cụm user muốn nghe; "
+                    "follow-up một cụm ngắn đã là query hợp lệ và không cần hỏi lại nếu đủ dữ kiện. "
+                    "Nếu đã chọn từ music_search có thể thêm video_id. Đổi bài không cần xác nhận riêng."
+                ),
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "description": "Tên bài, ca sĩ hoặc cụm tìm kiếm user yêu cầu.",
+                        },
+                        "video_id": {
+                            "type": "string",
+                            "minLength": 11,
+                            "maxLength": 11,
+                            "pattern": "^[A-Za-z0-9_-]{11}$",
+                        },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+                handler=self.play_music,
+                timeout_ms=30000,
+                read_only=False,
+                idempotent=False,
+                concurrency_group="music",
+            ),
+            ToolDescriptor(
+                name="music_search",
+                description=(
+                    "Tìm ứng viên YouTube khi cần so sánh/chọn. Lệnh phát trực tiếp dùng music_play."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                        },
                     },
                     "required": ["query"],
                     "additionalProperties": False,
@@ -154,31 +224,8 @@ class MusicToolProvider:
                 concurrency_group="music",
             ),
             ToolDescriptor(
-                name="music_play",
-                description=(
-                    "Phát đúng bài đã chọn bằng video_id. Khi người dùng chỉ nói tên bài/ca sĩ/thể loại, "
-                    "hãy gọi music_search trước, tự chọn ứng viên phù hợp từ receipt dựa trên toàn bộ context "
-                    "(hoặc hỏi lại nếu mơ hồ), rồi gọi music_play với đúng video_id. "
-                    "BẮT BUỘC gọi tool này để thực sự phát nhạc; cấm chỉ nói suông."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "video_id": {"type": "string", "minLength": 11, "maxLength": 11,
-                                     "pattern": "^[A-Za-z0-9_-]{11}$"},
-                    },
-                    "required": ["video_id"],
-                    "additionalProperties": False,
-                },
-                handler=self.play_music,
-                timeout_ms=30000,
-                read_only=False,
-                idempotent=False,
-                concurrency_group="music",
-            ),
-            ToolDescriptor(
                 name="music_control",
-                description="BẮT BUỘC gọi tool này khi người dùng muốn điều khiển nhạc: action='stop' (dừng/tắt/thôi/im), 'pause' (tạm dừng), 'resume' (tiếp tục), 'next' (bài sau/khác), 'previous' (bài trước), 'status' (trạng thái). Cấm chỉ nói suông mà không gọi tool.",
+                description="Điều khiển nhạc thật: stop, pause, resume, next, previous hoặc status.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -215,20 +262,57 @@ class MusicToolProvider:
 
     async def play_music(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         video_id = str(arguments.get("video_id") or "").strip()
-        if not video_id:
-            raise ValueError("play_music needs an exact video_id; call music_search first when needed")
-        candidate = self._last_candidates.get(video_id, {})
+        query = str(arguments.get("query") or "").strip()
+        candidate: Dict[str, Any] = {}
+
+        if video_id:
+            candidate = self._last_candidates.get(video_id, {})
+        elif query:
+            candidates = await ytdlp_search(
+                query,
+                max_results=self._search_results,
+                timeout_s=self._resolve_timeout_s,
+            )
+            self._last_candidates = {
+                str(item.get("video_id") or "").strip(): dict(item)
+                for item in candidates
+                if str(item.get("video_id") or "").strip()
+            }
+            if not candidates:
+                return {
+                    "status": "not_found",
+                    "query": query,
+                    "video_id": "",
+                }
+            candidate = dict(candidates[0])
+            video_id = str(candidate.get("video_id") or "").strip()
+            if not video_id:
+                raise ValueError("music search returned a candidate without video_id")
+        else:
+            raise ValueError("music_play needs query or video_id")
+
         title = str(candidate.get("title") or "")
         channel = str(candidate.get("channel") or "")
         duration = float(candidate.get("duration_s") or 0.0)
         stream_url = await ytdlp_resolve_url(
-            video_id, timeout_s=self._resolve_timeout_s)
+            video_id,
+            timeout_s=self._resolve_timeout_s,
+        )
+        http_headers = dict(getattr(stream_url, "http_headers", {}) or {})
         if not title:
-            title = video_id
-        track = MusicTrack(video_id=video_id, title=title, channel=channel,
-                           duration_s=float(duration or 0),
-                           stream_url=stream_url)
-        return self._player.set_pending(track)
+            title = query or video_id
+        track = MusicTrack(
+            video_id=video_id,
+            title=title,
+            channel=channel,
+            duration_s=float(duration or 0),
+            stream_url=str(stream_url),
+            http_headers=http_headers,
+        )
+        result = self._player.set_pending(track)
+        if query:
+            result = {**result, "query": query}
+        return result
 
     async def control_music(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         action = str(arguments.get("action") or "").strip()

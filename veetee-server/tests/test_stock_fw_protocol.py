@@ -2,6 +2,7 @@ import json
 import unittest
 
 from config.settings import AppConfig
+from core.audio_utils import AudioCodec
 from core.protocol import (
     ProtocolVersion,
     make_tts_message,
@@ -72,6 +73,27 @@ class ProtocolPacketTests(unittest.TestCase):
         message = json.loads(make_tts_message("session", "stop"))
         self.assertEqual(message, {"session_id": "session", "type": "tts", "state": "stop"})
 
+    def test_recovery_kind_is_optional_protocol_metadata(self):
+        message = json.loads(
+            make_tts_message(
+                "session",
+                "sentence_start",
+                "Thử lại nhé.",
+                response_kind="recovery",
+            )
+        )
+        self.assertEqual(message["state"], "sentence_start")
+        self.assertEqual(message["text"], "Thử lại nhé.")
+        self.assertEqual(message["response_kind"], "recovery")
+
+    def test_output_opus_can_be_decoded_to_pcm16_for_browser_console(self):
+        codec = AudioCodec(out_sample_rate=24000, frame_duration_ms=60)
+        pcm = (1000).to_bytes(2, "little", signed=True) * codec.out_frame_size
+        opus = codec.encode_pcm24_to_opus(pcm)
+        decoded = codec.decode_output_opus_to_pcm16(opus)
+        self.assertEqual(len(decoded), codec.out_frame_size * 2)
+        self.assertNotEqual(decoded, b"\x00" * len(decoded))
+
 
 class StockFirmwareSessionTests(unittest.IsolatedAsyncioTestCase):
     def make_session(self):
@@ -99,8 +121,28 @@ class StockFirmwareSessionTests(unittest.IsolatedAsyncioTestCase):
                 response = json.loads(websocket.sent[-1])
                 self.assertEqual(response["type"], "hello")
                 self.assertEqual(session.codec.in_frame_duration_ms, 60)
+                self.assertEqual(session.output_audio_format, "opus")
                 self.assertEqual(session.barge_in_policy, "client_only")
                 self.assertEqual(session.server_side_aec_requested, features.get("aec") is True)
+
+    async def test_browser_can_negotiate_pcm16_tts_output_without_changing_input(self):
+        session, _ = self.make_session()
+        await session._handle_text_json(json.dumps({
+            "type": "hello",
+            "version": 1,
+            "audio_params": {
+                "format": "pcm16",
+                "frame_duration": 20,
+                "output_format": "pcm16",
+            },
+        }))
+        self.assertEqual(session.input_audio_format, "pcm16")
+        self.assertEqual(session.output_audio_format, "pcm16")
+        hello = json.loads(session.websocket.sent[-1])
+        self.assertEqual(hello["audio_params"]["format"], "pcm16")
+
+        session.codec.decode_output_opus_to_pcm16 = lambda payload: b"pcm16-frame"
+        self.assertEqual(session._pack_tts_audio(b"opus-frame"), b"pcm16-frame")
 
     async def test_supported_input_frame_duration_is_decoupled_from_tts_output(self):
         session, _ = self.make_session()

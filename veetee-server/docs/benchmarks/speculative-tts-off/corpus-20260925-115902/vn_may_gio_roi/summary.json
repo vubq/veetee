@@ -1,0 +1,170 @@
+{
+  "metric": "speech_end_to_first_voiced_pcm_received_ms",
+  "metric_version": "v2",
+  "certification_metric": "speech_end_to_first_useful_voiced_audio_received_ms",
+  "certification_mode": false,
+  "requested_samples": 2,
+  "successful_samples": 2,
+  "timeout_samples": 0,
+  "cancelled_samples": 0,
+  "failed_samples": 0,
+  "valid_metric_samples": 2,
+  "missing_metric_samples": 0,
+  "minimum_samples": 20,
+  "minimum_success_rate": 0.95,
+  "success_rate": 1.0,
+  "sample_gate_passed": false,
+  "success_rate_gate_passed": true,
+  "outcomes": {
+    "completed": 2
+  },
+  "p50_ms": 822.777,
+  "p90_ms": 844.968,
+  "p95_ms": 844.968,
+  "max_ms": 844.968,
+  "sla_p95_lt_1000_ms": false,
+  "target_p50_lte_600_ms": false,
+  "sla_status": "SMOKE_ONLY",
+  "stage_latency_ms": {
+    "speech_end_to_stt_final_ms": {
+      "samples": 2,
+      "p50": 275.088,
+      "p90": 275.282,
+      "p95": 275.282,
+      "max": 275.282
+    },
+    "stt_final_to_first_clause_ms": {
+      "samples": 2,
+      "p50": 373.416,
+      "p90": 395.66,
+      "p95": 395.66,
+      "max": 395.66
+    },
+    "first_clause_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 109.047,
+      "p90": 111.089,
+      "p95": 111.089,
+      "max": 111.089
+    },
+    "first_binary_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 65.227,
+      "p90": 67.408,
+      "p95": 67.408,
+      "max": 67.408
+    },
+    "speech_end_to_first_binary_received_ms": {
+      "samples": 2,
+      "p50": 757.552,
+      "p90": 777.56,
+      "p95": 777.56,
+      "max": 777.56
+    },
+    "speech_end_to_first_voiced_pcm_received_ms": {
+      "samples": 2,
+      "p50": 822.777,
+      "p90": 844.968,
+      "p95": 844.968,
+      "max": 844.968
+    }
+  },
+  "audio_continuity": {
+    "samples": 2,
+    "run_gap_p95_p50_ms": 63.443,
+    "run_gap_p95_max_ms": 64.297,
+    "run_gap_max_p50_ms": 109.686,
+    "run_gap_max_ms": 110.679,
+    "gap_over_2x_frame_count": 0
+  },
+  "quality": {
+    "labelled_samples": 2,
+    "split_or_missing_final_samples": 0,
+    "wer_mean": 0.0,
+    "wer_max": 0.0,
+    "cer_mean": 0.0,
+    "cer_max": 0.0
+  },
+  "note": "p95 values are end-to-end percentiles; stage p95s are never summed. Voiced PCM is a proxy until quality/grounding passes.",
+  "generated_at": "2026-09-25T04:59:49.186122+00:00",
+  "uri": "ws://127.0.0.1:8000/",
+  "mode": "auto",
+  "warmup_runs": 0,
+  "reconnect_each": true,
+  "fixture": "eval/audio/vn_may_gio_roi.wav",
+  "fixture_source_sample_rate": 48000,
+  "speech_end_sample_16k": 10560,
+  "expected_transcript": "Mấy giờ rồi.",
+  "quality_labeled": true,
+  "voiced_rms_threshold_pcm16": 160.0,
+  "auto_silence_ms": 720,
+  "turn_cooldown_ms": 1000,
+  "server_latency_ms": {
+    "context_lookup": {
+      "samples": 2,
+      "p50": 1.331,
+      "p95": 1.585,
+      "max": 1.585
+    },
+    "tts_queue_to_lock": {
+      "samples": 2,
+      "p50": 0.151,
+      "p95": 0.173,
+      "max": 0.173
+    },
+    "tts_first_pcm": {
+      "samples": 2,
+      "p50": 105.542,
+      "p95": 109.736,
+      "max": 109.736
+    },
+    "tts_first_opus": {
+      "samples": 2,
+      "p50": 106.762,
+      "p95": 110.83,
+      "max": 110.83
+    },
+    "tts_first_pcm_to_opus": {
+      "samples": 2,
+      "p50": 1.094,
+      "p95": 1.22,
+      "max": 1.22
+    },
+    "tts_inference": {
+      "samples": 2,
+      "p50": 1078.678,
+      "p95": 1979.782,
+      "max": 1979.782
+    },
+    "tts_lease_held": {
+      "samples": 2,
+      "p50": 913.356,
+      "p95": 1681.153,
+      "max": 1681.153
+    },
+    "tts_opus_to_ws_binary": {
+      "samples": 2,
+      "p50": 0.247,
+      "p95": 0.263,
+      "max": 0.263
+    },
+    "speech_endpoint_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 462.725,
+      "p95": 503.269,
+      "max": 503.269
+    },
+    "last_voice_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 622.725,
+      "p95": 663.269,
+      "max": 663.269
+    },
+    "asr_final_to_first_ws_binary": {
+      "samples": 2,
+      "p50": 462.449,
+      "p95": 502.883,
+      "max": 502.883
+    }
+  }
+}

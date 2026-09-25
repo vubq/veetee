@@ -78,7 +78,7 @@ class TimeThenSynthesisLLM:
                            "detect_end_intent": detect_end_intent, "tool_choice": tool_choice})
         if len(self.calls) == 1:
             yield ControlEvent(intent="tool_request")
-            yield ToolCallReadyEvent(call_id="time-1", name="get_current_time", arguments={})
+            yield ToolCallReadyEvent(call_id="time-1", name="get_time_in_timezone", arguments={"timezone": "Asia/Tokyo"})
             yield CompletedEvent(finish_reason="tool_calls")
             return
         yield ControlEvent()
@@ -98,7 +98,7 @@ class MixedSpeechThenToolLLM:
         if len(self.calls) == 1:
             yield ControlEvent(intent="tool_request")
             yield SpeechSegmentEvent("Để mình kiểm tra nhé.", emotion="neutral")
-            yield ToolCallReadyEvent(call_id="time-1", name="get_current_time", arguments={})
+            yield ToolCallReadyEvent(call_id="time-1", name="get_time_in_timezone", arguments={"timezone": "Asia/Tokyo"})
             yield CompletedEvent(finish_reason="tool_calls")
             return
         yield ControlEvent()
@@ -261,6 +261,30 @@ class SemanticsRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("veetee_tool_catalog", names)
         self.assertTrue(any("tool_19" in t["function"]["description"] for t in exposed
                             if t["function"]["name"] == "veetee_tool_catalog"))
+
+    async def test_tool_catalog_cache_invalidates_on_registry_change(self):
+        from core.tools.base import ToolDescriptor
+
+        descriptor = ToolDescriptor(
+            name="cached_tool",
+            description="cached",
+            input_schema={"type": "object"},
+            handler=lambda arguments: {"ok": True},
+        )
+        registry = ToolRegistry([descriptor])
+        first = registry.openai_tools(limit=16)
+        cached_payload = registry._openai_cache[16]
+        second = registry.openai_tools(limit=16)
+
+        self.assertEqual(first, second)
+        self.assertIs(registry._openai_cache[16], cached_payload)
+
+        registry.unregister("cached_tool")
+        self.assertNotIn(16, registry._openai_cache)
+        self.assertNotEqual(
+            [item["function"]["name"] for item in registry.openai_tools(limit=16)],
+            ["cached_tool"],
+        )
 
 
 if __name__ == "__main__":

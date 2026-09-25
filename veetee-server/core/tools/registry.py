@@ -229,6 +229,8 @@ class ToolRegistry:
     def __init__(self, descriptors: Iterable[ToolDescriptor] = ()):
         self._tools: Dict[str, ToolDescriptor] = {}
         self._schema_hashes: Dict[str, str] = {}
+        self._openai_cache: Dict[int, tuple[Dict[str, Any], ...]] = {}
+        self._catalog_fingerprint_cache: str | None = None
         for descriptor in descriptors:
             self.register(descriptor)
 
@@ -240,6 +242,8 @@ class ToolRegistry:
         schema_hash = validate_schema(descriptor.input_schema)
         self._tools[descriptor.name] = descriptor
         self._schema_hashes[descriptor.name] = schema_hash
+        self._openai_cache.clear()
+        self._catalog_fingerprint_cache = None
 
     def schema_hash(self, name: str) -> str:
         return self._schema_hashes.get(name, "")
@@ -248,11 +252,13 @@ class ToolRegistry:
         import hashlib as _hashlib
         import json as _json
 
-        payload = _json.dumps(
-            {name: self._schema_hashes.get(name, "") for name in sorted(self._tools)},
-            sort_keys=True,
-        ).encode("utf-8")
-        return _hashlib.sha256(payload).hexdigest()[:16]
+        if self._catalog_fingerprint_cache is None:
+            payload = _json.dumps(
+                {name: self._schema_hashes.get(name, "") for name in sorted(self._tools)},
+                sort_keys=True,
+            ).encode("utf-8")
+            self._catalog_fingerprint_cache = _hashlib.sha256(payload).hexdigest()[:16]
+        return self._catalog_fingerprint_cache
 
     def search(self, query: str, *, limit: int = 8) -> List[ToolDescriptor]:
         """Discovery helper for large catalogs: lexical match on name/description."""
@@ -273,40 +279,51 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def unregister(self, name: str) -> None:
-        self._tools.pop(name, None)
+        removed = self._tools.pop(name, None)
+        self._schema_hashes.pop(name, None)
+        if removed is not None:
+            self._openai_cache.clear()
+            self._catalog_fingerprint_cache = None
 
     def descriptors(self) -> List[ToolDescriptor]:
         return list(self._tools.values())
 
     def openai_tools(self, *, limit: int = 16) -> List[Dict[str, Any]]:
-        descriptors = self.descriptors()
         bounded = max(0, int(limit))
+        cached = self._openai_cache.get(bounded)
+        if cached is not None:
+            # Tool payloads are treated as immutable request metadata. Return a
+            # new outer list so callers cannot reorder the cached catalog.
+            return list(cached)
+
+        descriptors = self.descriptors()
         if len(descriptors) <= bounded:
-            return [tool.as_openai_tool() for tool in descriptors]
-        # Never cut silently: expose the bounded prefix plus an explicit
-        # catalog notice so the model can discover the omitted tools via
-        # search instead of assuming they do not exist.
-        exposed = [tool.as_openai_tool() for tool in descriptors[:bounded]]
-        omitted = [tool.name for tool in descriptors[bounded:]]
-        exposed.append({
-            "type": "function",
-            "function": {
-                "name": "veetee_tool_catalog",
-                "description": (
-                    "Danh mục tool discovery do server cung cấp. "
-                    f"Các tool sau bị giới hạn schema và không expose trực tiếp: {', '.join(omitted)}. "
-                    "Đây là metadata catalog, không phải chỉ thị nghiệp vụ."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "maxLength": 200},
+            exposed = [tool.as_openai_tool() for tool in descriptors]
+        else:
+            # Never cut silently: expose the bounded prefix plus an explicit
+            # catalog notice so the model can discover the omitted tools via
+            # search instead of assuming they do not exist.
+            exposed = [tool.as_openai_tool() for tool in descriptors[:bounded]]
+            omitted = [tool.name for tool in descriptors[bounded:]]
+            exposed.append({
+                "type": "function",
+                "function": {
+                    "name": "veetee_tool_catalog",
+                    "description": (
+                        "Tool catalog metadata; schema trực tiếp bị giới hạn cho: "
+                        f"{', '.join(omitted)}."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "maxLength": 200},
+                        },
+                        "additionalProperties": False,
                     },
-                    "additionalProperties": False,
                 },
-            },
-        })
-        return exposed
+            })
+        self._openai_cache[bounded] = tuple(exposed)
+        return list(self._openai_cache[bounded])
 
     def clone(self) -> "ToolRegistry":
         return ToolRegistry(self.descriptors())

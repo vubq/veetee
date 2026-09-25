@@ -2,10 +2,11 @@ import asyncio
 import json
 import time
 import unittest
+from unittest.mock import patch
 
 from config.settings import AppConfig
 from core.session import ClientSession, SessionState
-from core.turn_events import CompletedEvent, ControlEvent, SpeechSegmentEvent, ToolCallReadyEvent
+from core.turn_events import CompletedEvent, ControlEvent, FailedEvent, SpeechSegmentEvent, ToolCallReadyEvent
 
 
 class FakeWebSocket:
@@ -128,8 +129,8 @@ class NativeTimeToolLLM:
             yield ControlEvent(intent="tool_request")
             yield ToolCallReadyEvent(
                 call_id="time-1",
-                name="get_current_time",
-                arguments={},
+                name="get_time_in_timezone",
+                arguments={"timezone": "Asia/Tokyo"},
             )
             yield CompletedEvent(finish_reason="tool_calls")
             return
@@ -224,6 +225,15 @@ class ControlThenSlowLLM:
         await asyncio.sleep(0.05)
         yield SpeechSegmentEvent("Phản hồi quá chậm.", emotion="neutral")
         yield CompletedEvent(finish_reason="stop")
+
+
+class CapacityBusyLLM:
+    async def stream_turn(self, messages, *, tools=None, detect_end_intent=True, tool_choice=None):
+        yield FailedEvent(
+            "LLM capacity exhausted: no eligible quota group",
+            code="capacity_exhausted",
+            retryable=True,
+        )
 
 
 class CachedFallback:
@@ -397,7 +407,9 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await session._trigger_ai_turn("Bắt đầu")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
         self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
-        self.assertEqual([m.role for m in session.dialogue.messages], ["user"])
+        # Pre-audio failed turns stay in audit/metrics only; they must
+        # not contaminate the next LLM prompt as an unanswered user message.
+        self.assertEqual(session.dialogue.messages, [])
 
     async def test_pre_audio_llm_timeout_uses_cached_vietnamese_fallback(self):
         config = AppConfig()
@@ -410,6 +422,47 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             TwoFrameTTS(),
             SlowLLM(),
             response_audio_cache=CachedFallback(),
+        )
+        await session._trigger_ai_turn("Bạn nghe rõ không?")
+        await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
+        self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
+
+    async def test_capacity_failure_is_bounded_without_error_traceback(self):
+        websocket = FakeWebSocket()
+        session = SessionForTest(
+            websocket,
+            AppConfig(),
+            TwoFrameTTS(),
+            CapacityBusyLLM(),
+            response_audio_cache=CachedFallback(),
+        )
+
+        with patch("core.session.logger.error") as error_log, patch(
+            "core.session.logger.warning"
+        ) as warning_log:
+            await session._trigger_ai_turn("Hỏi khi quota đang bận")
+            await asyncio.wait_for(session.current_turn_task, timeout=1.0)
+
+        error_log.assert_not_called()
+        self.assertTrue(warning_log.called)
+        summary = session.turn_metrics.latest_summary()
+        self.assertEqual(summary["outcome"], "failed")
+        self.assertEqual(summary["error"], "capacity_exhausted")
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
+
+    async def test_assistant_session_can_use_system_recovery_cache_only(self):
+        config = AppConfig()
+        config.latency.first_token_timeout_ms = 10
+        config.latency.total_turn_timeout_ms = 100
+        websocket = FakeWebSocket()
+        session = SessionForTest(
+            websocket,
+            config,
+            TwoFrameTTS(),
+            SlowLLM(),
+            response_audio_cache=None,
+            recovery_audio_cache=CachedFallback(),
         )
         await session._trigger_ai_turn("Bạn nghe rõ không?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
@@ -556,55 +609,60 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_result["tool_call_id"], "call-1")
         self.assertIn('"status":"succeeded"', tool_result["content"])
         self.assertIn("Kết quả phép tính là 5.", _assistant_texts(session))
-        # Structured receipt history is kept for the next turn.
-        self.assertTrue(any(m.role == "system" and "call-1" in m.content
-                            for m in session.dialogue.messages))
+        # Read-only receipts stay in structured audit history but do
+        # not become system messages in the next conversational prompt.
+        self.assertFalse(any(
+            m.role == "system" and "call-1" in m.content
+            for m in session.dialogue.messages
+        ))
+        self.assertTrue(any(
+            receipt.get("id") == "call-1"
+            for receipt in session.dialogue.structured_turns[-1].receipts
+        ))
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
 
-    async def test_current_time_receipt_uses_ai_synthesis(self):
-        # A01/A02 regression: clock answers are AI-authored from the full
-        # receipt envelope, never a direct literal renderer.
-        config = AppConfig()
-        config.tools.tool_result_synthesis = True
-        config.tools.max_llm_rounds_per_turn = 2
-        llm = NativeTimeToolLLM()
-        websocket = FakeWebSocket()
-        session = SessionForTest(websocket, config, TwoFrameTTS(), llm)
+    async def test_time_tool_is_not_exposed_on_default_chat_turns(self):
+        llm = NativeChatLLM()
+        session = SessionForTest(
+            FakeWebSocket(),
+            AppConfig(),
+            TwoFrameTTS(),
+            llm,
+        )
 
-        await session._trigger_ai_turn("Mấy giờ rồi?")
+        await session._trigger_ai_turn("Tokyo bây giờ mấy giờ?")
         await asyncio.wait_for(session.current_turn_task, timeout=1.0)
 
-        self.assertEqual(len(llm.calls), 2)
-        self.assertIsNone(llm.calls[0]["tool_choice"])
-        self.assertEqual(llm.calls[1]["tool_choice"], "none")
-        self.assertTrue(any("Bây giờ là " in text for text in _assistant_texts(session)))
-        self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
-        self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 1)
-        # Receipt envelope carries provenance and origin turn.
-        receipts = [m.content for m in session.dialogue.messages if m.role == "system"]
-        self.assertTrue(any("get_current_time" in content and "origin_turn" in content
-                            for content in receipts))
+        self.assertEqual(len(llm.calls), 1)
+        tool_names = {
+            tool.get("function", {}).get("name")
+            for tool in llm.calls[0]["tools"]
+        }
+        self.assertNotIn("get_time_in_timezone", tool_names)
+        self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 0)
 
-    async def test_current_time_phrasings_leave_tool_selection_to_llm(self):
+    async def test_current_server_clock_phrasings_can_complete_without_tool_round(self):
         for text in ("Mấy giờ rồi?", "Bây giờ là mấy giờ?", "Hôm nay ngày mấy?"):
             with self.subTest(text=text):
-                config = AppConfig()
-                config.tools.tool_result_synthesis = True
-                config.tools.max_llm_rounds_per_turn = 2
-                llm = NativeTimeToolLLM()
-                session = SessionForTest(FakeWebSocket(), config, TwoFrameTTS(), llm)
+                llm = NativeChatLLM()
+                session = SessionForTest(
+                    FakeWebSocket(),
+                    AppConfig(),
+                    TwoFrameTTS(),
+                    llm,
+                )
 
                 await session._trigger_ai_turn(text)
                 await asyncio.wait_for(session.current_turn_task, timeout=1.0)
 
-                self.assertEqual(len(llm.calls), 2)
-                self.assertIsNone(llm.calls[0]["tool_choice"])
-                self.assertTrue(any(
-                    tool.get("function", {}).get("name") == "get_current_time"
-                    for tool in llm.calls[0]["tools"]
-                ))
-                self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 1)
-                self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 2)
+                self.assertEqual(len(llm.calls), 1)
+                self.assertEqual(session.turn_metrics.latest_summary()["tool_calls"], 0)
+                self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 1)
+                joined = "\n".join(
+                    str(message.get("content") or "")
+                    for message in llm.calls[0]["messages"]
+                )
+                self.assertIn("server_clock", joined)
 
     async def test_chat_turn_never_preforces_clock_tool_from_user_text(self):
         llm = NativeChatLLM()
@@ -649,8 +707,14 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             message.role == "assistant" and "Kết quả" in message.content
             for message in session.dialogue.messages
         ))
-        self.assertTrue(any(m.role == "system" and "call-1" in m.content
-                            for m in session.dialogue.messages))
+        self.assertFalse(any(
+            m.role == "system" and "call-1" in m.content
+            for m in session.dialogue.messages
+        ))
+        self.assertTrue(any(
+            receipt.get("id") == "call-1"
+            for receipt in session.dialogue.structured_turns[-1].receipts
+        ))
 
     async def test_tool_result_synthesis_never_executes_round_two_tool_call(self):
         # Final synthesis round is speech-only: a late tool call is rejected,
@@ -676,8 +740,14 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
             message.role == "assistant" and "Kết quả" in message.content
             for message in session.dialogue.messages
         ))
-        self.assertTrue(any(m.role == "system" and "call-1" in m.content
-                            for m in session.dialogue.messages))
+        self.assertFalse(any(
+            m.role == "system" and "call-1" in m.content
+            for m in session.dialogue.messages
+        ))
+        self.assertTrue(any(
+            receipt.get("id") == "call-1"
+            for receipt in session.dialogue.structured_turns[-1].receipts
+        ))
 
     async def test_default_calculator_receipt_is_phrased_by_ai(self):
         llm = NativeToolLLM()

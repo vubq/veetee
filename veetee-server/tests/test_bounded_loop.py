@@ -68,7 +68,11 @@ class ChainLLM:
         self.calls.append({"tools": tools or [], "tool_choice": tool_choice})
         if len(self.calls) == 1:
             yield ControlEvent(intent="tool_request")
-            yield ToolCallReadyEvent(call_id="a-1", name="get_current_time", arguments={})
+            yield ToolCallReadyEvent(
+                call_id="a-1",
+                name="calculate",
+                arguments={"expression": "1+1"},
+            )
             yield CompletedEvent(finish_reason="tool_calls")
             return
         if len(self.calls) == 2:
@@ -117,10 +121,16 @@ class BoundedLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.turn_metrics.latest_summary()["llm_rounds"], 3)
         assistants = [m.content for m in session.dialogue.messages if m.role == "assistant"]
         self.assertTrue(any("Xong cả hai" in t for t in assistants))
-        # Follow-up understands the prior receipt: history keeps both.
+        # Read-only receipts are available inside the bounded loop and
+        # structured audit record, but are not promoted into next-turn system
+        # prompt history.
         systems = [m.content for m in session.dialogue.messages if m.role == "system"]
-        self.assertTrue(any("a-1" in s for s in systems))
-        self.assertTrue(any("b-1" in s for s in systems))
+        self.assertFalse(any("a-1" in s or "b-1" in s for s in systems))
+        receipt_ids = {
+            receipt.get("id")
+            for receipt in session.dialogue.structured_turns[-1].receipts
+        }
+        self.assertEqual(receipt_ids, {"a-1", "b-1"})
 
     async def test_chain_is_bounded_when_max_is_2(self):
         config = AppConfig()

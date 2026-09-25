@@ -94,6 +94,10 @@ class RetrievalRAGTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("session:", system["content"])
         self.assertIn("durable:", system["content"])
         self.assertIn("provenance", system["content"])
+        self.assertTrue(builder.last_lookup["durable_ids"])
+        self.assertTrue(
+            all(item.startswith("durable:") for item in builder.last_lookup["durable_ids"])
+        )
 
     async def test_rag_fixture_provenance_and_instruction_isolation(self):
         docs = [

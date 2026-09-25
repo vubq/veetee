@@ -12,6 +12,7 @@ class BaseTTS(ABC):
         *,
         priority: str = "live",
         queue_deadline_seconds: Optional[float] = None,
+        initial_turn_audio: bool = True,
     ) -> AsyncGenerator[bytes, None]:
         """
         Synthesizes text and yields Opus-encoded audio frames in real time.
@@ -26,6 +27,7 @@ def open_tts_stream(
     *,
     priority: str,
     queue_deadline_seconds: Optional[float] = None,
+    initial_turn_audio: bool = True,
 ):
     """Call priority-aware TTS while preserving compatibility with simple test providers."""
     method = tts_engine.stream_sentence_to_opus
@@ -42,4 +44,6 @@ def open_tts_stream(
         kwargs["priority"] = priority
     if supports_kwargs or "queue_deadline_seconds" in names:
         kwargs["queue_deadline_seconds"] = queue_deadline_seconds
+    if supports_kwargs or "initial_turn_audio" in names:
+        kwargs["initial_turn_audio"] = bool(initial_turn_audio)
     return method(text, cancel_event, **kwargs)

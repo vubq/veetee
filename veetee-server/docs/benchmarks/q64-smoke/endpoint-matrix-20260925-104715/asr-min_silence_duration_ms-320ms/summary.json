@@ -1,0 +1,113 @@
+{
+  "metric": "speech_end_to_first_voiced_pcm_received_ms",
+  "metric_version": "v2",
+  "certification_metric": "speech_end_to_first_useful_voiced_audio_received_ms",
+  "certification_mode": false,
+  "requested_samples": 2,
+  "successful_samples": 0,
+  "timeout_samples": 0,
+  "cancelled_samples": 0,
+  "failed_samples": 2,
+  "valid_metric_samples": 0,
+  "missing_metric_samples": 2,
+  "minimum_samples": 20,
+  "minimum_success_rate": 0.95,
+  "success_rate": 0.0,
+  "sample_gate_passed": false,
+  "success_rate_gate_passed": false,
+  "outcomes": {
+    "recovery": 2
+  },
+  "p50_ms": null,
+  "p90_ms": null,
+  "p95_ms": null,
+  "max_ms": null,
+  "sla_p95_lt_1000_ms": false,
+  "target_p50_lte_600_ms": false,
+  "sla_status": "SMOKE_ONLY",
+  "stage_latency_ms": {
+    "speech_end_to_stt_final_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    },
+    "stt_final_to_first_clause_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    },
+    "first_clause_to_first_binary_received_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    },
+    "first_binary_to_first_voiced_pcm_received_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    },
+    "speech_end_to_first_binary_received_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    },
+    "speech_end_to_first_voiced_pcm_received_ms": {
+      "samples": 0,
+      "p50": null,
+      "p90": null,
+      "p95": null,
+      "max": null
+    }
+  },
+  "audio_continuity": {
+    "samples": 0,
+    "run_gap_p95_p50_ms": null,
+    "run_gap_p95_max_ms": null,
+    "run_gap_max_p50_ms": null,
+    "run_gap_max_ms": null,
+    "gap_over_2x_frame_count": 0
+  },
+  "quality": {
+    "labelled_samples": 2,
+    "split_or_missing_final_samples": 0,
+    "wer_mean": 0.0,
+    "wer_max": 0.0,
+    "cer_mean": 0.0,
+    "cer_max": 0.0
+  },
+  "note": "p95 values are end-to-end percentiles; stage p95s are never summed. Voiced PCM is a proxy until quality/grounding passes.",
+  "generated_at": "2026-09-25T03:47:45.887444+00:00",
+  "uri": "ws://127.0.0.1:8000/",
+  "mode": "auto",
+  "warmup_runs": 1,
+  "reconnect_each": false,
+  "fixture": "eval/audio/vn_may_gio_roi.wav",
+  "fixture_source_sample_rate": 48000,
+  "speech_end_sample_16k": 10560,
+  "expected_transcript": "Mấy giờ rồi.",
+  "quality_labeled": true,
+  "voiced_rms_threshold_pcm16": 160.0,
+  "auto_silence_ms": 720,
+  "turn_cooldown_ms": 750,
+  "endpoint_setting": "asr.min_silence_duration_ms",
+  "endpoint_value_ms": 320,
+  "quality_not_measured": false,
+  "server_latency_ms": {
+    "context_lookup": {
+      "samples": 2,
+      "p50": 1.43,
+      "p95": 1.475,
+      "max": 1.475
+    }
+  }
+}

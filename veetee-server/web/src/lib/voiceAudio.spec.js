@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createStreamingPcm16Resampler,
   extractOpusPacket,
+  pcm16LeBytesToFloat32,
   resampleFloatToPcm16,
 } from './voiceAudio'
 
@@ -29,6 +30,18 @@ describe('voiceAudio protocol framing', () => {
 })
 
 describe('voiceAudio PCM conversion', () => {
+  it('decodes signed little-endian PCM16 bytes for browser playback', () => {
+    const bytes = Uint8Array.from([
+      0x00, 0x80,
+      0x00, 0x00,
+      0xff, 0x7f,
+    ])
+    const result = pcm16LeBytesToFloat32(bytes)
+    expect(result[0]).toBe(-1)
+    expect(result[1]).toBe(0)
+    expect(result[2]).toBe(1)
+  })
+
   it('clamps float samples to signed PCM16', () => {
     const result = resampleFloatToPcm16(Float32Array.from([-2, -1, 0, 1, 2]), 16000)
     expect([...result]).toEqual([-32768, -32768, 0, 32767, 32767])

@@ -33,18 +33,25 @@ const props = defineProps({
   pipelineAsr: { type: String, default: 'Chờ audio' },
   pipelineLlm: { type: String, default: 'Chờ transcript' },
   pipelineTts: { type: String, default: 'Chờ LLM' },
+  health: { type: Object, default: null },
 })
 
 const emit = defineEmits([
   'update:chatInput', 'update:protocol-version', 'update:listen-mode', 'update:raw-protocol',
-  'update:use-real-audio', 'connect', 'reconnect', 'send', 'toggle-mic', 'abort', 'direct-tts',
+  'update:use-real-audio', 'connect', 'reconnect', 'unlock-audio', 'send', 'toggle-mic', 'abort', 'direct-tts',
   'health', 'ota', 'ping', 'listen-start', 'listen-stop', 'wake-detect', 'wake-start',
-  'end-intent', 'send-raw', 'clear',
+  'end-intent', 'send-raw', 'clear', 'runtime',
 ])
 
 const chatBox = ref(null)
 const showAdvanced = ref(false)
 const connected = computed(() => props.wsState === 'connected')
+const llmUnavailable = computed(() => (props.health?.degraded_reasons || []).includes('llm_not_warm'))
+const audioNeedsUnlock = computed(() => /chặn|suspended|Lỗi phát TTS|Lỗi audio/i.test(props.audioStatus || ''))
+const canSend = computed(() => connected.value && !llmUnavailable.value && !!props.chatInput.trim())
+function sendIfReady() {
+  if (canSend.value) emit('send')
+}
 const protocolOptions = [
   { value: 1, label: 'V1' },
   { value: 2, label: 'V2' },
@@ -72,6 +79,10 @@ watch(() => props.messages, async () => {
   <div class="workspace-view voice-view">
     <PageHeader eyebrow="02 / Lab" title="Voice Console" description="Realtime workspace để test WebSocket, microphone, ASR, LLM, TTS và protocol diagnostics.">
       <template #actions>
+        <UiButton v-if="audioNeedsUnlock" variant="secondary" size="sm" @click="emit('unlock-audio')">
+          <template #icon><Speaker :size="14" /></template>
+          Bật âm thanh
+        </UiButton>
         <UiBadge :tone="connected ? 'success' : wsState === 'error' ? 'danger' : 'neutral'" dot>{{ wsState }}</UiBadge>
         <UiButton :variant="connected ? 'secondary' : 'primary'" @click="emit('connect')">
           <template #icon><component :is="connected ? Unplug : PlugZap" :size="15" /></template>
@@ -79,6 +90,14 @@ watch(() => props.messages, async () => {
         </UiButton>
       </template>
     </PageHeader>
+
+    <section v-if="llmUnavailable" class="voice-readiness-alert">
+      <div>
+        <strong>LLM chưa sẵn sàng</strong>
+        <p>Voice Console vẫn kết nối được để test WebSocket, ASR và TTS, nhưng AI chat sẽ không trả lời cho tới khi có GROQ_API_KEY hợp lệ.</p>
+      </div>
+      <UiButton variant="secondary" size="sm" @click="emit('runtime')">Mở Runtime</UiButton>
+    </section>
 
     <section class="voice-status-strip">
       <div><span>CONNECTION</span><strong>{{ connected ? 'LIVE' : 'OFFLINE' }}</strong></div>
@@ -111,9 +130,9 @@ watch(() => props.messages, async () => {
               placeholder="Nhập nội dung test, ví dụ: Hôm nay ngày mấy?"
               :disabled="!connected || isSyntheticAudioRunning"
               @update:model-value="emit('update:chatInput', $event)"
-              @keydown.enter.prevent="emit('send')"
+              @keydown.enter.prevent="sendIfReady"
             />
-            <UiButton variant="primary" icon-only :loading="isSyntheticAudioRunning" :disabled="!connected || !chatInput.trim()" aria-label="Gửi" @click="emit('send')">
+            <UiButton variant="primary" icon-only :loading="isSyntheticAudioRunning" :disabled="!canSend" aria-label="Gửi" @click="sendIfReady">
               <template #icon><Send :size="17" /></template>
             </UiButton>
           </div>
@@ -122,7 +141,7 @@ watch(() => props.messages, async () => {
             :model-value="useRealAudio"
             label="Text → audio → ASR thật"
             description="VieNeu tạo audio từ text rồi stream qua VAD / ASR như input microphone."
-            :disabled="!connected || isMicRecording || isSyntheticAudioRunning"
+            :disabled="!connected || isMicRecording || isSyntheticAudioRunning || llmUnavailable"
             @update:model-value="emit('update:use-real-audio', $event)"
           />
 

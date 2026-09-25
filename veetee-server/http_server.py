@@ -11,6 +11,7 @@ from config.settings import AppConfig
 from core.session import ClientSession
 from core.access import WebSocketAccess, serve_session
 from core.assistant_runtime import build_assistant_llm_view, build_assistant_tts_view
+from core.providers.tts.scheduler import TTSPreempted
 from core.turn_metrics import TurnTraceStore, summarize_trace
 
 logger = logging.getLogger("HttpServer")
@@ -101,9 +102,11 @@ class HttpServer:
         runtime_readiness_ref=None,
         websocket_access=None,
         management_store=None,
+        runtime_config_applier=None,
     ):
         self.config = app_config
         self.management_store = management_store
+        self.runtime_config_applier = runtime_config_applier
         self.websocket_access = websocket_access or WebSocketAccess(
             app_config.server, app_config.management, management_store
         )
@@ -148,6 +151,7 @@ class HttpServer:
         self.app.router.add_get("/api/ota/", self.handle_ota)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/api/diagnostics", self.handle_diagnostics)
+        self.app.router.add_get("/api/turns/{turn_id}", self.handle_turn_detail)
         self.app.router.add_post("/api/test-voice", self.handle_test_voice)
         self.app.router.add_get("/api/prompt", self.handle_get_prompt)
         self.app.router.add_post("/api/prompt", self.handle_set_prompt)
@@ -216,6 +220,7 @@ class HttpServer:
                 tts_engine=session_tts,
                 llm_engine=session_llm,
                 response_audio_cache=self.response_audio_cache if assistant is None else None,
+                recovery_audio_cache=self.response_audio_cache,
                 turn_trace_store=self.recent_turn_store,
                 authenticated_owner_id=owner_id,
             )
@@ -531,7 +536,7 @@ class HttpServer:
         return web.json_response({
             "values": values,
             "restart_required": False,
-            "note": "Secret values are masked. Provider credential/pool changes require restart to rebuild clients safely.",
+            "note": "Secret values are masked. Supported runtime changes are applied immediately without restarting the service.",
         }, headers={"Cache-Control": "no-store"})
 
     async def handle_update_runtime_config(self, request: web.Request) -> web.Response:
@@ -540,6 +545,28 @@ class HttpServer:
         try:
             payload = await self._json_body(request)
             changes = payload.get("values", payload)
+            if not isinstance(changes, dict):
+                raise ValueError("runtime changes must be an object")
+
+            if self.runtime_config_applier is not None:
+                result = await self.runtime_config_applier(changes)
+                if not isinstance(result, dict):
+                    raise RuntimeError("runtime config applier returned invalid result")
+                response = {
+                    "values": result.get(
+                        "values",
+                        self.management_store.runtime_public() if self.management_store else {},
+                    ),
+                    "restart_required": False,
+                    "applied": True,
+                }
+                for key in ("sessions_updated", "llm_reloaded", "llm_ready", "asr_reloaded"):
+                    if key in result:
+                        response[key] = result[key]
+                return web.json_response(response, headers={"Cache-Control": "no-store"})
+
+            # Compatibility path for standalone HttpServer use in tests/tools.
+            # Production VeeTeeServer always supplies the hot-apply callback.
             values = self.management_store.update_runtime(changes)
             restart_required = False
             for key, value in changes.items():
@@ -551,7 +578,6 @@ class HttpServer:
                         os.environ[key] = str(value)
                     restart_required = True
                 elif key in {"llm.model", "tts.voice"}:
-                    # Global defaults can be changed hot; Assistant-specific values remain isolated.
                     if key == "llm.model" and value and hasattr(self.llm_engine, "set_model"):
                         self.llm_engine.set_model(str(value), persist=False)
                     if key == "tts.voice" and value and hasattr(self.tts_engine, "set_voice"):
@@ -561,6 +587,13 @@ class HttpServer:
             return web.json_response({"values": values, "restart_required": restart_required})
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
+        except RuntimeError as exc:
+            logger.warning("Runtime hot-apply rejected: %s", exc)
+            return web.json_response(
+                {"error": f"Không thể áp dụng cấu hình ngay: {exc}"},
+                status=400,
+                headers={"Cache-Control": "no-store"},
+            )
 
     def _admit_test_voice(self) -> bool:
         now = time.monotonic()
@@ -596,6 +629,15 @@ class HttpServer:
 
         try:
             wav_bytes = await self.tts_engine.synthesize_wav(text)
+        except TTSPreempted:
+            logger.info("Dashboard test voice yielded TTS engine to live conversation")
+            return web.json_response(
+                {
+                    "error": "Test voice was interrupted by a live conversation",
+                    "code": "TTS_PREEMPTED",
+                },
+                status=409,
+            )
         except Exception as e:
             logger.error(f"VieNeu test voice generation failed: {e}", exc_info=True)
             return web.json_response({"error": "TTS generation failed"}, status=500)
@@ -853,6 +895,43 @@ class HttpServer:
             "voice": self._runtime_tts_voice()
         })
 
+    async def handle_turn_detail(self, request: web.Request) -> web.Response:
+        """Return one retained turn trace for authenticated review/debugging."""
+        if not self._management_access_allowed(request):
+            return self._management_denied()
+
+        turn_id = str(request.match_info.get("turn_id") or "").strip()
+        if not turn_id or len(turn_id) > 256:
+            return web.json_response({"error": "Invalid turn id"}, status=400)
+
+        for trace in reversed(self.recent_turn_store.recent):
+            if str(getattr(trace, "turn_id", "") or "") != turn_id:
+                continue
+            payload = summarize_trace(trace)
+            # The detail endpoint intentionally exposes event-level operational
+            # evidence to authenticated management clients. Scrub obvious
+            # credential-shaped fields defensively; semantic text/tool receipts
+            # remain visible for human review.
+            def scrub(value):
+                if isinstance(value, dict):
+                    output = {}
+                    for key, item in value.items():
+                        lowered = str(key or "").strip().lower()
+                        if lowered in {"api_key", "token", "password", "secret"} or lowered.endswith(
+                            ("_api_key", "_token", "_password", "_secret")
+                        ):
+                            output[key] = "<redacted>"
+                        else:
+                            output[key] = scrub(item)
+                    return output
+                if isinstance(value, list):
+                    return [scrub(item) for item in value]
+                return value
+
+            return web.json_response(scrub(payload))
+
+        return web.json_response({"error": "Turn not found"}, status=404)
+
     async def handle_diagnostics(self, request: web.Request) -> web.Response:
         """Expose runtime diagnostics to authenticated management clients."""
         if not self._management_access_allowed(request):
@@ -874,6 +953,8 @@ class HttpServer:
 
             mcp = getattr(session, "mcp_device", None)
             executor = getattr(session, "tool_executor", None)
+            playback = getattr(session, "playback", None)
+            context_builder = getattr(session, "context_builder", None)
             session_rows.append({
                 "session_id": session_id,
                 "state": str(getattr(getattr(session, "state", None), "value", getattr(session, "state", "unknown"))),
@@ -886,6 +967,12 @@ class HttpServer:
                     "active_count": 0,
                     "receipt_count": 0,
                 },
+                "playback": playback.snapshot() if playback is not None and hasattr(playback, "snapshot") else {
+                    "active": False,
+                    "owner": "",
+                    "generation": None,
+                },
+                "context_lookup": dict(getattr(context_builder, "last_lookup", {}) or {}),
             })
 
         tts_scheduler = None
@@ -899,12 +986,59 @@ class HttpServer:
         if self.response_audio_cache is not None and hasattr(self.response_audio_cache, "snapshot"):
             audio_cache = self.response_audio_cache.snapshot()
         readiness = await self._readiness_snapshot()
+        health_fn = getattr(self.llm_engine, "health", None)
+        try:
+            llm_health = health_fn() if callable(health_fn) else {
+                "available": bool(readiness.get("llm")),
+                "provider": self.config.llm.provider,
+                "model": self._runtime_llm_model(),
+            }
+        except Exception as exc:
+            llm_health = {
+                "available": False,
+                "provider": self.config.llm.provider,
+                "model": self._runtime_llm_model(),
+                "reason": f"health_snapshot_failed:{type(exc).__name__}",
+            }
+
+        quota_fn = getattr(self.llm_engine, "quota_snapshot", None)
+        if callable(quota_fn):
+            try:
+                llm_health["quota"] = await quota_fn()
+            except Exception as exc:
+                llm_health["quota_error"] = (
+                    f"quota_snapshot_failed:{type(exc).__name__}"
+                )
 
         memory = self.config.memory
         tools = self.config.tools
         latency = self.config.latency
         intent = self.config.intent
         return web.json_response({
+            "llm": llm_health,
+            "asr": {
+                "provider": self.config.asr.provider,
+                "device": self.config.asr.device,
+                "endpointing_ms": self.config.asr.endpointing_ms,
+                "min_silence_duration_ms": self.config.asr.min_silence_duration_ms,
+                "min_speech_duration_ms": self.config.asr.min_speech_duration_ms,
+                "speech_start_frames": self.config.asr.speech_start_frames,
+                "pre_speech_pad_ms": self.config.asr.pre_speech_pad_ms,
+                "vad_threshold": self.config.asr.vad_threshold,
+                "vad_threshold_low": self.config.asr.vad_threshold_low,
+                "vad_end_threshold": self.config.asr.vad_end_threshold,
+            },
+            "tts": {
+                "provider": self.config.tts.provider,
+                "voice": self._runtime_tts_voice(),
+                "send_ahead_ms": self.config.tts.send_ahead_ms,
+                "stream_queue_max_chunks": self.config.tts.stream_queue_max_chunks,
+                "first_audio_priority_boost": self.config.tts.first_audio_priority_boost,
+                "scheduler_aging_per_second": self.config.tts.scheduler_aging_per_second,
+                "admission_timeout_ms": self.config.tts.admission_timeout_ms,
+                "speculative_prefetch_enabled": self.config.tts.speculative_prefetch_enabled,
+                "frame_duration_ms": self.config.tts.frame_duration_ms,
+            },
             "server": {
                 "barge_in_policy": self.config.server.barge_in_policy,
                 "ws_port": self.config.server.ws_port,
@@ -916,6 +1050,7 @@ class HttpServer:
                 "semantic_routing": "ai",
                 "audio_cache_enabled": conversation.audio_cache_enabled,
                 "idle_timeout_seconds": conversation.idle_timeout_seconds,
+                "history_turns": conversation.history_turns,
                 "wake_start_wait_ms": conversation.wake_start_wait_ms,
                 "fixed_response_timeout_seconds": conversation.fixed_response_timeout_seconds,
                 "close_grace_ms": conversation.close_grace_ms,
@@ -926,11 +1061,62 @@ class HttpServer:
                 "browser_input_format": "pcm16",
             },
             "profile": {
+                "asr": {
+                    "provider": self.config.asr.provider,
+                    "device": self.config.asr.device,
+                    "endpointing_ms": self.config.asr.endpointing_ms,
+                    "min_silence_duration_ms": self.config.asr.min_silence_duration_ms,
+                    "speculative_inference_enabled": self.config.asr.speculative_inference_enabled,
+                    "speculative_start_silence_ms": self.config.asr.speculative_start_silence_ms,
+                    "speculative_min_confidence": self.config.asr.speculative_min_confidence,
+                    "speculative_llm_enabled": self.config.asr.speculative_llm_enabled,
+                    "speculative_llm_min_confidence": self.config.asr.speculative_llm_min_confidence,
+                    "min_speech_duration_ms": self.config.asr.min_speech_duration_ms,
+                    "speech_start_frames": self.config.asr.speech_start_frames,
+                    "pre_speech_pad_ms": self.config.asr.pre_speech_pad_ms,
+                    "vad_threshold": self.config.asr.vad_threshold,
+                    "vad_threshold_low": self.config.asr.vad_threshold_low,
+                    "vad_end_threshold": self.config.asr.vad_end_threshold,
+                },
+                "tts": {
+                    "provider": self.config.tts.provider,
+                    "voice": self._runtime_tts_voice(),
+                    "send_ahead_ms": self.config.tts.send_ahead_ms,
+                    "stream_queue_max_chunks": self.config.tts.stream_queue_max_chunks,
+                    "first_audio_priority_boost": self.config.tts.first_audio_priority_boost,
+                    "scheduler_aging_per_second": self.config.tts.scheduler_aging_per_second,
+                    "admission_timeout_ms": self.config.tts.admission_timeout_ms,
+                    "speculative_prefetch_enabled": self.config.tts.speculative_prefetch_enabled,
+                    "frame_duration_ms": self.config.tts.frame_duration_ms,
+                },
                 "latency": {
-                    "unified_turn_enabled": latency.unified_turn_enabled,
+                    "target_first_audio_ms": latency.target_first_audio_ms,
                     "first_token_timeout_ms": latency.first_token_timeout_ms,
                     "total_turn_timeout_ms": latency.total_turn_timeout_ms,
-                    "context_lookup_timeout_ms": latency.context_lookup_timeout_ms,
+                },
+                "routing": {
+                    "headroom_pct": self.config.llm.routing.headroom_pct,
+                    "max_attempts": self.config.llm.routing.max_attempts,
+                    "admission_wait_ms": self.config.llm.routing.admission_wait_ms,
+                    "discovery_wait_ms": self.config.llm.routing.discovery_wait_ms,
+                    "discovery_max_inflight": self.config.llm.routing.discovery_max_inflight,
+                    "inflight_penalty_s": self.config.llm.routing.inflight_penalty_s,
+                    "latency_ewma_alpha": self.config.llm.routing.latency_ewma_alpha,
+                    "latency_jitter_penalty": self.config.llm.routing.latency_jitter_penalty,
+                },
+                "speech_segmentation": {
+                    "min_segment_chars": self.config.llm.speech_segmentation.min_segment_chars,
+                    "clause_target_chars": self.config.llm.speech_segmentation.clause_target_chars,
+                    "clause_min_chars": self.config.llm.speech_segmentation.clause_min_chars,
+                    "first_clause_min_chars": self.config.llm.speech_segmentation.first_clause_min_chars,
+                    "first_clause_min_words": self.config.llm.speech_segmentation.first_clause_min_words,
+                    "hard_max_segment_chars": self.config.llm.speech_segmentation.hard_max_segment_chars,
+                    "hard_cut_search_back": self.config.llm.speech_segmentation.hard_cut_search_back,
+                    "hard_cut_search_forward": self.config.llm.speech_segmentation.hard_cut_search_forward,
+                    "first_segment_min_chars": self.config.llm.speech_segmentation.first_segment_min_chars,
+                    "first_segment_min_words": self.config.llm.speech_segmentation.first_segment_min_words,
+                    "first_soft_cut_chars": self.config.llm.speech_segmentation.first_soft_cut_chars,
+                    "first_soft_cut_min_words": self.config.llm.speech_segmentation.first_soft_cut_min_words,
                 },
                 "intent": {
                     "enabled": intent.enabled,
@@ -951,6 +1137,7 @@ class HttpServer:
                     "max_calls_per_turn": tools.max_calls_per_turn,
                     "schema_limit": tools.schema_limit,
                     "max_llm_rounds_per_turn": tools.max_llm_rounds_per_turn,
+                    "max_parallel_read_only": tools.max_parallel_read_only,
                     "tool_result_synthesis": tools.tool_result_synthesis,
                 },
             },
@@ -968,14 +1155,16 @@ class HttpServer:
                     {
                         "session_id": item.get("session_id"),
                         "turn_id": item.get("turn_id"),
+                        "capture_id": item.get("capture_id"),
                         "source": item.get("source"),
                         "outcome": item.get("outcome"),
                         "llm_rounds": item.get("llm_rounds"),
                         "tool_calls": item.get("tool_calls"),
                         "latency_ms": item.get("latency_ms", {}),
+                        "stage_aggregates_ms": item.get("stage_aggregates_ms", {}),
                         "turn_start_to_first_ws_binary_ms": item.get("turn_start_to_first_ws_binary_ms"),
                     }
-                    for item in recent_turns[-20:]
+                    for item in recent_turns[-50:]
                 ],
                 "sessions": session_rows,
             },

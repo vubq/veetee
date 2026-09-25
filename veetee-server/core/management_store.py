@@ -418,8 +418,11 @@ class ManagementStore:
 
     @staticmethod
     def _is_secret_key(key: str) -> bool:
-        lowered = str(key).lower()
-        return any(piece in lowered for piece in ("api_key", "token", "secret", "password"))
+        name = str(key or "").strip()
+        return (
+            name.startswith("GROQ_API_KEY_")
+            or name in {"DEEPGRAM_API_KEY", "HF_TOKEN"}
+        )
 
     @staticmethod
     def _mask_secret(value: str) -> str:
@@ -429,15 +432,77 @@ class ManagementStore:
             return "••••••••"
         return value[:3] + "••••••" + value[-3:]
 
+    @staticmethod
+    def runtime_key_allowed(key: str) -> bool:
+        key = str(key or "").strip()
+        if key.startswith("GROQ_API_KEY_"):
+            suffix = key[len("GROQ_API_KEY_"):]
+            return bool(suffix) and len(suffix) <= 64 and all(
+                char.isalnum() or char == "_" for char in suffix
+            )
+        return key in {
+            "DEEPGRAM_API_KEY",
+            "HF_TOKEN",
+            "llm.model",
+            "llm.speech_segmentation.min_segment_chars",
+            "llm.speech_segmentation.clause_target_chars",
+            "llm.speech_segmentation.clause_min_chars",
+            "llm.speech_segmentation.first_clause_min_chars",
+            "llm.speech_segmentation.first_clause_min_words",
+            "llm.speech_segmentation.hard_max_segment_chars",
+            "llm.speech_segmentation.hard_cut_search_back",
+            "llm.speech_segmentation.hard_cut_search_forward",
+            "llm.speech_segmentation.first_segment_min_chars",
+            "llm.speech_segmentation.first_segment_min_words",
+            "llm.speech_segmentation.first_soft_cut_chars",
+            "llm.speech_segmentation.first_soft_cut_min_words",
+            "llm.routing.headroom_pct",
+            "llm.routing.max_attempts",
+            "llm.routing.admission_wait_ms",
+            "llm.routing.discovery_wait_ms",
+            "llm.routing.discovery_max_inflight",
+            "llm.routing.inflight_penalty_s",
+            "llm.routing.latency_ewma_alpha",
+            "llm.routing.latency_jitter_penalty",
+            "tts.voice",
+            "asr.device",
+            "server.barge_in_policy",
+            "latency.target_first_audio_ms",
+            "latency.first_token_timeout_ms",
+            "latency.total_turn_timeout_ms",
+            "asr.endpointing_ms",
+            "asr.min_silence_duration_ms",
+            "asr.speculative_inference_enabled",
+            "asr.speculative_start_silence_ms",
+            "asr.speculative_min_confidence",
+            "asr.speculative_llm_enabled",
+            "asr.speculative_llm_min_confidence",
+            "asr.min_speech_duration_ms",
+            "asr.speech_start_frames",
+            "asr.pre_speech_pad_ms",
+            "asr.vad_threshold",
+            "asr.vad_threshold_low",
+            "asr.vad_end_threshold",
+            "tts.send_ahead_ms",
+            "tts.stream_queue_max_chunks",
+            "tts.first_audio_priority_boost",
+            "tts.scheduler_aging_per_second",
+            "tts.admission_timeout_ms",
+            "tts.speculative_prefetch_enabled",
+            "memory.lookup_timeout_ms",
+            "conversation.history_turns",
+            "tools.max_parallel_read_only",
+            "tools.max_llm_rounds_per_turn",
+        }
+
     def update_runtime(self, changes: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(changes, dict):
             raise ValueError("runtime changes must be an object")
-        allowed_prefixes = ("GROQ_API_KEY_", "DEEPGRAM_API_KEY", "HF_TOKEN", "llm.", "tts.", "asr.", "server.")
         with self._lock:
             runtime = self._state.setdefault("runtime", {})
             for key, value in changes.items():
                 key = str(key).strip()
-                if not key.startswith(allowed_prefixes):
+                if not self.runtime_key_allowed(key):
                     raise ValueError(f"runtime setting is not allowed: {key}")
                 if value is None or value == "":
                     runtime.pop(key, None)

@@ -239,15 +239,30 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 1)
         self.assertFalse(websocket.closed)
 
-    async def test_contextual_goodbye_closes_only_when_ai_emits_end(self):
+    async def test_contextual_goodbye_closes_only_when_ai_end_is_opted_in(self):
         phrase = "thôi mình đi ngủ đây"
         llm = CountingLLM(end_intents={phrase})
         session, websocket, _, tts = self.make_session(llm=llm)
+        session.config.intent.semantic_end_enabled = True
+        session.config.conversation.end_intent_ai_enabled = True
         await session._handle_text_json(json.dumps({"type": "text", "text": phrase}))
         await self.wait_closed(websocket)
         self.assertEqual(len(llm.calls), 1)
         self.assertEqual(tts.texts, [llm.goodbye])
         self.assertEqual(websocket.close_code, 1000)
+
+    async def test_false_ai_end_cannot_close_normal_chat_by_default(self):
+        phrase = "Mấy giờ rồi?"
+        llm = CountingLLM(end_intents={phrase})
+        session, websocket, _, _ = self.make_session(llm=llm)
+        await session._handle_text_json(json.dumps({"type": "text", "text": phrase}))
+        await self.wait_current_turn(session)
+
+        self.assertFalse(session.config.intent.semantic_end_enabled)
+        self.assertFalse(session.config.conversation.end_intent_ai_enabled)
+        self.assertFalse(websocket.closed)
+        self.assertIsNone(session._closing_reason)
+        self.assertFalse(llm.calls[0]["detect_end_intent"])
 
     async def test_raw_asr_goodbye_has_no_keyword_shortcut(self):
         llm = CountingLLM(correction="không được dùng")

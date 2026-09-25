@@ -7,21 +7,40 @@ from core.tools.builtin.time_tool import time_descriptor
 from core.tools.executor import ToolExecutor
 from core.tools.registry import ToolRegistry
 from core.tools.results import ToolStatus
+from config.settings import DEFAULT_TIMEZONE
 
 
 class ToolExecutionTests(unittest.IsolatedAsyncioTestCase):
-    def test_read_only_tool_schema_tells_model_to_call_without_confirmation(self):
+    def test_read_only_time_tool_requires_an_explicit_other_timezone(self):
         tool = time_descriptor().as_openai_tool()["function"]
         self.assertIn("Tool chỉ đọc", tool["description"])
         self.assertIn("không cần xin xác nhận", tool["description"])
-        self.assertNotIn("required", tool["parameters"])
+        self.assertIn("timezone", tool["parameters"]["required"])
+        self.assertIn("khác timezone server", tool["description"])
 
-    async def test_current_time_uses_default_timezone_without_argument(self):
+    async def test_time_tool_only_serves_a_different_timezone(self):
         registry = ToolRegistry([time_descriptor()])
         executor = ToolExecutor(registry)
-        result = await executor.execute("time-1", "get_current_time", {})
+
+        missing = await executor.execute("time-0", "get_time_in_timezone", {})
+        self.assertEqual(missing.status, ToolStatus.FAILED)
+
+        same = await executor.execute(
+            "time-1",
+            "get_time_in_timezone",
+            {"timezone": DEFAULT_TIMEZONE},
+        )
+        self.assertEqual(same.status, ToolStatus.FAILED)
+        self.assertIn("server_clock", same.error)
+
+        result = await executor.execute(
+            "time-2",
+            "get_time_in_timezone",
+            {"timezone": "Asia/Tokyo"},
+        )
         self.assertEqual(result.status, ToolStatus.SUCCEEDED)
-        self.assertEqual(result.data["timezone"], "Asia/Bangkok")
+        self.assertEqual(result.data["timezone"], "Asia/Tokyo")
+        self.assertTrue(result.data["weekday_vi"])
         self.assertTrue(result.data["time"])
 
     async def test_schema_validation_and_safe_calculator(self):

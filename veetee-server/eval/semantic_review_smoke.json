@@ -1,0 +1,692 @@
+{
+  "generated_at": "2026-09-25T04:12:06.066084+00:00",
+  "queue": "eval/semantic_corpus_review_queue.json",
+  "include_held_out": false,
+  "cases": 2,
+  "cleanup_error": null,
+  "review_policy": "No automatic semantic pass/fail. A human reviewer must compare expected_semantic_outcome/evidence_needed with observed protocol and server turn trace.",
+  "results": [
+    {
+      "id": "chat-001",
+      "split": "train",
+      "group": "semantics",
+      "critical": false,
+      "user": "Xin chào",
+      "expected_semantic_outcome": "chat greeting in context language, no tool",
+      "evidence_needed": [
+        "speech segment",
+        "no tool receipt"
+      ],
+      "review_status": "needs_human_review",
+      "observed": {
+        "protocol_completed": true,
+        "connection_closed": false,
+        "elapsed_ms": 3108.206,
+        "binary_frames": 44,
+        "messages": [
+          {
+            "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+            "type": "llm",
+            "emotion": "neutral",
+            "text": "😊"
+          },
+          {
+            "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+            "type": "tts",
+            "state": "start"
+          },
+          {
+            "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+            "type": "tts",
+            "state": "sentence_start",
+            "text": "Chào bạn, hôm"
+          },
+          {
+            "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+            "type": "tts",
+            "state": "sentence_start",
+            "text": "nay bạn thế nào?"
+          },
+          {
+            "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+            "type": "tts",
+            "state": "stop"
+          }
+        ],
+        "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+        "turn_id": "a4a6ee6fced441a8a713dd0c683fb786:1",
+        "turn_detail": {
+          "run_id": "19db8a9fb5c84668807e2655da5a8f07",
+          "commit": "9a3369faad450ea0bdfb8d2a824e7a264e2e9928",
+          "config_fingerprint": "7113b33b68eee45a",
+          "session_id": "a4a6ee6fced441a8a713dd0c683fb786",
+          "turn_id": "a4a6ee6fced441a8a713dd0c683fb786:1",
+          "capture_id": 0,
+          "source": "text",
+          "outcome": "completed",
+          "events": [
+            {
+              "name": "turn_start",
+              "at_ms": 0.0027169007807970047
+            },
+            {
+              "name": "context_lookup_start",
+              "at_ms": 0.09560398757457733
+            },
+            {
+              "name": "context_memory",
+              "at_ms": 8.245910052210093,
+              "status": "hit",
+              "speculative_reused": false,
+              "returned": 1
+            },
+            {
+              "name": "context_budget",
+              "at_ms": 8.573611034080386,
+              "estimated": true,
+              "max_context_tokens": 8192,
+              "chars_per_token": "<redacted>",
+              "reserve_output_tokens": 320,
+              "system_chars": 3817,
+              "tools_chars": 2111,
+              "message_budget_chars": 25560,
+              "message_chars": 840,
+              "groups_total": 3,
+              "groups_kept": 3,
+              "trimmed_groups": 0,
+              "persona_version": 0,
+              "catalog_hash": "6fcb8d5487f3fc4d"
+            },
+            {
+              "name": "context_lookup_end",
+              "at_ms": 8.638391038402915,
+              "message_count": 3
+            },
+            {
+              "name": "llm_prefix",
+              "at_ms": 8.852317929267883,
+              "fingerprint": "1a79cab8cb786ed7",
+              "bytes": 7220,
+              "tool_count": 5
+            },
+            {
+              "name": "llm_request_start",
+              "at_ms": 8.930698968470097,
+              "model": "qwen/qwen3.8-27b",
+              "tool_count": 5
+            },
+            {
+              "name": "llm_route_acquired",
+              "at_ms": 9.102091891691089,
+              "wait_ms": 0.059,
+              "route_alias": "A",
+              "quota_group": "gA",
+              "attempt": 1
+            },
+            {
+              "name": "llm_http_connection_reused",
+              "at_ms": 9.404503041878343
+            },
+            {
+              "name": "llm_headers",
+              "at_ms": 375.79366099089384,
+              "status": 200
+            },
+            {
+              "name": "llm_first_content_token",
+              "at_ms": 376.07551203109324
+            },
+            {
+              "name": "llm_control",
+              "at_ms": 376.38610205613077,
+              "intent": "chat",
+              "lifecycle": "continue"
+            },
+            {
+              "name": "llm_speech_segment",
+              "at_ms": 376.6434679273516,
+              "chars": 13
+            },
+            {
+              "name": "llm_usage",
+              "at_ms": 376.81562500074506,
+              "prompt_tokens": 2111,
+              "completion_tokens": 11,
+              "cached_prompt_tokens": 0,
+              "cached_prompt_ratio": 0.0,
+              "route": "A",
+              "quota_group": "gA"
+            },
+            {
+              "name": "llm_speech_segment",
+              "at_ms": 376.92566588521004,
+              "chars": 16
+            },
+            {
+              "name": "llm_stream_end",
+              "at_ms": 377.01376993209124,
+              "finish_reason": "stop",
+              "saw_content": true
+            },
+            {
+              "name": "llm_first_speech_committed",
+              "at_ms": 377.18344992026687
+            },
+            {
+              "name": "tts_enqueue",
+              "at_ms": 377.43638292886317,
+              "chars": 13,
+              "priority": "live"
+            },
+            {
+              "name": "tts_lock_acquired",
+              "at_ms": 377.62178597040474,
+              "priority": "live",
+              "queue_wait_ms": 0.009,
+              "initial_turn_audio": true
+            },
+            {
+              "name": "tts_first_pcm",
+              "at_ms": 576.721437042579,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 579.0825230069458,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 579.1733539663255
+            },
+            {
+              "name": "first_ws_binary_sent",
+              "at_ms": 579.3407699093223
+            },
+            {
+              "name": "tts_lease_held",
+              "at_ms": 1309.0163690503687,
+              "held_ms": 931.323,
+              "priority": "live",
+              "queue_wait_ms": 0.009
+            },
+            {
+              "name": "tts_inference_done",
+              "at_ms": 1485.586740076542,
+              "priority": "live",
+              "inference_ms": 1107.891
+            },
+            {
+              "name": "tts_enqueue",
+              "at_ms": 1547.0127500593662,
+              "chars": 16,
+              "priority": "live"
+            },
+            {
+              "name": "tts_lock_acquired",
+              "at_ms": 1547.31135093607,
+              "priority": "live",
+              "queue_wait_ms": 0.009,
+              "initial_turn_audio": false
+            },
+            {
+              "name": "tts_first_pcm",
+              "at_ms": 1654.8342159949243,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 1655.9288820717484,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 1656.0381900053471
+            },
+            {
+              "name": "tts_lease_held",
+              "at_ms": 2774.961377028376,
+              "held_ms": 1227.543,
+              "priority": "live",
+              "queue_wait_ms": 0.009
+            },
+            {
+              "name": "tts_inference_done",
+              "at_ms": 3045.55022995919,
+              "priority": "live",
+              "inference_ms": 1498.131
+            },
+            {
+              "name": "llm_usage",
+              "at_ms": 3107.3732839431614,
+              "round": 1,
+              "prompt_tokens": 2111,
+              "completion_tokens": 11,
+              "total_tokens": 2122
+            },
+            {
+              "name": "speech_streamed_before_terminal",
+              "at_ms": 3107.502799015492,
+              "segments": 2
+            },
+            {
+              "name": "turn_finish",
+              "at_ms": 3108.0155218951404,
+              "outcome": "completed",
+              "audio_sent": true,
+              "tool_calls": 0,
+              "llm_rounds": 1
+            }
+          ],
+          "audio_sent": true,
+          "tool_calls": 0,
+          "llm_rounds": 1,
+          "latency_ms": {
+            "context_lookup": 8.543,
+            "llm_route_acquire": 0.171,
+            "llm_upstream_headers": 366.692,
+            "llm_headers": 366.863,
+            "llm_first_content_token": "<redacted>",
+            "llm_first_speech_segment": 367.713,
+            "tts_queue_to_lock": 0.185,
+            "tts_first_pcm": 199.285,
+            "tts_first_opus": 201.646,
+            "tts_first_pcm_to_opus": 2.361,
+            "tts_inference": 1107.965,
+            "tts_lease_held": 931.323,
+            "tts_opus_to_ws_binary": 0.258
+          },
+          "stage_aggregates_ms": {
+            "tts_queue_wait": {
+              "count": 2,
+              "total_ms": 0.018,
+              "max_ms": 0.009,
+              "p50_ms": 0.009
+            },
+            "tts_lease_held": {
+              "count": 2,
+              "total_ms": 2158.866,
+              "max_ms": 1227.543,
+              "p50_ms": 1079.433
+            },
+            "tts_inference": {
+              "count": 2,
+              "total_ms": 2606.022,
+              "max_ms": 1498.131,
+              "p50_ms": 1303.011
+            }
+          },
+          "turn_start_to_first_ws_binary_ms": 579.341
+        }
+      },
+      "human_verdict": null,
+      "reviewer_notes": ""
+    },
+    {
+      "id": "neg-001",
+      "split": "dev",
+      "group": "semantics",
+      "critical": true,
+      "user": "\"Tạm biệt\" là câu trích dẫn, đừng kết thúc",
+      "expected_semantic_outcome": "continue, quoted end is not intent",
+      "evidence_needed": [
+        "lifecycle continue"
+      ],
+      "review_status": "needs_human_review",
+      "observed": {
+        "protocol_completed": true,
+        "connection_closed": false,
+        "elapsed_ms": 6908.336,
+        "binary_frames": 109,
+        "messages": [
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "llm",
+            "emotion": "neutral",
+            "text": "😊"
+          },
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "tts",
+            "state": "start"
+          },
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "tts",
+            "state": "sentence_start",
+            "text": "Haha, đểu thật"
+          },
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "tts",
+            "state": "sentence_start",
+            "text": "đấy, bắt mình phát âm đúng từng chữ rồi bỏ chạy."
+          },
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "tts",
+            "state": "sentence_start",
+            "text": "Được rồi, mình không kết thúc đâu."
+          },
+          {
+            "session_id": "503bbd0907524144abc68776715cddac",
+            "type": "tts",
+            "state": "stop"
+          }
+        ],
+        "session_id": "503bbd0907524144abc68776715cddac",
+        "turn_id": "503bbd0907524144abc68776715cddac:1",
+        "turn_detail": {
+          "run_id": "19db8a9fb5c84668807e2655da5a8f07",
+          "commit": "9a3369faad450ea0bdfb8d2a824e7a264e2e9928",
+          "config_fingerprint": "7113b33b68eee45a",
+          "session_id": "503bbd0907524144abc68776715cddac",
+          "turn_id": "503bbd0907524144abc68776715cddac:1",
+          "capture_id": 0,
+          "source": "text",
+          "outcome": "completed",
+          "events": [
+            {
+              "name": "turn_start",
+              "at_ms": 0.0026328489184379578
+            },
+            {
+              "name": "context_lookup_start",
+              "at_ms": 0.11065485887229443
+            },
+            {
+              "name": "context_memory",
+              "at_ms": 6.3505100551992655,
+              "status": "hit",
+              "speculative_reused": false,
+              "returned": 1
+            },
+            {
+              "name": "context_budget",
+              "at_ms": 6.671126000583172,
+              "estimated": true,
+              "max_context_tokens": 8192,
+              "chars_per_token": "<redacted>",
+              "reserve_output_tokens": 320,
+              "system_chars": 3817,
+              "tools_chars": 2111,
+              "message_budget_chars": 25560,
+              "message_chars": 876,
+              "groups_total": 3,
+              "groups_kept": 3,
+              "trimmed_groups": 0,
+              "persona_version": 0,
+              "catalog_hash": "6fcb8d5487f3fc4d"
+            },
+            {
+              "name": "context_lookup_end",
+              "at_ms": 6.7720129154622555,
+              "message_count": 3
+            },
+            {
+              "name": "llm_prefix",
+              "at_ms": 7.091525010764599,
+              "fingerprint": "1a79cab8cb786ed7",
+              "bytes": 7220,
+              "tool_count": 5
+            },
+            {
+              "name": "llm_request_start",
+              "at_ms": 7.205839967355132,
+              "model": "qwen/qwen3.8-27b",
+              "tool_count": 5
+            },
+            {
+              "name": "llm_route_acquired",
+              "at_ms": 7.447335869073868,
+              "wait_ms": 0.071,
+              "route_alias": "B",
+              "quota_group": "gB",
+              "attempt": 1
+            },
+            {
+              "name": "llm_http_connection_reused",
+              "at_ms": 7.764250971376896
+            },
+            {
+              "name": "llm_headers",
+              "at_ms": 341.51492291130126,
+              "status": 200
+            },
+            {
+              "name": "llm_first_content_token",
+              "at_ms": 341.7523598764092
+            },
+            {
+              "name": "llm_control",
+              "at_ms": 353.23998192325234,
+              "intent": "chat",
+              "lifecycle": "continue"
+            },
+            {
+              "name": "llm_speech_segment",
+              "at_ms": 353.4433748573065,
+              "chars": 14
+            },
+            {
+              "name": "llm_first_speech_committed",
+              "at_ms": 353.73062384314835
+            },
+            {
+              "name": "tts_enqueue",
+              "at_ms": 354.0232728701085,
+              "chars": 14,
+              "priority": "live"
+            },
+            {
+              "name": "tts_lock_acquired",
+              "at_ms": 354.210008867085,
+              "priority": "live",
+              "queue_wait_ms": 0.006,
+              "initial_turn_audio": true
+            },
+            {
+              "name": "llm_speech_segment",
+              "at_ms": 376.2313239276409,
+              "chars": 48
+            },
+            {
+              "name": "llm_usage",
+              "at_ms": 455.76227898709476,
+              "prompt_tokens": 2120,
+              "completion_tokens": 29,
+              "cached_prompt_tokens": 0,
+              "cached_prompt_ratio": 0.0,
+              "route": "B",
+              "quota_group": "gB"
+            },
+            {
+              "name": "llm_speech_segment",
+              "at_ms": 455.92580386437476,
+              "chars": 34
+            },
+            {
+              "name": "llm_stream_end",
+              "at_ms": 456.0897198971361,
+              "finish_reason": "stop",
+              "saw_content": true
+            },
+            {
+              "name": "tts_first_pcm",
+              "at_ms": 461.6074380464852,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 462.8063829150051,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 462.90073706768453
+            },
+            {
+              "name": "first_ws_binary_sent",
+              "at_ms": 463.0830909591168
+            },
+            {
+              "name": "tts_lease_held",
+              "at_ms": 1330.7251289952546,
+              "held_ms": 976.452,
+              "priority": "live",
+              "queue_wait_ms": 0.006
+            },
+            {
+              "name": "tts_inference_done",
+              "at_ms": 1559.6846409607679,
+              "priority": "live",
+              "inference_ms": 1205.41
+            },
+            {
+              "name": "tts_enqueue",
+              "at_ms": 1559.9455998744816,
+              "chars": 48,
+              "priority": "live"
+            },
+            {
+              "name": "tts_lock_acquired",
+              "at_ms": 1560.2865659166127,
+              "priority": "live",
+              "queue_wait_ms": 0.006,
+              "initial_turn_audio": false
+            },
+            {
+              "name": "tts_first_pcm",
+              "at_ms": 1677.399962907657,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 1678.674197057262,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 1678.7659679539502
+            },
+            {
+              "name": "tts_lease_held",
+              "at_ms": 4270.635216962546,
+              "held_ms": 2710.266,
+              "priority": "live",
+              "queue_wait_ms": 0.006
+            },
+            {
+              "name": "tts_inference_done",
+              "at_ms": 4567.3339169006795,
+              "priority": "live",
+              "inference_ms": 3006.966
+            },
+            {
+              "name": "tts_enqueue",
+              "at_ms": 4628.949771868065,
+              "chars": 34,
+              "priority": "live"
+            },
+            {
+              "name": "tts_lock_acquired",
+              "at_ms": 4629.238815978169,
+              "priority": "live",
+              "queue_wait_ms": 0.01,
+              "initial_turn_audio": false
+            },
+            {
+              "name": "tts_first_pcm",
+              "at_ms": 4739.113969961181,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 4740.2170959394425,
+              "priority": "live"
+            },
+            {
+              "name": "tts_first_opus",
+              "at_ms": 4740.3065408580005
+            },
+            {
+              "name": "tts_lease_held",
+              "at_ms": 6549.733927939087,
+              "held_ms": 1920.387,
+              "priority": "live",
+              "queue_wait_ms": 0.01
+            },
+            {
+              "name": "tts_inference_done",
+              "at_ms": 6848.048384068534,
+              "priority": "live",
+              "inference_ms": 2218.701
+            },
+            {
+              "name": "llm_usage",
+              "at_ms": 6907.4815169442445,
+              "round": 1,
+              "prompt_tokens": 2120,
+              "completion_tokens": 29,
+              "total_tokens": 2149
+            },
+            {
+              "name": "speech_streamed_before_terminal",
+              "at_ms": 6907.617219956592,
+              "segments": 3
+            },
+            {
+              "name": "turn_finish",
+              "at_ms": 6908.2196049857885,
+              "outcome": "completed",
+              "audio_sent": true,
+              "tool_calls": 0,
+              "llm_rounds": 1
+            }
+          ],
+          "audio_sent": true,
+          "tool_calls": 0,
+          "llm_rounds": 1,
+          "latency_ms": {
+            "context_lookup": 6.661,
+            "llm_route_acquire": 0.241,
+            "llm_upstream_headers": 334.068,
+            "llm_headers": 334.309,
+            "llm_first_content_token": "<redacted>",
+            "llm_first_speech_segment": 346.238,
+            "tts_queue_to_lock": 0.187,
+            "tts_first_pcm": 107.584,
+            "tts_first_opus": 108.783,
+            "tts_first_pcm_to_opus": 1.199,
+            "tts_inference": 1205.475,
+            "tts_lease_held": 976.452,
+            "tts_opus_to_ws_binary": 0.277
+          },
+          "stage_aggregates_ms": {
+            "tts_queue_wait": {
+              "count": 3,
+              "total_ms": 0.022,
+              "max_ms": 0.01,
+              "p50_ms": 0.006
+            },
+            "tts_lease_held": {
+              "count": 3,
+              "total_ms": 5607.105,
+              "max_ms": 2710.266,
+              "p50_ms": 1920.387
+            },
+            "tts_inference": {
+              "count": 3,
+              "total_ms": 6431.077,
+              "max_ms": 3006.966,
+              "p50_ms": 2218.701
+            }
+          },
+          "turn_start_to_first_ws_binary_ms": 463.083
+        }
+      },
+      "human_verdict": null,
+      "reviewer_notes": ""
+    }
+  ]
+}

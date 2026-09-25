@@ -15,6 +15,7 @@ actual usage. No request is ever sent to a group known to be exhausted.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -34,6 +35,7 @@ from core.ai_contract import (
 )
 from core.intent import Intent
 from core.providers.llm.base import BaseLLM
+from core.providers.llm.speech_segments import SpeechSegmentationPolicy, SpeechSegmentSplitter
 from core.providers.llm.router import GroqRouter, Lease, QuotaExhausted, RouteTarget
 from core.providers.llm.quota import QuotaLedger
 from core.providers.llm.stream_parser import SSEDecoder, NativeToolCallAccumulator
@@ -56,138 +58,6 @@ GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_ENV_PREFIX = "GROQ_API_KEY_"
 
 
-class SpeechSegmentSplitter:
-    """Split streamed text into natural TTS-sized speech segments.
-
-    VieNeu starts a fresh inference for every emitted segment. Prefer complete
-    sentences, allow an early clause only when it is long enough to sound like
-    a real prosodic unit, and use word-boundary cuts only as a last resort.
-    """
-
-    def __init__(self):
-        self.buffer = ""
-        self.end_puncts = {".", "!", "?", "\n", "…", "。", "！", "？"}
-        self.clause_puncts = {";", "；", ":", "：", ",", "，", "—"}
-        self.min_segment_chars = 28
-        self.clause_target_chars = 150
-        self.clause_min_chars = 80
-        self.first_clause_min_chars = 24
-        self.first_clause_min_words = 4
-        self.hard_max_segment_chars = 240
-        self.hard_cut_search_back = 45
-        self.first_segment_min_chars = 8
-        self.first_segment_min_words = 2
-        self._segments_emitted = 0
-
-    def _is_sentence_boundary(self, index: int) -> bool:
-        char = self.buffer[index]
-        if char != ".":
-            return True
-
-        # Wait for one-character look-ahead so decimals and compact
-        # abbreviations are not emitted as separate TTS segments.
-        if index + 1 >= len(self.buffer):
-            return False
-        prev_char = self.buffer[index - 1] if index > 0 else ""
-        next_char = self.buffer[index + 1]
-        if prev_char.isdigit() and next_char.isdigit():
-            return False
-        if next_char.isalpha() and not next_char.isspace():
-            return False
-
-        return True
-
-    def _find_sentence_cut(self) -> int:
-        visible_chars = 0
-        for index, char in enumerate(self.buffer):
-            if not char.isspace():
-                visible_chars += 1
-            if char not in self.end_puncts or not self._is_sentence_boundary(index):
-                continue
-            if self._segments_emitted > 0 and visible_chars >= self.min_segment_chars:
-                return index
-            if self._segments_emitted == 0 and visible_chars >= self.first_segment_min_chars:
-                words = re.findall(r"[^\W_]+", self.buffer[: index + 1], flags=re.UNICODE)
-                if len(words) >= self.first_segment_min_words:
-                    return index
-        return -1
-
-    def _find_clause_cut(self) -> int:
-        if self._segments_emitted == 0:
-            visible_chars = 0
-            for index, char in enumerate(self.buffer):
-                if not char.isspace():
-                    visible_chars += 1
-                if char not in self.clause_puncts or visible_chars < self.first_clause_min_chars:
-                    continue
-                words = re.findall(r"[^\W_]+", self.buffer[: index + 1], flags=re.UNICODE)
-                if len(words) >= self.first_clause_min_words:
-                    return index
-
-        if len(self.buffer) < self.clause_target_chars:
-            return -1
-
-        search_start = self.clause_min_chars
-        search_end = min(len(self.buffer), self.clause_target_chars + 1)
-        for index in range(search_end - 1, search_start - 1, -1):
-            if self.buffer[index] in self.clause_puncts:
-                return index
-        return -1
-
-    def _is_safe_word_boundary(self, index: int) -> bool:
-        # Hard-cut fallback is purely structural. Natural phrasing decisions
-        # belong to the model; the transport layer only needs a whitespace
-        # boundary once a segment exceeds the bounded TTS size.
-        return 0 <= index < len(self.buffer) and self.buffer[index].isspace()
-
-    def _find_hard_cut(self) -> int:
-        if len(self.buffer) < self.hard_max_segment_chars:
-            return -1
-
-        search_start = max(0, self.hard_max_segment_chars - self.hard_cut_search_back)
-        search_end = min(len(self.buffer), self.hard_max_segment_chars + 1)
-        for index in range(search_end - 1, search_start - 1, -1):
-            if self.buffer[index] in self.clause_puncts:
-                return index
-
-        for index in range(search_end - 1, search_start - 1, -1):
-            if self.buffer[index].isspace() and self._is_safe_word_boundary(index):
-                return index
-
-        for index in range(search_end, min(len(self.buffer), self.hard_max_segment_chars + 40)):
-            if self.buffer[index].isspace() and self._is_safe_word_boundary(index):
-                return index
-        return -1
-
-    def add_token(self, token: str) -> List[str]:
-        self.buffer += token
-        segments: List[str] = []
-        while True:
-            cut = self._find_sentence_cut()
-            if cut == -1:
-                cut = self._find_clause_cut()
-            if cut == -1:
-                cut = self._find_hard_cut()
-
-            if cut != -1:
-                segment = self.buffer[: cut + 1].strip()
-                self.buffer = self.buffer[cut + 1:]
-                if segment:
-                    segments.append(segment)
-                    self._segments_emitted += 1
-            else:
-                break
-        return segments
-
-    def flush(self) -> List[str]:
-        remainder = self.buffer.strip()
-        self.buffer = ""
-        if remainder:
-            self._segments_emitted += 1
-            return [remainder]
-        return []
-
-
 def build_engine_from_config(llm_config, *, server_dir: str):
     """Build a GroqDirectLLM from LLMConfig. Raises on unusable pool."""
     import os as _os
@@ -199,7 +69,10 @@ def build_engine_from_config(llm_config, *, server_dir: str):
          "quota_group": item.quota_group, "enabled": item.enabled}
         for item in (llm_config.key_pool or [])
     ]
-    targets = build_targets_from_env(pool_entries or None)
+    targets = build_targets_from_env(
+        pool_entries or None,
+        base_url=str(getattr(llm_config, "base_url", "") or GROQ_API_BASE_URL),
+    )
     if not targets:
         raise ValueError(
             "Groq key pool is empty: set llm.key_pool or export GROQ_API_KEY_<alias>")
@@ -218,7 +91,10 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         ledger,
         headroom_pct=float(getattr(routing, "headroom_pct", 10.0)),
         admission_wait_ms=float(getattr(routing, "admission_wait_ms", 50.0)),
+        discovery_wait_ms=float(getattr(routing, "discovery_wait_ms", 750.0)),
         inflight_penalty_s=float(getattr(routing, "inflight_penalty_s", 0.4)),
+        ewma_alpha=float(getattr(routing, "latency_ewma_alpha", 0.3)),
+        jitter_penalty=float(getattr(routing, "latency_jitter_penalty", 0.75)),
     )
     allowed = [llm_config.model] + [
         m for m in (getattr(llm_config, "extra_models", []) or [])
@@ -229,6 +105,12 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         model=llm_config.model,
         temperature=float(llm_config.temperature),
         max_tokens=int(llm_config.max_tokens),
+        request_timeout_ms=int(getattr(llm_config, "request_timeout_ms", 15000)),
+        probe_timeout_ms=int(getattr(llm_config, "probe_timeout_ms", 8000)),
+        control_timeout_ms=int(getattr(llm_config, "control_timeout_ms", 2000)),
+        http_keepalive_seconds=int(getattr(llm_config, "http_keepalive_seconds", 120)),
+        dns_cache_ttl_seconds=int(getattr(llm_config, "dns_cache_ttl_seconds", 300)),
+        reasoning_format=str(getattr(llm_config, "reasoning_format", "hidden")),
         base_prompt=llm_config.base_prompt,
         prompt_template_path=_os.path.join(
             server_dir, llm_config.prompt_template),
@@ -237,6 +119,7 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         reasoning_effort=str(getattr(llm_config, "reasoning_effort", "none")),
         allowed_models=allowed,
         model_state_path=_os.path.join(server_dir, "data", "llm-model.txt"),
+        speech_segmentation=SpeechSegmentationPolicy.from_config(llm_config),
     )
     engine.set_model_effort_overrides(
         getattr(llm_config, "model_reasoning_effort", {}) or {})
@@ -261,11 +144,20 @@ def build_targets_from_env(
     """
     targets: List[RouteTarget] = []
     pool = list(explicit_pool or [])
-    if not pool:
-        for name, value in sorted(os.environ.items()):
-            if name.startswith(GROQ_ENV_PREFIX) and value and value.strip():
-                alias = name[len(GROQ_ENV_PREFIX):] or name
-                pool.append({"id": alias, "api_key_env": name})
+    # Config may declare a small named pool, while the management UI can add
+    # an arbitrary number of runtime keys. Merge any GROQ_API_KEY_* variables
+    # that are not already represented by config instead of treating the
+    # explicit pool as an exclusive allow-list.
+    known_env_names = {
+        str(entry.get("api_key_env") or "").strip()
+        for entry in pool
+        if str(entry.get("api_key_env") or "").strip()
+    }
+    for name, value in sorted(os.environ.items()):
+        if (name.startswith(GROQ_ENV_PREFIX) and value and value.strip()
+                and name not in known_env_names):
+            alias = name[len(GROQ_ENV_PREFIX):] or name
+            pool.append({"id": alias, "api_key_env": name})
     for entry in pool:
         alias = str(entry.get("id") or entry.get("api_key_env") or "").strip()
         env_name = str(entry.get("api_key_env") or "").strip()
@@ -300,6 +192,12 @@ class GroqDirectLLM(BaseLLM):
         model: str = "qwen/qwen3.6-27b",
         temperature: float = 0.7,
         max_tokens: int = 256,
+        request_timeout_ms: int = 15000,
+        probe_timeout_ms: int = 8000,
+        control_timeout_ms: int = 2000,
+        http_keepalive_seconds: int = 120,
+        dns_cache_ttl_seconds: int = 300,
+        reasoning_format: str = "hidden",
         base_prompt: str = "",
         prompt_template_path: Optional[str] = None,
         base_prompt_state_path: Optional[str] = None,
@@ -308,6 +206,7 @@ class GroqDirectLLM(BaseLLM):
         reasoning_effort: str = "none",
         allowed_models: Optional[List[str]] = None,
         model_state_path: Optional[str] = None,
+        speech_segmentation: Optional[SpeechSegmentationPolicy] = None,
     ):
         self._router = router
         self.model = model
@@ -318,6 +217,12 @@ class GroqDirectLLM(BaseLLM):
             self.model = saved_model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self._request_timeout_s = max(0.1, int(request_timeout_ms) / 1000.0)
+        self._probe_timeout_s = max(0.1, int(probe_timeout_ms) / 1000.0)
+        self._control_timeout_s = max(0.1, int(control_timeout_ms) / 1000.0)
+        self._http_keepalive_seconds = max(15, int(http_keepalive_seconds))
+        self._dns_cache_ttl_seconds = max(15, int(dns_cache_ttl_seconds))
+        self._reasoning_format = str(reasoning_format or "hidden").strip() or "hidden"
         self.prompt_template_path = prompt_template_path
         self.base_prompt_state_path = base_prompt_state_path
         self.prompt_template = self._load_prompt_template()
@@ -330,6 +235,75 @@ class GroqDirectLLM(BaseLLM):
         self._model_effort_overrides: Dict[str, str] = {}
         self._session_factory = session_factory
         self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_transport_stats = {
+            "connections_created": 0,
+            "connections_reused": 0,
+            "dns_resolve_started": 0,
+            "dns_resolve_completed": 0,
+        }
+        self._shared_transport_owner: Optional["GroqDirectLLM"] = None
+        self._speech_segmentation = speech_segmentation or SpeechSegmentationPolicy()
+
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            "streaming": True,
+            "native_tools": True,
+            "history_summary": True,
+            "transcript_correction": True,
+            "multi_key_routing": True,
+        }
+
+    def health(self) -> Dict[str, Any]:
+        return {
+            "available": True,
+            "provider": "groq",
+            "model": self.model,
+            "models": self.list_models(),
+            "max_attempts": self._max_attempts,
+            "routing": self._router.config_snapshot(),
+            "route_latency": self._router.latency_snapshot(),
+            "transport": {
+                "http_keepalive_seconds": self._http_keepalive_seconds,
+                "dns_cache_ttl_seconds": self._dns_cache_ttl_seconds,
+                **self._transport_stats_snapshot(),
+            },
+            "capabilities": self.capabilities(),
+        }
+
+    async def quota_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        return await self._router.quota_snapshot()
+
+    async def configure_routing(
+        self,
+        *,
+        headroom_pct: Optional[float] = None,
+        max_attempts: Optional[int] = None,
+        admission_wait_ms: Optional[float] = None,
+        discovery_wait_ms: Optional[float] = None,
+        discovery_max_inflight: Optional[int] = None,
+        inflight_penalty_s: Optional[float] = None,
+        latency_ewma_alpha: Optional[float] = None,
+        latency_jitter_penalty: Optional[float] = None,
+    ) -> None:
+        """Hot-apply quota/latency routing without rebuilding the LLM engine."""
+        if max_attempts is not None:
+            self._max_attempts = max(1, int(max_attempts))
+        await self._router.configure(
+            headroom_pct=headroom_pct,
+            admission_wait_ms=admission_wait_ms,
+            discovery_wait_ms=discovery_wait_ms,
+            discovery_max_inflight=discovery_max_inflight,
+            inflight_penalty_s=inflight_penalty_s,
+            ewma_alpha=latency_ewma_alpha,
+            jitter_penalty=latency_jitter_penalty,
+        )
+
+    def set_speech_segmentation(
+        self, policy: SpeechSegmentationPolicy
+    ) -> None:
+        if not isinstance(policy, SpeechSegmentationPolicy):
+            raise TypeError("policy must be SpeechSegmentationPolicy")
+        self._speech_segmentation = policy
 
     def list_models(self) -> List[str]:
         """Switchable models: default first, then extras."""
@@ -489,34 +463,87 @@ class GroqDirectLLM(BaseLLM):
     def set_model_effort_overrides(self, overrides: Dict[str, str]) -> None:
         self._model_effort_overrides = dict(overrides or {})
 
-    def _reasoning_params(self) -> Dict[str, str]:
-        """Reasoning params valid for the active model.
+    def _reasoning_params(self) -> Dict[str, Any]:
+        """Return only reasoning controls supported by the active Groq model.
 
-        Qwen-style models accept effort "none" (suppresses <think>);
-        gpt-oss only accepts low/medium/high, so "none" means omit.
+        GPT-OSS exposes reasoning separately from final content. VeeTee never
+        consumes or speaks that private reasoning stream, so explicitly omit it
+        from the response and keep only the configured low/medium/high effort.
+        Qwen-style models retain the existing hidden/none behavior.
         """
-        effort = self._model_effort_overrides.get(self.model, self._reasoning_effort)
+        effort = self._model_effort_overrides.get(
+            self.model,
+            self._reasoning_effort,
+        )
+        if self.model.startswith("openai/gpt-oss"):
+            params: Dict[str, Any] = {"include_reasoning": False}
+            if effort in {"low", "medium", "high"}:
+                params["reasoning_effort"] = effort
+            return params
         if effort == "none":
-            return {"reasoning_format": "hidden", "reasoning_effort": "none"}
+            return {
+                "reasoning_format": self._reasoning_format,
+                "reasoning_effort": "none",
+            }
         return {"reasoning_effort": effort}
 
     # -- transport ----------------------------------------------------------
 
+    def _transport_stats_snapshot(self) -> Dict[str, int]:
+        owner = self._shared_transport_owner or self
+        return dict(owner._http_transport_stats)
+
+    def _http_trace_config(self) -> aiohttp.TraceConfig:
+        trace = aiohttp.TraceConfig()
+
+        async def connection_create_start(_session, _ctx, _params):
+            self._http_transport_stats["connections_created"] += 1
+            mark_current("llm_http_connection_create")
+
+        async def connection_reused(_session, _ctx, _params):
+            self._http_transport_stats["connections_reused"] += 1
+            mark_current("llm_http_connection_reused")
+
+        async def dns_start(_session, _ctx, _params):
+            self._http_transport_stats["dns_resolve_started"] += 1
+            mark_current("llm_http_dns_start")
+
+        async def dns_end(_session, _ctx, _params):
+            self._http_transport_stats["dns_resolve_completed"] += 1
+            mark_current("llm_http_dns_end")
+
+        trace.on_connection_create_start.append(connection_create_start)
+        trace.on_connection_reuseconn.append(connection_reused)
+        trace.on_dns_resolvehost_start.append(dns_start)
+        trace.on_dns_resolvehost_end.append(dns_end)
+        return trace
+
     async def _get_http_session(self):
+        if self._shared_transport_owner is not None:
+            return await self._shared_transport_owner._get_http_session()
         if self._session_factory is not None:
             return self._session_factory()
         if self._http_session is None or self._http_session.closed:
-            connector = aiohttp.TCPConnector(limit=32, keepalive_timeout=30)
-            self._http_session = aiohttp.ClientSession(connector=connector)
+            connector = aiohttp.TCPConnector(
+                limit=32,
+                keepalive_timeout=self._http_keepalive_seconds,
+                ttl_dns_cache=self._dns_cache_ttl_seconds,
+            )
+            self._http_session = aiohttp.ClientSession(
+                connector=connector,
+                trace_configs=[self._http_trace_config()],
+            )
         return self._http_session
 
     async def warmup(self):
         """Verify the configured model with one tiny real completion.
 
-        Listing /models proves only that a credential can reach Groq. A tiny
-        chat completion also proves that the selected model is actually usable
-        by this account before the server advertises LLM readiness.
+        A multi-key pool is considered usable when at least one enabled key can
+        successfully call the configured model. Bad/expired keys are skipped so
+        one broken credential does not make the entire pool unavailable.
         """
+        last_error: Optional[Exception] = None
+        attempted = 0
         for target in self._router.aliases():
             if not target["enabled"]:
                 continue
@@ -527,12 +554,13 @@ class GroqDirectLLM(BaseLLM):
             )
             if match is None:
                 continue
+            attempted += 1
             session = await self._get_http_session()
             payload = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": "Reply with OK."}],
                 "temperature": 0,
-                "max_tokens": min(max(16, int(self.max_tokens)), 32),
+                "max_completion_tokens": min(max(16, int(self.max_tokens)), 32),
                 "stream": False,
                 **self._reasoning_params(),
             }
@@ -541,7 +569,7 @@ class GroqDirectLLM(BaseLLM):
                     f"{match.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {match.api_key}"},
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=8),
+                    timeout=aiohttp.ClientTimeout(total=self._probe_timeout_s),
                 )
                 try:
                     if resp.status != 200:
@@ -561,12 +589,28 @@ class GroqDirectLLM(BaseLLM):
                     release = getattr(resp, "release", None)
                     if release is not None:
                         release()
-            except Exception:
-                logger.exception("Groq direct model probe failed for model=%s", self.model)
-                raise
-        raise RuntimeError("Groq direct model probe unavailable: no enabled key")
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Groq direct model probe failed for model=%s key=%s: %s",
+                    self.model,
+                    match.alias,
+                    exc,
+                )
+                continue
+        if last_error is not None:
+            raise last_error
+        if attempted == 0:
+            raise RuntimeError("Groq direct model probe unavailable: no enabled key")
+        raise RuntimeError("Groq direct model probe unavailable")
 
     async def close(self):
+        # Per-assistant/model views share the base engine transport and must
+        # never close its connection pool. Only the owning base engine closes
+        # the aiohttp session.
+        if self._shared_transport_owner is not None:
+            self._http_session = None
+            return
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
         self._http_session = None
@@ -676,12 +720,24 @@ class GroqDirectLLM(BaseLLM):
         attempts = 0
         session = await self._get_http_session()
         while attempts < self._router_max_attempts():
+            acquire_started = time.monotonic()
             try:
                 lease = await self._router.acquire(
-                    estimated, purpose=purpose, exclude_groups=frozenset(exclude))
+                    estimated,
+                    purpose=purpose,
+                    deadline=acquire_started + timeout_s,
+                    exclude_groups=frozenset(exclude),
+                )
             except QuotaExhausted as exc:
                 raise _CapacityBusy(str(exc)) from exc
             attempts += 1
+            mark_current(
+                "llm_route_acquired",
+                wait_ms=round((time.monotonic() - acquire_started) * 1000.0, 3),
+                route_alias=lease.alias,
+                quota_group=lease.quota_group,
+                attempt=attempts,
+            )
             started = time.monotonic()
             headers = {
                 "Content-Type": "application/json",
@@ -734,7 +790,25 @@ class GroqDirectLLM(BaseLLM):
                 except Exception:
                     pass
                 raise _UpstreamError("Groq HTTP 400 (payload/model)")
-            # 200 or other 5xx: hand to caller; caller settles exactly once.
+            # Retry transient upstream failures only before a response stream
+            # is handed to the consumer. At this point no speech/tool event can
+            # have been committed, so switching route cannot duplicate user
+            # visible output or side effects.
+            if resp.status in {408, 425, 500, 502, 503, 504}:
+                try:
+                    await resp.read()
+                except Exception:
+                    pass
+                await self._router.settle_uncertain(lease)
+                exclude.add(lease.quota_group)
+                try:
+                    resp.release()
+                except Exception:
+                    pass
+                if attempts >= self._router_max_attempts():
+                    raise _UpstreamError(f"Groq transient HTTP {resp.status}")
+                continue
+            # Successful or non-retryable responses are handed to the caller.
             # The finally releases the connection when the caller is done,
             # including on cancellation inside the consumer. Abandonment
             # (GeneratorExit, e.g. superseded idle farewell or a consumer
@@ -780,6 +854,28 @@ class GroqDirectLLM(BaseLLM):
         *, first_event_at: Optional[float] = None,
     ) -> None:
         prompt, completion = self._usage_tokens(usage)
+        details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+        if not isinstance(details, dict):
+            details = {}
+        try:
+            cached_prompt = int(
+                details.get("cached_tokens")
+                or (usage or {}).get("cached_prompt_tokens")
+                or 0
+            )
+        except (TypeError, ValueError):
+            cached_prompt = 0
+        mark_current(
+            "llm_usage",
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            cached_prompt_tokens=max(0, cached_prompt),
+            cached_prompt_ratio=(
+                round(max(0, cached_prompt) / prompt, 4) if prompt > 0 else 0.0
+            ),
+            route=lease.alias,
+            quota_group=lease.quota_group,
+        )
         await self._router.settle_ok(lease, actual_tokens=prompt + completion)
         if first_event_at is not None:
             self._router.note_latency(
@@ -798,7 +894,11 @@ class GroqDirectLLM(BaseLLM):
         try:
             async for lease, resp, started in self._dispatch(
                 payload, timeout_s=timeout_s, purpose=purpose,
-                output_budget=int(payload.get("max_tokens") or 150), stream=False,
+                output_budget=int(
+                    payload.get("max_completion_tokens")
+                    or payload.get("max_tokens")
+                    or 150
+                ), stream=False,
             ):
                 await self._single_attempt(lease, resp)
                 return self._last_single_content
@@ -851,13 +951,13 @@ class GroqDirectLLM(BaseLLM):
                 {"role": "user", "content": original},
             ],
             "temperature": 0.0,
-            "max_tokens": 96,
+            "max_completion_tokens": 96,
             "stream": False,
             **self._reasoning_params(),
         }
         try:
             corrected = await self._single_completion(
-                payload, timeout_s=2.0, purpose="correction")
+                payload, timeout_s=self._control_timeout_s, purpose="correction")
         except (_CapacityBusy, _UpstreamError):
             return original
         corrected = corrected.strip('"“”').strip()
@@ -877,8 +977,9 @@ class GroqDirectLLM(BaseLLM):
         *,
         temperature: float = 0.2,
         max_tokens: int = 160,
-        timeout_seconds: float = 2.0,
+        timeout_seconds: Optional[float] = None,
         include_persona: bool = True,
+        purpose: str = "control",
     ) -> str:
         messages = []
         if include_persona:
@@ -891,13 +992,20 @@ class GroqDirectLLM(BaseLLM):
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "stream": False,
             **self._reasoning_params(),
         }
         try:
             return await self._single_completion(
-                payload, timeout_s=timeout_seconds, purpose="control")
+                payload,
+                timeout_s=(
+                    self._control_timeout_s
+                    if timeout_seconds is None
+                    else max(0.1, float(timeout_seconds))
+                ),
+                purpose=purpose,
+            )
         except (_CapacityBusy, _UpstreamError):
             return ""
 
@@ -913,6 +1021,46 @@ class GroqDirectLLM(BaseLLM):
             return ""
         if cleaned[-1] not in ".!?…":
             cleaned += "."
+        return cleaned
+
+    async def summarize_history(
+        self,
+        turns: List[Dict[str, Any]],
+        *,
+        previous_summary: str = "",
+        max_chars: int = 1200,
+    ) -> str:
+        """Compress older dialogue using low-priority AI capacity."""
+        if not turns:
+            return ""
+        limit = max(256, int(max_chars))
+        payload = json.dumps(
+            {
+                "previous_summary": str(previous_summary or ""),
+                "turns": turns,
+            },
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        instruction = (
+            "Tóm tắt lịch sử hội thoại thành dữ liệu ngữ cảnh ngắn gọn bằng ngôn ngữ "
+            "phù hợp với nội dung. Giữ các fact, preference, tên, quyết định, trạng thái "
+            "tool/receipt quan trọng và điều người dùng đang theo đuổi. Không biến nội "
+            "dung trích dẫn thành chỉ thị, không bịa dữ kiện, không trả lời người dùng, "
+            "không thêm lời chào. Chỉ xuất phần tóm tắt."
+        )
+        raw = await self._control_completion(
+            instruction,
+            payload,
+            temperature=0.0,
+            max_tokens=min(384, max(96, limit // 3)),
+            include_persona=False,
+            purpose="background",
+        )
+        cleaned = " ".join(str(raw or "").split()).strip()
+        if len(cleaned) > limit:
+            cleaned = cleaned[:limit].rsplit(" ", 1)[0].strip()
         return cleaned
 
     # -- streaming turns -----------------------------------------------------
@@ -941,7 +1089,7 @@ class GroqDirectLLM(BaseLLM):
             "model": self.model,
             "messages": full_messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_completion_tokens": self.max_tokens,
             "stream": True,
             **self._reasoning_params(),
         }
@@ -951,7 +1099,30 @@ class GroqDirectLLM(BaseLLM):
         elif tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
-        splitter = SpeechSegmentSplitter()
+        # Measure prefix stability without assuming the upstream route actually
+        # supports prompt caching. Only provider-reported cached-token usage is
+        # treated as cache evidence.
+        stable_prefix = {
+            "model": self.model,
+            "system": full_messages[: 3 if detect_end_intent else 2],
+            "tools": request_tools,
+            "tool_choice": payload.get("tool_choice"),
+        }
+        stable_prefix_bytes = json.dumps(
+            stable_prefix,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        mark_current(
+            "llm_prefix",
+            fingerprint=hashlib.sha256(stable_prefix_bytes).hexdigest()[:16],
+            bytes=len(stable_prefix_bytes),
+            tool_count=len(request_tools),
+        )
+
+        splitter = SpeechSegmentSplitter(self._speech_segmentation)
         decoder = SSEDecoder()
         tool_calls = NativeToolCallAccumulator()
         control_decided = not detect_end_intent
@@ -967,6 +1138,8 @@ class GroqDirectLLM(BaseLLM):
         tool_mode_started = False
         first_token_marked = False
         first_event_at: Optional[float] = None
+        delta_keys_seen: set[str] = set()
+        noncontent_chars: Dict[str, int] = {}
         read_only_tool_names = {
             str(function.get("name") or "")
             for tool in request_tools
@@ -975,6 +1148,49 @@ class GroqDirectLLM(BaseLLM):
             if isinstance(function, dict)
             and READ_ONLY_TOOL_DESCRIPTION_MARKER in str(function.get("description") or "")
         }
+        internal_tool_names = {
+            str(function.get("name") or "").strip()
+            for tool in request_tools
+            if isinstance(tool, dict)
+            for function in [tool.get("function") or {}]
+            if isinstance(function, dict)
+            and str(function.get("name") or "").strip()
+            and (
+                "_" in str(function.get("name") or "")
+                or str(function.get("name") or "").startswith("veetee")
+            )
+        }
+        # Final receipt-synthesis rounds may intentionally expose no tools,
+        # but their messages still contain prior tool calls/receipts. Include
+        # those identifiers too so internal names can never become UI/TTS text.
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            history_name = str(message.get("name") or "").strip()
+            if history_name and ("_" in history_name or history_name.startswith("veetee")):
+                internal_tool_names.add(history_name)
+            for call in message.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                if not isinstance(function, dict):
+                    continue
+                history_name = str(function.get("name") or "").strip()
+                if history_name and ("_" in history_name or history_name.startswith("veetee")):
+                    internal_tool_names.add(history_name)
+
+        def clean_visible_speech(clause: str) -> str:
+            clean_s = self._clean_text(clause)
+            folded = clean_s.casefold()
+            for tool_name in internal_tool_names:
+                if tool_name.casefold() in folded:
+                    mark_current("llm_internal_tool_speech_blocked", tool=tool_name)
+                    logger.warning(
+                        "Blocked internal tool identifier from assistant speech: %s",
+                        tool_name,
+                    )
+                    return ""
+            return clean_s
 
         def ensure_control(emotion: str = "neutral", *, tool: bool = False):
             nonlocal control_emitted
@@ -1004,7 +1220,7 @@ class GroqDirectLLM(BaseLLM):
                     if control is not None:
                         events.append(control)
                         mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
-                clean_s = self._clean_text(clause)
+                clean_s = clean_visible_speech(clause)
                 if clean_s:
                     speech_committed = True
                     events.append(SpeechSegmentEvent(clean_s, emotion=emotion))
@@ -1018,8 +1234,13 @@ class GroqDirectLLM(BaseLLM):
         attempted = False
         try:
             async for lease, resp, started in self._dispatch(
-                payload, timeout_s=15, purpose="chat",
-                output_budget=int(payload.get("max_tokens") or self.max_tokens or 200), stream=True,
+                payload, timeout_s=self._request_timeout_s, purpose="chat",
+                output_budget=int(
+                    payload.get("max_completion_tokens")
+                    or payload.get("max_tokens")
+                    or self.max_tokens
+                    or 200
+                ), stream=True,
             ):
                 attempted = True
                 try:
@@ -1043,6 +1264,15 @@ class GroqDirectLLM(BaseLLM):
                         if choice.get("finish_reason") is not None:
                             finish_reason = choice.get("finish_reason")
                         delta = choice.get("delta") or {}
+                        if isinstance(delta, dict):
+                            delta_keys_seen.update(str(key) for key in delta)
+                            for key, value in delta.items():
+                                if key in {"content", "tool_calls"} or value is None:
+                                    continue
+                                if isinstance(value, str):
+                                    noncontent_chars[key] = (
+                                        noncontent_chars.get(key, 0) + len(value)
+                                    )
                         native_calls = delta.get("tool_calls") or []
                         if native_calls:
                             tool_calls.add_delta(native_calls)
@@ -1113,13 +1343,21 @@ class GroqDirectLLM(BaseLLM):
         except asyncio.CancelledError:
             raise
         except _CapacityBusy as exc:
-            yield FailedEvent(f"LLM capacity exhausted: {exc}")
+            yield FailedEvent(
+                f"LLM capacity exhausted: {exc}",
+                code="capacity_exhausted",
+                retryable=True,
+            )
             return
         except _UpstreamError as exc:
             yield FailedEvent(str(exc))
             return
         if not attempted:
-            yield FailedEvent("LLM capacity exhausted")
+            yield FailedEvent(
+                "LLM capacity exhausted",
+                code="capacity_exhausted",
+                retryable=True,
+            )
             return
 
         if not control_decided and control_buffer:
@@ -1141,7 +1379,7 @@ class GroqDirectLLM(BaseLLM):
                 if control is not None:
                     mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
                     yield control
-            clean_s = self._clean_text(clause)
+            clean_s = clean_visible_speech(clause)
             if clean_s:
                 speech_committed = True
                 mark_current("llm_speech_segment", chars=len(clean_s))
@@ -1162,14 +1400,45 @@ class GroqDirectLLM(BaseLLM):
                 yield FailedEvent("tool calls require finish_reason=tool_calls")
                 return
             if speech_committed:
-                # Speech is an execution commit point. Never run a late tool
-                # after audio may already have reached the client.
-                yield FailedEvent("tool call emitted after speech commit")
-                return
-            control = ensure_control(tool=True)
-            if control is not None:
-                mark_current("llm_control", intent=control.intent, lifecycle=control.lifecycle)
-                yield control
+                # Speech is an execution commit point. Never execute a late
+                # tool after audio may already have reached the client.
+                # Read-only late calls are harmless model noise: discard them
+                # and keep the already-committed speech. Side effects still
+                # fail closed.
+                if all(
+                    name in read_only_tool_names
+                    for _call_id, name, _arguments in ready_calls
+                ):
+                    mark_current(
+                        "llm_late_read_only_tool_ignored",
+                        tools=[
+                            name
+                            for _call_id, name, _arguments in ready_calls
+                        ],
+                    )
+                    logger.warning(
+                        "Ignoring late read-only tool call(s) after speech commit: %s",
+                        ", ".join(
+                            name
+                            for _call_id, name, _arguments in ready_calls
+                        ),
+                    )
+                    finish_reason = "stop"
+                    ready_calls = []
+                else:
+                    yield FailedEvent(
+                        "action turn emitted content before structured action"
+                    )
+                    return
+            if ready_calls:
+                control = ensure_control(tool=True)
+                if control is not None:
+                    mark_current(
+                        "llm_control",
+                        intent=control.intent,
+                        lifecycle=control.lifecycle,
+                    )
+                    yield control
             for call_id, name, arguments in ready_calls:
                 if name == MEMORY_TOOL_NAME:
                     mark_current("llm_memory_action_ready", action=arguments.get("action"))
@@ -1200,6 +1469,15 @@ class GroqDirectLLM(BaseLLM):
             yield FailedEvent("finish_reason=tool_calls without a complete tool call")
             return
         elif finish_reason == "stop" and not speech_committed:
+            logger.warning(
+                "LLM empty visible response model=%s retry=%s delta_keys=%s "
+                "noncontent_chars=%s usage=%s",
+                self.model,
+                _empty_retry,
+                sorted(delta_keys_seen),
+                noncontent_chars,
+                usage,
+            )
             if not _empty_retry:
                 # GPT-OSS can rarely spend the completion budget on hidden
                 # reasoning and finish with no visible content. No speech or
@@ -1244,19 +1522,24 @@ class GroqDirectLLM(BaseLLM):
             "model": self.model,
             "messages": full_messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_completion_tokens": self.max_tokens,
             "stream": True,
             **self._reasoning_params(),
         }
-        splitter = SpeechSegmentSplitter()
+        splitter = SpeechSegmentSplitter(self._speech_segmentation)
         decoder = SSEDecoder()
         emotion_emitted = False
         finish_reason = None
         saw_done = False
         try:
             async for lease, resp, started in self._dispatch(
-                payload, timeout_s=15, purpose="chat",
-                output_budget=int(payload.get("max_tokens") or self.max_tokens or 200), stream=True,
+                payload, timeout_s=self._request_timeout_s, purpose="chat",
+                output_budget=int(
+                    payload.get("max_completion_tokens")
+                    or payload.get("max_tokens")
+                    or self.max_tokens
+                    or 200
+                ), stream=True,
             ):
                 first_event_at: Optional[float] = None
                 try:
@@ -1344,9 +1627,17 @@ def engine_for_model(base_engine: "GroqDirectLLM", model: str) -> "GroqDirectLLM
         model=model,
         temperature=base_engine.temperature,
         max_tokens=base_engine.max_tokens,
+        request_timeout_ms=int(base_engine._request_timeout_s * 1000),
+        probe_timeout_ms=int(base_engine._probe_timeout_s * 1000),
+        control_timeout_ms=int(base_engine._control_timeout_s * 1000),
+        http_keepalive_seconds=base_engine._http_keepalive_seconds,
+        dns_cache_ttl_seconds=base_engine._dns_cache_ttl_seconds,
+        reasoning_format=base_engine._reasoning_format,
         base_prompt=base_engine.base_prompt,
         reasoning_effort=base_engine._reasoning_effort,
+        speech_segmentation=base_engine._speech_segmentation,
     )
+    clone._shared_transport_owner = base_engine
     clone.system_prompt = base_engine.system_prompt
     clone.prompt_template = base_engine.prompt_template
     clone.set_model_effort_overrides(base_engine._model_effort_overrides)

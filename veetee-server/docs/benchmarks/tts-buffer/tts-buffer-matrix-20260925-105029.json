@@ -1,0 +1,116 @@
+{
+  "generated_at": "2026-09-25T03:50:29.846241+00:00",
+  "values_chunks": [
+    4,
+    16,
+    64
+  ],
+  "original_value_chunks": 64,
+  "restored": true,
+  "restore_error": null,
+  "sessions": 2,
+  "turns_per_session": 1,
+  "question": "Hãy trả lời bằng tiếng Việt trong khoảng 180 đến 220 ký tự. Giải thích ngắn gọn vì sao trợ lý giọng nói cần phản hồi nhanh nhưng vẫn phải giữ câu trả lời tự nhiên và chính xác.",
+  "note": "Measures the production LLM->streaming-TTS path. Only the internal bounded VieNeu producer queue changes; device send-ahead/pacing remains unchanged.",
+  "rows": [
+    {
+      "value_chunks": 4,
+      "success_rate": 1.0,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 2,
+        "p50_ms": 931.072,
+        "p95_ms": 1384.28,
+        "max_ms": 1384.28
+      },
+      "tts_queue_to_lock_ms": {
+        "samples": 2,
+        "p50_ms": 393.822,
+        "p95_ms": 787.464,
+        "max_ms": 787.464
+      },
+      "tts_first_pcm_ms": {
+        "samples": 2,
+        "p50_ms": 505.825,
+        "p95_ms": 881.682,
+        "max_ms": 881.682
+      },
+      "tts_lease_held_ms": {
+        "samples": 2,
+        "p50_ms": 894.343,
+        "p95_ms": 941.056,
+        "max_ms": 941.056
+      },
+      "outcomes": {
+        "completed": 2
+      }
+    },
+    {
+      "value_chunks": 16,
+      "success_rate": 1.0,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 2,
+        "p50_ms": 945.567,
+        "p95_ms": 1391.789,
+        "max_ms": 1391.789
+      },
+      "tts_queue_to_lock_ms": {
+        "samples": 2,
+        "p50_ms": 393.058,
+        "p95_ms": 785.959,
+        "max_ms": 785.959
+      },
+      "tts_first_pcm_ms": {
+        "samples": 2,
+        "p50_ms": 486.813,
+        "p95_ms": 878.522,
+        "max_ms": 878.522
+      },
+      "tts_lease_held_ms": {
+        "samples": 2,
+        "p50_ms": 894.421,
+        "p95_ms": 894.669,
+        "max_ms": 894.669
+      },
+      "outcomes": {
+        "completed": 2
+      }
+    },
+    {
+      "value_chunks": 64,
+      "success_rate": 1.0,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 2,
+        "p50_ms": 949.143,
+        "p95_ms": 1434.076,
+        "max_ms": 1434.076
+      },
+      "tts_queue_to_lock_ms": {
+        "samples": 2,
+        "p50_ms": 413.642,
+        "p95_ms": 827.1,
+        "max_ms": 827.1
+      },
+      "tts_first_pcm_ms": {
+        "samples": 2,
+        "p50_ms": 519.135,
+        "p95_ms": 928.206,
+        "max_ms": 928.206
+      },
+      "tts_lease_held_ms": {
+        "samples": 2,
+        "p50_ms": 944.426,
+        "p95_ms": 979.183,
+        "max_ms": 979.183
+      },
+      "outcomes": {
+        "completed": 2
+      }
+    }
+  ]
+}

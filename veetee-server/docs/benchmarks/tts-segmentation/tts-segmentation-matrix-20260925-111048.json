@@ -1,0 +1,142 @@
+{
+  "generated_at": "2026-09-25T04:10:48.827410+00:00",
+  "original": {
+    "clause_target_chars": 150,
+    "clause_min_chars": 80,
+    "hard_max_segment_chars": 240
+  },
+  "restored": true,
+  "restore_error": null,
+  "sessions": 2,
+  "turns_per_session": 1,
+  "question": "Hãy trả lời bằng tiếng Việt trong khoảng 180 đến 220 ký tự. Giải thích ngắn gọn vì sao trợ lý giọng nói cần phản hồi nhanh nhưng vẫn phải giữ câu trả lời tự nhiên và chính xác.",
+  "profiles": [
+    "micro",
+    "tiny"
+  ],
+  "note": "Only transport/prosody segmentation thresholds change. Use concurrency metrics to reduce TTS engine hold time, then run audio continuity/corpus acceptance before promoting a profile.",
+  "rows": [
+    {
+      "profile": "micro",
+      "values": {
+        "clause_target_chars": 48,
+        "clause_min_chars": 32,
+        "hard_max_segment_chars": 64
+      },
+      "success_rate": 0.0,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_inference_max_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_inference_total_ms": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "tts_segment_count": {
+        "samples": 0,
+        "p50": null,
+        "max": null
+      },
+      "outcomes": {
+        "failed": 2
+      }
+    },
+    {
+      "profile": "tiny",
+      "values": {
+        "clause_target_chars": 40,
+        "clause_min_chars": 28,
+        "hard_max_segment_chars": 56
+      },
+      "success_rate": 1.0,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 2,
+        "p50_ms": 970.552,
+        "p95_ms": 1392.255,
+        "max_ms": 1392.255
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 2,
+        "p50_ms": 2583.707,
+        "p95_ms": 2814.191,
+        "max_ms": 2814.191
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 2,
+        "p50_ms": 11002.933,
+        "p95_ms": 11622.274,
+        "max_ms": 11622.274
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 2,
+        "p50_ms": 2941.691,
+        "p95_ms": 3172.152,
+        "max_ms": 3172.152
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 2,
+        "p50_ms": 14069.711,
+        "p95_ms": 15434.408,
+        "max_ms": 15434.408
+      },
+      "tts_inference_max_ms": {
+        "samples": 2,
+        "p50_ms": 3240.637,
+        "p95_ms": 3471.021,
+        "max_ms": 3471.021
+      },
+      "tts_inference_total_ms": {
+        "samples": 2,
+        "p50_ms": 16122.844,
+        "p95_ms": 17759.987,
+        "max_ms": 17759.987
+      },
+      "tts_segment_count": {
+        "samples": 2,
+        "p50": 7.5,
+        "max": 8
+      },
+      "outcomes": {
+        "completed": 2
+      }
+    }
+  ]
+}

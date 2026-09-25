@@ -26,8 +26,11 @@ class AudioCodec:
         self.in_frame_size = int(in_sample_rate * 60 / 1000)
         self.configure_input_frame_duration(in_frame_duration_ms)
         
-        # 24kHz Opus encoder for speaker output
+        # 24kHz Opus codec for speaker output. The decoder is used only
+        # for clients (such as the browser Voice Console) that explicitly
+        # negotiate PCM16 output instead of raw Opus.
         self.encoder_24k = opuslib_next.Encoder(out_sample_rate, 1, opuslib_next.APPLICATION_VOIP)
+        self.decoder_24k = opuslib_next.Decoder(out_sample_rate, 1)
         self.out_frame_size = int(out_sample_rate * frame_duration_ms / 1000) # 1440 samples @ 24kHz 60ms
 
     def configure_input_frame_duration(self, frame_duration_ms: int) -> bool:
@@ -61,6 +64,14 @@ class AudioCodec:
             return self.encoder_24k.encode(pcm_bytes, self.out_frame_size)
         except Exception as e:
             logger.debug(f"Opus encode error: {e}")
+            return b""
+
+    def decode_output_opus_to_pcm16(self, opus_bytes: bytes) -> bytes:
+        """Decode one outgoing 24kHz Opus packet to signed PCM16 mono."""
+        try:
+            return self.decoder_24k.decode(opus_bytes, self.out_frame_size)
+        except Exception as e:
+            logger.debug(f"Output Opus decode error: {e}")
             return b""
 
     def resample_float32_48k_to_pcm16_24k(self, audio_48k: np.ndarray) -> np.ndarray:

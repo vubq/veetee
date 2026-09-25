@@ -40,6 +40,7 @@ class Fixture:
     pcm16: bytes
     speech_end_sample: int
     source_sample_rate: int
+    expected_transcript: str = ""
 
 
 @dataclass
@@ -49,12 +50,19 @@ class RunTrace:
     mode: str
     session_id: str = ""
     transcript: str = ""
+    final_transcripts: list[str] = field(default_factory=list)
+    expected_transcript: str = ""
+    word_error_rate: Optional[float] = None
+    char_error_rate: Optional[float] = None
     marks: Dict[str, float] = field(default_factory=dict)
     received_audio_frames: int = 0
     decoded_audio_frames: int = 0
     first_voiced_rms: Optional[float] = None
     leading_output_silence_ms: Optional[float] = None
     first_tts_sentence: str = ""
+    response_kind: str = ""
+    audio_frame_gaps_ms: list[float] = field(default_factory=list)
+    audio_gap_over_2x_frame_count: int = 0
     outcome: str = "running"
     error: str = ""
 
@@ -66,6 +74,37 @@ class RunTrace:
             return None
         return round((self.marks[end] - self.marks[start]) * 1000.0, 3)
 
+    def observe_audio_frame(
+        self,
+        at: float,
+        *,
+        expected_frame_ms: float,
+    ) -> None:
+        previous = self.marks.get("last_binary_received")
+        if previous is not None:
+            gap_ms = max(0.0, (at - previous) * 1000.0)
+            self.audio_frame_gaps_ms.append(gap_ms)
+            if gap_ms > max(1.0, float(expected_frame_ms) * 2.0):
+                self.audio_gap_over_2x_frame_count += 1
+        self.marks["last_binary_received"] = at
+
+    def _audio_gap_percentile(self, percentile: float) -> Optional[float]:
+        if not self.audio_frame_gaps_ms:
+            return None
+        values = sorted(self.audio_frame_gaps_ms)
+        if len(values) == 1:
+            return round(values[0], 3)
+        rank = max(0.0, min(1.0, float(percentile))) * (len(values) - 1)
+        lower = int(math.floor(rank))
+        upper = int(math.ceil(rank))
+        if lower == upper:
+            return round(values[lower], 3)
+        weight = rank - lower
+        return round(
+            values[lower] * (1.0 - weight) + values[upper] * weight,
+            3,
+        )
+
     def record(self) -> Dict[str, Any]:
         return {
             "run_index": self.run_index,
@@ -75,16 +114,37 @@ class RunTrace:
             "outcome": self.outcome,
             "error": self.error or None,
             "transcript": self.transcript,
+            "final_transcripts": list(self.final_transcripts),
+            "stt_final_count": len(self.final_transcripts),
+            "expected_transcript": self.expected_transcript or None,
+            "word_error_rate": self.word_error_rate,
+            "char_error_rate": self.char_error_rate,
             "received_audio_frames": self.received_audio_frames,
             "decoded_audio_frames": self.decoded_audio_frames,
+            "audio_frame_gap_p95_ms": self._audio_gap_percentile(0.95),
+            "audio_frame_gap_max_ms": (
+                round(max(self.audio_frame_gaps_ms), 3)
+                if self.audio_frame_gaps_ms else None
+            ),
+            "audio_gap_over_2x_frame_count": self.audio_gap_over_2x_frame_count,
             "first_voiced_rms": self.first_voiced_rms,
             "leading_output_silence_ms": self.leading_output_silence_ms,
             "first_tts_sentence": self.first_tts_sentence,
+            "response_kind": self.response_kind or None,
             "speech_end_to_stt_final_ms": self.delta_ms("speech_end", "stt_final_received"),
             "speech_end_to_first_clause_ms": self.delta_ms("speech_end", "first_clause_received"),
             "speech_end_to_first_binary_received_ms": self.delta_ms("speech_end", "first_binary_received"),
             "speech_end_to_first_voiced_pcm_received_ms": self.delta_ms(
                 "speech_end", "first_voiced_pcm_received"
+            ),
+            "stt_final_to_first_clause_ms": self.delta_ms(
+                "stt_final_received", "first_clause_received"
+            ),
+            "first_clause_to_first_binary_received_ms": self.delta_ms(
+                "first_clause_received", "first_binary_received"
+            ),
+            "first_binary_to_first_voiced_pcm_received_ms": self.delta_ms(
+                "first_binary_received", "first_voiced_pcm_received"
             ),
             # Legacy packet metric retained for old artifact readers. It is not
             # used for SLA because an Opus packet may decode to silence.
@@ -137,7 +197,53 @@ def _load_metadata(path: Path) -> Dict[str, Any]:
     return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 
-def load_fixture(path: Path, speech_end_sample: Optional[int]) -> Fixture:
+def _normalize_transcript(text: str) -> str:
+    import re
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFC", str(text or "").lower())
+    normalized = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def _edit_distance(left: list[str], right: list[str]) -> int:
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for index, item in enumerate(left, start=1):
+        current = [index]
+        for j, other in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[j] + 1,
+                    previous[j - 1] + (item != other),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def transcript_error_rates(actual: str, expected: str) -> tuple[float, float]:
+    actual_norm = _normalize_transcript(actual)
+    expected_norm = _normalize_transcript(expected)
+    expected_words = expected_norm.split()
+    actual_words = actual_norm.split()
+    word_denominator = max(1, len(expected_words))
+    wer = _edit_distance(actual_words, expected_words) / word_denominator
+
+    expected_chars = list(expected_norm.replace(" ", ""))
+    actual_chars = list(actual_norm.replace(" ", ""))
+    char_denominator = max(1, len(expected_chars))
+    cer = _edit_distance(actual_chars, expected_chars) / char_denominator
+    return round(wer, 6), round(cer, 6)
+
+
+def load_fixture(
+    path: Path,
+    speech_end_sample: Optional[int],
+    expected_transcript: Optional[str] = None,
+) -> Fixture:
     try:
         import numpy as np
         import soxr
@@ -173,11 +279,17 @@ def load_fixture(path: Path, speech_end_sample: Optional[int]) -> Fixture:
         samples_f = soxr.resample(samples_f, source_rate, INPUT_RATE)
         samples = (np.clip(samples_f, -1.0, 1.0) * 32767.0).astype(np.int16)
 
+    labelled_transcript = str(
+        expected_transcript
+        if expected_transcript is not None
+        else metadata.get("expected_transcript") or ""
+    ).strip()
     return Fixture(
         path=str(path),
         pcm16=samples.tobytes(),
         speech_end_sample=end_16k,
         source_sample_rate=source_rate,
+        expected_transcript=labelled_transcript,
     )
 
 
@@ -230,6 +342,13 @@ async def _receive_turn(
         now = time.perf_counter()
         if isinstance(message, bytes):
             trace.received_audio_frames += 1
+            expected_frame_ms = (
+                response_frame_samples * 1000.0 / response_sample_rate
+            )
+            trace.observe_audio_frame(
+                now,
+                expected_frame_ms=expected_frame_ms,
+            )
             trace.mark("first_binary_received", now)
             try:
                 pcm16 = response_decoder.decode(message, response_frame_samples)
@@ -255,7 +374,10 @@ async def _receive_turn(
         data = json.loads(message)
         msg_type = data.get("type")
         if msg_type == "stt" and data.get("speech_final") is True:
-            trace.transcript = str(data.get("text") or "").strip()
+            final_text = str(data.get("text") or "").strip()
+            trace.final_transcripts.append(final_text)
+            if not trace.transcript:
+                trace.transcript = final_text
             trace.mark("stt_final_received", now)
         elif msg_type == "vad" and data.get("state") == "speech_ended":
             trace.mark("vad_speech_ended_received", now)
@@ -266,9 +388,23 @@ async def _receive_turn(
             elif state == "sentence_start":
                 if not trace.first_tts_sentence:
                     trace.first_tts_sentence = str(data.get("text") or "").strip()
+                    trace.response_kind = str(data.get("response_kind") or "").strip()
                 trace.mark("first_clause_received", now)
             elif state == "stop":
-                trace.mark("tts_stop_received", now)
+                # A lifecycle stop can race with listen:start/abort and is not
+                # evidence that the measured response completed. Only accept a
+                # stop after this turn has produced correlated STT or response
+                # output; otherwise keep waiting for the actual turn.
+                correlated = (
+                    "stt_final_received" in trace.marks
+                    or "tts_start_received" in trace.marks
+                    or "first_clause_received" in trace.marks
+                    or trace.received_audio_frames > 0
+                )
+                if correlated:
+                    trace.mark("tts_stop_received", now)
+                else:
+                    trace.mark("ignored_uncorrelated_tts_stop", now)
 
 
 async def _hello(ws, mode: str, timeout_seconds: float) -> tuple[str, int, int]:
@@ -321,7 +457,13 @@ async def _run_turn(
     response_frame_duration_ms: int,
     voiced_rms_threshold: float,
 ) -> RunTrace:
-    trace = RunTrace(run_index=run_index, measured=measured, mode=mode, session_id=session_id)
+    trace = RunTrace(
+        run_index=run_index,
+        measured=measured,
+        mode=mode,
+        session_id=session_id,
+        expected_transcript=fixture.expected_transcript,
+    )
     receiver = asyncio.create_task(
         _receive_turn(
             ws,
@@ -367,6 +509,16 @@ async def _run_turn(
         await receiver
         if not trace.transcript:
             raise BenchmarkError("missing final STT transcript")
+        if len(trace.final_transcripts) != 1:
+            raise BenchmarkError(
+                "expected exactly one final STT transcript, got "
+                f"{len(trace.final_transcripts)}: {trace.final_transcripts!r}"
+            )
+        if fixture.expected_transcript:
+            trace.word_error_rate, trace.char_error_rate = transcript_error_rates(
+                trace.transcript,
+                fixture.expected_transcript,
+            )
         if trace.received_audio_frames <= 0:
             raise BenchmarkError("missing TTS binary audio")
         if "first_voiced_pcm_received" not in trace.marks:
@@ -374,7 +526,11 @@ async def _run_turn(
         first_audio = trace.marks.get("first_binary_received")
         if first_audio is not None and first_audio < trace.marks["speech_end"]:
             raise BenchmarkError("first response audio arrived before labelled speech end")
-        trace.outcome = "completed"
+        if trace.response_kind == "recovery":
+            trace.outcome = "recovery"
+            trace.error = "server recovery response"
+        else:
+            trace.outcome = "completed"
     except asyncio.TimeoutError:
         trace.outcome = "timeout"
         trace.error = "turn timeout"
@@ -388,10 +544,15 @@ async def _run_turn(
     finally:
         if not receiver.done():
             receiver.cancel()
-            try:
-                await receiver
-            except asyncio.CancelledError:
-                pass
+        try:
+            await receiver
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # The main try/except above already converts receiver failures into
+            # the RunTrace outcome. Await again only to retrieve the task
+            # exception and avoid noisy "Task exception was never retrieved".
+            pass
     return trace
 
 
@@ -439,6 +600,23 @@ def summarize(records: list[Dict[str, Any]], *, certification: bool = False) -> 
     success_gate = success_rate >= minimum_success_rate
     p95 = _percentile(values, 0.95)
     p50 = round(statistics.median(values), 3) if values else None
+    labelled = [
+        record for record in measured
+        if record.get("expected_transcript")
+    ]
+    wer_values = [
+        float(record["word_error_rate"])
+        for record in labelled
+        if record.get("word_error_rate") is not None
+    ]
+    cer_values = [
+        float(record["char_error_rate"])
+        for record in labelled
+        if record.get("char_error_rate") is not None
+    ]
+    split_samples = sum(
+        1 for record in measured if int(record.get("stt_final_count") or 0) != 1
+    )
     sla_pass = bool(values) and sample_gate and success_gate and (p95 or 0) < 1000.0
     p50_pass = bool(values) and sample_gate and success_gate and (p50 or 0) <= 600.0
     if not certification:
@@ -451,6 +629,69 @@ def summarize(records: list[Dict[str, Any]], *, certification: bool = False) -> 
         sla_status = "PARTIAL"
     else:
         sla_status = "NOT_MET"
+
+    stage_fields = (
+        "speech_end_to_stt_final_ms",
+        "stt_final_to_first_clause_ms",
+        "first_clause_to_first_binary_received_ms",
+        "first_binary_to_first_voiced_pcm_received_ms",
+        "speech_end_to_first_binary_received_ms",
+        "speech_end_to_first_voiced_pcm_received_ms",
+    )
+    stage_latency_ms: Dict[str, Dict[str, Any]] = {}
+    for field_name in stage_fields:
+        samples = [
+            float(record[field_name])
+            for record in measured
+            if record.get("outcome") == "completed"
+            and record.get(field_name) is not None
+        ]
+        stage_latency_ms[field_name] = {
+            "samples": len(samples),
+            "p50": round(statistics.median(samples), 3) if samples else None,
+            "p90": _percentile(samples, 0.90),
+            "p95": _percentile(samples, 0.95),
+            "max": round(max(samples), 3) if samples else None,
+        }
+
+    run_gap_p95_values = [
+        float(record["audio_frame_gap_p95_ms"])
+        for record in measured
+        if record.get("outcome") == "completed"
+        and record.get("audio_frame_gap_p95_ms") is not None
+    ]
+    run_gap_max_values = [
+        float(record["audio_frame_gap_max_ms"])
+        for record in measured
+        if record.get("outcome") == "completed"
+        and record.get("audio_frame_gap_max_ms") is not None
+    ]
+    gap_over_2x_count = sum(
+        int(record.get("audio_gap_over_2x_frame_count") or 0)
+        for record in measured
+        if record.get("outcome") == "completed"
+    )
+    audio_continuity = {
+        "samples": len(run_gap_p95_values),
+        "run_gap_p95_p50_ms": (
+            round(statistics.median(run_gap_p95_values), 3)
+            if run_gap_p95_values else None
+        ),
+        "run_gap_p95_max_ms": (
+            round(max(run_gap_p95_values), 3)
+            if run_gap_p95_values else None
+        ),
+        "run_gap_max_p50_ms": (
+            round(statistics.median(run_gap_max_values), 3)
+            if run_gap_max_values else None
+        ),
+        "run_gap_max_ms": (
+            round(max(run_gap_max_values), 3)
+            if run_gap_max_values else None
+        ),
+        "gap_over_2x_frame_count": gap_over_2x_count,
+    }
+
     return {
         "metric": "speech_end_to_first_voiced_pcm_received_ms",
         "metric_version": METRIC_VERSION,
@@ -481,6 +722,22 @@ def summarize(records: list[Dict[str, Any]], *, certification: bool = False) -> 
         "sla_p95_lt_1000_ms": sla_pass,
         "target_p50_lte_600_ms": p50_pass,
         "sla_status": sla_status,
+        "stage_latency_ms": stage_latency_ms,
+        "audio_continuity": audio_continuity,
+        "quality": {
+            "labelled_samples": len(labelled),
+            "split_or_missing_final_samples": split_samples,
+            "wer_mean": (
+                round(sum(wer_values) / len(wer_values), 6)
+                if wer_values else None
+            ),
+            "wer_max": round(max(wer_values), 6) if wer_values else None,
+            "cer_mean": (
+                round(sum(cer_values) / len(cer_values), 6)
+                if cer_values else None
+            ),
+            "cer_max": round(max(cer_values), 6) if cer_values else None,
+        },
         "note": (
             "p95 values are end-to-end percentiles; stage p95s are never summed. "
             "Voiced PCM is a proxy until quality/grounding passes."
@@ -495,7 +752,11 @@ async def run(args) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
     except Exception as exc:
         raise BenchmarkError(f"benchmark dependency unavailable: {exc}") from exc
 
-    fixture = load_fixture(Path(args.wav), args.speech_end_sample)
+    fixture = load_fixture(
+        Path(args.wav),
+        args.speech_end_sample,
+        getattr(args, "expected_transcript", None),
+    )
     encoded_frames, silence_frame, silence_count = encode_fixture(
         fixture,
         args.auto_silence_ms,
@@ -541,6 +802,9 @@ async def run(args) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
             voiced_rms_threshold=args.voiced_rms_threshold,
         )
         records.append(trace.record())
+        cooldown_ms = max(0, int(getattr(args, "turn_cooldown_ms", 0) or 0))
+        if cooldown_ms > 0 and index + 1 < total_runs:
+            await asyncio.sleep(cooldown_ms / 1000.0)
 
     if args.reconnect_each:
         for index in range(total_runs):
@@ -583,8 +847,11 @@ async def run(args) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
         "fixture": fixture.path,
         "fixture_source_sample_rate": fixture.source_sample_rate,
         "speech_end_sample_16k": fixture.speech_end_sample,
+        "expected_transcript": fixture.expected_transcript or None,
+        "quality_labeled": bool(fixture.expected_transcript),
         "voiced_rms_threshold_pcm16": args.voiced_rms_threshold,
         "auto_silence_ms": args.auto_silence_ms if args.mode == "auto" else None,
+        "turn_cooldown_ms": max(0, int(getattr(args, "turn_cooldown_ms", 0) or 0)),
     })
     return records, summary
 
@@ -596,6 +863,11 @@ def parse_args():
     parser.add_argument("--uri", default="ws://127.0.0.1:8000/")
     parser.add_argument("--wav", required=True, help="pre-generated mono PCM16 WAV fixture")
     parser.add_argument("--speech-end-sample", type=int, default=None)
+    parser.add_argument(
+        "--expected-transcript",
+        default=None,
+        help="optional labelled transcript override; otherwise read from <wav>.json",
+    )
     parser.add_argument("--mode", choices=("auto", "manual"), default="auto")
     parser.add_argument("--runs", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=3)
@@ -608,6 +880,12 @@ def parse_args():
         help="PCM16 RMS threshold used to identify the first voiced 10 ms output window",
     )
     parser.add_argument("--reconnect-each", action="store_true")
+    parser.add_argument(
+        "--turn-cooldown-ms",
+        type=int,
+        default=0,
+        help="delay between turns; excluded from per-turn latency measurements",
+    )
     parser.add_argument("--artifact-dir", default="benchmark-artifacts")
     parser.add_argument("--certification", action="store_true",
                         help="use 100-attempt/99%% certification gates instead of smoke gates")

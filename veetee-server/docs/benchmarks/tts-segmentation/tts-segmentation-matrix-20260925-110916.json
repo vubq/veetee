@@ -1,0 +1,270 @@
+{
+  "generated_at": "2026-09-25T04:09:16.349552+00:00",
+  "original": {
+    "clause_target_chars": 150,
+    "clause_min_chars": 80,
+    "hard_max_segment_chars": 240
+  },
+  "restored": true,
+  "restore_error": null,
+  "sessions": 2,
+  "turns_per_session": 1,
+  "question": "Hãy trả lời bằng tiếng Việt trong khoảng 180 đến 220 ký tự. Giải thích ngắn gọn vì sao trợ lý giọng nói cần phản hồi nhanh nhưng vẫn phải giữ câu trả lời tự nhiên và chính xác.",
+  "profiles": [
+    "baseline",
+    "balanced",
+    "compact",
+    "fast"
+  ],
+  "note": "Only transport/prosody segmentation thresholds change. Use concurrency metrics to reduce TTS engine hold time, then run audio continuity/corpus acceptance before promoting a profile.",
+  "rows": [
+    {
+      "profile": "baseline",
+      "values": {
+        "clause_target_chars": 150,
+        "clause_min_chars": 80,
+        "hard_max_segment_chars": 240
+      },
+      "success_rate": 0.5,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 1,
+        "p50_ms": 1324.944,
+        "p95_ms": 1324.944,
+        "max_ms": 1324.944
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 1,
+        "p50_ms": 3476.485,
+        "p95_ms": 3476.485,
+        "max_ms": 3476.485
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 1,
+        "p50_ms": 7559.763,
+        "p95_ms": 7559.763,
+        "max_ms": 7559.763
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 1,
+        "p50_ms": 5401.166,
+        "p95_ms": 5401.166,
+        "max_ms": 5401.166
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 1,
+        "p50_ms": 14927.525,
+        "p95_ms": 14927.525,
+        "max_ms": 14927.525
+      },
+      "tts_inference_max_ms": {
+        "samples": 1,
+        "p50_ms": 5758.514,
+        "p95_ms": 5758.514,
+        "max_ms": 5758.514
+      },
+      "tts_inference_total_ms": {
+        "samples": 1,
+        "p50_ms": 16061.346,
+        "p95_ms": 16061.346,
+        "max_ms": 16061.346
+      },
+      "tts_segment_count": {
+        "samples": 1,
+        "p50": 4,
+        "max": 4
+      },
+      "outcomes": {
+        "failed": 1,
+        "completed": 1
+      }
+    },
+    {
+      "profile": "balanced",
+      "values": {
+        "clause_target_chars": 100,
+        "clause_min_chars": 60,
+        "hard_max_segment_chars": 160
+      },
+      "success_rate": 0.5,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 1,
+        "p50_ms": 1293.614,
+        "p95_ms": 1293.614,
+        "max_ms": 1293.614
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 1,
+        "p50_ms": 3000.919,
+        "p95_ms": 3000.919,
+        "max_ms": 3000.919
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 1,
+        "p50_ms": 6484.61,
+        "p95_ms": 6484.61,
+        "max_ms": 6484.61
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 1,
+        "p50_ms": 6364.805,
+        "p95_ms": 6364.805,
+        "max_ms": 6364.805
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 1,
+        "p50_ms": 15514.634,
+        "p95_ms": 15514.634,
+        "max_ms": 15514.634
+      },
+      "tts_inference_max_ms": {
+        "samples": 1,
+        "p50_ms": 6723.134,
+        "p95_ms": 6723.134,
+        "max_ms": 6723.134
+      },
+      "tts_inference_total_ms": {
+        "samples": 1,
+        "p50_ms": 16774.459,
+        "p95_ms": 16774.459,
+        "max_ms": 16774.459
+      },
+      "tts_segment_count": {
+        "samples": 1,
+        "p50": 4,
+        "max": 4
+      },
+      "outcomes": {
+        "completed": 1,
+        "failed": 1
+      }
+    },
+    {
+      "profile": "compact",
+      "values": {
+        "clause_target_chars": 80,
+        "clause_min_chars": 48,
+        "hard_max_segment_chars": 120
+      },
+      "success_rate": 0.5,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 1,
+        "p50_ms": 530.008,
+        "p95_ms": 530.008,
+        "max_ms": 530.008
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 1,
+        "p50_ms": 699.405,
+        "p95_ms": 699.405,
+        "max_ms": 699.405
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 1,
+        "p50_ms": 699.43,
+        "p95_ms": 699.43,
+        "max_ms": 699.43
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 1,
+        "p50_ms": 5341.532,
+        "p95_ms": 5341.532,
+        "max_ms": 5341.532
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 1,
+        "p50_ms": 15840.768,
+        "p95_ms": 15840.768,
+        "max_ms": 15840.768
+      },
+      "tts_inference_max_ms": {
+        "samples": 1,
+        "p50_ms": 5641.404,
+        "p95_ms": 5641.404,
+        "max_ms": 5641.404
+      },
+      "tts_inference_total_ms": {
+        "samples": 1,
+        "p50_ms": 16916.086,
+        "p95_ms": 16916.086,
+        "max_ms": 16916.086
+      },
+      "tts_segment_count": {
+        "samples": 1,
+        "p50": 4,
+        "max": 4
+      },
+      "outcomes": {
+        "failed": 1,
+        "completed": 1
+      }
+    },
+    {
+      "profile": "fast",
+      "values": {
+        "clause_target_chars": 64,
+        "clause_min_chars": 40,
+        "hard_max_segment_chars": 96
+      },
+      "success_rate": 0.5,
+      "protocol_success_rate": 1.0,
+      "trace_complete": true,
+      "turn_start_to_first_ws_binary_ms": {
+        "samples": 1,
+        "p50_ms": 495.484,
+        "p95_ms": 495.484,
+        "max_ms": 495.484
+      },
+      "tts_queue_wait_max_ms": {
+        "samples": 1,
+        "p50_ms": 4559.271,
+        "p95_ms": 4559.271,
+        "max_ms": 4559.271
+      },
+      "tts_queue_wait_total_ms": {
+        "samples": 1,
+        "p50_ms": 11825.326,
+        "p95_ms": 11825.326,
+        "max_ms": 11825.326
+      },
+      "tts_lease_held_max_ms": {
+        "samples": 1,
+        "p50_ms": 5771.924,
+        "p95_ms": 5771.924,
+        "max_ms": 5771.924
+      },
+      "tts_lease_held_total_ms": {
+        "samples": 1,
+        "p50_ms": 15749.015,
+        "p95_ms": 15749.015,
+        "max_ms": 15749.015
+      },
+      "tts_inference_max_ms": {
+        "samples": 1,
+        "p50_ms": 6070.523,
+        "p95_ms": 6070.523,
+        "max_ms": 6070.523
+      },
+      "tts_inference_total_ms": {
+        "samples": 1,
+        "p50_ms": 17132.912,
+        "p95_ms": 17132.912,
+        "max_ms": 17132.912
+      },
+      "tts_segment_count": {
+        "samples": 1,
+        "p50": 5,
+        "max": 5
+      },
+      "outcomes": {
+        "completed": 1,
+        "failed": 1
+      }
+    }
+  ]
+}

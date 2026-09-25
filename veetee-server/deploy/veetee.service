@@ -2,6 +2,8 @@
 Description=VeeTee Realtime Voice Assistant
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -12,6 +14,11 @@ EnvironmentFile=-/home/quangvu/Project/veetee/veetee-server/.env
 Environment=PYTHONPATH=/home/quangvu/Project/veetee/veetee-server
 Environment=NUMBA_CACHE_DIR=/tmp/veetee-numba
 Environment=TORCHINDUCTOR_CACHE_DIR=/tmp/veetee-torchinductor
+# Config is intentionally service-owned. Maintenance/benchmark commands may
+# rewrite it as root; normalize ownership before dropping to User=quangvu.
+ExecStartPre=+/usr/bin/chown quangvu:quangvu /home/quangvu/Project/veetee/veetee-server/config.yaml
+ExecStartPre=+/usr/bin/chmod 0600 /home/quangvu/Project/veetee/veetee-server/config.yaml
+ExecStartPre=/usr/bin/test -r /home/quangvu/Project/veetee/veetee-server/config.yaml
 ExecStart=/home/quangvu/Project/venv/bin/python /home/quangvu/Project/veetee/veetee-server/server.py
 Restart=on-failure
 RestartSec=3

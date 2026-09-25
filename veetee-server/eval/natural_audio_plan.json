@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "purpose": "natural_audio_endpoint_asr_acceptance",
+  "instructions": [
+    "Mỗi case thu bằng giọng người thật, không dùng TTS để thay gate tự nhiên.",
+    "Giữ nguyên ngập ngừng/pause nếu prompt có dấu ba chấm.",
+    "Case background_noise phải ghi môi trường thực tế trong sidecar.",
+    "Sau thu âm, label speech_end_sample bằng điểm kết thúc lời nói thực, không phải cuối file."
+  ],
+  "cases": [
+    {
+      "id": "short-01",
+      "category": "very_short",
+      "text": "Mấy giờ rồi?",
+      "critical": true
+    },
+    {
+      "id": "short-02",
+      "category": "very_short",
+      "text": "Hôm nay thứ mấy?",
+      "critical": true
+    },
+    {
+      "id": "short-03",
+      "category": "very_short",
+      "text": "Bạn tên gì?",
+      "critical": false
+    },
+    {
+      "id": "pause-01",
+      "category": "internal_pause",
+      "text": "Cho tôi biết... thời tiết hôm nay thế nào?",
+      "critical": true
+    },
+    {
+      "id": "pause-02",
+      "category": "internal_pause",
+      "text": "Tôi muốn hỏi một chút... bây giờ là mấy giờ?",
+      "critical": true
+    },
+    {
+      "id": "pause-03",
+      "category": "internal_pause",
+      "text": "Ừm... bạn có thể giải thích việc này không?",
+      "critical": true
+    },
+    {
+      "id": "hesitate-01",
+      "category": "hesitation",
+      "text": "À... tôi đang nghĩ... bạn kể ngắn gọn một câu chuyện nhé.",
+      "critical": true
+    },
+    {
+      "id": "hesitate-02",
+      "category": "hesitation",
+      "text": "Ờ thì... hôm nay tôi nên làm gì trước nhỉ?",
+      "critical": false
+    },
+    {
+      "id": "hesitate-03",
+      "category": "hesitation",
+      "text": "Để xem nào... bạn nhắc lại câu vừa rồi được không?",
+      "critical": false
+    },
+    {
+      "id": "name-01",
+      "category": "proper_name",
+      "text": "Nguyễn Trãi sinh năm bao nhiêu?",
+      "critical": true
+    },
+    {
+      "id": "name-02",
+      "category": "proper_name",
+      "text": "Đường Nguyễn Xiển ở quận nào?",
+      "critical": true
+    },
+    {
+      "id": "name-03",
+      "category": "proper_name",
+      "text": "Bambu Lab A1 Mini có khổ in bao nhiêu?",
+      "critical": false
+    },
+    {
+      "id": "number-01",
+      "category": "long_number",
+      "text": "Đọc giúp tôi số 0987654321.",
+      "critical": true
+    },
+    {
+      "id": "number-02",
+      "category": "long_number",
+      "text": "Một triệu hai trăm ba mươi bốn nghìn năm trăm sáu mươi bảy là bao nhiêu?",
+      "critical": true
+    },
+    {
+      "id": "number-03",
+      "category": "long_number",
+      "text": "Nhắc lại mã 20260925123045.",
+      "critical": true
+    },
+    {
+      "id": "long-01",
+      "category": "long_sentence",
+      "text": "Giải thích ngắn gọn vì sao trợ lý giọng nói cần phản hồi nhanh nhưng vẫn phải giữ câu trả lời tự nhiên và chính xác.",
+      "critical": true
+    },
+    {
+      "id": "long-02",
+      "category": "long_sentence",
+      "text": "Nếu tôi hỏi một câu khá dài và có nhiều ý nối tiếp nhau thì bạn hãy nghe hết trước khi bắt đầu trả lời nhé.",
+      "critical": true
+    },
+    {
+      "id": "long-03",
+      "category": "long_sentence",
+      "text": "Tôi muốn bạn tóm tắt ba điểm quan trọng nhất của một kế hoạch làm việc nhưng đừng bỏ sót phần rủi ro và việc cần làm tiếp theo.",
+      "critical": false
+    },
+    {
+      "id": "command-01",
+      "category": "command",
+      "text": "Nói nhỏ lại một chút.",
+      "critical": true
+    },
+    {
+      "id": "command-02",
+      "category": "command",
+      "text": "Dừng lại.",
+      "critical": true
+    },
+    {
+      "id": "command-03",
+      "category": "command",
+      "text": "Tiếp tục câu trả lời đi.",
+      "critical": true
+    },
+    {
+      "id": "neg-01",
+      "category": "negation",
+      "text": "Đừng dừng, hãy nói tiếp.",
+      "critical": true
+    },
+    {
+      "id": "neg-02",
+      "category": "negation",
+      "text": "Tôi không bảo bạn tăng âm lượng.",
+      "critical": true
+    },
+    {
+      "id": "neg-03",
+      "category": "negation",
+      "text": "Không phải hôm qua, tôi hỏi hôm nay.",
+      "critical": true
+    },
+    {
+      "id": "noise-01",
+      "category": "background_noise",
+      "text": "Mấy giờ rồi?",
+      "critical": true,
+      "environment": "fan"
+    },
+    {
+      "id": "noise-02",
+      "category": "background_noise",
+      "text": "Bạn nghe rõ tôi không?",
+      "critical": true,
+      "environment": "music_low"
+    },
+    {
+      "id": "noise-03",
+      "category": "background_noise",
+      "text": "Hôm nay thứ mấy?",
+      "critical": true,
+      "environment": "street_low"
+    },
+    {
+      "id": "repeat-01",
+      "category": "self_correction",
+      "text": "Ngày mai... à không, hôm nay là thứ mấy?",
+      "critical": true
+    },
+    {
+      "id": "repeat-02",
+      "category": "self_correction",
+      "text": "Tăng âm lượng... thôi, giữ nguyên âm lượng.",
+      "critical": true
+    },
+    {
+      "id": "repeat-03",
+      "category": "self_correction",
+      "text": "Gọi là A1... ý tôi là A1 Mini.",
+      "critical": false
+    },
+    {
+      "id": "silence-01",
+      "category": "trailing_silence",
+      "text": "Xin chào.",
+      "critical": true,
+      "trailing_silence_ms": 800
+    },
+    {
+      "id": "silence-02",
+      "category": "trailing_silence",
+      "text": "Mấy giờ rồi?",
+      "critical": true,
+      "trailing_silence_ms": 1200
+    },
+    {
+      "id": "silence-03",
+      "category": "trailing_silence",
+      "text": "Bạn khỏe không?",
+      "critical": false,
+      "trailing_silence_ms": 1600
+    }
+  ]
+}

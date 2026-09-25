@@ -36,14 +36,17 @@ Một số default đáng chú ý trong source/example hiện tại:
 | Field | Default |
 | --- | --- |
 | `asr.min_silence_duration_ms` | `450` |
-| `latency.first_token_timeout_ms` | `6000` |
+| `latency.target_first_audio_ms` | `600` (warm-path SLO, không phải timeout) |
+| `latency.first_token_timeout_ms` | `1800` |
 | `latency.total_turn_timeout_ms` | `15000` |
 | `tts.sample_rate` | `24000` |
 | `tools.max_calls_per_turn` | `3` (cho phép `1..8`) |
 | `tools.schema_limit` | `16` (max `64`) |
 | `tools.max_llm_rounds_per_turn` | `3` (cho phép `1..4`) |
 | `llm.base_prompt_max_bytes` / `base_prompt_max_tokens` | `32768` / `8000` est. |
-| `tts.first_chunk_timeout_ms` / `stall_timeout_ms` | `4000` / `2500` |
+| `tts.first_chunk_timeout_ms` / `stall_timeout_ms` | `1500` / `1500` |
+| `tts.native_chunk_frames` | `1` (low-TTFA profile) |
+| `conversation.history_turns` | `6` |
 | `conversation.enabled` / `idle_timeout_seconds` | `false` / `120` (local test hay bật `true`; hết timeout không tương tác thì chào rồi đóng phiên) |
 
 Local `config.yaml` có thể override các giá trị này; local override không phải default của project.
@@ -67,8 +70,8 @@ LLM provider `groq` gọi Groq API trực tiếp (`https://api.groq.com/openai/v
 Groq keys cấp qua env, đặt tên `GROQ_API_KEY_<alias>` (số lượng linh hoạt; pool rỗng sẽ tự quét env). File YAML chỉ giữ id + quota_group, không chứa secret:
 
 ```bash
-export GROQ_API_KEY_A='<secret>'
-export GROQ_API_KEY_B='<secret>'
+export GROQ_API_KEY_1='<secret>'
+export GROQ_API_KEY_HOME='<secret>'
 ```
 
 Mỗi alias mặc định một `quota_group` riêng. `llm.quota_groups` khai báo caps đã biết (rpm/rpd/tpm/tpd/itpm/otpm); group bỏ trống chạy discovery mode (giới hạn in-flight, học caps từ response headers). Xem `config.example.yaml`.

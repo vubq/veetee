@@ -29,7 +29,8 @@ class ToolExecutor:
         self._call_fingerprints: Dict[Tuple[str, str], str] = {}
         self._receipt_times: Dict[Tuple[str, str], float] = {}
         self._group_locks: Dict[str, asyncio.Lock] = {}
-        self._read_slots = asyncio.Semaphore(max(1, int(max_parallel_read_only)))
+        self._max_parallel_read_only = max(1, int(max_parallel_read_only))
+        self._read_slots = asyncio.Semaphore(self._max_parallel_read_only)
         self._lock = asyncio.Lock()
         self._receipt_ttl_seconds = max(1.0, float(receipt_ttl_seconds))
         self._receipt_cap = max(1, int(receipt_cap))
@@ -226,10 +227,14 @@ class ToolExecutor:
 
             async def scheduled_call():
                 if descriptor.read_only:
+                    # Capture the semaphore for this call. A hot runtime change
+                    # may replace self._read_slots for NEW calls while this one
+                    # must still release the exact semaphore it acquired.
+                    read_slots = self._read_slots
                     read_acquired = False
                     group_acquired = False
                     try:
-                        await self._acquire_cancellable(self._read_slots, cancel_event)
+                        await self._acquire_cancellable(read_slots, cancel_event)
                         read_acquired = True
                         await self._acquire_cancellable(group_lock, cancel_event)
                         group_acquired = True
@@ -238,7 +243,7 @@ class ToolExecutor:
                         if group_acquired:
                             group_lock.release()
                         if read_acquired:
-                            self._read_slots.release()
+                            read_slots.release()
                 group_acquired = False
                 try:
                     await self._acquire_cancellable(group_lock, cancel_event)
@@ -293,6 +298,13 @@ class ToolExecutor:
         await self._store_receipt(scope_key, result)
         return result
 
+    async def reconfigure_read_parallelism(self, value: int) -> None:
+        """Hot-apply read concurrency for newly admitted tool calls."""
+        new_value = max(1, int(value))
+        async with self._lock:
+            self._max_parallel_read_only = new_value
+            self._read_slots = asyncio.Semaphore(new_value)
+
     def snapshot(self) -> dict:
         status_counts: Dict[str, int] = {}
         for result in self._receipts.values():
@@ -303,6 +315,7 @@ class ToolExecutor:
         return {
             "active_count": len(self._inflight),
             "active_tools": active_tools,
+            "max_parallel_read_only": self._max_parallel_read_only,
             "receipt_count": len(self._receipts),
             "receipt_status_counts": status_counts,
             "receipt_cap": self._receipt_cap,

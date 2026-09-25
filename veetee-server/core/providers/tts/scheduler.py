@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -12,22 +13,40 @@ PRIORITY_VALUES = {
     "prewarm": 20,
 }
 
+LIVE_PRIORITIES = {"live_first", "live"}
+
+
+class TTSPreempted(RuntimeError):
+    """A lower-priority TTS job yielded the shared engine to live voice."""
+
 
 @dataclass
 class _Waiter:
     priority_name: str
-    base_priority: int
+    base_priority: float
     sequence: int
     enqueued_at: float
 
 
 class TTSLease:
-    def __init__(self, scheduler: "TTSAdmissionScheduler", *, priority: str, wait_ms: float):
+    def __init__(
+        self,
+        scheduler: "TTSAdmissionScheduler",
+        *,
+        priority: str,
+        wait_ms: float,
+        preempt_event: threading.Event,
+    ):
         self._scheduler = scheduler
         self.priority = priority
         self.wait_ms = wait_ms
         self.acquired_perf = time.perf_counter()
+        self._preempt_event = preempt_event
         self._released = False
+
+    @property
+    def preempted(self) -> bool:
+        return self._preempt_event.is_set()
 
     @property
     def held_ms(self) -> float:
@@ -37,26 +56,59 @@ class TTSLease:
         if self._released:
             return
         self._released = True
-        await self._scheduler.release(held_ms=self.held_ms)
+        await self._scheduler.release(
+            held_ms=self.held_ms,
+            priority=self.priority,
+            preempted=self.preempted,
+        )
 
 
 class TTSAdmissionScheduler:
     """Single-engine admission with live/dashboard/prewarm priority and aging."""
 
-    def __init__(self, *, aging_priority_per_second: float = 2.0):
+    def __init__(
+        self,
+        *,
+        aging_priority_per_second: float = 2.0,
+        first_audio_priority_boost: float = 5.0,
+    ):
         self._condition = asyncio.Condition()
         self._waiters: list[_Waiter] = []
         self._active = False
         self._active_priority: Optional[str] = None
+        self._active_preempt_event: Optional[threading.Event] = None
         self._sequence = 0
         self._aging_priority_per_second = max(0.1, float(aging_priority_per_second))
+        self._first_audio_priority_boost = max(
+            0.0, float(first_audio_priority_boost)
+        )
         self._holds = 0
         self._total_held_ms = 0.0
         self._max_held_ms = 0.0
         self._quota_skipped_prewarm = 0
+        self._preemption_requests = 0
+        self._preemptions_completed = 0
 
-    def _priority_value(self, name: str) -> int:
-        return PRIORITY_VALUES.get(str(name or "live").strip().lower(), PRIORITY_VALUES["live"])
+    def configure(
+        self,
+        *,
+        aging_priority_per_second: Optional[float] = None,
+        first_audio_priority_boost: Optional[float] = None,
+    ) -> None:
+        if aging_priority_per_second is not None:
+            self._aging_priority_per_second = max(
+                0.1, float(aging_priority_per_second)
+            )
+        if first_audio_priority_boost is not None:
+            self._first_audio_priority_boost = max(
+                0.0, float(first_audio_priority_boost)
+            )
+
+    def _priority_value(self, name: str) -> float:
+        normalized = str(name or "live").strip().lower()
+        if normalized == "live_first":
+            return -self._first_audio_priority_boost
+        return float(PRIORITY_VALUES.get(normalized, PRIORITY_VALUES["live"]))
 
     def _select_next(self, now: float) -> Optional[_Waiter]:
         if not self._waiters:
@@ -77,7 +129,7 @@ class TTSAdmissionScheduler:
         deadline_seconds: Optional[float] = None,
     ) -> TTSLease:
         priority_name = str(priority or "live").strip().lower()
-        if priority_name not in PRIORITY_VALUES:
+        if priority_name not in set(PRIORITY_VALUES).union(LIVE_PRIORITIES):
             priority_name = "live"
         enqueued_at = time.perf_counter()
         deadline_at = None
@@ -93,6 +145,20 @@ class TTSAdmissionScheduler:
                 enqueued_at=enqueued_at,
             )
             self._waiters.append(waiter)
+            # Priority normally affects only the next admitted waiter. For
+            # realtime voice that is not sufficient: a dashboard/prewarm job
+            # already inside a long local TTS inference can otherwise block a
+            # live turn for seconds. Signal cooperative preemption; the engine
+            # adapter decides the nearest safe chunk boundary at which to stop.
+            if (
+                priority_name in LIVE_PRIORITIES
+                and self._active
+                and self._active_priority in {"dashboard", "prewarm"}
+                and self._active_preempt_event is not None
+                and not self._active_preempt_event.is_set()
+            ):
+                self._active_preempt_event.set()
+                self._preemption_requests += 1
             try:
                 while True:
                     now = time.perf_counter()
@@ -112,10 +178,13 @@ class TTSAdmissionScheduler:
                         self._waiters.remove(waiter)
                         self._active = True
                         self._active_priority = priority_name
+                        preempt_event = threading.Event()
+                        self._active_preempt_event = preempt_event
                         return TTSLease(
                             self,
                             priority=priority_name,
                             wait_ms=(now - enqueued_at) * 1000.0,
+                            preempt_event=preempt_event,
                         )
 
                     poll_seconds = 0.05 if cancel_event is not None or deadline_at is not None else 1.0
@@ -135,10 +204,19 @@ class TTSAdmissionScheduler:
         """Record a prewarm skip so load runs keep live admission bounded."""
         self._quota_skipped_prewarm += 1
 
-    async def release(self, *, held_ms: float = 0.0) -> None:
+    async def release(
+        self,
+        *,
+        held_ms: float = 0.0,
+        priority: Optional[str] = None,
+        preempted: bool = False,
+    ) -> None:
         async with self._condition:
+            if preempted and priority in {"dashboard", "prewarm"}:
+                self._preemptions_completed += 1
             self._active = False
             self._active_priority = None
+            self._active_preempt_event = None
             self._holds += 1
             held = max(0.0, float(held_ms or 0.0))
             self._total_held_ms += held
@@ -147,7 +225,7 @@ class TTSAdmissionScheduler:
 
     def snapshot(self) -> dict:
         now = time.perf_counter()
-        waiting = {name: 0 for name in PRIORITY_VALUES}
+        waiting = {name: 0 for name in (*LIVE_PRIORITIES, *PRIORITY_VALUES)}
         longest_wait_ms = 0.0
         for waiter in self._waiters:
             waiting[waiter.priority_name] = waiting.get(waiter.priority_name, 0) + 1
@@ -157,11 +235,20 @@ class TTSAdmissionScheduler:
             "active_priority": self._active_priority,
             "waiting": waiting,
             "longest_wait_ms": round(longest_wait_ms, 3),
-            # Lease hold covers inference + queue/pacing/backpressure so M6
-            # can separate engine time from delivery hold. The lease must
-            # only release when the engine is truly free.
+            # Lease hold tracks native engine ownership. Buffered audio may
+            # continue through Opus conversion/playback after the engine is
+            # free, which lets another session synthesize without waiting for
+            # the previous client's paced delivery to finish.
             "holds": self._holds,
             "avg_held_ms": round(self._total_held_ms / self._holds, 3) if self._holds else 0.0,
             "max_held_ms": round(self._max_held_ms, 3),
             "quota_skipped_prewarm": self._quota_skipped_prewarm,
+            "preemption_requests": self._preemption_requests,
+            "preemptions_completed": self._preemptions_completed,
+            "first_audio_priority_boost": round(
+                self._first_audio_priority_boost, 3
+            ),
+            "aging_priority_per_second": round(
+                self._aging_priority_per_second, 3
+            ),
         }
