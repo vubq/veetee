@@ -265,6 +265,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
                     server = VeeTeeServer(config)
                     result = await server.apply_runtime_config({
                         'GROQ_API_KEY_1': 'gsk_test_runtime_key',
+                        'groq.token_limit.GROQ_API_KEY_1': 50000,
                     })
 
                 self.assertIs(server.llm_engine, replacement)
@@ -272,6 +273,11 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(server.runtime_readiness['llm_warm'])
                 self.assertFalse(result['values']['GROQ_API_KEY_1'].get('masked') == 'gsk_test_runtime_key')
                 self.assertTrue(result['values']['GROQ_API_KEY_1']['configured'])
+                token_usage = result['values']['GROQ_API_KEY_1']['token_usage']
+                self.assertEqual(token_usage['period'], 'day')
+                self.assertEqual(token_usage['used'], 0)
+                self.assertEqual(token_usage['limit'], 50000)
+                self.assertEqual(token_usage['remaining'], 50000)
                 self.assertEqual(store.runtime_raw()['GROQ_API_KEY_1'], 'gsk_test_runtime_key')
                 self.assertEqual(os.environ.get('GROQ_API_KEY_1'), 'gsk_test_runtime_key')
                 self.assertFalse(result.get('restart_required', False))

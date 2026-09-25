@@ -1,5 +1,7 @@
 import { computed, reactive, ref } from 'vue'
 
+const DEFAULT_GROQ_DAILY_TOKEN_LIMIT = 200000
+
 export function useDashboard() {
   const loading = ref(false)
   const busy = ref(false)
@@ -19,6 +21,9 @@ export function useDashboard() {
     value: '',
     configured: false,
     masked: '',
+    tokenLimit: String(DEFAULT_GROQ_DAILY_TOKEN_LIMIT),
+    usedTokens: 0,
+    remainingTokens: null,
   }])
   const removedGroqKeys = new Set()
   const voices = ref([])
@@ -176,6 +181,9 @@ export function useDashboard() {
       value: '',
       configured: false,
       masked: '',
+      tokenLimit: '',
+      usedTokens: 0,
+      remainingTokens: null,
     }
   }
 
@@ -329,6 +337,11 @@ export function useDashboard() {
         value: '',
         configured: Boolean(value.configured),
         masked: value.masked || '',
+        tokenLimit: value.token_usage?.limit
+          ? String(value.token_usage.limit)
+          : String(DEFAULT_GROQ_DAILY_TOKEN_LIMIT),
+        usedTokens: Number(value.token_usage?.used || 0),
+        remainingTokens: value.token_usage?.remaining ?? null,
       }))
     if (configuredRows.length) {
       groqKeys.value = configuredRows
@@ -338,6 +351,9 @@ export function useDashboard() {
         value: '',
         configured: false,
         masked: '',
+        tokenLimit: '',
+        usedTokens: 0,
+        remainingTokens: null,
       }]
     }
   }
@@ -349,6 +365,11 @@ export function useDashboard() {
   function updateGroqKey(envKey, value) {
     const row = groqKeys.value.find(item => item.envKey === envKey)
     if (row) row.value = value
+  }
+
+  function updateGroqLimit(envKey, value) {
+    const row = groqKeys.value.find(item => item.envKey === envKey)
+    if (row) row.tokenLimit = value
   }
 
   function removeGroqKey(envKey) {
@@ -523,6 +544,15 @@ export function useDashboard() {
     for (const row of groqKeys.value) {
       const value = String(row.value || '').trim()
       if (value) values[row.envKey] = value
+      if (row.configured || value) {
+        const rawLimit = String(row.tokenLimit ?? '').trim()
+        const limit = rawLimit === '' ? 0 : Number(rawLimit)
+        if (!Number.isInteger(limit) || limit < 0) {
+          notify(`Token limit của ${row.envKey} phải là số nguyên >= 0`, 'error')
+          return false
+        }
+        values[`groq.token_limit.${row.envKey}`] = limit
+      }
     }
     for (const key of removedGroqKeys) values[key] = null
 
@@ -651,6 +681,6 @@ export function useDashboard() {
     notify, fmtTime, publicRuntimeValue, secretPlaceholder,
     login, loadPublicData, loadManagedData, refreshAll,
     prepareNewAssistant, prepareEditAssistant, saveAssistant, toggleAssistant, deleteAssistant,
-    pairDevice, updateDevice, revokeDevice, addGroqKey, updateGroqKey, removeGroqKey, saveRuntime,
+    pairDevice, updateDevice, revokeDevice, addGroqKey, updateGroqKey, updateGroqLimit, removeGroqKey, saveRuntime,
   }
 }

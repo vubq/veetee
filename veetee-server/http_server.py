@@ -582,6 +582,10 @@ class HttpServer:
                         self.llm_engine.set_model(str(value), persist=False)
                     if key == "tts.voice" and value and hasattr(self.tts_engine, "set_voice"):
                         self.tts_engine.set_voice(str(value), persist=False)
+                elif key.startswith(ManagementStore.GROQ_TOKEN_LIMIT_PREFIX):
+                    # Per-key daily budget is read dynamically by the
+                    # router/store and never requires a process restart.
+                    pass
                 else:
                     restart_required = True
             return web.json_response({"values": values, "restart_required": restart_required})

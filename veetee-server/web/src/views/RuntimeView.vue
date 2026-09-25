@@ -33,6 +33,7 @@ const emit = defineEmits([
   'update',
   'add-groq-key',
   'update-groq-key',
+  'update-groq-limit',
   'remove-groq-key',
   'save',
 ])
@@ -49,6 +50,31 @@ const groqConfiguredCount = computed(() => props.groqKeys.filter(item => item.co
 
 function setValue(key, value) {
   emit('update', key, value)
+}
+
+function formatTokenCount(value) {
+  const number = Number(value || 0)
+  return new Intl.NumberFormat('vi-VN').format(
+    Number.isFinite(number) ? Math.max(0, number) : 0,
+  )
+}
+
+function tokenLimitLabel(item) {
+  const limit = Number(item.tokenLimit || 0)
+  return limit > 0 ? formatTokenCount(limit) : 'Không giới hạn'
+}
+
+function tokenUsagePercent(item) {
+  const limit = Number(item.tokenLimit || 0)
+  const used = Number(item.usedTokens || 0)
+  if (!Number.isFinite(limit) || limit <= 0) return 0
+  return Math.min(100, Math.max(0, (used / limit) * 100))
+}
+
+function remainingTokenLabel(item) {
+  const limit = Number(item.tokenLimit || 0)
+  if (!Number.isFinite(limit) || limit <= 0) return '∞'
+  return formatTokenCount(Math.max(0, limit - Number(item.usedTokens || 0)))
 }
 </script>
 
@@ -83,30 +109,69 @@ function setValue(key, value) {
         </header>
 
         <div class="groq-key-list">
-          <div v-for="(item, index) in groqKeys" :key="item.envKey" class="groq-key-row">
-            <div class="groq-key-row__index">{{ index + 1 }}</div>
-            <UiInput
-              :model-value="item.value"
-              :label="`Groq API key ${index + 1}`"
-              type="password"
-              autocomplete="new-password"
-              :placeholder="item.configured ? (item.masked || 'Đã cấu hình') : 'gsk_…'"
-              class="mono-field"
-              @update:model-value="emit('update-groq-key', item.envKey, $event)"
-            />
-            <div class="groq-key-row__status">
-              <UiBadge v-if="item.configured" tone="success" dot>Đã lưu</UiBadge>
-              <UiBadge v-else tone="neutral">Mới</UiBadge>
-              <UiButton
-                variant="danger-ghost"
-                size="sm"
-                icon-only
-                :aria-label="`Xóa Groq key ${index + 1}`"
-                title="Xóa key"
-                @click="emit('remove-groq-key', item.envKey)"
-              >
-                <template #icon><Trash2 :size="15" /></template>
-              </UiButton>
+          <div v-for="(item, index) in groqKeys" :key="item.envKey" class="groq-key-card">
+            <div class="groq-key-card__header">
+              <div class="groq-key-card__identity">
+                <span class="groq-key-card__index">{{ index + 1 }}</span>
+                <div>
+                  <strong>Groq API key {{ index + 1 }}</strong>
+                  <small>{{ item.envKey }}</small>
+                </div>
+              </div>
+              <div class="groq-key-card__actions">
+                <UiBadge v-if="item.configured" tone="success" dot>Đã lưu</UiBadge>
+                <UiBadge v-else tone="neutral">Mới</UiBadge>
+                <UiButton
+                  variant="danger-ghost"
+                  size="sm"
+                  icon-only
+                  :aria-label="`Xóa Groq key ${index + 1}`"
+                  title="Xóa key"
+                  @click="emit('remove-groq-key', item.envKey)"
+                >
+                  <template #icon><Trash2 :size="15" /></template>
+                </UiButton>
+              </div>
+            </div>
+
+            <div class="groq-key-card__fields">
+              <UiInput
+                :model-value="item.value"
+                label="API key"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="item.configured ? (item.masked || 'Đã cấu hình') : 'gsk_…'"
+                class="mono-field"
+                @update:model-value="emit('update-groq-key', item.envKey, $event)"
+              />
+              <UiInput
+                :model-value="item.tokenLimit"
+                label="Giới hạn token / ngày"
+                type="number"
+                min="0"
+                step="1000"
+                placeholder="200000"
+                hint="0 = không giới hạn"
+                @update:model-value="emit('update-groq-limit', item.envKey, $event)"
+              />
+            </div>
+
+            <div class="groq-key-card__usage">
+              <div class="groq-key-card__stat">
+                <span>Đã dùng hôm nay</span>
+                <strong>{{ formatTokenCount(item.usedTokens) }}</strong>
+              </div>
+              <div class="groq-key-card__stat">
+                <span>Còn lại</span>
+                <strong>{{ remainingTokenLabel(item) }}</strong>
+              </div>
+              <div class="groq-key-card__stat">
+                <span>Giới hạn/ngày</span>
+                <strong>{{ tokenLimitLabel(item) }}</strong>
+              </div>
+              <div class="groq-key-card__progress" aria-hidden="true">
+                <span :style="{ width: `${tokenUsagePercent(item)}%` }"></span>
+              </div>
             </div>
           </div>
 

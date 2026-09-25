@@ -34,6 +34,8 @@ class RouteTarget:
     quota_group: str
     base_url: str
     enabled: bool = True
+    env_key: str = ""
+    credential_id: str = ""
 
 
 @dataclass
@@ -44,6 +46,9 @@ class Lease:
     base_url: str
     reservation_id: int
     estimated_tokens: int
+    env_key: str = ""
+    credential_id: str = ""
+    token_budget_reservation_id: Optional[int] = None
 
 
 @dataclass
@@ -71,6 +76,7 @@ class GroqRouter:
         ewma_alpha: float = 0.3,
         jitter_penalty: float = 0.75,
         low_priority_purposes: frozenset = LOW_PRIORITY_PURPOSES,
+        usage_store: Any = None,
     ) -> None:
         self._targets = list(targets)
         self._ledger = ledger
@@ -87,6 +93,72 @@ class GroqRouter:
         # Abandoned generators, task cancels and explicit settles all funnel
         # here, so no path can double-charge or double-release a slot.
         self._settled: Dict[int, float] = {}
+        self._usage_flush_tasks: set[asyncio.Task] = set()
+        self._usage_store = None
+        if usage_store is not None:
+            self.bind_usage_store(usage_store)
+
+    def bind_usage_store(self, usage_store: Any) -> None:
+        """Bind persistent per-credential daily token accounting.
+
+        This is intentionally independent of provider RPM/TPM quota windows:
+        the user-defined limit belongs to one exact credential instance and is
+        reset when that credential is deleted/replaced.
+        """
+        self._usage_store = usage_store
+        if usage_store is None:
+            for target in self._targets:
+                target.credential_id = ""
+            return
+        for target in self._targets:
+            if not target.env_key or not target.api_key:
+                continue
+            row = usage_store.ensure_groq_credential(
+                target.env_key, target.api_key
+            )
+            target.credential_id = str(row.get("instance_id") or "")
+
+    def _budget_snapshot(self, target: RouteTarget) -> Optional[Dict[str, Any]]:
+        store = self._usage_store
+        if (
+            store is None
+            or not target.env_key
+            or not target.credential_id
+        ):
+            return None
+        return store.groq_budget_snapshot(
+            target.env_key, target.credential_id
+        )
+
+    def _schedule_usage_flush(self) -> None:
+        store = self._usage_store
+        if store is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def flush_quietly() -> None:
+            try:
+                await asyncio.to_thread(store.flush)
+            except Exception as exc:
+                logger.warning("Groq token usage persistence failed: %s", exc)
+
+        task = loop.create_task(flush_quietly())
+        self._usage_flush_tasks.add(task)
+
+        def done_callback(done: asyncio.Task) -> None:
+            self._usage_flush_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(done_callback)
+
+    async def flush_usage(self) -> None:
+        tasks = tuple(self._usage_flush_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def configure(
         self,
@@ -211,6 +283,20 @@ class GroqRouter:
         result: Dict[str, Dict[str, Any]] = {}
         for group in sorted(aliases_by_group):
             snap = await self._ledger.snapshot(group)
+            credentials = []
+            for target in self._targets:
+                if target.quota_group != group:
+                    continue
+                budget = self._budget_snapshot(target)
+                if budget is None:
+                    continue
+                credentials.append({
+                    "alias": target.alias,
+                    "used_tokens": int(budget.get("used_tokens") or 0),
+                    "token_limit": int(budget.get("token_limit") or 0),
+                    "remaining_tokens": budget.get("remaining_tokens"),
+                    "reserved_tokens": int(budget.get("reserved_tokens") or 0),
+                })
             result[group] = {
                 "aliases": sorted(aliases_by_group[group]),
                 "enabled": enabled_by_group.get(group, False),
@@ -221,6 +307,7 @@ class GroqRouter:
                 "discovery": bool(snap.get("discovery", False)),
                 "cooldown_until": float(snap.get("cooldown_until") or 0.0),
                 "cooldown_reason": str(snap.get("cooldown_reason") or ""),
+                "credentials": credentials,
             }
         return result
 
@@ -237,6 +324,16 @@ class GroqRouter:
                 continue
             if target.quota_group in exclude_groups:
                 continue
+            budget = self._budget_snapshot(target)
+            if budget is not None:
+                token_limit = int(budget.get("token_limit") or 0)
+                remaining_tokens = budget.get("remaining_tokens")
+                if (
+                    token_limit > 0
+                    and isinstance(remaining_tokens, (int, float))
+                    and remaining_tokens < estimated_tokens
+                ):
+                    continue
             snap = await self._ledger.snapshot(target.quota_group)
             if not snap.get("known"):
                 in_flight = 0
@@ -258,6 +355,26 @@ class GroqRouter:
             reservation_id = await self._ledger.try_reserve(
                 target.quota_group, tokens=float(estimated_tokens))
             if reservation_id is not None:
+                budget_reservation_id = None
+                if (
+                    self._usage_store is not None
+                    and target.env_key
+                    and target.credential_id
+                ):
+                    budget_reservation_id = (
+                        self._usage_store.try_reserve_groq_tokens(
+                            target.env_key,
+                            target.credential_id,
+                            estimated_tokens,
+                        )
+                    )
+                    if budget_reservation_id is None:
+                        await self._ledger.settle(
+                            target.quota_group,
+                            reservation_id,
+                            outcome="rejected",
+                        )
+                        continue
                 return Lease(
                     alias=target.alias,
                     quota_group=target.quota_group,
@@ -265,6 +382,9 @@ class GroqRouter:
                     base_url=target.base_url,
                     reservation_id=reservation_id,
                     estimated_tokens=estimated_tokens,
+                    env_key=target.env_key,
+                    credential_id=target.credential_id,
+                    token_budget_reservation_id=budget_reservation_id,
                 )
         return None
 
@@ -382,24 +502,48 @@ class GroqRouter:
             }
         return True
 
+    def _settle_token_budget(
+        self,
+        lease: Lease,
+        *,
+        outcome: str,
+        actual_tokens: int = 0,
+    ) -> None:
+        store = self._usage_store
+        if store is None or lease.token_budget_reservation_id is None:
+            return
+        charged = store.settle_groq_token_reservation(
+            lease.token_budget_reservation_id,
+            outcome=outcome,
+            actual_tokens=max(0, int(actual_tokens)),
+        )
+        if charged > 0:
+            self._schedule_usage_flush()
+
     async def settle_ok(self, lease: Lease, actual_tokens: int = 0) -> None:
         if not self._claim_settle(lease):
             return
+        actual = max(0, int(actual_tokens))
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id,
-            outcome="ok", actual_tokens=max(0, int(actual_tokens)))
+            outcome="ok", actual_tokens=actual)
+        self._settle_token_budget(
+            lease, outcome="ok", actual_tokens=actual
+        )
 
     async def settle_rejected(self, lease: Lease) -> None:
         if not self._claim_settle(lease):
             return
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id, outcome="rejected")
+        self._settle_token_budget(lease, outcome="rejected")
 
     async def settle_uncertain(self, lease: Lease) -> None:
         if not self._claim_settle(lease):
             return
         await self._ledger.settle(
             lease.quota_group, lease.reservation_id, outcome="uncertain")
+        self._settle_token_budget(lease, outcome="uncertain")
 
     async def cooldown(self, group: str, retry_after_s: float, reason: str = "") -> None:
         await self._ledger.set_cooldown(

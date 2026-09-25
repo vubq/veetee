@@ -30,7 +30,7 @@ describe('RuntimeView', () => {
       },
     })
 
-    expect(wrapper.findAll('.groq-key-row')).toHaveLength(1)
+    expect(wrapper.findAll('.groq-key-card')).toHaveLength(1)
     expect(wrapper.text()).toContain('LLM · Groq')
     expect(wrapper.text()).toContain('Models · Hugging Face')
     expect(wrapper.find('.restart-alert').exists()).toBe(false)
@@ -38,16 +38,19 @@ describe('RuntimeView', () => {
     await wrapper.get('.groq-add-key').trigger('click')
     expect(wrapper.emitted('add-groq-key')).toHaveLength(1)
 
-    await wrapper.get('.groq-key-row .ui-button--danger-ghost').trigger('click')
+    await wrapper.get('.groq-key-card .ui-button--danger-ghost').trigger('click')
     expect(wrapper.emitted('remove-groq-key')?.[0]).toEqual(['GROQ_API_KEY_1'])
   })
 
   it('renders all previously configured Groq keys without exposing raw values', () => {
-    const groqKeys = ['A', 'B', 'C', 'D'].map(id => ({
+    const groqKeys = ['A', 'B', 'C', 'D'].map((id, index) => ({
       envKey: `GROQ_API_KEY_${id}`,
       value: '',
       configured: true,
       masked: `gsk••••••${id}`,
+      tokenLimit: index === 0 ? '50000' : '',
+      usedTokens: index === 0 ? 12345 : 0,
+      remainingTokens: index === 0 ? 37655 : null,
     }))
     const wrapper = mount(RuntimeView, {
       props: {
@@ -60,11 +63,13 @@ describe('RuntimeView', () => {
       },
     })
 
-    expect(wrapper.findAll('.groq-key-row')).toHaveLength(4)
+    expect(wrapper.findAll('.groq-key-card')).toHaveLength(4)
     expect(wrapper.text()).toContain('4 configured')
     for (const item of groqKeys) {
       expect(wrapper.html()).not.toContain('raw-secret')
       expect(wrapper.find(`input[placeholder="${item.masked}"]`).exists()).toBe(true)
     }
+    expect(wrapper.text()).toContain('12.345')
+    expect(wrapper.text()).toContain('50.000')
   })
 })

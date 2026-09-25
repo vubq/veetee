@@ -6,12 +6,15 @@ Pending six-digit activation requests intentionally live in memory and expire qu
 from __future__ import annotations
 
 import copy
+import hashlib
+import itertools
 import json
 import os
 import secrets
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,6 +23,8 @@ class ManagementStore:
     MAX_DEVICE_ID_LEN = 128
     MAX_CLIENT_ID_LEN = 128
     MAX_METADATA_VALUE_LEN = 128
+    GROQ_TOKEN_LIMIT_PREFIX = "groq.token_limit."
+    MAX_GROQ_TOKEN_LIMIT = 10**12
 
     def __init__(
         self,
@@ -35,11 +40,19 @@ class ManagementStore:
         self.pending_per_source_per_minute = max(1, int(pending_per_source_per_minute))
         self._lock = threading.RLock()
         self._pending: dict[str, dict[str, Any]] = {}
+        self._groq_reservations: dict[int, dict[str, Any]] = {}
+        self._groq_reservation_ids = itertools.count(1)
         self._state = self._load()
         self._ensure_default_assistant()
 
     def _blank(self) -> dict[str, Any]:
-        return {"version": 1, "assistants": {}, "devices": {}, "runtime": {}}
+        return {
+            "version": 1,
+            "assistants": {},
+            "devices": {},
+            "runtime": {},
+            "groq_credentials": {},
+        }
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -53,6 +66,7 @@ class ManagementStore:
         data.setdefault("assistants", {})
         data.setdefault("devices", {})
         data.setdefault("runtime", {})
+        data.setdefault("groq_credentials", {})
         return data
 
     def _write(self) -> None:
@@ -404,10 +418,33 @@ class ManagementStore:
     def runtime_public(self) -> dict[str, Any]:
         with self._lock:
             runtime = copy.deepcopy(self._state.get("runtime", {}))
+            credentials = self._state.get("groq_credentials", {})
+            if isinstance(credentials, dict):
+                for usage in credentials.values():
+                    if isinstance(usage, dict):
+                        self._roll_groq_day_locked(usage)
+            groq_credentials = copy.deepcopy(credentials)
         output: dict[str, Any] = {}
         for key, value in runtime.items():
             if self._is_secret_key(key):
-                output[key] = {"configured": bool(value), "masked": self._mask_secret(str(value or ""))}
+                row = {
+                    "configured": bool(value),
+                    "masked": self._mask_secret(str(value or "")),
+                }
+                if key.startswith("GROQ_API_KEY_"):
+                    usage = groq_credentials.get(key) or {}
+                    used = max(0, int(usage.get("used_tokens") or 0))
+                    limit = max(0, int(usage.get("token_limit") or 0))
+                    row["token_usage"] = {
+                        "period": "day",
+                        "day": str(usage.get("usage_day") or self._groq_usage_day()),
+                        "used": used,
+                        "limit": limit,
+                        "remaining": (
+                            max(0, limit - used) if limit > 0 else None
+                        ),
+                    }
+                output[key] = row
             else:
                 output[key] = value
         return output
@@ -433,13 +470,39 @@ class ManagementStore:
         return value[:3] + "••••••" + value[-3:]
 
     @staticmethod
-    def runtime_key_allowed(key: str) -> bool:
+    def _groq_env_key_allowed(key: str) -> bool:
         key = str(key or "").strip()
-        if key.startswith("GROQ_API_KEY_"):
-            suffix = key[len("GROQ_API_KEY_"):]
-            return bool(suffix) and len(suffix) <= 64 and all(
-                char.isalnum() or char == "_" for char in suffix
+        if not key.startswith("GROQ_API_KEY_"):
+            return False
+        suffix = key[len("GROQ_API_KEY_"):]
+        return bool(suffix) and len(suffix) <= 64 and all(
+            char.isalnum() or char == "_" for char in suffix
+        )
+
+    @classmethod
+    def parse_groq_token_limit(cls, value: Any) -> int:
+        if value in (None, ""):
+            return 0
+        if isinstance(value, bool):
+            raise ValueError("Groq token limit must be an integer")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Groq token limit must be an integer") from exc
+        if parsed < 0 or parsed > cls.MAX_GROQ_TOKEN_LIMIT:
+            raise ValueError(
+                f"Groq token limit must be between 0 and {cls.MAX_GROQ_TOKEN_LIMIT}"
             )
+        return parsed
+
+    @classmethod
+    def runtime_key_allowed(cls, key: str) -> bool:
+        key = str(key or "").strip()
+        if cls._groq_env_key_allowed(key):
+            return True
+        if key.startswith(cls.GROQ_TOKEN_LIMIT_PREFIX):
+            env_key = key[len(cls.GROQ_TOKEN_LIMIT_PREFIX):]
+            return cls._groq_env_key_allowed(env_key)
         return key in {
             "HF_TOKEN",
             "llm.model",
@@ -493,15 +556,249 @@ class ManagementStore:
             "tools.max_llm_rounds_per_turn",
         }
 
+    @staticmethod
+    def _groq_secret_fingerprint(secret: str) -> str:
+        return hashlib.sha256(str(secret or "").encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _groq_usage_day() -> str:
+        # Provider daily quotas are tracked in a stable UTC calendar bucket.
+        return datetime.now(timezone.utc).date().isoformat()
+
+    def _roll_groq_day_locked(self, row: dict[str, Any]) -> bool:
+        today = self._groq_usage_day()
+        stored_day = str(row.get("usage_day") or "")
+        if not stored_day:
+            # Existing counters were introduced today; preserve them during
+            # the one-time migration from lifetime to daily accounting.
+            row["usage_day"] = today
+            return True
+        if stored_day == today:
+            return False
+        row["usage_day"] = today
+        row["used_tokens"] = 0
+        row["updated_at"] = int(time.time())
+        return True
+
+    def _drop_groq_reservations_locked(self, env_key: str) -> None:
+        self._groq_reservations = {
+            reservation_id: row
+            for reservation_id, row in self._groq_reservations.items()
+            if row.get("env_key") != env_key
+        }
+
+    def _ensure_groq_credential_locked(
+        self,
+        env_key: str,
+        secret: str,
+    ) -> tuple[dict[str, Any], bool]:
+        if not self._groq_env_key_allowed(env_key):
+            raise ValueError(f"invalid Groq key name: {env_key}")
+        fingerprint = self._groq_secret_fingerprint(secret)
+        credentials = self._state.setdefault("groq_credentials", {})
+        existing = credentials.get(env_key)
+        if (
+            isinstance(existing, dict)
+            and existing.get("secret_fingerprint") == fingerprint
+            and existing.get("instance_id")
+        ):
+            return existing, False
+        now = int(time.time())
+        row = {
+            "instance_id": uuid.uuid4().hex,
+            "secret_fingerprint": fingerprint,
+            "used_tokens": 0,
+            "token_limit": 0,
+            "usage_day": self._groq_usage_day(),
+            "created_at": now,
+            "updated_at": now,
+        }
+        credentials[env_key] = row
+        self._drop_groq_reservations_locked(env_key)
+        return row, True
+
+    def ensure_groq_credential(self, env_key: str, secret: str) -> dict[str, Any]:
+        """Ensure one usage identity for this exact credential value.
+
+        A changed secret, or a key that was deleted and later re-added, gets a
+        fresh instance with today's usage=0 and no inherited daily limit.
+        """
+        secret = str(secret or "").strip()
+        if not secret:
+            raise ValueError("Groq key secret is required")
+        with self._lock:
+            row, changed = self._ensure_groq_credential_locked(env_key, secret)
+            rolled = self._roll_groq_day_locked(row)
+            if changed or rolled:
+                self._write()
+            return {
+                "instance_id": str(row["instance_id"]),
+                "used_tokens": max(0, int(row.get("used_tokens") or 0)),
+                "token_limit": max(0, int(row.get("token_limit") or 0)),
+            }
+
+    def groq_budget_snapshot(
+        self,
+        env_key: str,
+        instance_id: str = "",
+    ) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self._state.get("groq_credentials", {}).get(str(env_key))
+            if not isinstance(row, dict):
+                return None
+            if instance_id and str(row.get("instance_id") or "") != str(instance_id):
+                return None
+            self._roll_groq_day_locked(row)
+            used = max(0, int(row.get("used_tokens") or 0))
+            limit = max(0, int(row.get("token_limit") or 0))
+            reserved = sum(
+                max(0, int(item.get("estimated_tokens") or 0))
+                for item in self._groq_reservations.values()
+                if item.get("env_key") == env_key
+                and item.get("instance_id") == row.get("instance_id")
+            )
+            return {
+                "instance_id": str(row.get("instance_id") or ""),
+                "used_tokens": used,
+                "token_limit": limit,
+                "reserved_tokens": reserved,
+                "remaining_tokens": (
+                    max(0, limit - used - reserved) if limit > 0 else None
+                ),
+            }
+
+    def try_reserve_groq_tokens(
+        self,
+        env_key: str,
+        instance_id: str,
+        estimated_tokens: int,
+    ) -> Optional[int]:
+        estimated = max(1, int(estimated_tokens))
+        with self._lock:
+            row = self._state.get("groq_credentials", {}).get(str(env_key))
+            if (
+                not isinstance(row, dict)
+                or str(row.get("instance_id") or "") != str(instance_id)
+            ):
+                return None
+            self._roll_groq_day_locked(row)
+            used = max(0, int(row.get("used_tokens") or 0))
+            limit = max(0, int(row.get("token_limit") or 0))
+            reserved = sum(
+                max(0, int(item.get("estimated_tokens") or 0))
+                for item in self._groq_reservations.values()
+                if item.get("env_key") == env_key
+                and item.get("instance_id") == instance_id
+            )
+            if limit > 0 and used + reserved + estimated > limit:
+                return None
+            reservation_id = next(self._groq_reservation_ids)
+            self._groq_reservations[reservation_id] = {
+                "env_key": env_key,
+                "instance_id": instance_id,
+                "estimated_tokens": estimated,
+            }
+            return reservation_id
+
+    def settle_groq_token_reservation(
+        self,
+        reservation_id: Optional[int],
+        *,
+        outcome: str,
+        actual_tokens: int = 0,
+    ) -> int:
+        if reservation_id is None:
+            return 0
+        if outcome not in {"ok", "rejected", "uncertain"}:
+            raise ValueError(f"invalid Groq token settlement: {outcome}")
+        with self._lock:
+            reserved = self._groq_reservations.pop(int(reservation_id), None)
+            if not reserved or outcome == "rejected":
+                return 0
+            credentials = self._state.setdefault("groq_credentials", {})
+            row = credentials.get(str(reserved.get("env_key") or ""))
+            if (
+                not isinstance(row, dict)
+                or str(row.get("instance_id") or "")
+                != str(reserved.get("instance_id") or "")
+            ):
+                return 0
+            self._roll_groq_day_locked(row)
+            estimated = max(0, int(reserved.get("estimated_tokens") or 0))
+            actual = max(0, int(actual_tokens or 0))
+            charged = actual if outcome == "ok" and actual > 0 else estimated
+            if charged <= 0:
+                return 0
+            row["used_tokens"] = max(
+                0, int(row.get("used_tokens") or 0)
+            ) + charged
+            row["updated_at"] = int(time.time())
+            return charged
+
+    def flush(self) -> None:
+        """Persist the current in-memory management state atomically."""
+        with self._lock:
+            self._write()
+
+    def groq_state_raw(self) -> dict[str, Any]:
+        with self._lock:
+            return copy.deepcopy(self._state.get("groq_credentials", {}))
+
+    def restore_groq_state(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            self._state["groq_credentials"] = copy.deepcopy(dict(state or {}))
+            self._groq_reservations.clear()
+            self._write()
+
     def update_runtime(self, changes: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(changes, dict):
             raise ValueError("runtime changes must be an object")
+        normalized = {str(key).strip(): value for key, value in changes.items()}
+        for key in normalized:
+            if not self.runtime_key_allowed(key):
+                raise ValueError(f"runtime setting is not allowed: {key}")
+            if key.startswith(self.GROQ_TOKEN_LIMIT_PREFIX):
+                self.parse_groq_token_limit(normalized[key])
+
         with self._lock:
             runtime = self._state.setdefault("runtime", {})
-            for key, value in changes.items():
-                key = str(key).strip()
-                if not self.runtime_key_allowed(key):
-                    raise ValueError(f"runtime setting is not allowed: {key}")
+            credentials = self._state.setdefault("groq_credentials", {})
+
+            # Credential identity is applied before limits so one PATCH may add
+            # a new key and configure its fresh daily budget atomically.
+            for key, value in normalized.items():
+                if not self._groq_env_key_allowed(key):
+                    continue
+                if value is None or value == "":
+                    runtime.pop(key, None)
+                    credentials.pop(key, None)
+                    self._drop_groq_reservations_locked(key)
+                    continue
+                secret = str(value).strip()
+                runtime[key] = secret
+                self._ensure_groq_credential_locked(key, secret)
+
+            for key, value in normalized.items():
+                if not key.startswith(self.GROQ_TOKEN_LIMIT_PREFIX):
+                    continue
+                env_key = key[len(self.GROQ_TOKEN_LIMIT_PREFIX):]
+                secret = str(runtime.get(env_key) or "").strip()
+                if not secret:
+                    raise ValueError(
+                        f"configure {env_key} before setting its token limit"
+                    )
+                row, _changed = self._ensure_groq_credential_locked(
+                    env_key, secret
+                )
+                row["token_limit"] = self.parse_groq_token_limit(value)
+                row["updated_at"] = int(time.time())
+
+            for key, value in normalized.items():
+                if (
+                    self._groq_env_key_allowed(key)
+                    or key.startswith(self.GROQ_TOKEN_LIMIT_PREFIX)
+                ):
+                    continue
                 if value is None or value == "":
                     runtime.pop(key, None)
                 else:

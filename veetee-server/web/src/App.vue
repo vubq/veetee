@@ -28,7 +28,7 @@ const {
   assistantDraft, pairing, runtimeDraft, toast, pairedActiveDevices, onlineDevices,
   notify, fmtTime, secretPlaceholder, login, loadPublicData, loadManagedData, refreshAll,
   prepareNewAssistant, prepareEditAssistant, saveAssistant, toggleAssistant, deleteAssistant,
-  pairDevice, updateDevice, revokeDevice, addGroqKey, updateGroqKey, removeGroqKey, saveRuntime,
+  pairDevice, updateDevice, revokeDevice, addGroqKey, updateGroqKey, updateGroqLimit, removeGroqKey, saveRuntime,
 } = dashboard
 
 const voice = useVoiceConsole({ authRequired, notify, health })
@@ -214,6 +214,7 @@ onMounted(async () => {
             @update="updateRuntime"
             @add-groq-key="addGroqKey"
             @update-groq-key="updateGroqKey"
+            @update-groq-limit="updateGroqLimit"
             @remove-groq-key="removeGroqKey"
             @save="saveRuntime"
           />

@@ -59,7 +59,7 @@ GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_ENV_PREFIX = "GROQ_API_KEY_"
 
 
-def build_engine_from_config(llm_config, *, server_dir: str):
+def build_engine_from_config(llm_config, *, server_dir: str, usage_store=None):
     """Build a GroqDirectLLM from LLMConfig. Raises on unusable pool."""
     import os as _os
 
@@ -96,6 +96,7 @@ def build_engine_from_config(llm_config, *, server_dir: str):
         inflight_penalty_s=float(getattr(routing, "inflight_penalty_s", 0.4)),
         ewma_alpha=float(getattr(routing, "latency_ewma_alpha", 0.3)),
         jitter_penalty=float(getattr(routing, "latency_jitter_penalty", 0.75)),
+        usage_store=usage_store,
     )
     allowed = [llm_config.model] + [
         m for m in (getattr(llm_config, "extra_models", []) or [])
@@ -175,6 +176,7 @@ def build_targets_from_env(
             quota_group=str(entry.get("quota_group") or f"g{alias}"),
             base_url=base_url,
             enabled=bool(entry.get("enabled", True)),
+            env_key=env_name,
         ))
     return targets
 
@@ -273,6 +275,9 @@ class GroqDirectLLM(BaseLLM):
 
     async def quota_snapshot(self) -> Dict[str, Dict[str, Any]]:
         return await self._router.quota_snapshot()
+
+    def bind_usage_store(self, usage_store) -> None:
+        self._router.bind_usage_store(usage_store)
 
     async def configure_routing(
         self,
@@ -612,6 +617,7 @@ class GroqDirectLLM(BaseLLM):
         if self._shared_transport_owner is not None:
             self._http_session = None
             return
+        await self._router.flush_usage()
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
         self._http_session = None

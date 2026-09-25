@@ -64,6 +64,7 @@ describe('useDashboard', () => {
     const dashboard = useDashboard()
     dashboard.addGroqKey()
     dashboard.groqKeys.value[0].value = '  secret-a  '
+    dashboard.groqKeys.value[0].tokenLimit = '50000'
     dashboard.runtimeDraft['llm.model'] = 'model-a'
 
     const ok = await dashboard.saveRuntime()
@@ -74,10 +75,26 @@ describe('useDashboard', () => {
     expect(options.method).toBe('PATCH')
     const body = JSON.parse(options.body)
     expect(body.values.GROQ_API_KEY_1).toBe('secret-a')
+    expect(body.values['groq.token_limit.GROQ_API_KEY_1']).toBe(50000)
     expect(body.values['llm.model']).toBe('model-a')
     expect(dashboard.restartRequired.value).toBe(false)
     expect(dashboard.health.value?.readiness).toBe('ready')
     expect(dashboard.toast.text).toContain('hot-reload')
+  })
+
+  it('rejects an invalid per-key token limit before calling the API', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const dashboard = useDashboard()
+    dashboard.groqKeys.value[0].value = 'secret-a'
+    dashboard.groqKeys.value[0].tokenLimit = '-1'
+
+    const ok = await dashboard.saveRuntime()
+
+    expect(ok).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(dashboard.toast.text).toContain('Token limit')
   })
 
   it('sends TTS fairness tuning as numeric runtime settings', async () => {

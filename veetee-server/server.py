@@ -32,6 +32,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("VeeTeeServer")
 
+_GROQ_TOKEN_LIMIT_PREFIX = "groq.token_limit."
+_MAX_GROQ_TOKEN_LIMIT = 10**12
+
 _RUNTIME_INT_SETTINGS = {
     "latency.target_first_audio_ms": ("latency", "target_first_audio_ms", 100, 5000),
     "latency.first_token_timeout_ms": ("latency", "first_token_timeout_ms", 100, 30000),
@@ -194,6 +197,22 @@ def _runtime_float_value(key: str, value) -> float:
     return parsed
 
 
+def _groq_token_limit_value(value) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, bool):
+        raise ValueError("Groq token limit must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Groq token limit must be an integer") from exc
+    if parsed < 0 or parsed > _MAX_GROQ_TOKEN_LIMIT:
+        raise ValueError(
+            f"Groq token limit must be between 0 and {_MAX_GROQ_TOKEN_LIMIT}"
+        )
+    return parsed
+
+
 class VeeTeeServer:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -310,7 +329,10 @@ class VeeTeeServer:
         # repair runtime configuration from the dashboard.
         try:
             self.llm_engine = build_engine_from_config(
-                config.llm, server_dir=server_dir)
+                config.llm,
+                server_dir=server_dir,
+                usage_store=self.management_store,
+            )
         except Exception as exc:
             logger.error("LLM initialization unavailable; starting management plane degraded: %s", exc)
             self.llm_engine = UnavailableLLM(
@@ -378,6 +400,8 @@ class VeeTeeServer:
         for key in normalized:
             if not ManagementStore.runtime_key_allowed(key):
                 raise ValueError(f"runtime setting is not allowed: {key}")
+            if key.startswith(_GROQ_TOKEN_LIMIT_PREFIX):
+                normalized[key] = _groq_token_limit_value(normalized[key])
         for key in set(normalized).intersection(_RUNTIME_INT_SETTINGS):
             if normalized[key] in (None, ""):
                 continue
@@ -462,6 +486,7 @@ class VeeTeeServer:
             if key.startswith("llm.routing.")
         }
         previous_runtime = self.management_store.runtime_raw()
+        previous_groq_state = self.management_store.groq_state_raw()
         runtime_persisted = False
         previous_int_values = {
             key: _config_attr(self.config, section, attr)
@@ -602,6 +627,15 @@ class VeeTeeServer:
 
             values = self.management_store.update_runtime(normalized)
             runtime_persisted = True
+
+            # The staged engine is deliberately not bound before warmup: a bad
+            # credential must not reset/persist today's usage. Bind only after
+            # the runtime transaction has committed successfully.
+            if new_llm is not None:
+                bind_usage = getattr(new_llm, "bind_usage_store", None)
+                if callable(bind_usage):
+                    bind_usage(self.management_store)
+                values = self.management_store.runtime_public()
 
             if "llm.model" in normalized and normalized["llm.model"]:
                 self.config.llm.model = str(normalized["llm.model"]).strip()
@@ -802,6 +836,9 @@ class VeeTeeServer:
                 }
                 try:
                     self.management_store.update_runtime(restore_runtime)
+                    self.management_store.restore_groq_state(
+                        previous_groq_state
+                    )
                 except Exception as restore_exc:
                     logger.error("Runtime persistence rollback failed: %s", restore_exc)
             for key, old_value in previous_int_values.items():
