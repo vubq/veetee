@@ -130,7 +130,7 @@ class LLMConfig:
     extra_models: list = field(default_factory=list)
     model_reasoning_effort: dict = field(default_factory=dict)
     temperature: float = 0.6
-    max_tokens: int = 320
+    max_tokens: int = 600
     # Provider transport budgets. TurnRunner still owns the stricter
     # first-usable-event/whole-turn deadlines; these prevent socket/probe
     # requests from outliving the configured runtime budget.

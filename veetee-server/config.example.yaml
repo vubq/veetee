@@ -118,7 +118,7 @@ llm:
     first_soft_cut_chars: 0
     first_soft_cut_min_words: 3
   temperature: 0.6
-  max_tokens: 320
+  max_tokens: 600
   request_timeout_ms: 15000
   probe_timeout_ms: 8000
   control_timeout_ms: 2000

@@ -43,7 +43,7 @@ class GroqProviderConfigTests(unittest.TestCase):
         self.assertEqual(config.llm.key_pool, [])
         self.assertEqual(config.server.timezone, DEFAULT_TIMEZONE)
         self.assertEqual(config.latency.target_first_audio_ms, 600)
-        self.assertEqual(config.llm.max_tokens, 320)
+        self.assertEqual(config.llm.max_tokens, 600)
 
     def test_minimal_pool_parses_and_defaults_group(self):
         path = write_temp(MINIMAL_YAML)
