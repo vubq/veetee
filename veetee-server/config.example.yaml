@@ -187,7 +187,7 @@ conversation:
   history_summary_max_chars: 1200
   history_summary_defer_ms: 250
   goodbye_enabled: true
-  end_intent_ai_enabled: false
+  end_intent_ai_enabled: true
   ai_control_timeout_ms: 1800
   wake_start_wait_ms: 150
   fixed_response_timeout_seconds: 5
@@ -213,7 +213,7 @@ management:
 
 intent:
   enabled: true
-  semantic_end_enabled: false
+  semantic_end_enabled: true
   confirmation_ttl_seconds: 15
 
 memory:

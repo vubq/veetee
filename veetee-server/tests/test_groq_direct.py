@@ -353,6 +353,28 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[surprised]", speech)
         self.assertNotIn("[happy]", speech)
 
+    async def test_end_control_marker_is_hidden_and_emitted_before_complete_farewell(self):
+        chunks = [
+            chat_chunk("[end][relaxed]Ừ, tạm biệt nhé.", finish="stop"),
+            b"data: [DONE]\n\n",
+        ]
+        session = FakeSession([FakeResponse(status=200, chunks=chunks)])
+        llm, _, _ = make_provider(session)
+        events = [e async for e in llm.stream_turn(
+            [{"role": "user", "content": "Tạm biệt."}],
+            detect_end_intent=True,
+        )]
+        control_index = next(i for i, e in enumerate(events) if isinstance(e, ControlEvent))
+        speech_index = next(i for i, e in enumerate(events) if isinstance(e, SpeechSegmentEvent))
+        control = events[control_index]
+        speech = " ".join(e.text for e in events if isinstance(e, SpeechSegmentEvent))
+        self.assertLess(control_index, speech_index)
+        self.assertEqual(control.lifecycle, "end")
+        self.assertEqual(control.intent, "end_conversation")
+        self.assertEqual(speech, "Ừ, tạm biệt nhé.")
+        self.assertNotIn("[end]", speech)
+        self.assertNotIn("[relaxed]", speech)
+
     async def test_stream_without_done_sentinel_still_completes(self):
         # gpt-oss sometimes closes right after finish_reason=stop.
         chunks = [chat_chunk("[continue]Ừm."),
@@ -372,6 +394,44 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
                          "Để tôi bật nhạc cho bạn nhé.")
         self.assertEqual(clean("Mã [ABC] vẫn giữ nguyên."),
                          "Mã [ABC] vẫn giữ nguyên.")
+
+    async def test_end_marker_before_tool_call_does_not_end_tool_round(self):
+        tool_delta = [{
+            "index": 0,
+            "id": "call-music",
+            "function": {
+                "name": "music_play",
+                "arguments": '{"query":"Sóng gió"}',
+            },
+        }]
+        chunks = [
+            chat_chunk("[end]"),
+            sse_data({"choices": [{"delta": {"tool_calls": tool_delta},
+                                    "finish_reason": None}]}),
+            sse_data({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+            b"data: [DONE]\n\n",
+        ]
+        session = FakeSession([FakeResponse(status=200, chunks=chunks)])
+        llm, _, _ = make_provider(session)
+        events = [e async for e in llm.stream_turn(
+            [{"role": "user", "content": "Bật Sóng gió rồi mình đi đây"}],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "music_play",
+                    "description": "Phát nhạc",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            detect_end_intent=True,
+        )]
+        controls = [e for e in events if isinstance(e, ControlEvent)]
+        calls = [e for e in events if isinstance(e, ToolCallReadyEvent)]
+        self.assertEqual(len(controls), 1)
+        self.assertEqual(controls[0].intent, "tool_request")
+        self.assertEqual(controls[0].lifecycle, "continue")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].name, "music_play")
 
     async def test_internal_tool_name_in_speech_is_blocked_and_retried_as_tool_call(self):
         leak_chunks = [

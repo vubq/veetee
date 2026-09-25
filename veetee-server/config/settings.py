@@ -203,7 +203,7 @@ class ConversationConfig:
     goodbye_enabled: bool = True
     goodbye_text: str = ""
     goodbye_ai_enabled: bool = True
-    end_intent_ai_enabled: bool = False
+    end_intent_ai_enabled: bool = True
     ai_control_timeout_ms: int = 1800
     wake_start_wait_ms: int = 150
     fixed_response_timeout_seconds: float = 5.0
@@ -230,7 +230,7 @@ class LatencyConfig:
 @dataclass
 class IntentConfig:
     enabled: bool = True
-    semantic_end_enabled: bool = False
+    semantic_end_enabled: bool = True
     confirmation_ttl_seconds: float = 15.0
 
 

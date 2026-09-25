@@ -13,6 +13,7 @@ from core.tools.base import READ_ONLY_TOOL_DESCRIPTION_MARKER
 from core.ai_contract import (
     ASR_CORRECTION_PROMPT,
     CONFIRMATION_TOOL_NAME,
+    END_INTENT_VERIFICATION_PROMPT,
     INLINE_CONVERSATION_CONTROL_PROMPT,
     MEMORY_TOOL_NAME,
     RECOVERY_MESSAGE_PROMPT,
@@ -320,6 +321,24 @@ class OmnirouteGroqLLM(BaseLLM):
         if min_words > 0 and len(re.findall(r"[^\W_]+", cleaned, flags=re.UNICODE)) < min_words:
             return ""
         return cleaned
+
+    async def verify_end_intent(self, messages: List[Dict[str, Any]]) -> bool:
+        dialogue = [
+            {"role": str(item.get("role") or ""), "content": str(item.get("content") or "")}
+            for item in messages
+            if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+        ][-8:]
+        raw = await self._control_completion(
+            END_INTENT_VERIFICATION_PROMPT,
+            json.dumps(dialogue, ensure_ascii=False, separators=(",", ":")),
+            temperature=0.0,
+            max_tokens=4,
+            include_persona=False,
+        )
+        match = re.match(r"^\s*(END|CONTINUE)", str(raw or ""), flags=re.IGNORECASE)
+        verified = bool(match and match.group(1).upper() == "END")
+        mark_current("llm_end_verify_result", verified=verified, valid=bool(match))
+        return verified
 
     async def generate_recovery_message(self) -> str:
         raw = await self._control_completion(
@@ -630,7 +649,14 @@ class OmnirouteGroqLLM(BaseLLM):
             )
             return ControlEvent(
                 intent=intent,
-                lifecycle="end" if inline_end_intent else "continue",
+                # Tool rounds are never terminal. Even if the model emitted an
+                # inline [end] marker before a tool call, the action/receipt
+                # (and possible confirmation or chained tool) must finish first.
+                # A later speech-only synthesis round may then end the session.
+                lifecycle=(
+                    "continue" if tool
+                    else ("end" if inline_end_intent else "continue")
+                ),
                 emotion=emotion,
             )
 

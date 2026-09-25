@@ -325,6 +325,38 @@ class SpeculativeLLMTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.calls), 2)
         self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
 
+    async def test_speculative_result_is_not_reused_when_lifecycle_mode_changes(self):
+        llm = CountingNativeLLM()
+        session, websocket = make_speculative_session(llm)
+
+        await session._on_asr_speculative_transcript(
+            "Tạm biệt.",
+            0.99,
+            session._capture_generation,
+        )
+        task = session._speculative_llm_task
+        self.assertIsNotNone(task)
+        await asyncio.wait_for(task, timeout=1.0)
+        self.assertEqual(len(llm.calls), 1)
+        self.assertTrue(llm.calls[0]["detect_end_intent"])
+
+        # A runtime lifecycle-policy change between speculative ASR and final
+        # commit must invalidate the speculative event stream.
+        session.config.intent.semantic_end_enabled = False
+        await session._on_asr_transcript(
+            "Tạm biệt.",
+            True,
+            True,
+            session._capture_generation,
+        )
+        turn = session.current_turn_task
+        self.assertIsNotNone(turn)
+        await asyncio.wait_for(turn, timeout=1.0)
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertFalse(llm.calls[1]["detect_end_intent"])
+        self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
+
     async def test_speculative_tts_prefetch_never_sends_before_final_and_is_reused(self):
         llm = CountingNativeLLM()
         tts = CountingPrefetchTTS()

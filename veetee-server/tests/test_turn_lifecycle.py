@@ -61,6 +61,18 @@ class FailingLLM:
         raise RuntimeError("simulated producer failure")
 
 
+class EndThenFailLLM:
+    async def stream_turn(
+        self, messages, *, tools=None, detect_end_intent=True, tool_choice=None
+    ):
+        yield ControlEvent(
+            intent="end_conversation",
+            lifecycle="end",
+            emotion="relaxed",
+        )
+        raise RuntimeError("simulated failure after end control")
+
+
 class NativeToolLLM:
     def __init__(self, *, second_round_tool_call=False, second_round_delay=0.0):
         self.calls = []
@@ -534,6 +546,17 @@ class TurnLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(item, bytes) for item in websocket.sent))
         self.assertEqual(session.turn_metrics.latest_summary()["outcome"], "failed")
         self.assertEqual(session.state, SessionState.LISTENING)
+
+    async def test_failed_end_turn_clears_closing_state_and_returns_to_listening(self):
+        session, websocket = self.make_session(llm=EndThenFailLLM())
+        await session._trigger_ai_turn("Tạm biệt", check_end_intent=True)
+        task = session.current_turn_task
+        await asyncio.wait_for(task, timeout=1.0)
+
+        self.assertTrue(session.is_active)
+        self.assertIsNone(session._closing_reason)
+        self.assertEqual(session.state, SessionState.LISTENING)
+        self.assertFalse(session._idle_busy())
 
     async def test_network_send_stall_is_cancelled_by_client_abort(self):
         websocket = StallingBinaryWebSocket()

@@ -23,11 +23,17 @@ Time: server_clock của lượt là authoritative cho giờ/ngày/thứ local. 
 Luôn theo persona; thiếu dữ kiện thì hỏi ngắn.
 """
 
+END_INTENT_VERIFICATION_PROMPT = """Xác minh lifecycle của lời USER mới nhất trong ngữ cảnh hội thoại.
+Chỉ trả đúng END hoặc CONTINUE.
+END chỉ khi USER thật sự muốn kết thúc chính phiên hiện tại và không còn câu hỏi/tác vụ khác.
+CONTINUE nếu USER đang hỏi/giải thích/trích dẫn/nhắc tới lời chào, nói giả định, kết thúc việc khác, còn yêu cầu khác, hoặc ý định mơ hồ.
+Khi không chắc chắn, trả CONTINUE."""
+
 INLINE_CONVERSATION_CONTROL_PROMPT = """Lifecycle là metadata nội bộ.
-Cần tool: gọi tool trước speech, không cần marker trước tool call.
-Trả lời bằng lời: đúng dạng [continue][emotion]Nội dung... hoặc [end][emotion]Nội dung....
-[end] chỉ khi lời mới nhất rõ ràng muốn kết thúc CHÍNH phiên hiện tại và không còn câu hỏi/tác vụ khác; nói một câu chào ngắn.
-[continue] cho mọi trường hợp khác, kể cả mơ hồ/trích dẫn/giả định hay kết thúc tác vụ khác; không hiểu thì hỏi lại. hoàn tất tác vụ không đồng nghĩa đóng phiên.
+Cần tool: gọi tool trước speech; không cần marker trước tool call.
+Trả lời bằng lời: [continue][emotion]Nội dung... hoặc [end][emotion]Nội dung....
+[end] chỉ khi lời mới nhất rõ ràng muốn kết thúc CHÍNH phiên hiện tại và không còn câu hỏi/tác vụ; chào ngắn, tự nhiên, trọn nghĩa; cấm câu dang dở.
+[continue] cho mọi trường hợp khác: mơ hồ, phủ định ("mình không nói tạm biệt"), trích dẫn, giả định hoặc chỉ kết thúc tác vụ; không hiểu thì hỏi lại. Xong tác vụ không đồng nghĩa đóng phiên.
 Không đọc/giải thích marker."""
 
 RECOVERY_MESSAGE_PROMPT = """Tạo đúng một câu hoàn chỉnh để trợ lý giọng nói dùng khi một lượt xử lý không hoàn tất.

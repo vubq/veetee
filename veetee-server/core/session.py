@@ -1978,6 +1978,7 @@ class ClientSession:
             "capture_generation": capture_generation,
             "pending_action_id": pending_action_id,
             "music_action_gate": music_action_gate,
+            "detect_end_intent": detect_end_intent,
             "persona_version": persona_version,
             "catalog_hash": catalog_hash,
             "base_dialogue_hash": base_dialogue_hash,
@@ -2428,6 +2429,7 @@ class ClientSession:
         )
         queue_done = object()
         producer_errors: list[BaseException] = []
+        deferred_producer_error: Optional[BaseException] = None
 
         generation_deadline = (
             time.monotonic() + self.config.latency.total_turn_timeout_ms / 1000.0
@@ -2624,6 +2626,8 @@ class ClientSession:
                                 == current_pending_id
                                 and bool(result.get("music_action_gate"))
                                 == music_action_gate
+                                and bool(result.get("detect_end_intent"))
+                                == bool(detect_end_intent)
                                 and result.get("persona_version")
                                 == persona_version
                                 and result.get("catalog_hash")
@@ -3010,13 +3014,19 @@ class ClientSession:
             while True:
                 if producer_task.done() and event_queue.empty():
                     if producer_errors:
-                        raise producer_errors[0]
+                        if speech_committed:
+                            deferred_producer_error = producer_errors[0]
+                        else:
+                            raise producer_errors[0]
                     break
 
                 event = await event_queue.get()
                 if event is queue_done:
                     if producer_errors:
-                        raise producer_errors[0]
+                        if speech_committed:
+                            deferred_producer_error = producer_errors[0]
+                        else:
+                            raise producer_errors[0]
                     break
 
                 if cancel_event.is_set() or not self._owns_turn(turn_generation):
@@ -3475,7 +3485,7 @@ class ClientSession:
 
             if cancel_event.is_set() or not self._owns_turn(turn_generation):
                 return
-            if not completed:
+            if not completed and deferred_producer_error is None:
                 raise RuntimeError("LLM turn ended without CompletedEvent")
             # Persona snapshot must stay consistent across rounds of one turn.
             if self._persona_snapshot() != persona_version:
@@ -3918,6 +3928,13 @@ class ClientSession:
             # without increasing client send-ahead.
             await finish_speech_pipeline()
 
+            # If the provider failed only after speech had already committed,
+            # let the queued TTS finish first. This preserves truthful audio
+            # that was already accepted by the turn, then marks the turn failed
+            # and closes the TTS envelope through the normal exception path.
+            if deferred_producer_error is not None:
+                raise deferred_producer_error
+
             if close_reason and tts_started:
                 drain_seconds = pacer.estimated_lead_ms() / 1000.0
                 drain_seconds += self.config.conversation.close_grace_ms / 1000.0
@@ -4080,6 +4097,10 @@ class ClientSession:
                 # A failed turn must not suppress the same utterance on the
                 # next genuine capture.
                 self.processed_transcript = ""
+                # A requested semantic close only becomes final after a
+                # successful farewell pipeline. Any failed turn returns to
+                # listening and must not leave the session permanently busy.
+                self._closing_reason = None
                 self._discard_asr_until_speech_final = False
                 self._speech_active = False
                 self.final_transcript_parts.clear()

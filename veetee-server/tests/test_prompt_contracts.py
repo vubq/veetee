@@ -36,7 +36,9 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("[end]", INLINE_CONVERSATION_CONTROL_PROMPT)
         self.assertIn("CHÍNH phiên hiện tại", INLINE_CONVERSATION_CONTROL_PROMPT)
         self.assertIn("[continue] cho mọi trường hợp khác", INLINE_CONVERSATION_CONTROL_PROMPT)
-        self.assertIn("hoàn tất tác vụ không đồng nghĩa đóng phiên", INLINE_CONVERSATION_CONTROL_PROMPT)
+        self.assertIn("phủ định", INLINE_CONVERSATION_CONTROL_PROMPT)
+        self.assertIn("mình không nói tạm biệt", INLINE_CONVERSATION_CONTROL_PROMPT)
+        self.assertIn("tác vụ không đồng nghĩa đóng phiên", INLINE_CONVERSATION_CONTROL_PROMPT)
 
     def test_clock_snapshot_is_compact_authoritative_data(self):
         message = clock_context(DEFAULT_TIMEZONE)
