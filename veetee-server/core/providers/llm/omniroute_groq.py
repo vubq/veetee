@@ -313,7 +313,7 @@ class OmnirouteGroqLLM(BaseLLM):
         cleaned = str(text or "").strip().strip('"“”').strip()
         # Same contract-marker hygiene as _clean_text: a cached recovery
         # sentence with "[happy]" baked in would otherwise speak the tag.
-        cleaned = re.sub(r"\[[^\[\]\n]{1,32}\]", "", cleaned)
+        cleaned = re.sub(r"\[(?i:happy|neutral|sad|surprised|thinking|angry|relaxed|end|continue)\]\s*", "", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
             return ""
@@ -373,7 +373,7 @@ class OmnirouteGroqLLM(BaseLLM):
         # so later-clause tags would otherwise leak into spoken audio.
         # Control parsing runs on raw tokens before this cleaner, so stripping
         # here cannot break end-intent detection.
-        text = re.sub(r"\[[^\[\]\n]{1,32}\]", "", text)
+        text = re.sub(r"\[(?i:happy|neutral|sad|surprised|thinking|angry|relaxed|end|continue)\]\s*", "", text)
         # Roleplayed tool invocations must never be spoken: a follow-up round
         # has no tools, so a model that "calls" here is narrating, not acting.
         # Drop the whole clause (roleplay blocks rarely close their tags).

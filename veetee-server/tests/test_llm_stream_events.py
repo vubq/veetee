@@ -72,6 +72,8 @@ class LLMStreamEventTests(unittest.TestCase):
         self.assertEqual(clean("Ừm [happy] mình hiểu rồi nhé."),
                          "Ừm mình hiểu rồi nhé.")
         self.assertEqual(clean("[end] Tạm biệt nhé."), "Tạm biệt nhé.")
+        self.assertEqual(clean("Mã [ABC] vẫn phải được đọc nguyên vẹn."),
+                         "Mã [ABC] vẫn phải được đọc nguyên vẹn.")
         self.assertEqual(
             clean("<tool_call> <function=music_play> <parameter>video_id> x"),
             "")
@@ -83,6 +85,8 @@ class LLMStreamEventTests(unittest.TestCase):
         clean = OmnirouteGroqLLM._clean_control_sentence
         self.assertEqual(clean("[happy] Khoan, hơi trục trặc chút."),
                          "Khoan, hơi trục trặc chút.")
+        self.assertEqual(clean("Mã [ABC] vẫn hợp lệ."),
+                         "Mã [ABC] vẫn hợp lệ.")
         self.assertEqual(clean("Ừm, để tôi xử lý lại nha."),
                          "Ừm, để tôi xử lý lại nha.")
 

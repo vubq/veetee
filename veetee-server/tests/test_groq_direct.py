@@ -370,6 +370,8 @@ class GroqDirectTests(unittest.IsolatedAsyncioTestCase):
             "")
         self.assertEqual(clean("Để tôi bật nhạc cho bạn nhé."),
                          "Để tôi bật nhạc cho bạn nhé.")
+        self.assertEqual(clean("Mã [ABC] vẫn giữ nguyên."),
+                         "Mã [ABC] vẫn giữ nguyên.")
 
     async def test_internal_tool_name_in_speech_is_blocked_and_retried_as_tool_call(self):
         leak_chunks = [

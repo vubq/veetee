@@ -411,7 +411,7 @@ class GroqDirectLLM(BaseLLM):
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
         text = text.replace("**", "").replace("*", "").replace("#", "").replace("`", "")
-        text = re.sub(r"\[[^\[\]\n]{1,32}\]", "", text)
+        text = re.sub(r"\[(?i:happy|neutral|sad|surprised|thinking|angry|relaxed|end|continue)\]\s*", "", text)
         # Roleplayed tool invocations must never be spoken: a follow-up round
         # has no tools, so a model that "calls" here is narrating, not acting.
         # Drop the whole clause (roleplay blocks rarely close their tags).
@@ -429,7 +429,7 @@ class GroqDirectLLM(BaseLLM):
         min_words: int = 0,
     ) -> str:
         cleaned = str(text or "").strip().strip('"“”').strip()
-        cleaned = re.sub(r"\[[^\[\]\n]{1,32}\]", "", cleaned)
+        cleaned = re.sub(r"\[(?i:happy|neutral|sad|surprised|thinking|angry|relaxed|end|continue)\]\s*", "", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         if not cleaned or len(cleaned) > max_chars or "\n" in cleaned:
             return ""
